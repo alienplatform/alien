@@ -49,9 +49,17 @@ let value: GetRemoteOperatorProjectSummaryResponse = {
       message: "<value>",
     },
     data: {
-      reported: [],
-      older: 970663,
-      unknown: 894335,
+      reported: [
+        {
+          releaseId: "<id>",
+          version: "<value>",
+          createdAt: new Date("2026-02-12T11:27:57.156Z"),
+          deployments: 179604,
+          latest: true,
+        },
+      ],
+      older: 344847,
+      unknown: 288932,
       rollout: [
         {
           releaseId: "<id>",
@@ -165,7 +173,7 @@ let value: GetRemoteOperatorProjectSummaryResponse = {
 | `project`                                                                                                              | [operations.GetRemoteOperatorProjectSummaryProject](../../models/operations/getremoteoperatorprojectsummaryproject.md) | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
 | `nextAction`                                                                                                           | [operations.NextAction](../../models/operations/nextaction.md)                                                         | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
 | `installations`                                                                                                        | [operations.Installations](../../models/operations/installations.md)                                                   | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
-| `release`                                                                                                              | [operations.Release](../../models/operations/release.md)                                                               | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `release`                                                                                                              | [operations.GetRemoteOperatorProjectSummaryRelease](../../models/operations/getremoteoperatorprojectsummaryrelease.md) | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
 | `access`                                                                                                               | [operations.GetRemoteOperatorProjectSummaryAccess](../../models/operations/getremoteoperatorprojectsummaryaccess.md)   | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
 | `operations`                                                                                                           | [operations.Operations](../../models/operations/operations.md)                                                         | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
 | `activity`                                                                                                             | [operations.Activity](../../models/operations/activity.md)                                                             | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |

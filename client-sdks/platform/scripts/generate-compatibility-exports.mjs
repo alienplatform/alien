@@ -239,7 +239,222 @@ Object.assign(additionalExports, {
     ]
   }
 });
+// Federation adds setup-management metadata to the shared target configuration.
+// Preserve the published volume-restore module when its shared declarations move.
+modules.targetdeploymentvolumerestore = "targetdeploymentsetupmanagement";
+additionalExports.targetdeploymentvolumerestore = {
+  targetdeployment: [
+    "TargetDeploymentStackSettings", "TargetDeploymentStackSettings$inboundSchema",
+    "TargetDeploymentTelemetry", "TargetDeploymentTelemetry$inboundSchema",
+    "TargetDeploymentUpdates", "TargetDeploymentUpdates$inboundSchema",
+    "TargetDeploymentVolumeRestore", "TargetDeploymentVolumeRestore$inboundSchema",
+    "targetDeploymentStackSettingsFromJSON", "targetDeploymentVolumeRestoreFromJSON"
+  ]
+};
+// Retain the previously published paths after shared inline declarations regroup.
+Object.assign(modules, {
+  "deploymentdetailresponsependingpreparedstackdefaultunion": "deploymentdetailresponsependingpreparedstackdefaultstringlist",
+  "deploymentdetailresponsepreparedstackplugins": "deploymentdetailresponsepreparedstackapprovalplugins",
+  "deploymentpendingpreparedstackdefaultunion": "deploymentpendingpreparedstackdefaultstringlist",
+  "deploymentpreparedstackplugins": "deploymentpreparedstackapprovalplugins",
+  "synclistresponsependingpreparedstackdefaultunion": "synclistresponsependingpreparedstackdefaultstringlist",
+  "synclistresponsepreparedstackplugins": "synclistresponsepreparedstackapprovalplugins",
+  "persistimporteddeploymentrequestpreparedstackoverridegcpresource": "persistimporteddeploymentrequestpreparedstackoverrideazureresource"
+});
+modules.persistimporteddeploymentrequestpendingpreparedstacksettingscustom2 = "persistimporteddeploymentrequestpendingpreparedstackvalidationunion";
+additionalExports.persistimporteddeploymentrequestpendingpreparedstacksettingscustom2 = {
+  "persistimporteddeploymentrequestpreparedstackoverrideazureresource": [
+    "PersistImportedDeploymentRequestPendingPreparedStackApprovalCustom",
+    "PersistImportedDeploymentRequestPendingPreparedStackApprovalCustom$Outbound",
+    "PersistImportedDeploymentRequestPendingPreparedStackApprovalCustom$outboundSchema",
+    "PersistImportedDeploymentRequestPendingPreparedStackApprovalCustomEnum",
+    "PersistImportedDeploymentRequestPendingPreparedStackApprovalCustomEnum$outboundSchema",
+    "PersistImportedDeploymentRequestPendingPreparedStackCustomApprovalUnion",
+    "PersistImportedDeploymentRequestPendingPreparedStackCustomApprovalUnion$Outbound",
+    "PersistImportedDeploymentRequestPendingPreparedStackCustomApprovalUnion$outboundSchema",
+    "PersistImportedDeploymentRequestPendingPreparedStackCustomDecision",
+    "PersistImportedDeploymentRequestPendingPreparedStackCustomDecision$outboundSchema",
+    "PersistImportedDeploymentRequestPendingPreparedStackInput",
+    "PersistImportedDeploymentRequestPendingPreparedStackInput$Outbound",
+    "PersistImportedDeploymentRequestPendingPreparedStackInput$outboundSchema",
+    "PersistImportedDeploymentRequestPendingPreparedStackSettingsCustom2",
+    "PersistImportedDeploymentRequestPendingPreparedStackSettingsCustom2$Outbound",
+    "PersistImportedDeploymentRequestPendingPreparedStackSettingsCustom2$outboundSchema",
+    "PersistImportedDeploymentRequestPendingPreparedStackSettingsCustom3",
+    "PersistImportedDeploymentRequestPendingPreparedStackSettingsCustom3$Outbound",
+    "PersistImportedDeploymentRequestPendingPreparedStackSettingsCustom3$outboundSchema",
+    "persistImportedDeploymentRequestPendingPreparedStackApprovalCustomToJSON",
+    "persistImportedDeploymentRequestPendingPreparedStackCustomApprovalUnionToJSON",
+    "persistImportedDeploymentRequestPendingPreparedStackInputToJSON",
+    "persistImportedDeploymentRequestPendingPreparedStackSettingsCustom2ToJSON",
+    "persistImportedDeploymentRequestPendingPreparedStackSettingsCustom3ToJSON"
+  ]
+};
+// Stable deployment-state model paths.
+Object.assign(modules, {
+  "deploymentstatependingpreparedstackdefaultunion": "deploymentstatependingpreparedstackdefaultstringlist",
+  "deploymentstatepreparedstackplugins": "deploymentstatepreparedstackapprovalplugins",
+  "targetreleaseoperations": "targetreleaseapprovalpluginsenum",
+  "typekv4": "keyprefixsecretref1"
+});
+Object.assign(additionalExports, {
+  "deploymentstatependingpreparedstackdefaultunion": {
+    "deploymentstatepreparedstackapprovalplugins": [
+      "DeploymentStatePendingPreparedStackDefaultBoolean",
+      "DeploymentStatePendingPreparedStackDefaultBoolean$Outbound",
+      "DeploymentStatePendingPreparedStackDefaultBoolean$inboundSchema",
+      "DeploymentStatePendingPreparedStackDefaultBoolean$outboundSchema",
+      "DeploymentStatePendingPreparedStackDefaultNumber",
+      "DeploymentStatePendingPreparedStackDefaultNumber$Outbound",
+      "DeploymentStatePendingPreparedStackDefaultNumber$inboundSchema",
+      "DeploymentStatePendingPreparedStackDefaultNumber$outboundSchema",
+      "DeploymentStatePendingPreparedStackDefaultString",
+      "DeploymentStatePendingPreparedStackDefaultString$Outbound",
+      "DeploymentStatePendingPreparedStackDefaultString$inboundSchema",
+      "DeploymentStatePendingPreparedStackDefaultString$outboundSchema",
+      "DeploymentStatePendingPreparedStackDefaultUnion",
+      "DeploymentStatePendingPreparedStackDefaultUnion$Outbound",
+      "DeploymentStatePendingPreparedStackDefaultUnion$inboundSchema",
+      "DeploymentStatePendingPreparedStackDefaultUnion$outboundSchema",
+      "DeploymentStatePendingPreparedStackTypeBoolean",
+      "DeploymentStatePendingPreparedStackTypeBoolean$inboundSchema",
+      "DeploymentStatePendingPreparedStackTypeBoolean$outboundSchema",
+      "DeploymentStatePendingPreparedStackTypeNumber",
+      "DeploymentStatePendingPreparedStackTypeNumber$inboundSchema",
+      "DeploymentStatePendingPreparedStackTypeNumber$outboundSchema",
+      "DeploymentStatePendingPreparedStackTypeString",
+      "DeploymentStatePendingPreparedStackTypeString$inboundSchema",
+      "DeploymentStatePendingPreparedStackTypeString$outboundSchema",
+      "deploymentStatePendingPreparedStackDefaultBooleanFromJSON",
+      "deploymentStatePendingPreparedStackDefaultBooleanToJSON",
+      "deploymentStatePendingPreparedStackDefaultNumberFromJSON",
+      "deploymentStatePendingPreparedStackDefaultNumberToJSON",
+      "deploymentStatePendingPreparedStackDefaultStringFromJSON",
+      "deploymentStatePendingPreparedStackDefaultStringToJSON",
+      "deploymentStatePendingPreparedStackDefaultUnionFromJSON",
+      "deploymentStatePendingPreparedStackDefaultUnionToJSON"
+    ]
+  },
+  "deploymentstatepreparedstackplugins": {
+    "targetreleaseapprovalpluginsenum": [
+      "DeploymentStatePreparedStackApprovalPluginsEnum",
+      "DeploymentStatePreparedStackApprovalPluginsEnum$inboundSchema",
+      "DeploymentStatePreparedStackApprovalPluginsEnum$outboundSchema",
+      "DeploymentStatePreparedStackPlugins",
+      "DeploymentStatePreparedStackPlugins$Outbound",
+      "DeploymentStatePreparedStackPlugins$inboundSchema",
+      "DeploymentStatePreparedStackPlugins$outboundSchema",
+      "DeploymentStatePreparedStackPluginsApprovalUnion",
+      "DeploymentStatePreparedStackPluginsApprovalUnion$Outbound",
+      "DeploymentStatePreparedStackPluginsApprovalUnion$inboundSchema",
+      "DeploymentStatePreparedStackPluginsApprovalUnion$outboundSchema",
+      "DeploymentStatePreparedStackPluginsSettingsUnion",
+      "DeploymentStatePreparedStackPluginsSettingsUnion$Outbound",
+      "DeploymentStatePreparedStackPluginsSettingsUnion$inboundSchema",
+      "DeploymentStatePreparedStackPluginsSettingsUnion$outboundSchema",
+      "DeploymentStatePreparedStackSettingsPlugins1",
+      "DeploymentStatePreparedStackSettingsPlugins1$Outbound",
+      "DeploymentStatePreparedStackSettingsPlugins1$inboundSchema",
+      "DeploymentStatePreparedStackSettingsPlugins1$outboundSchema",
+      "DeploymentStatePreparedStackSettingsPlugins2",
+      "DeploymentStatePreparedStackSettingsPlugins2$Outbound",
+      "DeploymentStatePreparedStackSettingsPlugins2$inboundSchema",
+      "DeploymentStatePreparedStackSettingsPlugins2$outboundSchema",
+      "DeploymentStatePreparedStackSettingsPlugins3",
+      "DeploymentStatePreparedStackSettingsPlugins3$Outbound",
+      "DeploymentStatePreparedStackSettingsPlugins3$inboundSchema",
+      "DeploymentStatePreparedStackSettingsPlugins3$outboundSchema",
+      "deploymentStatePreparedStackPluginsApprovalUnionFromJSON",
+      "deploymentStatePreparedStackPluginsApprovalUnionToJSON",
+      "deploymentStatePreparedStackPluginsFromJSON",
+      "deploymentStatePreparedStackPluginsSettingsUnionFromJSON",
+      "deploymentStatePreparedStackPluginsSettingsUnionToJSON",
+      "deploymentStatePreparedStackPluginsToJSON",
+      "deploymentStatePreparedStackSettingsPlugins1FromJSON",
+      "deploymentStatePreparedStackSettingsPlugins1ToJSON",
+      "deploymentStatePreparedStackSettingsPlugins2FromJSON",
+      "deploymentStatePreparedStackSettingsPlugins2ToJSON",
+      "deploymentStatePreparedStackSettingsPlugins3FromJSON",
+      "deploymentStatePreparedStackSettingsPlugins3ToJSON"
+    ]
+  },
+  "targetreleaseoperations": {
+    "deploymentstate": [
+      "TargetReleaseOperations",
+      "TargetReleaseOperations$Outbound",
+      "TargetReleaseOperations$inboundSchema",
+      "TargetReleaseOperations$outboundSchema",
+      "TargetReleasePlugins",
+      "TargetReleasePlugins$Outbound",
+      "TargetReleasePlugins$inboundSchema",
+      "TargetReleasePlugins$outboundSchema",
+      "TargetReleasePluginsApprovalUnion",
+      "TargetReleasePluginsApprovalUnion$Outbound",
+      "TargetReleasePluginsApprovalUnion$inboundSchema",
+      "TargetReleasePluginsApprovalUnion$outboundSchema",
+      "TargetReleasePluginsSettingsUnion",
+      "TargetReleasePluginsSettingsUnion$Outbound",
+      "TargetReleasePluginsSettingsUnion$inboundSchema",
+      "TargetReleasePluginsSettingsUnion$outboundSchema",
+      "TargetReleaseSettingsPlugins1",
+      "TargetReleaseSettingsPlugins1$Outbound",
+      "TargetReleaseSettingsPlugins1$inboundSchema",
+      "TargetReleaseSettingsPlugins1$outboundSchema",
+      "TargetReleaseSettingsPlugins2",
+      "TargetReleaseSettingsPlugins2$Outbound",
+      "TargetReleaseSettingsPlugins2$inboundSchema",
+      "TargetReleaseSettingsPlugins2$outboundSchema",
+      "TargetReleaseSettingsPlugins3",
+      "TargetReleaseSettingsPlugins3$Outbound",
+      "TargetReleaseSettingsPlugins3$inboundSchema",
+      "TargetReleaseSettingsPlugins3$outboundSchema",
+      "targetReleaseOperationsFromJSON",
+      "targetReleaseOperationsToJSON",
+      "targetReleasePluginsApprovalUnionFromJSON",
+      "targetReleasePluginsApprovalUnionToJSON",
+      "targetReleasePluginsFromJSON",
+      "targetReleasePluginsSettingsUnionFromJSON",
+      "targetReleasePluginsSettingsUnionToJSON",
+      "targetReleasePluginsToJSON",
+      "targetReleaseSettingsPlugins1FromJSON",
+      "targetReleaseSettingsPlugins1ToJSON",
+      "targetReleaseSettingsPlugins2FromJSON",
+      "targetReleaseSettingsPlugins2ToJSON",
+      "targetReleaseSettingsPlugins3FromJSON",
+      "targetReleaseSettingsPlugins3ToJSON"
+    ]
+  },
+  "typekv4": {
+    "externalbindingunion": [
+      "KeyPrefix1",
+      "KeyPrefix1$Outbound",
+      "KeyPrefix1$inboundSchema",
+      "KeyPrefix1$outboundSchema",
+      "TypeKv4",
+      "TypeKv4$inboundSchema",
+      "TypeKv4$outboundSchema",
+      "keyPrefix1FromJSON",
+      "keyPrefix1ToJSON"
+    ]
+  }
+});
+const deploymentStatusUrl = new URL("../typescript/src/models/deploymentstatependingpreparedstackdefaultstringlist.ts", import.meta.url);
+const deploymentStatusMarker = "\n// Published deployment-state readiness exports.\n";
+const deploymentStatusSource = (await readFile(deploymentStatusUrl, "utf8")).split(deploymentStatusMarker)[0];
+await writeFile(deploymentStatusUrl, `${deploymentStatusSource}${deploymentStatusMarker}export const DeploymentStateRuntimeMetadataStatus = DeploymentStateDeployerSecretStatus;
+export type DeploymentStateRuntimeMetadataStatus = DeploymentStateDeployerSecretStatus;
+export const DeploymentStateRuntimeMetadataStatus$inboundSchema = DeploymentStateDeployerSecretStatus$inboundSchema;
+export const DeploymentStateRuntimeMetadataStatus$outboundSchema = DeploymentStateDeployerSecretStatus$outboundSchema;
+`);
 const models = new URL("../typescript/src/models/", import.meta.url);
+// Preserve the published secret-readiness enum after its shared owner changes.
+const readinessUrl = new URL("persistimporteddeploymentrequestpendingpreparedstackvalidationunion.ts", models);
+const readinessMarker = "\n// Published secret-readiness compatibility exports.\n";
+const readinessSource = (await readFile(readinessUrl, "utf8")).split(readinessMarker)[0];
+await writeFile(readinessUrl, `${readinessSource}${readinessMarker}export const PersistImportedDeploymentRequestRuntimeMetadataStatus = PersistImportedDeploymentRequestDeployerSecretStatus;
+export type PersistImportedDeploymentRequestRuntimeMetadataStatus = PersistImportedDeploymentRequestDeployerSecretStatus;
+export const PersistImportedDeploymentRequestRuntimeMetadataStatus$outboundSchema = PersistImportedDeploymentRequestDeployerSecretStatus$outboundSchema;
+`);
 async function exportIsValue(module, name) {
   if (modules[module]) {
     const moved = Object.entries(additionalExports[module] ?? {})
@@ -267,7 +482,7 @@ for (const [previous, current] of orderedModules) {
   }
   await writeFile(
     new URL(`${previous}.ts`, models),
-    `// Generated by generate-compatibility-exports.mjs. DO NOT EDIT.\nexport * from "./${current}.js";\n${reexports.join("\n")}\n`,
+    `// Generated by generate-compatibility-exports.mjs. DO NOT EDIT.\nexport * from "./${current}.js";\n${reexports.join("\n")}\n`.trimEnd() + "\n",
   );
 }
 

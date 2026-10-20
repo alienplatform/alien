@@ -17,6 +17,7 @@ let value: DaemonInstance1 = {
 | Field                                   | Type                                    | Required                                | Description                             |
 | --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
 | `cpu`                                   | *operations.DaemonInstanceCpuUnion1*    | :heavy_minus_sign:                      | N/A                                     |
+| `image`                                 | *string*                                | :heavy_minus_sign:                      | Image this replica runs.                |
 | `ip`                                    | *string*                                | :heavy_minus_sign:                      | N/A                                     |
 | `machineId`                             | *string*                                | :heavy_minus_sign:                      | N/A                                     |
 | `memory`                                | *operations.DaemonInstanceMemoryUnion1* | :heavy_minus_sign:                      | N/A                                     |

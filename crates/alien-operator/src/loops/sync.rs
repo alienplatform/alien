@@ -237,7 +237,10 @@ async fn sync_with_manager(
                 environment_info: None,
                 runtime_metadata: None,
                 retry_requested: false,
-                protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                protocol_version: alien_core::deployment_protocol_version_for_platform(
+                    state.config.platform,
+                    state.config.base_platform,
+                ),
             });
 
     // A vault outage must not prevent receiving a new target or deletion request.
@@ -527,8 +530,19 @@ pub(crate) async fn accept_target(
                 environment_info: None,
                 runtime_metadata: None,
                 retry_requested: false,
-                protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                protocol_version: alien_core::deployment_protocol_version_for_platform(
+                    state.config.platform,
+                    state.config.base_platform,
+                ),
             });
+
+    deployment_state.protocol_version = alien_core::deployment_protocol_version_for_platform(
+        state.config.platform,
+        target_deployment
+            .config
+            .base_platform
+            .or(state.config.base_platform),
+    );
 
     // Update target_release in state
     accept_target_release(
@@ -984,11 +998,15 @@ mod tests {
         );
         vault.status = alien_core::ResourceStatus::Running;
         vault.remote_binding_params = Some(
-            serde_json::to_value(alien_core::VaultBinding::parameter_store("test-deployer-secrets"))
-                .unwrap(),
+            serde_json::to_value(alien_core::VaultBinding::parameter_store(
+                "test-deployer-secrets",
+            ))
+            .unwrap(),
         );
         let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
-        stack_state.resources.insert("deployer-secrets".into(), vault);
+        stack_state
+            .resources
+            .insert("deployer-secrets".into(), vault);
         let running = DeploymentState {
             platform: Platform::Kubernetes, status: DeploymentStatus::Running,
             current_release: None, target_release: None, stack_state: Some(stack_state),
@@ -1084,7 +1102,9 @@ mod tests {
             "deployer-secrets".into(),
             alien_core::StackResourceState::new_pending(
                 "vault".into(),
-                alien_core::Resource::new(alien_core::Vault::new("deployer-secrets".into()).build()),
+                alien_core::Resource::new(
+                    alien_core::Vault::new("deployer-secrets".into()).build(),
+                ),
                 Some(alien_core::ResourceLifecycle::Frozen),
                 Vec::new(),
             ),

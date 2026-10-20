@@ -90,6 +90,9 @@ export type ReleaseListItemResponse = {
   gitMetadata?: GitMetadata | null | undefined;
   createdAt: Date;
   stack?: ReleaseListItemResponseStack | null | undefined;
+  /**
+   * Per-target setup compatibility fingerprints for this release
+   */
   setupFingerprints: { [k: string]: SetupFingerprintInfo };
   rootDirectory?: string | null | undefined;
   /**

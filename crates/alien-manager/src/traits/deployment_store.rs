@@ -181,6 +181,15 @@ pub struct CreateDeploymentParams {
     pub deployment_token: Option<String>,
 }
 
+/// Immutable setup selection recorded before an installer creates cloud resources.
+#[derive(Debug, Clone)]
+pub struct SetupReservation {
+    pub release_id: String,
+    pub import_source: ImportSourceKind,
+    pub setup_target: String,
+    pub setup_fingerprint_version: u32,
+}
+
 /// Parameters for creating a deployment whose layer-2 stack state was produced
 /// by a setup artifact (CloudFormation, Terraform, Helm).
 #[derive(Debug, Clone)]
@@ -525,6 +534,20 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         params: CreateDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError>;
+
+    /// Allocate the installation identity and durable token without starting setup.
+    /// The later import activates this same record. Implementations must persist
+    /// the reservation and deployment together, including the original inputs.
+    async fn create_setup_reservation(
+        &self,
+        _caller: &crate::auth::Subject,
+        _params: CreateDeploymentParams,
+        _reservation: SetupReservation,
+    ) -> Result<DeploymentRecord, AlienError> {
+        Err(AlienError::new(alien_error::GenericError {
+            message: "This deployment store does not support setup reservations".to_string(),
+        }))
+    }
 
     /// Persist a deployment whose stack state was produced by a setup artifact
     /// (CloudFormation custom resource, Terraform provider, or Helm chart).

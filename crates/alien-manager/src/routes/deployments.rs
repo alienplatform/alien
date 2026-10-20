@@ -31,7 +31,17 @@ use super::{auth, AppState};
 pub struct CreateDeploymentRequest {
     pub name: String,
     pub platform: Platform,
+    /// Base cloud for a Kubernetes installation; omitted for cloud-native targets.
+    #[serde(default)]
+    pub base_platform: Option<Platform>,
     pub deployment_group_id: Option<String>,
+    /// Reserve an installation before an external setup package creates resources.
+    #[serde(default)]
+    pub setup_handoff: SetupHandoff,
+    #[serde(default)]
+    pub setup_method: Option<String>,
+    #[serde(default)]
+    pub pinned_release_id: Option<String>,
     #[serde(default)]
     pub stack_settings: Option<StackSettings>,
     #[serde(default)]
@@ -42,6 +52,15 @@ pub struct CreateDeploymentRequest {
     /// deployment step, like the values a setup collects.
     #[serde(default)]
     pub input_values: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum SetupHandoff {
+    #[default]
+    Immediate,
+    AwaitRegistration,
 }
 
 /// Replace the saved quota warning overrides. An empty list explicitly clears them.
@@ -71,9 +90,7 @@ pub struct DeploymentResponse {
     pub platform: Platform,
     pub status: String,
     pub deployment_group_id: String,
-    /// Required by the platform-SDK Deployment schema. Hard-coded to
-    /// alien-core's `CURRENT_DEPLOYMENT_PROTOCOL_VERSION` so the CLI
-    /// accepts the response.
+    /// State protocol stored on this deployment and required by its runtime.
     pub deployment_protocol_version: u32,
     /// Required by the platform-SDK Deployment schema. Standalone is
     /// single-tenant; reuse the same synthetic project id used in the
@@ -441,6 +458,10 @@ async fn create_deployment(
         Err(e) => return e.into_response(),
     };
 
+    if let Err(error) = super::sync::validate_kubernetes_base_platform(req.platform, req.base_platform) {
+        return error.into_response();
+    }
+
     if let Some(settings) = &req.stack_settings {
         if let Err(error) = alien_preflights::quotas::validate_warning_overrides(
             req.platform,
@@ -516,40 +537,96 @@ async fn create_deployment(
         return ErrorData::forbidden("Cannot create deployment in this group").into_response();
     }
 
-    if dg.deployment_count >= dg.max_deployments {
-        return alien_error::AlienError::new(ErrorData::MaxDeploymentsReached {
-            deployment_group_id: deployment_group_id.clone(),
-            max_deployments: dg.max_deployments,
-        })
-        .into_response();
+    let awaits_registration = req.setup_handoff == SetupHandoff::AwaitRegistration;
+    let import_source = if awaits_registration {
+        match req.setup_method.as_deref() {
+            Some("terraform") => Some(ImportSourceKind::Terraform),
+            Some("cloudformation") if req.platform == Platform::Aws => {
+                Some(ImportSourceKind::CloudFormation)
+            }
+            _ => return ErrorData::bad_request(
+                "Setup reservation requires a supported Terraform or CloudFormation setup method",
+            )
+            .into_response(),
+        }
+    } else {
+        None
+    };
+    let existing_reservation = if awaits_registration {
+        match state
+            .deployment_store
+            .get_deployment_by_name(&subject, &deployment_group_id, &req.name)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => return error.into_response(),
+        }
+    } else {
+        None
+    };
+    // An exact reservation replay does not consume another deployment slot.
+    if existing_reservation.is_none() {
+        if dg.deployment_count >= dg.max_deployments {
+            return alien_error::AlienError::new(ErrorData::MaxDeploymentsReached {
+                deployment_group_id: deployment_group_id.clone(),
+                max_deployments: dg.max_deployments,
+            })
+            .into_response();
+        }
     }
 
     // Start at the release the default channel points at (the latest
     // release on a manager without channels).
-    let starting_release =
-        match super::channels::release_for_deployment(&state, &subject, None).await {
+    let reserved_release_id = existing_reservation
+        .as_ref()
+        .and_then(|record| record.setup_metadata.as_ref())
+        .and_then(|metadata| metadata.get("setupReservation"))
+        .and_then(|reservation| reservation.get("releaseId"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let selected_release_id = req
+        .pinned_release_id
+        .as_deref()
+        .or(reserved_release_id.as_deref());
+    let starting_release = match selected_release_id {
+        Some(id) => match state.release_store.get_release(&subject, id).await {
+            Ok(Some(release)) => Some(release),
+            Ok(None) => return ErrorData::not_found_release(id).into_response(),
+            Err(error) => return error.into_response(),
+        },
+        None => match super::channels::release_for_deployment(&state, &subject, None).await {
             Ok(release) => release,
-            Err(e) => return e.into_response(),
-        };
+            Err(error) => return error.into_response(),
+        },
+    };
+    if awaits_registration && starting_release.is_none() {
+        return ErrorData::bad_request("Publish a release before reserving setup").into_response();
+    }
     let desired_release_id = starting_release.as_ref().map(|release| release.id.clone());
 
     // Generated secret inputs get their value now, once, and keep it in the
     // stored input values for every later update.
-    let mut input_values = req.input_values;
-    if let Some(stack) = starting_release
+    let requested_input_values = req.input_values.clone();
+    let mut input_values = existing_reservation
         .as_ref()
-        .and_then(|release| release.stacks.get(&req.platform))
-    {
-        crate::generated_inputs::generate_missing_input_values(
-            &stack.inputs,
-            req.platform,
-            &mut input_values,
-        );
+        .map(|record| record.input_values.clone())
+        .unwrap_or_else(|| req.input_values.clone());
+    if existing_reservation.is_none() {
+        if let Some(stack) = starting_release
+            .as_ref()
+            .and_then(|release| release.stacks.get(&req.platform))
+        {
+            crate::generated_inputs::generate_missing_input_values(
+                &stack.inputs,
+                req.platform,
+                &mut input_values,
+            );
+        }
     }
 
     // Create the deployment first (token is set after).
-    let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
-    let stack_state = match req.resource_prefix {
+    let (raw_token, _, _) = ids::generate_token(TokenType::Deployment.prefix());
+    let stack_state = match req.resource_prefix.clone() {
         Some(resource_prefix) => {
             if !is_valid_resource_prefix(&resource_prefix) {
                 return ErrorData::bad_request(RESOURCE_PREFIX_ERROR_MESSAGE).into_response();
@@ -562,66 +639,128 @@ async fn create_deployment(
         None => None,
     };
 
-    let stack_settings = match stack_settings_for_platform(req.platform, req.stack_settings) {
+    let stack_settings = match stack_settings_for_platform(req.platform, req.stack_settings.clone())
+    {
         Ok(settings) => settings,
         Err(e) => return e.into_response(),
     };
 
-    let mut deployment = match state
-        .deployment_store
-        .create_deployment(
-            &subject,
-            CreateDeploymentParams {
-                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
-                name: req.name,
+    let setup_target = req.platform.as_str().to_string();
+    let mut deployment = if let Some(existing) = existing_reservation {
+        let same = existing.status == "pending"
+            && existing.current_release_id.is_none()
+            && existing.import_source == import_source
+            && existing.platform == req.platform
+            && existing.base_platform == req.base_platform
+            && existing.stack_settings.as_ref() == Some(&stack_settings)
+            && existing.user_environment_variables == req.environment_variables
+            && existing.setup_target.as_deref() == Some(setup_target.as_str())
+            && reserved_release_id.as_deref() == desired_release_id.as_deref()
+            && requested_input_values
+                .iter()
+                .all(|(key, value)| existing.input_values.get(key) == Some(value))
+            && req.resource_prefix.as_deref().is_none_or(|prefix| {
+                existing
+                    .stack_state
+                    .as_ref()
+                    .is_some_and(|state| state.resource_prefix == prefix)
+            });
+        if !same {
+            return alien_error::AlienError::new(ErrorData::DeploymentNameConflict {
+                name: req.name.clone(),
                 deployment_group_id: deployment_group_id.clone(),
-                platform: req.platform,
-                base_platform: None,
-                stack_settings,
-                stack_state,
-                environment_variables: req.environment_variables,
-                public_subdomain: None,
-                input_values,
-                setup_item: None,
-                deployment_token: Some(raw_token.clone()),
-            },
-        )
-        .await
-    {
-        Ok(d) => d,
-        Err(e) => return e.into_response(),
-    };
-
-    // Create the deployment token with the deployment_id so the proxy can
-    // scope pull access to this specific deployment's release images.
-    match state
-        .token_store
-        .create_token(CreateTokenParams {
-            token_type: TokenType::Deployment,
-            key_prefix,
-            key_hash,
-            deployment_group_id: Some(deployment_group_id.clone()),
-            deployment_id: Some(deployment.id.clone()),
-        })
-        .await
-    {
-        Ok(_) => {}
-        Err(e) => return e.into_response(),
-    };
-
-    // Set the desired release if we found one
-    if let Some(ref release_id) = desired_release_id {
-        if let Err(e) = state
-            .deployment_store
-            .set_deployment_desired_release(&subject, &deployment.id, release_id)
-            .await
-        {
-            return e.into_response();
+            })
+            .into_response();
         }
-        deployment.desired_release_id = desired_release_id;
+        if !state.authz.can_update_deployment(&subject, &existing) {
+            return ErrorData::forbidden("Cannot access this setup reservation").into_response();
+        }
+        existing
+    } else {
+        let params = CreateDeploymentParams {
+            deployment_protocol_version: alien_core::deployment_protocol_version_for_platform(
+                req.platform,
+                None,
+            ),
+            name: req.name.clone(),
+            deployment_group_id: deployment_group_id.clone(),
+            platform: req.platform,
+            base_platform: req.base_platform,
+            stack_settings,
+            stack_state,
+            environment_variables: req.environment_variables.clone(),
+            public_subdomain: None,
+            input_values,
+            setup_item: None,
+            deployment_token: Some(raw_token.clone()),
+        };
+        let result = if let Some(import_source) = import_source {
+            state
+                .deployment_store
+                .create_setup_reservation(
+                    &subject,
+                    params,
+                    crate::traits::SetupReservation {
+                        release_id: desired_release_id
+                            .clone()
+                            .expect("reservation requires a release"),
+                        import_source,
+                        setup_target,
+                        setup_fingerprint_version: 1,
+                    },
+                )
+                .await
+        } else {
+            state
+                .deployment_store
+                .create_deployment(&subject, params)
+                .await
+        };
+        match result {
+            Ok(record) => record,
+            Err(error) => return error.into_response(),
+        }
+    };
+
+    // A proxy store may return its upstream's canonical token. Persist and return
+    // that token, rather than a proposed secret the upstream never accepted.
+    let token = deployment.deployment_token.clone();
+    if let Some(raw_token) = &token {
+        let key_hash = ids::sha256_hash(raw_token);
+        let stored = match state.token_store.validate_token(&key_hash).await {
+            Ok(value) => value,
+            Err(error) => return error.into_response(),
+        };
+        if stored.is_none() {
+            if let Err(error) = state
+                .token_store
+                .create_token(CreateTokenParams {
+                    token_type: TokenType::Deployment,
+                    key_prefix: raw_token.chars().take(12).collect(),
+                    key_hash,
+                    deployment_group_id: Some(deployment_group_id.clone()),
+                    deployment_id: Some(deployment.id.clone()),
+                })
+                .await
+            {
+                return error.into_response();
+            }
+        }
     }
 
-    let token = Some(raw_token);
+    // Set the desired release if we found one
+    if !awaits_registration {
+        if let Some(ref release_id) = desired_release_id {
+            if let Err(e) = state
+                .deployment_store
+                .set_deployment_desired_release(&subject, &deployment.id, release_id)
+                .await
+            {
+                return e.into_response();
+            }
+            deployment.desired_release_id = desired_release_id;
+        }
+    }
 
     (
         StatusCode::CREATED,

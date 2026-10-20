@@ -783,6 +783,7 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            gcp_federation_scope: None,
             deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),
             management_config: None,

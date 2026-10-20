@@ -14,6 +14,10 @@ export type DeploymentReleaseInfo = {
    */
   id: string;
   version: string;
+  /**
+   * Human-readable release title
+   */
+  title?: string | null | undefined;
   gitMetadata?: GitMetadata | null | undefined;
   createdAt: Date;
 };
@@ -25,6 +29,7 @@ export const DeploymentReleaseInfo$inboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   version: z.string(),
+  title: z.nullable(z.string()).optional(),
   gitMetadata: z.nullable(GitMetadata$inboundSchema).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });

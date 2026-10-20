@@ -185,7 +185,10 @@ async fn apply_pending_target(state: &OperatorState, secret_name: &str) -> Resul
                     environment_info: None,
                     runtime_metadata: None,
                     retry_requested: false,
-                    protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                    protocol_version: alien_core::deployment_protocol_version_for_platform(
+                        state.config.platform,
+                        state.config.base_platform,
+                    ),
                 })
                 .await?;
         }

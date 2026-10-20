@@ -65,6 +65,10 @@ export type ResourceManaged = {
   desiredCount: number | null;
   currentCount: number | null;
   readyCount: number | null;
+  /**
+   * Replicas running the workload's target image. Below `currentCount` while an update rolls out. Null when the runtime does not report per-replica images.
+   */
+  updatedCount: number | null;
   deploymentCount: number;
   attentionCount: number;
   lastObservedAt: Date;
@@ -167,6 +171,7 @@ export const ResourceManaged$inboundSchema: z.ZodType<
   desiredCount: z.nullable(z.int()),
   currentCount: z.nullable(z.int()),
   readyCount: z.nullable(z.int()),
+  updatedCount: z.nullable(z.int()),
   deploymentCount: z.int(),
   attentionCount: z.int(),
   lastObservedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),

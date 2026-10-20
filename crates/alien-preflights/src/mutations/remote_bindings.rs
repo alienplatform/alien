@@ -339,6 +339,7 @@ mod tests {
 
     fn config() -> DeploymentConfig {
         DeploymentConfig {
+            gcp_federation_scope: None,
             deployment_name: None,
             stack_settings: StackSettings::default(),
             management_config: Some(ManagementConfig::Kubernetes),

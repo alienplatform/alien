@@ -90,6 +90,10 @@ export type ConfigSandboxBundle = {
    */
   baseImage: string;
   /**
+   * Selects the supervised layout for the new Internet egress opt-in only.
+   */
+  internetEgress?: boolean | undefined;
+  /**
    * Object key the bundle is written under in every regional bundle store.
    */
   objectKey: string;
@@ -1021,9 +1025,6 @@ export type Package = {
    * Exact package dependency used as build input. Helm packages use this to identify the Operator image embedded in the chart.
    */
   dependsOnPackageId?: string | null | undefined;
-  /**
-   * Per-target setup compatibility fingerprints copied from the source release
-   */
   setupFingerprints: { [k: string]: SetupFingerprintInfo };
   /**
    * Hash of Platform-known package build request inputs: package type, source release, setup fingerprints, package config, and setup contract version
@@ -1121,6 +1122,7 @@ export const ConfigSandboxBundle$inboundSchema: z.ZodType<
 > = z.object({
   agentImage: z.string(),
   baseImage: z.string(),
+  internetEgress: z.boolean().optional(),
   objectKey: z.string(),
   supportedAwsRegions: z.array(z.string()).optional(),
   type: z.literal("sandbox-bundle"),

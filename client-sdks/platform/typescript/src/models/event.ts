@@ -11,9 +11,17 @@ import {
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
+  DeploymentCheckRequestedEvent,
+  DeploymentCheckRequestedEvent$inboundSchema,
+} from "./deploymentcheckrequestedevent.js";
+import {
   DeploymentCredentialRotationEvent,
   DeploymentCredentialRotationEvent$inboundSchema,
 } from "./deploymentcredentialrotationevent.js";
+import {
+  DeploymentEndpointHealthChangedEvent,
+  DeploymentEndpointHealthChangedEvent$inboundSchema,
+} from "./deploymentendpointhealthchangedevent.js";
 import {
   DeploymentGroupMovedEvent,
   DeploymentGroupMovedEvent$inboundSchema,
@@ -1596,6 +1604,10 @@ export type EventDataRunningPreflights = {
    */
   stack: string;
   type: "RunningPreflights";
+  /**
+   * Non-blocking diagnostics reported by the completed checks.
+   */
+  warnings?: Array<string> | undefined;
 };
 
 export type EventDataBuildingStack = {
@@ -1615,6 +1627,8 @@ export type EventDataLoadingConfiguration = {
 };
 
 export type EventDataUnion =
+  | DeploymentCheckRequestedEvent
+  | DeploymentEndpointHealthChangedEvent
   | DeploymentGroupMovedEvent
   | EventDataLoadingConfiguration
   | EventDataFinished
@@ -1809,6 +1823,8 @@ export type Event = {
    */
   debugSessionId?: string | null | undefined;
   data:
+    | DeploymentCheckRequestedEvent
+    | DeploymentEndpointHealthChangedEvent
     | DeploymentGroupMovedEvent
     | EventDataLoadingConfiguration
     | EventDataFinished
@@ -3739,6 +3755,7 @@ export const EventDataRunningPreflights$inboundSchema: z.ZodType<
   platform: z.string(),
   stack: z.string(),
   type: z.literal("RunningPreflights"),
+  warnings: z.array(z.string()).optional(),
 });
 
 export function eventDataRunningPreflightsFromJSON(
@@ -3809,6 +3826,8 @@ export function eventDataLoadingConfigurationFromJSON(
 /** @internal */
 export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
   z.union([
+    DeploymentCheckRequestedEvent$inboundSchema,
+    DeploymentEndpointHealthChangedEvent$inboundSchema,
     DeploymentGroupMovedEvent$inboundSchema,
     z.lazy(() => EventDataLoadingConfiguration$inboundSchema),
     z.lazy(() => EventDataFinished$inboundSchema),
@@ -3987,6 +4006,8 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
   releaseId: z.nullable(z.string()).optional(),
   debugSessionId: z.nullable(z.string()).optional(),
   data: z.union([
+    DeploymentCheckRequestedEvent$inboundSchema,
+    DeploymentEndpointHealthChangedEvent$inboundSchema,
     DeploymentGroupMovedEvent$inboundSchema,
     z.lazy(() => EventDataLoadingConfiguration$inboundSchema),
     z.lazy(() => EventDataFinished$inboundSchema),

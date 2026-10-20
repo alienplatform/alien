@@ -16,7 +16,7 @@ import { ManagerStatus, ManagerStatus$inboundSchema } from "./managerstatus.js";
 /**
  * Represents the target cloud platform.
  */
-export const TargetEnum = {
+export const ManagerTarget = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -28,7 +28,7 @@ export const TargetEnum = {
 /**
  * Represents the target cloud platform.
  */
-export type TargetEnum = ClosedEnum<typeof TargetEnum>;
+export type ManagerTarget = ClosedEnum<typeof ManagerTarget>;
 
 /**
  * Cloud where this private manager is deployed
@@ -97,7 +97,7 @@ export type Manager = {
   /**
    * Platforms this manager can handle
    */
-  targets: Array<TargetEnum>;
+  targets: Array<ManagerTarget>;
   /**
    * Cloud where this private manager is deployed
    */
@@ -161,9 +161,8 @@ export type Manager = {
 };
 
 /** @internal */
-export const TargetEnum$inboundSchema: z.ZodEnum<typeof TargetEnum> = z.enum(
-  TargetEnum,
-);
+export const ManagerTarget$inboundSchema: z.ZodEnum<typeof ManagerTarget> = z
+  .enum(ManagerTarget);
 
 /** @internal */
 export const CloudEnum$inboundSchema: z.ZodEnum<typeof CloudEnum> = z.enum(
@@ -198,7 +197,7 @@ export function managerMetricsFromJSON(
 export const Manager$inboundSchema: z.ZodType<Manager, unknown> = z.object({
   id: z.string(),
   name: z.string(),
-  targets: z.array(TargetEnum$inboundSchema),
+  targets: z.array(ManagerTarget$inboundSchema),
   cloud: z.nullable(CloudEnum$inboundSchema).optional(),
   region: z.nullable(z.string()).optional(),
   setupStatus: z.nullable(ManagerSetupStatus$inboundSchema).optional(),

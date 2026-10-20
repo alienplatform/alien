@@ -70,6 +70,10 @@ export type SyncListRequestPlatform = ClosedEnum<
  * Request to list full operational deployments
  */
 export type SyncListRequest = {
+  /**
+   * Highest deployment protocol this runtime can interpret. Omitted means version 1.
+   */
+  maxSupportedDeploymentProtocolVersion?: number | undefined;
   managerId?: string | undefined;
   /**
    * Specific deployment IDs to include
@@ -105,6 +109,7 @@ export const SyncListRequestPlatform$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type SyncListRequest$Outbound = {
+  maxSupportedDeploymentProtocolVersion?: number | undefined;
   managerId?: string | undefined;
   deploymentIds?: Array<string> | undefined;
   statuses?: Array<string> | undefined;
@@ -118,6 +123,7 @@ export const SyncListRequest$outboundSchema: z.ZodType<
   SyncListRequest$Outbound,
   SyncListRequest
 > = z.object({
+  maxSupportedDeploymentProtocolVersion: z.int().optional(),
   managerId: z.string().optional(),
   deploymentIds: z.array(z.string()).optional(),
   statuses: z.array(SyncListRequestStatus$outboundSchema).optional(),

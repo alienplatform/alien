@@ -3731,16 +3731,26 @@ mod tests {
                 endpoints: HashMap::from([("iamcredentials".to_string(), server.base_url())]),
             }),
         }));
-        let stack = gcp_stack_with_target_identity();
-        let error = alien_infra::RemoteAccessResolver::new(HashMap::new())
-            .resolve(config, &stack, None)
-            .await
-            .context(ErrorData::RemoteCredentialHandoffFailed {
-                deployment_id: "dep_test".to_string(),
-                platform: Platform::Gcp,
-            })
-            .unwrap_err()
-            .into_generic();
+        use alien_gcp_clients::iam::{GenerateAccessTokenRequest, IamApi, IamClient};
+        let error = IamClient::new(
+            reqwest::Client::new(),
+            config.gcp_config().unwrap().clone(),
+        )
+        .generate_access_token(
+            "target@example.invalid".to_string(),
+            GenerateAccessTokenRequest::builder()
+                .scope(vec![
+                    "https://www.googleapis.com/auth/cloud-platform".to_string()
+                ])
+                .build(),
+        )
+        .await
+        .context(ErrorData::RemoteCredentialHandoffFailed {
+            deployment_id: "dep_test".to_string(),
+            platform: Platform::Gcp,
+        })
+        .unwrap_err()
+        .into_generic();
         assert!(response.hits_async().await > 0);
         crate::providers::credential_errors::classify_credential_error(error)
     }

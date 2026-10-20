@@ -39,7 +39,8 @@ use alien_core::{
     container_resources::keep_volume_sizes_over_setup_source,
     import::{
         ImportContext, ImportedResource, StackImportRequest, StackImportResponse,
-        CURRENT_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+        MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+        MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
     },
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
@@ -659,7 +660,10 @@ pub async fn stack_import(
     let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
 
     let params = CreateImportedDeploymentParams {
-        deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        deployment_protocol_version: alien_core::deployment_protocol_version_for_platform(
+            req.platform,
+            req.base_platform,
+        ),
         name: deployment_name,
         deployment_group_id: deployment_group_id.clone(),
         platform: req.platform,
@@ -963,19 +967,19 @@ fn parse_stack_import_request(raw: serde_json::Value) -> crate::error::Result<St
             AlienError::new(ErrorData::IncompatibleSetupImport {
                 found_version: 0,
                 min_supported_version: MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
-                current_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                current_version: MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
                 repair: "Use a setup package that emits setupImportFormatVersion, or upgrade the setup package."
                     .to_string(),
             })
         })?;
 
-    if !(MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION..=CURRENT_SETUP_IMPORT_FORMAT_VERSION)
+    if !(MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION..=MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION)
         .contains(&found_version)
     {
         return Err(AlienError::new(ErrorData::IncompatibleSetupImport {
             found_version,
             min_supported_version: MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
-            current_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            current_version: MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
             repair: "Use a setup package compatible with this manager, or upgrade the manager."
                 .to_string(),
         }));
@@ -1781,7 +1785,7 @@ mod setup_update_authorization_tests {
 
     fn request() -> StackImportRequest {
         StackImportRequest {
-            setup_import_format_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            setup_import_format_version: alien_core::import::CURRENT_SETUP_IMPORT_FORMAT_VERSION,
             deployment_group_token: String::new(),
             deployment_name: "deployment".to_string(),
             resource_prefix: "deployment".to_string(),

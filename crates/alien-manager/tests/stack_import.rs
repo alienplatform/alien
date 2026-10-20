@@ -472,7 +472,7 @@ fn gcp_remote_management_import_request(
     project_id: &str,
     project_number: Option<&str>,
 ) -> StackImportRequest {
-    StackImportRequest {
+    let mut request = StackImportRequest {
         setup_import_format_version: 1,
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
@@ -528,7 +528,22 @@ fn gcp_remote_management_import_request(
             })
             .unwrap(),
         }],
+    };
+    for (id, service) in [
+        ("enable-iam", "iam.googleapis.com"),
+        (
+            "enable-cloud-resource-manager",
+            "cloudresourcemanager.googleapis.com",
+        ),
+        ("enable-iam-credentials", "iamcredentials.googleapis.com"),
+        ("enable-security-token-service", "sts.googleapis.com"),
+    ] {
+        request.resources.push(ImportedResource {
+            id: id.into(), resource_type: alien_core::ServiceActivation::RESOURCE_TYPE,
+            import_data: serde_json::json!({ "projectId": project_id, "serviceName": service, "activated": true }),
+        });
     }
+    request
 }
 
 fn azure_remote_management_import_request(
@@ -2976,7 +2991,7 @@ async fn reserve_gcp_import_fixture(fixture: &Fixture, body: &mut StackImportReq
     reserve_gcp_import_fixture_with_protocol(
         fixture,
         body,
-        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION,
     )
     .await
 }
@@ -3035,3 +3050,6 @@ async fn reserve_gcp_import_fixture_with_protocol(
 
 #[path = "stack_import/protocol.rs"]
 mod protocol;
+
+#[path = "stack_import/reservation.rs"]
+mod reservation;

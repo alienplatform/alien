@@ -106,16 +106,23 @@ pub async fn step(
 ) -> Result<DeploymentStepResult> {
     let mut current = current;
 
-    if current.protocol_version < alien_core::MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+    // Refuse an older control plane before project discovery or any cloud writes.
+    let min_protocol =
+        if config.base_platform.unwrap_or(current.platform) == alien_core::Platform::Gcp {
+            alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
+        } else {
+            alien_core::MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+        };
+    if current.protocol_version < min_protocol
         || current.protocol_version > alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
     {
         return Err(alien_error::AlienError::new(
             ErrorData::IncompatibleDeploymentProtocol {
                 found_version: current.protocol_version,
-                min_supported_version: alien_core::MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
+                min_supported_version: min_protocol,
                 current_version: alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
                 repair:
-                    "Upgrade the deployment actor or repair the deployment state before retrying."
+                    "Upgrade the management service and deployment actor before retrying setup."
                         .to_string(),
             },
         ));

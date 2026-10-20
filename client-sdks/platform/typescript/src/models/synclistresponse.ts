@@ -33,6 +33,8 @@ import {
 import {
   SyncListResponseBasePlatform,
   SyncListResponseBasePlatform$inboundSchema,
+  SyncListResponseCredentialRetryUnion,
+  SyncListResponseCredentialRetryUnion$inboundSchema,
   SyncListResponseDeployerSecret,
   SyncListResponseDeployerSecret$inboundSchema,
   SyncListResponseEnvironmentInfoUnion,
@@ -47,17 +49,95 @@ import {
   SyncListResponseStackState$inboundSchema,
   SyncListResponseStatus,
   SyncListResponseStatus$inboundSchema,
-} from "./synclistresponsependingpreparedstackdefaultunion.js";
+} from "./synclistresponsependingpreparedstackdefaultstringlist.js";
 import {
   SyncListResponsePendingPreparedStackUnion,
   SyncListResponsePendingPreparedStackUnion$inboundSchema,
+  SyncListResponsePreparedStackApprovalPlugins,
+  SyncListResponsePreparedStackApprovalPlugins$inboundSchema,
   SyncListResponsePreparedStackCustom,
   SyncListResponsePreparedStackCustom$inboundSchema,
   SyncListResponsePreparedStackInput,
   SyncListResponsePreparedStackInput$inboundSchema,
-  SyncListResponsePreparedStackPlugins,
-  SyncListResponsePreparedStackPlugins$inboundSchema,
-} from "./synclistresponsepreparedstackplugins.js";
+} from "./synclistresponsepreparedstackapprovalplugins.js";
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const SyncListResponsePreparedStackApprovalPluginsEnum = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type SyncListResponsePreparedStackApprovalPluginsEnum = ClosedEnum<
+  typeof SyncListResponsePreparedStackApprovalPluginsEnum
+>;
+
+/**
+ * Approval rule for the operations a pattern matches.
+ */
+export type SyncListResponsePreparedStackPluginsApprovalUnion =
+  | SyncListResponsePreparedStackApprovalPlugins
+  | SyncListResponsePreparedStackApprovalPluginsEnum;
+
+export type SyncListResponsePreparedStackSettingsPlugins3 = {
+  /**
+   * Environment variable name.
+   */
+  env: string;
+};
+
+export type SyncListResponsePreparedStackSettingsPlugins2 = {
+  /**
+   * Resource ids in the same stack.
+   */
+  resources: Array<string>;
+};
+
+export type SyncListResponsePreparedStackSettingsPlugins1 = {
+  /**
+   * Stack input id.
+   */
+  input: string;
+};
+
+/**
+ * Value of one plugin setting.
+ */
+export type SyncListResponsePreparedStackPluginsSettingsUnion =
+  | SyncListResponsePreparedStackSettingsPlugins1
+  | SyncListResponsePreparedStackSettingsPlugins2
+  | SyncListResponsePreparedStackSettingsPlugins3
+  | string;
+
+/**
+ * Settings and approval rules for one plugin.
+ */
+export type SyncListResponsePreparedStackPlugins = {
+  /**
+   * Approval rule per operation: an operation name, or `*` for all of them.
+   *
+   * @remarks
+   * Operations no rule matches need approval.
+   */
+  approval?: {
+    [k: string]:
+      | SyncListResponsePreparedStackApprovalPlugins
+      | SyncListResponsePreparedStackApprovalPluginsEnum;
+  } | undefined;
+  /**
+   * Values for the settings the plugin's manifest declares.
+   */
+  settings?: {
+    [k: string]:
+      | SyncListResponsePreparedStackSettingsPlugins1
+      | SyncListResponsePreparedStackSettingsPlugins2
+      | SyncListResponsePreparedStackSettingsPlugins3
+      | string;
+  } | undefined;
+};
 
 /**
  * Operations declared by a stack, or by an Operator installed on its own.
@@ -1515,6 +1595,10 @@ export type SyncListResponseRuntimeMetadata = {
    */
   automaticSetup?: boolean | undefined;
   /**
+   * Bounded credential retry state shared by all deployment drivers.
+   */
+  credentialRetry?: SyncListResponseCredentialRetryUnion | null | undefined;
+  /**
    * Whether each vault-native deployer secret is in the customer's secret
    *
    * @remarks
@@ -1758,6 +1842,24 @@ export type SyncListResponseManagementConfigAzure = {
   platform: SyncListResponseManagementConfigPlatformAzure;
 };
 
+/**
+ * The exact manager identity trusted by a deployment-owned identity pool.
+ */
+export type SyncListResponseFederationTrust = {
+  /**
+   * OIDC issuer; Google or the manager's Kubernetes issuer.
+   */
+  issuer: string;
+  /**
+   * Exact immutable Google account ID or Kubernetes service-account subject.
+   */
+  subject: string;
+};
+
+export type SyncListResponseFederationTrustUnion =
+  | SyncListResponseFederationTrust
+  | string;
+
 export const SyncListResponseManagementConfigPlatformGcp = {
   Gcp: "gcp",
 } as const;
@@ -1769,8 +1871,9 @@ export type SyncListResponseManagementConfigPlatformGcp = ClosedEnum<
  * GCP management configuration extracted from stack settings
  */
 export type SyncListResponseManagementConfigGcp = {
+  federationTrust?: SyncListResponseFederationTrust | string | null | undefined;
   /**
-   * Service account email for management roles
+   * Linked source account metadata; never a direct target trust grant.
    */
   serviceAccountEmail: string;
   platform: SyncListResponseManagementConfigPlatformGcp;
@@ -1992,6 +2095,162 @@ export type SyncListResponse = {
 };
 
 /** @internal */
+export const SyncListResponsePreparedStackApprovalPluginsEnum$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePreparedStackApprovalPluginsEnum> = z.enum(
+    SyncListResponsePreparedStackApprovalPluginsEnum,
+  );
+
+/** @internal */
+export const SyncListResponsePreparedStackPluginsApprovalUnion$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackPluginsApprovalUnion, unknown> = z
+    .union([
+      SyncListResponsePreparedStackApprovalPlugins$inboundSchema,
+      SyncListResponsePreparedStackApprovalPluginsEnum$inboundSchema,
+    ]);
+
+export function syncListResponsePreparedStackPluginsApprovalUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackPluginsApprovalUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackPluginsApprovalUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackPluginsApprovalUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackSettingsPlugins3$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackSettingsPlugins3, unknown> = z.object({
+    env: z.string(),
+  });
+
+export function syncListResponsePreparedStackSettingsPlugins3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackSettingsPlugins3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackSettingsPlugins3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackSettingsPlugins3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackSettingsPlugins2$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackSettingsPlugins2, unknown> = z.object({
+    resources: z.array(z.string()),
+  });
+
+export function syncListResponsePreparedStackSettingsPlugins2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackSettingsPlugins2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackSettingsPlugins2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackSettingsPlugins2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackSettingsPlugins1$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackSettingsPlugins1, unknown> = z.object({
+    input: z.string(),
+  });
+
+export function syncListResponsePreparedStackSettingsPlugins1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackSettingsPlugins1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackSettingsPlugins1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackSettingsPlugins1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackPluginsSettingsUnion$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackPluginsSettingsUnion, unknown> = z
+    .union([
+      z.lazy(() => SyncListResponsePreparedStackSettingsPlugins1$inboundSchema),
+      z.lazy(() => SyncListResponsePreparedStackSettingsPlugins2$inboundSchema),
+      z.lazy(() => SyncListResponsePreparedStackSettingsPlugins3$inboundSchema),
+      z.string(),
+    ]);
+
+export function syncListResponsePreparedStackPluginsSettingsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackPluginsSettingsUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackPluginsSettingsUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackPluginsSettingsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackPlugins$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackPlugins,
+  unknown
+> = z.object({
+  approval: z.record(
+    z.string(),
+    z.union([
+      SyncListResponsePreparedStackApprovalPlugins$inboundSchema,
+      SyncListResponsePreparedStackApprovalPluginsEnum$inboundSchema,
+    ]),
+  ).optional(),
+  settings: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncListResponsePreparedStackSettingsPlugins1$inboundSchema),
+      z.lazy(() => SyncListResponsePreparedStackSettingsPlugins2$inboundSchema),
+      z.lazy(() => SyncListResponsePreparedStackSettingsPlugins3$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+});
+
+export function syncListResponsePreparedStackPluginsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePreparedStackPlugins, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackPlugins$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackPlugins' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponsePreparedStackOperations$inboundSchema: z.ZodType<
   SyncListResponsePreparedStackOperations,
   unknown
@@ -1999,7 +2258,7 @@ export const SyncListResponsePreparedStackOperations$inboundSchema: z.ZodType<
   custom: z.array(SyncListResponsePreparedStackCustom$inboundSchema).optional(),
   plugins: z.record(
     z.string(),
-    SyncListResponsePreparedStackPlugins$inboundSchema,
+    z.lazy(() => SyncListResponsePreparedStackPlugins$inboundSchema),
   ).optional(),
 });
 
@@ -4269,6 +4528,9 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   automaticSetup: z.boolean().optional(),
+  credentialRetry: z.nullable(
+    SyncListResponseCredentialRetryUnion$inboundSchema,
+  ).optional(),
   deployerSecrets: z.array(SyncListResponseDeployerSecret$inboundSchema)
     .optional(),
   directSetupRevision: z.nullable(z.string()).optional(),
@@ -4427,6 +4689,45 @@ export function syncListResponseManagementConfigAzureFromJSON(
 }
 
 /** @internal */
+export const SyncListResponseFederationTrust$inboundSchema: z.ZodType<
+  SyncListResponseFederationTrust,
+  unknown
+> = z.object({
+  issuer: z.string(),
+  subject: z.string(),
+});
+
+export function syncListResponseFederationTrustFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseFederationTrust, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseFederationTrust$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseFederationTrust' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseFederationTrustUnion$inboundSchema: z.ZodType<
+  SyncListResponseFederationTrustUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseFederationTrust$inboundSchema),
+  z.string(),
+]);
+
+export function syncListResponseFederationTrustUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseFederationTrustUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseFederationTrustUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseFederationTrustUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponseManagementConfigPlatformGcp$inboundSchema:
   z.ZodEnum<typeof SyncListResponseManagementConfigPlatformGcp> = z.enum(
     SyncListResponseManagementConfigPlatformGcp,
@@ -4437,6 +4738,12 @@ export const SyncListResponseManagementConfigGcp$inboundSchema: z.ZodType<
   SyncListResponseManagementConfigGcp,
   unknown
 > = z.object({
+  federationTrust: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseFederationTrust$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   serviceAccountEmail: z.string(),
   platform: SyncListResponseManagementConfigPlatformGcp$inboundSchema,
 });

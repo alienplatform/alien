@@ -11,9 +11,17 @@ import {
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
+  DeploymentCheckRequestedEvent,
+  DeploymentCheckRequestedEvent$inboundSchema,
+} from "./deploymentcheckrequestedevent.js";
+import {
   DeploymentCredentialRotationEvent,
   DeploymentCredentialRotationEvent$inboundSchema,
 } from "./deploymentcredentialrotationevent.js";
+import {
+  DeploymentEndpointHealthChangedEvent,
+  DeploymentEndpointHealthChangedEvent$inboundSchema,
+} from "./deploymentendpointhealthchangedevent.js";
 import {
   DeploymentGroupMovedEvent,
   DeploymentGroupMovedEvent$inboundSchema,
@@ -1702,6 +1710,10 @@ export type EventListItemResponseDataRunningPreflights = {
    */
   stack: string;
   type: "RunningPreflights";
+  /**
+   * Non-blocking diagnostics reported by the completed checks.
+   */
+  warnings?: Array<string> | undefined;
 };
 
 export type EventListItemResponseDataBuildingStack = {
@@ -1721,6 +1733,8 @@ export type EventListItemResponseDataLoadingConfiguration = {
 };
 
 export type EventListItemResponseDataUnion =
+  | DeploymentCheckRequestedEvent
+  | DeploymentEndpointHealthChangedEvent
   | DeploymentGroupMovedEvent
   | EventListItemResponseDataLoadingConfiguration
   | EventListItemResponseDataFinished
@@ -1923,6 +1937,8 @@ export type EventListItemResponse = {
    */
   debugSessionId?: string | null | undefined;
   data:
+    | DeploymentCheckRequestedEvent
+    | DeploymentEndpointHealthChangedEvent
     | DeploymentGroupMovedEvent
     | EventListItemResponseDataLoadingConfiguration
     | EventListItemResponseDataFinished
@@ -4195,6 +4211,7 @@ export const EventListItemResponseDataRunningPreflights$inboundSchema:
     platform: z.string(),
     stack: z.string(),
     type: z.literal("RunningPreflights"),
+    warnings: z.array(z.string()).optional(),
   });
 
 export function eventListItemResponseDataRunningPreflightsFromJSON(
@@ -4278,6 +4295,8 @@ export const EventListItemResponseDataUnion$inboundSchema: z.ZodType<
   EventListItemResponseDataUnion,
   unknown
 > = z.union([
+  DeploymentCheckRequestedEvent$inboundSchema,
+  DeploymentEndpointHealthChangedEvent$inboundSchema,
   DeploymentGroupMovedEvent$inboundSchema,
   z.lazy(() => EventListItemResponseDataLoadingConfiguration$inboundSchema),
   z.lazy(() => EventListItemResponseDataFinished$inboundSchema),
@@ -4493,6 +4512,8 @@ export const EventListItemResponse$inboundSchema: z.ZodType<
   releaseId: z.nullable(z.string()).optional(),
   debugSessionId: z.nullable(z.string()).optional(),
   data: z.union([
+    DeploymentCheckRequestedEvent$inboundSchema,
+    DeploymentEndpointHealthChangedEvent$inboundSchema,
     DeploymentGroupMovedEvent$inboundSchema,
     z.lazy(() => EventListItemResponseDataLoadingConfiguration$inboundSchema),
     z.lazy(() => EventListItemResponseDataFinished$inboundSchema),

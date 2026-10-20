@@ -18,6 +18,8 @@ export type ListEventsGlobals = {
 
 export const ListEventsInclude = {
   ReleaseCreatedAt: "releaseCreatedAt",
+  EndpointHealth: "endpointHealth",
+  Releases: "releases",
 } as const;
 export type ListEventsInclude = ClosedEnum<typeof ListEventsInclude>;
 
@@ -35,7 +37,7 @@ export type ListEventsRequest = {
    */
   releaseId?: string | undefined;
   /**
-   * Optional fields to include: releaseCreatedAt
+   * Optional additions: releaseCreatedAt metadata, endpointHealth events, and `releases`, the title, version and commit of every release the listed events reference. Health events are opt-in for compatibility with existing clients.
    */
   include?: Array<ListEventsInclude> | undefined;
   /**
@@ -48,8 +50,22 @@ export type ListEventsRequest = {
   cursor?: string | undefined;
 };
 
+export type ListEventsRelease = {
+  /**
+   * Unique identifier for the release.
+   */
+  id: string;
+  version: string;
+  /**
+   * Human-readable release title
+   */
+  title?: string | null | undefined;
+  gitMetadata?: models.GitMetadata | null | undefined;
+  createdAt: Date;
+};
+
 /**
- * Paginated response
+ * Retrieved events.
  */
 export type ListEventsResponse = {
   /**
@@ -60,6 +76,10 @@ export type ListEventsResponse = {
    * Cursor for the next page, null if last page
    */
   nextCursor: string | null;
+  /**
+   * Releases the listed events reference, with ?include=releases
+   */
+  releases?: Array<ListEventsRelease> | undefined;
 };
 
 /** @internal */
@@ -99,12 +119,35 @@ export function listEventsRequestToJSON(
 }
 
 /** @internal */
+export const ListEventsRelease$inboundSchema: z.ZodType<
+  ListEventsRelease,
+  unknown
+> = z.object({
+  id: z.string(),
+  version: z.string(),
+  title: z.nullable(z.string()).optional(),
+  gitMetadata: z.nullable(models.GitMetadata$inboundSchema).optional(),
+  createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+});
+
+export function listEventsReleaseFromJSON(
+  jsonString: string,
+): SafeParseResult<ListEventsRelease, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ListEventsRelease$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ListEventsRelease' from JSON`,
+  );
+}
+
+/** @internal */
 export const ListEventsResponse$inboundSchema: z.ZodType<
   ListEventsResponse,
   unknown
 > = z.object({
   items: z.array(models.EventListItemResponse$inboundSchema),
   nextCursor: z.nullable(z.string()),
+  releases: z.array(z.lazy(() => ListEventsRelease$inboundSchema)).optional(),
 });
 
 export function listEventsResponseFromJSON(

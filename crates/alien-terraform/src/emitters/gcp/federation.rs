@@ -79,7 +79,7 @@ pub(super) fn emit(fragment: &mut TfFragment, label: &str, purpose: &ResourceTyp
     fragment.resource_blocks.push(resource_block("google_service_account_iam_member", &pool, [
         attr("service_account_id", expr::traversal(["google_service_account", label, "id"])),
         attr("role", Expression::String("roles/iam.workloadIdentityUser".into())),
-        attr("member", expr::raw(format!("\"principal://iam.googleapis.com/${{google_iam_workload_identity_pool.{pool}.name}}/subject/${{urlencode(var.managing_oidc_subject)}}\""))),
+        attr("member", expr::raw(format!("\"principal://iam.googleapis.com/${{google_iam_workload_identity_pool.{pool}.name}}/subject/${{var.managing_oidc_subject}}\""))),
         attr("depends_on", expr::raw(format!("[google_iam_workload_identity_pool_provider.{pool}]"))),
     ]));
 }

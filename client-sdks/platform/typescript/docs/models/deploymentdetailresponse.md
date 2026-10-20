@@ -27,11 +27,16 @@ let value: DeploymentDetailResponse = {
       reasons: [],
       targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       changedKeys: [],
-      requestedAt: new Date("2026-04-28T10:12:17.277Z"),
+      cause: {
+        kind: "volume-restore",
+        at: new Date("2024-04-20T16:58:36.345Z"),
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      },
+      requestedAt: new Date("2024-05-03T02:14:14.983Z"),
     },
     next: {
       id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-      status: "blocked",
+      status: "applying",
       reasons: [],
       targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       changedKeys: [
@@ -39,21 +44,28 @@ let value: DeploymentDetailResponse = {
         "<value 2>",
         "<value 3>",
       ],
-      requestedAt: new Date("2025-05-23T02:17:08.731Z"),
+      cause: {
+        kind: "volume-restore",
+        at: new Date("2024-04-20T16:58:36.345Z"),
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      },
+      requestedAt: new Date("2025-07-21T11:59:25.062Z"),
     },
     latest: {
       id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-      status: "superseded",
-      reasons: [
-        "redeploy",
-      ],
+      status: "queued",
+      reasons: [],
       targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       changedKeys: [
         "<value 1>",
         "<value 2>",
-        "<value 3>",
       ],
-      requestedAt: new Date("2024-11-23T19:43:18.153Z"),
+      cause: {
+        kind: "volume-restore",
+        at: new Date("2024-04-20T16:58:36.345Z"),
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      },
+      requestedAt: new Date("2026-06-26T04:52:21.740Z"),
     },
   },
   createdAt: new Date("2025-05-12T19:36:51.813Z"),
@@ -61,6 +73,24 @@ let value: DeploymentDetailResponse = {
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   workspaceId: "ws_It13CUaGEhLLAB87simX0",
   release: null,
+  desiredRelease: {
+    id: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    version: "<value>",
+    gitMetadata: {
+      commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
+      commitMessage:
+        "add method to measure Interaction to Next Paint (INP) (#36490)",
+      commitRef: "main",
+      commitDate: new Date("2026-03-16T12:00:00Z"),
+      dirty: true,
+      remoteUrl: "https://github.com/alienplatform/alien",
+      commitAuthorName: "John Doe",
+      commitAuthorEmail: "john@example.com",
+      commitAuthorLogin: "johndoe",
+      commitAuthorAvatarUrl: "https://github.com/johndoe.png",
+    },
+    createdAt: new Date("2024-02-09T10:08:53.771Z"),
+  },
   deploymentGroup: {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     name: "prod-us-east-1",
@@ -74,7 +104,7 @@ let value: DeploymentDetailResponse = {
     id: "dosy_uxveigz3biyrosqycaqubbr",
     status: "ready",
     targetBundleHash: "<value>",
-    targetSetAt: new Date("2024-02-09T10:08:53.771Z"),
+    targetSetAt: new Date("2025-04-02T12:41:43.968Z"),
   },
 };
 ```
@@ -125,7 +155,9 @@ let value: DeploymentDetailResponse = {
 | `managerId`                                                                                                                                                                                                                                                         | *string*                                                                                                                                                                                                                                                            | :heavy_check_mark:                                                                                                                                                                                                                                                  | N/A                                                                                                                                                                                                                                                                 | mgr_enxscjrqiiu2lrc672hwwuc5                                                                                                                                                                                                                                        |
 | `workspaceId`                                                                                                                                                                                                                                                       | *string*                                                                                                                                                                                                                                                            | :heavy_check_mark:                                                                                                                                                                                                                                                  | Unique identifier for the workspace.                                                                                                                                                                                                                                | ws_It13CUaGEhLLAB87simX0                                                                                                                                                                                                                                            |
 | `customerKeyUnavailable`                                                                                                                                                                                                                                            | *boolean*                                                                                                                                                                                                                                                           | :heavy_minus_sign:                                                                                                                                                                                                                                                  | A customer encryption key is unavailable. Dependent resources are preserved until access returns.                                                                                                                                                                   |                                                                                                                                                                                                                                                                     |
+| `resourceObservedAt`                                                                                                                                                                                                                                                | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)                                                                                                                                                                       | :heavy_minus_sign:                                                                                                                                                                                                                                                  | Time of the last accepted runtime checkpoint or heartbeat; absent before registration.                                                                                                                                                                              |                                                                                                                                                                                                                                                                     |
 | `release`                                                                                                                                                                                                                                                           | [models.DeploymentReleaseInfo](../models/deploymentreleaseinfo.md)                                                                                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                                                                                                                  | N/A                                                                                                                                                                                                                                                                 |                                                                                                                                                                                                                                                                     |
+| `desiredRelease`                                                                                                                                                                                                                                                    | [models.DeploymentReleaseInfo](../models/deploymentreleaseinfo.md)                                                                                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                                                                                                                  | N/A                                                                                                                                                                                                                                                                 |                                                                                                                                                                                                                                                                     |
 | `deploymentGroup`                                                                                                                                                                                                                                                   | [models.DeploymentGroupInfo](../models/deploymentgroupinfo.md)                                                                                                                                                                                                      | :heavy_minus_sign:                                                                                                                                                                                                                                                  | N/A                                                                                                                                                                                                                                                                 |                                                                                                                                                                                                                                                                     |
 | `project`                                                                                                                                                                                                                                                           | [models.DeploymentProjectInfo](../models/deploymentprojectinfo.md)                                                                                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                                                                                                                  | N/A                                                                                                                                                                                                                                                                 |                                                                                                                                                                                                                                                                     |
 | `operatorSync`                                                                                                                                                                                                                                                      | [models.OperatorSync](../models/operatorsync.md)                                                                                                                                                                                                                    | :heavy_minus_sign:                                                                                                                                                                                                                                                  | Plugin/operations-bundle sync status for this deployment's Operator. Null for non-pull deployments.                                                                                                                                                                 |                                                                                                                                                                                                                                                                     |

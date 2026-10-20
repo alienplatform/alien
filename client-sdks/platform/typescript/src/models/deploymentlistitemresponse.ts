@@ -348,6 +348,10 @@ export type DeploymentListItemResponse = {
    */
   status: DeploymentListItemResponseStatus;
   /**
+   * A customer encryption key is unavailable. Dependent resources are preserved until access returns.
+   */
+  customerKeyUnavailable?: boolean | undefined;
+  /**
    * Unique identifier for the project.
    */
   projectId: string;
@@ -444,6 +448,10 @@ export type DeploymentListItemResponse = {
    * Whether a retry has been requested
    */
   retryRequested: boolean;
+  /**
+   * Whether the deployment's latest update waits for the deployment owner to rerun setup. The deployment keeps running its current release until then.
+   */
+  updateBlocked: boolean;
   createdAt: Date;
   updatedAt: Date;
   /**
@@ -690,6 +698,7 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   id: z.string(),
   name: z.string(),
   status: DeploymentListItemResponseStatus$inboundSchema,
+  customerKeyUnavailable: z.boolean().optional(),
   projectId: z.string(),
   platform: DeploymentListItemResponsePlatform$inboundSchema,
   deploymentProtocolVersion: z.int(),
@@ -735,6 +744,7 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   error: z.nullable(z.lazy(() => DeploymentListItemResponseError$inboundSchema))
     .optional(),
   retryRequested: z.boolean(),
+  updateBlocked: z.boolean(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   managerId: z.string(),

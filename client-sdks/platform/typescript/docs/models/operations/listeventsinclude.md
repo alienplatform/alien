@@ -11,5 +11,5 @@ let value: ListEventsInclude = "endpointHealth";
 ## Values
 
 ```typescript
-"releaseCreatedAt" | "endpointHealth"
+"releaseCreatedAt" | "endpointHealth" | "releases"
 ```

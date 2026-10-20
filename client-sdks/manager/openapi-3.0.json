@@ -6823,6 +6823,15 @@
           "platform"
         ],
         "properties": {
+          "basePlatform": {
+            "nullable": true,
+            "description": "Base cloud for a Kubernetes installation; omitted for cloud-native targets.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Platform"
+              }
+            ]
+          },
           "deploymentGroupId": {
             "type": "string",
             "nullable": true
@@ -6842,10 +6851,22 @@
           "name": {
             "type": "string"
           },
+          "pinnedReleaseId": {
+            "type": "string",
+            "nullable": true
+          },
           "platform": {
             "$ref": "#/components/schemas/Platform"
           },
           "resourcePrefix": {
+            "type": "string",
+            "nullable": true
+          },
+          "setupHandoff": {
+            "$ref": "#/components/schemas/SetupHandoff",
+            "description": "Reserve an installation before an external setup package creates resources."
+          },
+          "setupMethod": {
             "type": "string",
             "nullable": true
           },
@@ -7372,7 +7393,7 @@
           "deploymentProtocolVersion": {
             "type": "integer",
             "format": "int32",
-            "description": "Required by the platform-SDK Deployment schema. Hard-coded to\nalien-core's `CURRENT_DEPLOYMENT_PROTOCOL_VERSION` so the CLI\naccepts the response.",
+            "description": "State protocol stored on this deployment and required by its runtime.",
             "minimum": 0
           },
           "desiredReleaseId": {
@@ -16872,6 +16893,13 @@
             "type": "string"
           }
         }
+      },
+      "SetupHandoff": {
+        "type": "string",
+        "enum": [
+          "immediate",
+          "await-registration"
+        ]
       },
       "SetupManagement": {
         "type": "string",

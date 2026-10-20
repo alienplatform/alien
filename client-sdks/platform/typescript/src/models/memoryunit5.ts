@@ -521,6 +521,10 @@ export type DaemonInstanceMemoryUnion4 = MemoryDaemonInstance4 | string;
 
 export type DaemonInstance4 = {
   cpu?: CpuDaemonInstance4 | string | null | undefined;
+  /**
+   * Image this replica runs.
+   */
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryDaemonInstance4 | string | null | undefined;
@@ -691,6 +695,10 @@ export type DaemonInstanceMemoryUnion3 = MemoryDaemonInstance3 | string;
 
 export type DaemonInstance3 = {
   cpu?: CpuDaemonInstance3 | string | null | undefined;
+  /**
+   * Image this replica runs.
+   */
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryDaemonInstance3 | string | null | undefined;
@@ -861,6 +869,10 @@ export type DaemonInstanceMemoryUnion2 = MemoryDaemonInstance2 | string;
 
 export type DaemonInstance2 = {
   cpu?: CpuDaemonInstance2 | string | null | undefined;
+  /**
+   * Image this replica runs.
+   */
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryDaemonInstance2 | string | null | undefined;
@@ -1031,6 +1043,10 @@ export type DaemonInstanceMemoryUnion1 = MemoryDaemonInstance1 | string;
 
 export type DaemonInstance1 = {
   cpu?: CpuDaemonInstance1 | string | null | undefined;
+  /**
+   * Image this replica runs.
+   */
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryDaemonInstance1 | string | null | undefined;
@@ -2530,6 +2546,7 @@ export function daemonInstanceMemoryUnion4ToJSON(
 /** @internal */
 export type DaemonInstance4$Outbound = {
   cpu?: CpuDaemonInstance4$Outbound | string | null | undefined;
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryDaemonInstance4$Outbound | string | null | undefined;
@@ -2557,6 +2574,7 @@ export const DaemonInstance4$outboundSchema: z.ZodType<
   cpu: z.nullable(
     z.union([z.lazy(() => CpuDaemonInstance4$outboundSchema), z.string()]),
   ).optional(),
+  image: z.nullable(z.string()).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
@@ -2943,6 +2961,7 @@ export function daemonInstanceMemoryUnion3ToJSON(
 /** @internal */
 export type DaemonInstance3$Outbound = {
   cpu?: CpuDaemonInstance3$Outbound | string | null | undefined;
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryDaemonInstance3$Outbound | string | null | undefined;
@@ -2970,6 +2989,7 @@ export const DaemonInstance3$outboundSchema: z.ZodType<
   cpu: z.nullable(
     z.union([z.lazy(() => CpuDaemonInstance3$outboundSchema), z.string()]),
   ).optional(),
+  image: z.nullable(z.string()).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
@@ -3356,6 +3376,7 @@ export function daemonInstanceMemoryUnion2ToJSON(
 /** @internal */
 export type DaemonInstance2$Outbound = {
   cpu?: CpuDaemonInstance2$Outbound | string | null | undefined;
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryDaemonInstance2$Outbound | string | null | undefined;
@@ -3383,6 +3404,7 @@ export const DaemonInstance2$outboundSchema: z.ZodType<
   cpu: z.nullable(
     z.union([z.lazy(() => CpuDaemonInstance2$outboundSchema), z.string()]),
   ).optional(),
+  image: z.nullable(z.string()).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
@@ -3767,6 +3789,7 @@ export function daemonInstanceMemoryUnion1ToJSON(
 /** @internal */
 export type DaemonInstance1$Outbound = {
   cpu?: CpuDaemonInstance1$Outbound | string | null | undefined;
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryDaemonInstance1$Outbound | string | null | undefined;
@@ -3794,6 +3817,7 @@ export const DaemonInstance1$outboundSchema: z.ZodType<
   cpu: z.nullable(
     z.union([z.lazy(() => CpuDaemonInstance1$outboundSchema), z.string()]),
   ).optional(),
+  image: z.nullable(z.string()).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(

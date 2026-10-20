@@ -470,6 +470,10 @@ export type ReplicaUnitMemoryUnion = MemoryReplicaUnit | string;
 
 export type ReplicaUnit = {
   cpu?: CpuReplicaUnit | string | null | undefined;
+  /**
+   * Image this replica runs.
+   */
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryReplicaUnit | string | null | undefined;
@@ -2440,6 +2444,7 @@ export function replicaUnitMemoryUnionToJSON(
 /** @internal */
 export type ReplicaUnit$Outbound = {
   cpu?: CpuReplicaUnit$Outbound | string | null | undefined;
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryReplicaUnit$Outbound | string | null | undefined;
@@ -2467,6 +2472,7 @@ export const ReplicaUnit$outboundSchema: z.ZodType<
   cpu: z.nullable(
     z.union([z.lazy(() => CpuReplicaUnit$outboundSchema), z.string()]),
   ).optional(),
+  image: z.nullable(z.string()).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(

@@ -35,6 +35,7 @@ let value: GetResourceDeploymentDetailResponse = {
     resourceId: "<id>",
     resourceType: "<value>",
   },
+  replicaReleases: [],
 };
 ```
 
@@ -44,3 +45,4 @@ let value: GetResourceDeploymentDetailResponse = {
 | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `deployment`                                                                                                         | [operations.GetResourceDeploymentDetailDeployment](../../models/operations/getresourcedeploymentdetaildeployment.md) | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
 | `heartbeat`                                                                                                          | *operations.HeartbeatUnion*                                                                                          | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
+| `replicaReleases`                                                                                                    | [operations.ReplicaRelease](../../models/operations/replicarelease.md)[]                                             | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |

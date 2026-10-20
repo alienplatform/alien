@@ -23,7 +23,7 @@ use crate::{
     target::TerraformTarget,
 };
 use alien_core::{
-    import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
+    import::{setup_import_format_version_for_platform, EmitContext},
     ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, Key, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
@@ -2048,7 +2048,7 @@ fn variables_body(
         // Keep the reservation input on every GCP package as its setup contract marker.
         blocks.push(nested(variable_block(
             "deployment_id",
-            "Immutable deployment ID returned by registration before cloud setup.",
+            "Immutable deployment ID reserved by the management service before setup.",
             (!needs_gcp_federation).then(|| Expression::String(String::new())),
             false,
         )));
@@ -3561,7 +3561,7 @@ fn registration_body(
             attr(
                 "setup_import_format_version",
                 Expression::Number(hcl::Number::from(i64::from(
-                    CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                    setup_import_format_version_for_platform(target.cloud_platform()),
                 ))),
             ),
             attr(
@@ -3628,7 +3628,7 @@ fn registration_body(
                 (
                     "setup_import_format_version",
                     Expression::Number(hcl::Number::from(i64::from(
-                        CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                        setup_import_format_version_for_platform(target.cloud_platform()),
                     ))),
                 ),
                 (
@@ -4136,7 +4136,7 @@ fn outputs_body(
         (
             "deployment_setup_import_format_version",
             Expression::Number(hcl::Number::from(i64::from(
-                CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                setup_import_format_version_for_platform(target.cloud_platform()),
             ))),
             "Setup registration payload format version.",
         ),

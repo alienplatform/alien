@@ -1351,6 +1351,8 @@ export type DeploymentInfoDeploymentGroup = {
   id: string;
   name: string;
   pinnedSubdomain: string | null;
+  maxDeployments: number;
+  currentCount: number;
 };
 
 export type DeploymentInfoWorkspace = {
@@ -2040,6 +2042,24 @@ export type DeploymentInfoManagementConfigAzure = {
   platform: TargetsPlatformAzure;
 };
 
+/**
+ * The exact manager identity trusted by a deployment-owned identity pool.
+ */
+export type DeploymentInfoFederationTrust = {
+  /**
+   * OIDC issuer; Google or the manager's Kubernetes issuer.
+   */
+  issuer: string;
+  /**
+   * Exact immutable Google account ID or Kubernetes service-account subject.
+   */
+  subject: string;
+};
+
+export type DeploymentInfoFederationTrustUnion =
+  | DeploymentInfoFederationTrust
+  | string;
+
 export const TargetsPlatformGcp = {
   Gcp: "gcp",
 } as const;
@@ -2049,8 +2069,9 @@ export type TargetsPlatformGcp = ClosedEnum<typeof TargetsPlatformGcp>;
  * GCP management configuration extracted from stack settings
  */
 export type DeploymentInfoManagementConfigGcp = {
+  federationTrust?: DeploymentInfoFederationTrust | string | null | undefined;
   /**
-   * Service account email for management roles
+   * Linked source account metadata; never a direct target trust grant.
    */
   serviceAccountEmail: string;
   platform: TargetsPlatformGcp;
@@ -4172,6 +4193,8 @@ export const DeploymentInfoDeploymentGroup$inboundSchema: z.ZodType<
   id: z.string(),
   name: z.string(),
   pinnedSubdomain: z.nullable(z.string()),
+  maxDeployments: z.int(),
+  currentCount: z.int(),
 });
 
 export function deploymentInfoDeploymentGroupFromJSON(
@@ -4904,6 +4927,45 @@ export function deploymentInfoManagementConfigAzureFromJSON(
 }
 
 /** @internal */
+export const DeploymentInfoFederationTrust$inboundSchema: z.ZodType<
+  DeploymentInfoFederationTrust,
+  unknown
+> = z.object({
+  issuer: z.string(),
+  subject: z.string(),
+});
+
+export function deploymentInfoFederationTrustFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoFederationTrust, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoFederationTrust$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoFederationTrust' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoFederationTrustUnion$inboundSchema: z.ZodType<
+  DeploymentInfoFederationTrustUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentInfoFederationTrust$inboundSchema),
+  z.string(),
+]);
+
+export function deploymentInfoFederationTrustUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoFederationTrustUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoFederationTrustUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoFederationTrustUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const TargetsPlatformGcp$inboundSchema: z.ZodEnum<
   typeof TargetsPlatformGcp
 > = z.enum(TargetsPlatformGcp);
@@ -4913,6 +4975,12 @@ export const DeploymentInfoManagementConfigGcp$inboundSchema: z.ZodType<
   DeploymentInfoManagementConfigGcp,
   unknown
 > = z.object({
+  federationTrust: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentInfoFederationTrust$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   serviceAccountEmail: z.string(),
   platform: TargetsPlatformGcp$inboundSchema,
 });

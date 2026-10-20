@@ -11,5 +11,5 @@ let value: ReleaseRolloutState = "updated";
 ## Values
 
 ```typescript
-"updated" | "updating" | "failed" | "pending" | "pinned-other" | "superseded" | "on-other"
+"updated" | "updating" | "failed" | "pending" | "waiting-on-owner" | "waiting-on-inputs" | "pinned-other" | "superseded" | "on-other"
 ```

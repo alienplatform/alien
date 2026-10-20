@@ -300,6 +300,28 @@ export type ReleaseDeploymentItemError = {
   source?: any | null | undefined;
 };
 
+/**
+ * What promoting this release to the requested `channel` does to the deployment. Present only when the request names a channel.
+ */
+export const ReleaseDeploymentItemPromotionEffect = {
+  Updates: "updates",
+  Unconfirmed: "unconfirmed",
+  Retries: "retries",
+  AlreadyOn: "already-on",
+  Pinned: "pinned",
+  CustomerApplies: "customer-applies",
+  WaitsForApproval: "waits-for-approval",
+  WaitsForOwner: "waits-for-owner",
+  WaitsForInputs: "waits-for-inputs",
+  NotAffected: "not-affected",
+} as const;
+/**
+ * What promoting this release to the requested `channel` does to the deployment. Present only when the request names a channel.
+ */
+export type ReleaseDeploymentItemPromotionEffect = ClosedEnum<
+  typeof ReleaseDeploymentItemPromotionEffect
+>;
+
 export type ReleaseDeploymentItem = {
   /**
    * Unique identifier for the deployment.
@@ -365,6 +387,10 @@ export type ReleaseDeploymentItem = {
    * Latest error information if the deployment is in a failed state
    */
   error?: ReleaseDeploymentItemError | null | undefined;
+  /**
+   * What promoting this release to the requested `channel` does to the deployment. Present only when the request names a channel.
+   */
+  promotionEffect?: ReleaseDeploymentItemPromotionEffect | null | undefined;
 };
 
 /** @internal */
@@ -610,6 +636,11 @@ export function releaseDeploymentItemErrorFromJSON(
 }
 
 /** @internal */
+export const ReleaseDeploymentItemPromotionEffect$inboundSchema: z.ZodEnum<
+  typeof ReleaseDeploymentItemPromotionEffect
+> = z.enum(ReleaseDeploymentItemPromotionEffect);
+
+/** @internal */
 export const ReleaseDeploymentItem$inboundSchema: z.ZodType<
   ReleaseDeploymentItem,
   unknown
@@ -644,6 +675,9 @@ export const ReleaseDeploymentItem$inboundSchema: z.ZodType<
   durationMs: z.nullable(z.int()),
   error: z.nullable(z.lazy(() => ReleaseDeploymentItemError$inboundSchema))
     .optional(),
+  promotionEffect: z.nullable(
+    ReleaseDeploymentItemPromotionEffect$inboundSchema,
+  ).optional(),
 });
 
 export function releaseDeploymentItemFromJSON(

@@ -28,11 +28,16 @@ let value: CreateDeploymentResponse = {
         reasons: [],
         targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         changedKeys: [],
-        requestedAt: new Date("2026-04-28T10:12:17.277Z"),
+        cause: {
+          kind: "volume-restore",
+          at: new Date("2024-04-20T16:58:36.345Z"),
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        },
+        requestedAt: new Date("2024-05-03T02:14:14.983Z"),
       },
       next: {
         id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-        status: "blocked",
+        status: "applying",
         reasons: [],
         targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         changedKeys: [
@@ -40,29 +45,36 @@ let value: CreateDeploymentResponse = {
           "<value 2>",
           "<value 3>",
         ],
-        requestedAt: new Date("2025-05-23T02:17:08.731Z"),
+        cause: {
+          kind: "volume-restore",
+          at: new Date("2024-04-20T16:58:36.345Z"),
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        },
+        requestedAt: new Date("2025-07-21T11:59:25.062Z"),
       },
       latest: {
         id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-        status: "superseded",
-        reasons: [
-          "redeploy",
-        ],
+        status: "queued",
+        reasons: [],
         targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         changedKeys: [
           "<value 1>",
           "<value 2>",
-          "<value 3>",
         ],
-        requestedAt: new Date("2024-11-23T19:43:18.153Z"),
+        cause: {
+          kind: "volume-restore",
+          at: new Date("2024-04-20T16:58:36.345Z"),
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        },
+        requestedAt: new Date("2026-06-26T04:52:21.740Z"),
       },
     },
-    createdAt: new Date("2024-01-02T08:31:30.348Z"),
-    updatedAt: new Date("2025-07-14T02:26:55.487Z"),
+    createdAt: new Date("2024-01-13T13:20:22.491Z"),
+    updatedAt: new Date("2025-07-24T15:47:13.039Z"),
     managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
     workspaceId: "ws_It13CUaGEhLLAB87simX0",
   },
-  deploymentModel: "push",
+  deploymentModel: "pull",
 };
 ```
 

@@ -26,6 +26,18 @@ use tracing::{debug, info};
 /// - postgres: sqladmin.googleapis.com (Cloud SQL) + compute.googleapis.com (PSC) + secretmanager.googleapis.com (connection secret)
 /// - network: compute.googleapis.com (Compute Engine)
 /// - compute-cluster: compute.googleapis.com (Compute Engine)
+// Google documents these prerequisites for customer-owned workload federation.
+// Setup enables them; runtime identities do not receive Service Usage administration.
+pub(crate) const GCP_FEDERATION_SERVICES: [(&str, &str); 4] = [
+    ("enable-iam", "iam.googleapis.com"),
+    (
+        "enable-cloud-resource-manager",
+        "cloudresourcemanager.googleapis.com",
+    ),
+    ("enable-iam-credentials", "iamcredentials.googleapis.com"),
+    ("enable-security-token-service", "sts.googleapis.com"),
+];
+
 pub struct GcpServiceActivationMutation;
 
 #[async_trait]
@@ -165,6 +177,12 @@ impl GcpServiceActivationMutation {
         for (_, entry) in &stack.resources {
             let resource_type = entry.config.resource_type();
             match resource_type.as_ref() {
+                "remote-stack-management" | "resource-access" => {
+                    for (id, service) in GCP_FEDERATION_SERVICES {
+                        services.insert(id.to_string(), service.to_string());
+                    }
+                }
+
                 "worker" => {
                     services.insert(
                         "enable-cloud-run".to_string(),

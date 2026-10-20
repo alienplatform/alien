@@ -69,11 +69,28 @@ export type GetManagerManagementConfigAzure = {
 };
 
 /**
+ * The exact manager identity trusted by a deployment-owned identity pool.
+ */
+export type FederationTrust = {
+  /**
+   * OIDC issuer; Google or the manager's Kubernetes issuer.
+   */
+  issuer: string;
+  /**
+   * Exact immutable Google account ID or Kubernetes service-account subject.
+   */
+  subject: string;
+};
+
+export type FederationTrustUnion = FederationTrust | string;
+
+/**
  * GCP management configuration extracted from stack settings
  */
 export type GetManagerManagementConfigGcp = {
+  federationTrust?: FederationTrust | string | null | undefined;
   /**
-   * Service account email for management roles
+   * Linked source account metadata; never a direct target trust grant.
    */
   serviceAccountEmail: string;
   platform: "gcp";
@@ -176,10 +193,48 @@ export function getManagerManagementConfigAzureFromJSON(
 }
 
 /** @internal */
+export const FederationTrust$inboundSchema: z.ZodType<
+  FederationTrust,
+  unknown
+> = z.object({
+  issuer: z.string(),
+  subject: z.string(),
+});
+
+export function federationTrustFromJSON(
+  jsonString: string,
+): SafeParseResult<FederationTrust, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => FederationTrust$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'FederationTrust' from JSON`,
+  );
+}
+
+/** @internal */
+export const FederationTrustUnion$inboundSchema: z.ZodType<
+  FederationTrustUnion,
+  unknown
+> = z.union([z.lazy(() => FederationTrust$inboundSchema), z.string()]);
+
+export function federationTrustUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<FederationTrustUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => FederationTrustUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'FederationTrustUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const GetManagerManagementConfigGcp$inboundSchema: z.ZodType<
   GetManagerManagementConfigGcp,
   unknown
 > = z.object({
+  federationTrust: z.nullable(
+    z.union([z.lazy(() => FederationTrust$inboundSchema), z.string()]),
+  ).optional(),
   serviceAccountEmail: z.string(),
   platform: z.literal("gcp"),
 });

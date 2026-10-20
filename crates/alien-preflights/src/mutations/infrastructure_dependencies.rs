@@ -327,6 +327,15 @@ impl InfrastructureDependenciesMutation {
 
             // GCP dependencies
             // An installed Key from before the activation existed has none.
+            (Platform::Gcp, "remote-stack-management" | "resource-access") => {
+                super::gcp_service_activation::GCP_FEDERATION_SERVICES
+                    .iter()
+                    .filter(|(id, _)| stack.resources.contains_key(*id))
+                    .map(|(id, _)| {
+                        ResourceRef::new(alien_core::ServiceActivation::RESOURCE_TYPE, *id)
+                    })
+                    .collect()
+            }
             (Platform::Gcp, "key") => stack
                 .resources
                 .contains_key(CLOUD_KMS_ACTIVATION_ID)

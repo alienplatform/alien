@@ -1396,6 +1396,24 @@ export type CreateSetupRegistrationOperationRequestManagementConfigAzure = {
   platform: CreateSetupRegistrationOperationRequestPlatformAzure;
 };
 
+/**
+ * The exact manager identity trusted by a deployment-owned identity pool.
+ */
+export type CreateSetupRegistrationOperationRequestFederationTrust = {
+  /**
+   * OIDC issuer; Google or the manager's Kubernetes issuer.
+   */
+  issuer: string;
+  /**
+   * Exact immutable Google account ID or Kubernetes service-account subject.
+   */
+  subject: string;
+};
+
+export type CreateSetupRegistrationOperationRequestFederationTrustUnion =
+  | CreateSetupRegistrationOperationRequestFederationTrust
+  | string;
+
 export const CreateSetupRegistrationOperationRequestPlatformGcp = {
   Gcp: "gcp",
 } as const;
@@ -1407,8 +1425,13 @@ export type CreateSetupRegistrationOperationRequestPlatformGcp = ClosedEnum<
  * GCP management configuration extracted from stack settings
  */
 export type CreateSetupRegistrationOperationRequestManagementConfigGcp = {
+  federationTrust?:
+    | CreateSetupRegistrationOperationRequestFederationTrust
+    | string
+    | null
+    | undefined;
   /**
-   * Service account email for management roles
+   * Linked source account metadata; never a direct target trust grant.
    */
   serviceAccountEmail: string;
   platform: CreateSetupRegistrationOperationRequestPlatformGcp;
@@ -4523,6 +4546,60 @@ export function createSetupRegistrationOperationRequestManagementConfigAzureToJS
 }
 
 /** @internal */
+export type CreateSetupRegistrationOperationRequestFederationTrust$Outbound = {
+  issuer: string;
+  subject: string;
+};
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestFederationTrust$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestFederationTrust$Outbound,
+    CreateSetupRegistrationOperationRequestFederationTrust
+  > = z.object({
+    issuer: z.string(),
+    subject: z.string(),
+  });
+
+export function createSetupRegistrationOperationRequestFederationTrustToJSON(
+  createSetupRegistrationOperationRequestFederationTrust:
+    CreateSetupRegistrationOperationRequestFederationTrust,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestFederationTrust$outboundSchema.parse(
+      createSetupRegistrationOperationRequestFederationTrust,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestFederationTrustUnion$Outbound =
+  | CreateSetupRegistrationOperationRequestFederationTrust$Outbound
+  | string;
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestFederationTrustUnion$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestFederationTrustUnion$Outbound,
+    CreateSetupRegistrationOperationRequestFederationTrustUnion
+  > = z.union([
+    z.lazy(() =>
+      CreateSetupRegistrationOperationRequestFederationTrust$outboundSchema
+    ),
+    z.string(),
+  ]);
+
+export function createSetupRegistrationOperationRequestFederationTrustUnionToJSON(
+  createSetupRegistrationOperationRequestFederationTrustUnion:
+    CreateSetupRegistrationOperationRequestFederationTrustUnion,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestFederationTrustUnion$outboundSchema
+      .parse(createSetupRegistrationOperationRequestFederationTrustUnion),
+  );
+}
+
+/** @internal */
 export const CreateSetupRegistrationOperationRequestPlatformGcp$outboundSchema:
   z.ZodEnum<typeof CreateSetupRegistrationOperationRequestPlatformGcp> = z.enum(
     CreateSetupRegistrationOperationRequestPlatformGcp,
@@ -4531,6 +4608,11 @@ export const CreateSetupRegistrationOperationRequestPlatformGcp$outboundSchema:
 /** @internal */
 export type CreateSetupRegistrationOperationRequestManagementConfigGcp$Outbound =
   {
+    federationTrust?:
+      | CreateSetupRegistrationOperationRequestFederationTrust$Outbound
+      | string
+      | null
+      | undefined;
     serviceAccountEmail: string;
     platform: string;
   };
@@ -4541,6 +4623,14 @@ export const CreateSetupRegistrationOperationRequestManagementConfigGcp$outbound
     CreateSetupRegistrationOperationRequestManagementConfigGcp$Outbound,
     CreateSetupRegistrationOperationRequestManagementConfigGcp
   > = z.object({
+    federationTrust: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestFederationTrust$outboundSchema
+        ),
+        z.string(),
+      ]),
+    ).optional(),
     serviceAccountEmail: z.string(),
     platform: CreateSetupRegistrationOperationRequestPlatformGcp$outboundSchema,
   });

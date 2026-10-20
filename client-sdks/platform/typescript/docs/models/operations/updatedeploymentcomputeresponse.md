@@ -20,7 +20,12 @@ let value: UpdateDeploymentComputeResponse = {
       "<value 1>",
       "<value 2>",
     ],
-    requestedAt: new Date("2025-01-15T20:32:07.502Z"),
+    cause: {
+      kind: "volume-restore",
+      at: new Date("2024-04-20T16:58:36.345Z"),
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    },
+    requestedAt: new Date("2025-01-25T18:29:02.081Z"),
   },
 };
 ```

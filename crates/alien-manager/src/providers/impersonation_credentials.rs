@@ -596,6 +596,24 @@ mod tests {
     }
 
     fn gcp_handoff_deployment() -> DeploymentRecord {
+        let scope = alien_core::GcpFederationScope {
+            deployment_id: "deployment".into(),
+        };
+        let access = alien_core::GcpFederationAccess {
+            project_number: "987654321".into(),
+            pool_id: scope
+                .pool_id(&RemoteStackManagement::RESOURCE_TYPE)
+                .unwrap(),
+            provider_id: "manager".into(),
+            service_account_email: "deployment@target-project.iam.gserviceaccount.com".into(),
+            assertion_audience: scope
+                .assertion_audience(&RemoteStackManagement::RESOURCE_TYPE)
+                .unwrap(),
+            trust: alien_core::GcpFederationTrust {
+                issuer: "https://accounts.google.com".into(),
+                subject: "123456789012345678901".into(),
+            },
+        };
         let remote_management = RemoteStackManagement::new("management".to_string()).build();
         let mut stack_state =
             StackState::with_resource_prefix(Platform::Gcp, "test-prefix".to_string());
@@ -608,8 +626,7 @@ mod tests {
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
                     management_resource_id: "deployment@target-project.iam.gserviceaccount.com"
                         .to_string(),
-                    access_configuration: "deployment@target-project.iam.gserviceaccount.com"
-                        .to_string(),
+                    access_configuration: serde_json::to_string(&access).unwrap(),
                     legacy_remote_bindings_access: None,
                 }))
                 .lifecycle(ResourceLifecycle::Frozen)
@@ -678,7 +695,7 @@ mod tests {
             "management".to_string(),
             serde_json::to_value(ServiceAccountBinding::gcp_service_account(
                 "management@managing-project.iam.gserviceaccount.com",
-                "management-unique-id",
+                "123456789012345678901",
             ))
             .expect("management binding should serialize"),
         )]);
@@ -731,7 +748,7 @@ mod tests {
                     "management".to_string(),
                     serde_json::to_value(ServiceAccountBinding::gcp_service_account(
                         "management@example.invalid",
-                        "synthetic-id",
+                        "123456789012345678901",
                     ))
                     .unwrap(),
                 )]),
@@ -763,12 +780,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gcp_target_denials_and_missing_setup_are_permanent() {
+    async fn gcp_assertion_denials_and_missing_setup_preserve_error_classification() {
         let server = httpmock::MockServer::start_async().await;
-        let _management = server.mock_async(|when, then| {
-            when.method(httpmock::Method::POST).path("/projects/-/serviceAccounts/management%40example.invalid:generateAccessToken");
-            then.status(200).json_body(serde_json::json!({"accessToken": "synthetic-management-token", "expireTime": "2099-01-01T00:00:00Z"}));
-        }).await;
         let config = ClientConfig::Gcp(Box::new(GcpClientConfig {
             project_id: "managing-project".to_string(),
             region: "us-central1".to_string(),
@@ -787,7 +800,7 @@ mod tests {
                     "management".to_string(),
                     serde_json::to_value(ServiceAccountBinding::gcp_service_account(
                         "management@example.invalid",
-                        "synthetic-id",
+                        "123456789012345678901",
                     ))
                     .unwrap(),
                 )]),
@@ -801,7 +814,7 @@ mod tests {
         );
         for (status, retryable) in [(403, false), (429, true), (503, true)] {
             let response = server.mock_async(|when, then| {
-                when.method(httpmock::Method::POST).path("/projects/-/serviceAccounts/deployment%40target-project.iam.gserviceaccount.com:generateAccessToken");
+                when.method(httpmock::Method::POST).path("/projects/-/serviceAccounts/management%40example.invalid:generateIdToken");
                 then.status(status).json_body(serde_json::json!({"error": {"code": status, "message": "synthetic target rejection"}}));
             }).await;
             let error = resolver

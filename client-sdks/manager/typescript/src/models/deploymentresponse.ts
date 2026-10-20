@@ -22,11 +22,7 @@ export type DeploymentResponse = {
   deploymentGroup?: DeploymentGroupMinimal | null | undefined;
   deploymentGroupId: string;
   /**
-   * Required by the platform-SDK Deployment schema. Hard-coded to
-   *
-   * @remarks
-   * alien-core's `CURRENT_DEPLOYMENT_PROTOCOL_VERSION` so the CLI
-   * accepts the response.
+   * State protocol stored on this deployment and required by its runtime.
    */
   deploymentProtocolVersion: number;
   desiredReleaseId?: string | null | undefined;

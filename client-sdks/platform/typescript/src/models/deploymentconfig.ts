@@ -572,6 +572,26 @@ export type DeploymentConfigEnvironmentVariables = {
   variables: Array<DeploymentConfigVariable>;
 };
 
+/**
+ * Identity of one installation. The runtime constructs this from its
+ *
+ * @remarks
+ * authenticated deployment record, never names or imported target metadata.
+ */
+export type DeploymentConfigGcpFederationScope = {
+  /**
+   * Immutable ID allocated by the control plane before cloud setup.
+   *
+   * @remarks
+   * Names, display metadata and imported resource identifiers cannot replace it.
+   */
+  deploymentId: string;
+};
+
+export type DeploymentConfigGcpFederationScopeUnion =
+  | DeploymentConfigGcpFederationScope
+  | string;
+
 export const DeploymentConfigPlatformKubernetes = {
   Kubernetes: "kubernetes",
 } as const;
@@ -609,6 +629,24 @@ export type DeploymentConfigManagementConfigAzure = {
   platform: DeploymentConfigPlatformAzure;
 };
 
+/**
+ * The exact manager identity trusted by a deployment-owned identity pool.
+ */
+export type DeploymentConfigFederationTrust = {
+  /**
+   * OIDC issuer; Google or the manager's Kubernetes issuer.
+   */
+  issuer: string;
+  /**
+   * Exact immutable Google account ID or Kubernetes service-account subject.
+   */
+  subject: string;
+};
+
+export type DeploymentConfigFederationTrustUnion =
+  | DeploymentConfigFederationTrust
+  | string;
+
 export const DeploymentConfigPlatformGcp = {
   Gcp: "gcp",
 } as const;
@@ -620,8 +658,9 @@ export type DeploymentConfigPlatformGcp = ClosedEnum<
  * GCP management configuration extracted from stack settings
  */
 export type DeploymentConfigManagementConfigGcp = {
+  federationTrust?: DeploymentConfigFederationTrust | string | null | undefined;
   /**
-   * Service account email for management roles
+   * Linked source account metadata; never a direct target trust grant.
    */
   serviceAccountEmail: string;
   platform: DeploymentConfigPlatformGcp;
@@ -2028,6 +2067,11 @@ export type DeploymentConfig = {
    * Validated at runtime: binding type must match resource type.
    */
   externalBindings?: { [k: string]: ExternalBindingUnion } | undefined;
+  gcpFederationScope?:
+    | DeploymentConfigGcpFederationScope
+    | string
+    | null
+    | undefined;
   /**
    * Deployer-provided stack input values, keyed by input id. A resource
    *
@@ -2734,6 +2778,50 @@ export function deploymentConfigEnvironmentVariablesFromJSON(
 }
 
 /** @internal */
+export const DeploymentConfigGcpFederationScope$inboundSchema: z.ZodType<
+  DeploymentConfigGcpFederationScope,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+});
+
+export function deploymentConfigGcpFederationScopeFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigGcpFederationScope, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigGcpFederationScope$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigGcpFederationScope' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigGcpFederationScopeUnion$inboundSchema: z.ZodType<
+  DeploymentConfigGcpFederationScopeUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentConfigGcpFederationScope$inboundSchema),
+  z.string(),
+]);
+
+export function deploymentConfigGcpFederationScopeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentConfigGcpFederationScopeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigGcpFederationScopeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentConfigGcpFederationScopeUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentConfigPlatformKubernetes$inboundSchema: z.ZodEnum<
   typeof DeploymentConfigPlatformKubernetes
 > = z.enum(DeploymentConfigPlatformKubernetes);
@@ -2788,6 +2876,45 @@ export function deploymentConfigManagementConfigAzureFromJSON(
 }
 
 /** @internal */
+export const DeploymentConfigFederationTrust$inboundSchema: z.ZodType<
+  DeploymentConfigFederationTrust,
+  unknown
+> = z.object({
+  issuer: z.string(),
+  subject: z.string(),
+});
+
+export function deploymentConfigFederationTrustFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigFederationTrust, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentConfigFederationTrust$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigFederationTrust' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentConfigFederationTrustUnion$inboundSchema: z.ZodType<
+  DeploymentConfigFederationTrustUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentConfigFederationTrust$inboundSchema),
+  z.string(),
+]);
+
+export function deploymentConfigFederationTrustUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentConfigFederationTrustUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentConfigFederationTrustUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentConfigFederationTrustUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentConfigPlatformGcp$inboundSchema: z.ZodEnum<
   typeof DeploymentConfigPlatformGcp
 > = z.enum(DeploymentConfigPlatformGcp);
@@ -2797,6 +2924,12 @@ export const DeploymentConfigManagementConfigGcp$inboundSchema: z.ZodType<
   DeploymentConfigManagementConfigGcp,
   unknown
 > = z.object({
+  federationTrust: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentConfigFederationTrust$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   serviceAccountEmail: z.string(),
   platform: DeploymentConfigPlatformGcp$inboundSchema,
 });
@@ -4918,6 +5051,12 @@ export const DeploymentConfig$inboundSchema: z.ZodType<
   ),
   externalBindings: z.record(z.string(), ExternalBindingUnion$inboundSchema)
     .optional(),
+  gcpFederationScope: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentConfigGcpFederationScope$inboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
   inputValues: z.record(z.string(), z.nullable(z.any())).optional(),
   labelDomain: z.nullable(z.string()).optional(),
   managementConfig: z.nullable(

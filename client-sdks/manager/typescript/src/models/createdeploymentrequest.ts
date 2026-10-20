@@ -9,6 +9,7 @@ import {
   EnvironmentVariable$outboundSchema,
 } from "./environmentvariable.js";
 import { PlatformEnum, PlatformEnum$outboundSchema } from "./platformenum.js";
+import { SetupHandoff, SetupHandoff$outboundSchema } from "./setuphandoff.js";
 import {
   StackSettings,
   StackSettings$Outbound,
@@ -16,6 +17,7 @@ import {
 } from "./stacksettings.js";
 
 export type CreateDeploymentRequest = {
+  basePlatform?: PlatformEnum | null | undefined;
   deploymentGroupId?: string | null | undefined;
   environmentVariables?: Array<EnvironmentVariable> | null | undefined;
   /**
@@ -26,22 +28,29 @@ export type CreateDeploymentRequest = {
    */
   inputValues?: { [k: string]: any } | undefined;
   name: string;
+  pinnedReleaseId?: string | null | undefined;
   /**
    * Represents the target cloud platform.
    */
   platform: PlatformEnum;
   resourcePrefix?: string | null | undefined;
+  setupHandoff?: SetupHandoff | undefined;
+  setupMethod?: string | null | undefined;
   stackSettings?: StackSettings | null | undefined;
 };
 
 /** @internal */
 export type CreateDeploymentRequest$Outbound = {
+  basePlatform?: string | null | undefined;
   deploymentGroupId?: string | null | undefined;
   environmentVariables?: Array<EnvironmentVariable$Outbound> | null | undefined;
   inputValues?: { [k: string]: any } | undefined;
   name: string;
+  pinnedReleaseId?: string | null | undefined;
   platform: string;
   resourcePrefix?: string | null | undefined;
+  setupHandoff?: string | undefined;
+  setupMethod?: string | null | undefined;
   stackSettings?: StackSettings$Outbound | null | undefined;
 };
 
@@ -50,13 +59,17 @@ export const CreateDeploymentRequest$outboundSchema: z.ZodType<
   CreateDeploymentRequest$Outbound,
   CreateDeploymentRequest
 > = z.object({
+  basePlatform: z.nullable(PlatformEnum$outboundSchema).optional(),
   deploymentGroupId: z.nullable(z.string()).optional(),
   environmentVariables: z.nullable(z.array(EnvironmentVariable$outboundSchema))
     .optional(),
   inputValues: z.record(z.string(), z.any()).optional(),
   name: z.string(),
+  pinnedReleaseId: z.nullable(z.string()).optional(),
   platform: PlatformEnum$outboundSchema,
   resourcePrefix: z.nullable(z.string()).optional(),
+  setupHandoff: SetupHandoff$outboundSchema.optional(),
+  setupMethod: z.nullable(z.string()).optional(),
   stackSettings: z.nullable(StackSettings$outboundSchema).optional(),
 });
 

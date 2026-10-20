@@ -12,9 +12,11 @@ let value: ReleaseRolloutStateCounts = {
   updating: 209667,
   failed: 197301,
   pending: 996144,
-  pinnedOther: 119808,
-  superseded: 913884,
-  onOther: 305959,
+  waitingOnOwner: 119808,
+  waitingOnInputs: 913884,
+  pinnedOther: 305959,
+  superseded: 712862,
+  onOther: 173673,
 };
 ```
 
@@ -26,6 +28,8 @@ let value: ReleaseRolloutStateCounts = {
 | `updating`         | *number*           | :heavy_check_mark: | N/A                |
 | `failed`           | *number*           | :heavy_check_mark: | N/A                |
 | `pending`          | *number*           | :heavy_check_mark: | N/A                |
+| `waitingOnOwner`   | *number*           | :heavy_check_mark: | N/A                |
+| `waitingOnInputs`  | *number*           | :heavy_check_mark: | N/A                |
 | `pinnedOther`      | *number*           | :heavy_check_mark: | N/A                |
 | `superseded`       | *number*           | :heavy_check_mark: | N/A                |
 | `onOther`          | *number*           | :heavy_check_mark: | N/A                |

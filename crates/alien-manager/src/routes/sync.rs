@@ -857,7 +857,7 @@ mod tests {
         deployment_state_from_record, deployment_target_release_id, management_platform,
         may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
         should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_initialize_base_platform, AgentSyncRequest, AgentSyncWireRequest,
+        validate_kubernetes_base_platform, AgentSyncRequest, AgentSyncWireRequest,
         InitialDesiredRelease, InitializeRequest, ReconcileRequest, RunnerConfigSources,
     };
 
@@ -1232,20 +1232,20 @@ mod tests {
     #[test]
     fn initialize_accepts_cloud_base_platform_for_kubernetes() {
         assert_eq!(
-            validate_initialize_base_platform(Platform::Kubernetes, Some(Platform::Gcp)).unwrap(),
+            validate_kubernetes_base_platform(Platform::Kubernetes, Some(Platform::Gcp)).unwrap(),
             Some(Platform::Gcp)
         );
     }
 
     #[test]
     fn initialize_rejects_base_platform_for_non_kubernetes_platform() {
-        assert!(validate_initialize_base_platform(Platform::Aws, Some(Platform::Gcp)).is_err());
+        assert!(validate_kubernetes_base_platform(Platform::Aws, Some(Platform::Gcp)).is_err());
     }
 
     #[test]
     fn initialize_rejects_non_cloud_base_platform_for_kubernetes() {
         assert!(
-            validate_initialize_base_platform(Platform::Kubernetes, Some(Platform::Local)).is_err()
+            validate_kubernetes_base_platform(Platform::Kubernetes, Some(Platform::Local)).is_err()
         );
     }
 
@@ -2666,7 +2666,7 @@ fn management_platform(platform: Platform, base_platform: Option<Platform>) -> P
     base_platform.unwrap_or(platform)
 }
 
-fn validate_initialize_base_platform(
+pub(crate) fn validate_kubernetes_base_platform(
     platform: Platform,
     base_platform: Option<Platform>,
 ) -> std::result::Result<Option<Platform>, alien_error::AlienError<ErrorData>> {
@@ -3003,7 +3003,7 @@ async fn initialize(
                 }
                 None => None,
             };
-            let base_platform = match validate_initialize_base_platform(platform, req.base_platform)
+            let base_platform = match validate_kubernetes_base_platform(platform, req.base_platform)
             {
                 Ok(base_platform) => base_platform,
                 Err(e) => return e.into_response(),
@@ -3131,8 +3131,7 @@ async fn initialize(
                 .create_deployment(
                     &subject,
                     CreateDeploymentParams {
-                        deployment_protocol_version:
-                            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        deployment_protocol_version: alien_core::deployment_protocol_version_for_platform(platform, base_platform),
                         name,
                         deployment_group_id: dg_id.clone(),
                         platform,

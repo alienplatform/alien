@@ -585,11 +585,49 @@ export type HeartbeatAvailable = {
 export type HeartbeatUnion = HeartbeatAvailable | HeartbeatMissing;
 
 /**
+ * `desired`: the release the deployment is updating to. `current`: the release it last installed. `other`: any other release of the project, such as one whose update failed.
+ */
+export const Relation = {
+  Desired: "desired",
+  Current: "current",
+  Other: "other",
+} as const;
+/**
+ * `desired`: the release the deployment is updating to. `current`: the release it last installed. `other`: any other release of the project, such as one whose update failed.
+ */
+export type Relation = ClosedEnum<typeof Relation>;
+
+/**
+ * The project release that ships this image for the resource, or null when none does.
+ */
+export type GetResourceDeploymentDetailRelease = {
+  id: string;
+  version: string;
+  /**
+   * `desired`: the release the deployment is updating to. `current`: the release it last installed. `other`: any other release of the project, such as one whose update failed.
+   */
+  relation: Relation;
+};
+
+/**
+ * The release a running replica's image belongs to.
+ */
+export type ReplicaRelease = {
+  replicaId: string;
+  image: string | null;
+  /**
+   * The project release that ships this image for the resource, or null when none does.
+   */
+  release: GetResourceDeploymentDetailRelease | null;
+};
+
+/**
  * Latest heartbeat detail for one resource deployment.
  */
 export type GetResourceDeploymentDetailResponse = {
   deployment: GetResourceDeploymentDetailDeployment;
   heartbeat: HeartbeatAvailable | HeartbeatMissing;
+  replicaReleases: Array<ReplicaRelease>;
 };
 
 /** @internal */
@@ -1288,6 +1326,52 @@ export function heartbeatUnionFromJSON(
 }
 
 /** @internal */
+export const Relation$inboundSchema: z.ZodEnum<typeof Relation> = z.enum(
+  Relation,
+);
+
+/** @internal */
+export const GetResourceDeploymentDetailRelease$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailRelease,
+  unknown
+> = z.object({
+  id: z.string(),
+  version: z.string(),
+  relation: Relation$inboundSchema,
+});
+
+export function getResourceDeploymentDetailReleaseFromJSON(
+  jsonString: string,
+): SafeParseResult<GetResourceDeploymentDetailRelease, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      GetResourceDeploymentDetailRelease$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailRelease' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReplicaRelease$inboundSchema: z.ZodType<ReplicaRelease, unknown> =
+  z.object({
+    replicaId: z.string(),
+    image: z.nullable(z.string()),
+    release: z.nullable(
+      z.lazy(() => GetResourceDeploymentDetailRelease$inboundSchema),
+    ),
+  });
+
+export function replicaReleaseFromJSON(
+  jsonString: string,
+): SafeParseResult<ReplicaRelease, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReplicaRelease$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReplicaRelease' from JSON`,
+  );
+}
+
+/** @internal */
 export const GetResourceDeploymentDetailResponse$inboundSchema: z.ZodType<
   GetResourceDeploymentDetailResponse,
   unknown
@@ -1297,6 +1381,7 @@ export const GetResourceDeploymentDetailResponse$inboundSchema: z.ZodType<
     z.lazy(() => HeartbeatAvailable$inboundSchema),
     HeartbeatMissing$inboundSchema,
   ]),
+  replicaReleases: z.array(z.lazy(() => ReplicaRelease$inboundSchema)),
 });
 
 export function getResourceDeploymentDetailResponseFromJSON(

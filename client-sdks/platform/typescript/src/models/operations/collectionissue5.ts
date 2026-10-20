@@ -490,6 +490,10 @@ export type ReplicaUnitMemoryUnion = MemoryReplicaUnit | string;
 
 export type ReplicaUnit = {
   cpu?: CpuReplicaUnit | string | null | undefined;
+  /**
+   * Image this replica runs.
+   */
+  image?: string | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
   memory?: MemoryReplicaUnit | string | null | undefined;
@@ -2186,6 +2190,7 @@ export const ReplicaUnit$inboundSchema: z.ZodType<ReplicaUnit, unknown> = z
     cpu: z.nullable(
       z.union([z.lazy(() => CpuReplicaUnit$inboundSchema), z.string()]),
     ).optional(),
+    image: z.nullable(z.string()).optional(),
     ip: z.nullable(z.string()).optional(),
     machineId: z.nullable(z.string()).optional(),
     memory: z.nullable(
