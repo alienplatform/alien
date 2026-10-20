@@ -48,6 +48,13 @@ pub trait LambdaApi: Send + Sync + std::fmt::Debug {
     /// GetFunction: the function's configuration and its tags. Lambda returns the tags only to
     /// callers allowed `lambda:ListTags`; for others `tags` is `None`.
     async fn get_function(&self, function_name: &str) -> Result<GetFunctionResponse>;
+    /// The environment variables the function runs with, from the same GetFunction call (and
+    /// permission) as [`LambdaApi::get_function_configuration`]. Values can be secret: never log
+    /// them.
+    async fn get_function_environment(
+        &self,
+        function_name: &str,
+    ) -> Result<std::collections::HashMap<String, String>>;
     async fn delete_function_url_config(
         &self,
         function_name: &str,
@@ -555,6 +562,38 @@ impl LambdaApi for LambdaClient {
         let path = format!("/2015-03-31/functions/{}", function_name);
         self.send_json(Method::GET, &path, None, None, "GetFunction", function_name)
             .await
+    }
+
+    async fn get_function_environment(
+        &self,
+        function_name: &str,
+    ) -> Result<std::collections::HashMap<String, String>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Variables {
+            #[serde(default)]
+            variables: Option<std::collections::HashMap<String, String>>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Configuration {
+            #[serde(default)]
+            environment: Option<Variables>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Response {
+            configuration: Configuration,
+        }
+        let path = format!("/2015-03-31/functions/{}", function_name);
+        let response: Response = self
+            .send_json(Method::GET, &path, None, None, "GetFunction", function_name)
+            .await?;
+        Ok(response
+            .configuration
+            .environment
+            .and_then(|environment| environment.variables)
+            .unwrap_or_default())
     }
 
     async fn delete_function_url_config(
