@@ -79,6 +79,12 @@ async fn the_lifecycle_creates_and_removes_pool_pods_on_a_real_cluster() {
 
     // Standing in for the Helm chart, which owns this namespace.
     kubectl(&path, &["create", "namespace", NAMESPACE]);
+    // And for the chart's operator environment: the controller publishes this address in the
+    // binding and refuses to provision without it. Nothing here claims through it.
+    std::env::set_var(
+        alien_core::ENV_ALIEN_SANDBOX_BROKER_URL,
+        format!("http://alien-operator.{NAMESPACE}.svc:8080"),
+    );
 
     let mut executor = SingleControllerExecutor::builder()
         .real_delays()

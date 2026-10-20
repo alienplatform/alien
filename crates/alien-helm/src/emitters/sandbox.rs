@@ -81,7 +81,8 @@ impl HelmEmitter for SandboxEmitter {
 /// NetworkPolicy spells "none", where omitting the type would mean "unrestricted".
 fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
     // Runtime pods carry the operator's resource prefix as their deployment label, and their
-    // resource id under the same label domain.
+    // resource id under the same label domain. The id is quoted: a valid id such as `true`
+    // would otherwise be read as a YAML boolean, which `matchLabels` refuses.
     let linkers: String = stack
         .linkers(&ResourceRef::new(Sandbox::RESOURCE_TYPE, sandbox.id()))
         .iter()
@@ -90,7 +91,7 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
                 r#"        - podSelector:
             matchLabels:
               {{{{ $scopeKey }}}}: {{{{ $scopeValue | quote }}}}
-              {{{{ printf "%s/resource" (trimSuffix "/deployment" $scopeKey) }}}}: {id}
+              {{{{ printf "%s/resource" (trimSuffix "/deployment" $scopeKey) }}}}: "{id}"
               managed-by: runtime
 "#,
                 id = linker.id()

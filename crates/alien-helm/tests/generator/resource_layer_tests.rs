@@ -588,10 +588,13 @@ fn sandbox_with_linked_app() -> Stack {
     };
     let app = container("app").link(&sandbox).build();
     let other = container("other").build();
+    // A valid id that YAML would read as a boolean if it were not quoted.
+    let boolean_named = container("true").link(&sandbox).build();
     Stack::new("sandbox-broker-chart".to_string())
         .add(sandbox, ResourceLifecycle::Frozen)
         .add(app, ResourceLifecycle::Live)
         .add(other, ResourceLifecycle::Live)
+        .add(boolean_named, ResourceLifecycle::Live)
         .build()
 }
 
@@ -712,9 +715,17 @@ fn the_sandbox_policy_admits_its_linkers_on_the_agent_port() {
         "alien.dev/deployment: release-a\nalien.dev/resource: app\nmanaged-by: runtime\n",
     )
     .unwrap();
+    let boolean_named: serde_yaml::Value = serde_yaml::from_str(
+        "alien.dev/deployment: release-a\nalien.dev/resource: \"true\"\nmanaged-by: runtime\n",
+    )
+    .unwrap();
     let operator: serde_yaml::Value = serde_yaml::from_str(
         "app.kubernetes.io/name: sandbox-broker-chart\napp.kubernetes.io/instance: acme\n",
     )
     .unwrap();
-    assert_eq!(peers, vec![operator, app], "only the operator and the linker");
+    assert_eq!(
+        peers,
+        vec![operator, app, boolean_named],
+        "only the operator and the linkers, every label value a string"
+    );
 }
