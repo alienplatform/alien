@@ -742,7 +742,12 @@ print("proxy-only passed")
 proxy=urllib.parse.urlsplit(env["HTTPS_PROXY"])
 s=socket.create_connection((proxy.hostname,proxy.port),timeout=8)
 s.sendall(b"CONNECT allowed.test:443 HTTP/1.0\\r\\n\\r\\n")
-status=s.recv(64).split(b"\\r\\n")[0]
+status=b""
+while b"\\r\\n" not in status and len(status)<256:
+    chunk=s.recv(256)
+    if not chunk:break
+    status+=chunk
+status=status.split(b"\\r\\n")[0]
 assert status.startswith(b"HTTP/1.1 200"),status
 print("raw connect passed")
 '''
@@ -791,6 +796,9 @@ def main():
         parser.error("--replica-failover-only requires --agent-image")
     if args.agent_uid <= 0:
         parser.error("--agent-uid must be a non-root UID")
+    guest_pythons = [version for version in args.guest_pythons.split(",") if version]
+    if len(set(guest_pythons)) != len(guest_pythons):
+        parser.error("--guest-pythons must not repeat a version")
     AGENT_UID = args.agent_uid
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -891,7 +899,7 @@ def main():
             check_run_ordering(suite, args.agent_image, containers, networks, PREFIX, AUD)
             suite.agent(args.agent_image, containers, networks)
             suite.proxy_only(args.agent_image, containers, networks)
-            for index, version in enumerate(v for v in args.guest_pythons.split(",") if v):
+            for index, version in enumerate(guest_pythons):
                 guest = guest_image(args.agent_image, version)
                 images.append(guest)
                 suite.proxy_only(guest, containers, networks, label=f"-py{version}", ip=f"172.29.91.{20 + index}")
@@ -903,8 +911,6 @@ def main():
             from denied_ranges import check_denied_range_refresh
             check_denied_range_refresh(suite, config, docker, containers, PREFIX, AUD, ORIGIN, PROXY)
     finally:
-        for guest in images:
-            docker("rmi", "-f", guest)
         secret_in_logs = False
         for name in reversed(containers):
             logs = docker("logs", name)
@@ -913,6 +919,12 @@ def main():
             docker("rm", "-f", name)
         for name in networks:
             docker("network", "rm", name)
+        for guest in images:
+            # After the containers that ran them; a failed removal never stops the checks below.
+            try:
+                docker("rmi", "-f", guest)
+            except Exception as error:  # noqa: BLE001 - report and keep cleaning up
+                print(f"could not remove {guest}: {error}")
         remaining = docker("ps", "-a", "--filter", f"name={PREFIX}", "--format", "{{.Names}}")
         assert remaining == "", remaining
         assert not secret_in_logs, "credential leaked to container logs"
