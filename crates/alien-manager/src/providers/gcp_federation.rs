@@ -54,10 +54,16 @@ pub async fn assertion_source(
             service_account: service_account.to_string(),
         });
     }
-    let account = provider
-        .load_service_account("management")
-        .await
-        .map_err(|error| error.into_generic())?;
+    let account = match provider.load_service_account("management").await {
+        Ok(account) => account,
+        // Both names are used by manager stacks. Do not change identities
+        // when a configured primary binding is malformed or inaccessible.
+        Err(error) if error.code == "BINDING_NOT_CONFIGURED" => provider
+            .load_service_account("management-sa")
+            .await
+            .map_err(|error| error.into_generic())?,
+        Err(error) => return Err(error.into_generic()),
+    };
     let ServiceAccountInfo::Gcp(info) = account
         .get_info()
         .await
@@ -137,4 +143,70 @@ fn invalid(field: &str, reason: &str) -> AlienError<alien_core::ErrorData> {
         field: field.to_string(),
         reason: reason.to_string(),
     })
+}
+
+#[cfg(test)]
+mod binding_tests {
+    use super::*;
+    use alien_bindings::BindingsProvider;
+    use alien_core::{bindings::ServiceAccountBinding, GcpClientConfig};
+
+    fn provider(bindings: HashMap<String, serde_json::Value>) -> BindingsProvider {
+        BindingsProvider::new(
+            ClientConfig::Gcp(Box::new(GcpClientConfig {
+                project_id: "source-project".to_string(),
+                region: "us-central1".to_string(),
+                project_number: None,
+                service_overrides: None,
+                credentials: GcpCredentials::ServiceMetadata,
+            })),
+            bindings,
+        )
+        .unwrap()
+    }
+
+    fn account() -> serde_json::Value {
+        serde_json::to_value(ServiceAccountBinding::gcp_service_account(
+            "manager@source-project.iam.gserviceaccount.com".to_string(),
+            "123456789012345678901".to_string(),
+        ))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn linked_account_names_preserve_the_container_credential_source() {
+        for name in ["management", "management-sa"] {
+            let bindings = provider(HashMap::from([(name.to_string(), account())]));
+            let source = assertion_source(&bindings, &HashMap::new()).await.unwrap();
+            let GcpFederationSource::GoogleServiceAccount {
+                source,
+                service_account_email,
+                service_account_unique_id,
+            } = source
+            else {
+                panic!("Google source required")
+            };
+            assert!(matches!(
+                source.credentials,
+                GcpCredentials::ServiceMetadata
+            ));
+            assert_eq!(
+                service_account_email,
+                "manager@source-project.iam.gserviceaccount.com"
+            );
+            assert_eq!(service_account_unique_id, "123456789012345678901");
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_primary_binding_does_not_switch_to_another_account() {
+        let bindings = provider(HashMap::from([
+            (
+                "management".to_string(),
+                serde_json::json!({"type":"invalid"}),
+            ),
+            ("management-sa".to_string(), account()),
+        ]));
+        assert!(assertion_source(&bindings, &HashMap::new()).await.is_err());
+    }
 }
