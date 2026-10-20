@@ -5,7 +5,8 @@ use tracing::{debug, info};
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
     delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
-    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, pod_template_annotations,
+    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, linked_bindings,
+    pod_template_annotations,
     projected_env_vars, reconcile_environment_secret_with_additional_secrets,
     EnvSecretRotationTracker, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
     ResourceControllerContext,
@@ -33,6 +34,17 @@ use k8s_openapi::api::core::v1::{
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
+
+/// Name of the daemon's container in its pod template.
+const DAEMON_CONTAINER_NAME: &str = "daemon";
+
+/// Whether every node the DaemonSet schedules on runs a ready pod.
+fn daemonset_is_ready(daemonset: &DaemonSet) -> bool {
+    daemonset.status.as_ref().is_some_and(|status| {
+        status.number_ready >= status.desired_number_scheduled
+            && status.desired_number_scheduled > 0
+    })
+}
 
 #[controller]
 pub struct KubernetesDaemonController {
@@ -286,7 +298,35 @@ impl KubernetesDaemonController {
         status = ResourceStatus::Running,
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        if !self.daemonset_ready(ctx).await? {
+        let live = self.read_daemonset(ctx).await?;
+        // A linked resource can change what its binding publishes without this daemon being
+        // updated, such as a sandbox reading its broker address again on its own Ready. Compare
+        // before readiness: a stale binding can be why a pod is not ready.
+        if let Some(env) = linked_bindings::pod_template_env(
+            live.as_ref()
+                .and_then(|daemonset| daemonset.spec.as_ref())
+                .and_then(|spec| spec.template.spec.as_ref()),
+            DAEMON_CONTAINER_NAME,
+        ) {
+            let config = ctx.desired_resource_config::<Daemon>()?;
+            let drifted =
+                linked_bindings::kubernetes_linked_binding_drift(ctx, &config.links, &config.id, env)
+                    .await?;
+            if !drifted.is_empty() {
+                // Names only: binding values can carry secrets.
+                info!(
+                    daemon = %config.id,
+                    variables = ?drifted,
+                    reason = "linked binding drift",
+                    "Refreshing the daemon's linked bindings"
+                );
+                return Ok(HandlerAction::Continue {
+                    state: UpdateStart,
+                    suggested_delay: None,
+                });
+            }
+        }
+        if !live.as_ref().is_some_and(daemonset_is_ready) {
             let config = ctx.desired_resource_config::<Daemon>()?;
             return Err(AlienError::new(ErrorData::ResourceDrift {
                 resource_id: config.id.clone(),
@@ -937,6 +977,15 @@ impl KubernetesDaemonController {
     }
 
     async fn daemonset_ready(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        Ok(self
+            .read_daemonset(ctx)
+            .await?
+            .as_ref()
+            .is_some_and(daemonset_is_ready))
+    }
+
+    /// The live DaemonSet, or `None` when it does not exist.
+    async fn read_daemonset(&self, ctx: &ResourceControllerContext<'_>) -> Result<Option<DaemonSet>> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
         let daemon_set_name = self.daemon_set_name.as_ref().ok_or_else(|| {
@@ -960,20 +1009,14 @@ impl KubernetesDaemonController {
             .get_daemonset(namespace, daemon_set_name)
             .await
         {
-            Ok(daemonset) => {
-                if let Some(status) = &daemonset.status {
-                    return Ok(status.number_ready >= status.desired_number_scheduled
-                        && status.desired_number_scheduled > 0);
-                }
-                Ok(false)
-            }
+            Ok(daemonset) => Ok(Some(daemonset)),
             Err(e)
                 if matches!(
                     e.error,
                     Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                 ) =>
             {
-                Ok(false)
+                Ok(None)
             }
             Err(e) => Err(e.context(ErrorData::CloudPlatformError {
                 message: format!("Failed to get daemonset '{}'.", daemon_set_name),
@@ -1034,7 +1077,7 @@ impl KubernetesDaemonController {
         let env_vars = projected_env_vars(env_secret_plan, bindings, env_map)?;
 
         let container = Container {
-            name: "daemon".to_string(),
+            name: DAEMON_CONTAINER_NAME.to_string(),
             image: Some(image),
             // The daemon contract: `command` overrides the image default
             // entrypoint, and the declared ResourceSpecs become real

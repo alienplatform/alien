@@ -135,6 +135,29 @@ impl KubernetesManifestTestHarness {
         }
     }
 
+    /// Adds a resource the workload links, in the state its controller holds.
+    pub(crate) fn with_linked_resource<R: alien_core::ResourceDefinition>(
+        mut self,
+        resource: R,
+        controller: impl crate::core::ResourceController + 'static,
+    ) -> Self {
+        let resource = Resource::new(resource);
+        let state = alien_core::StackResourceState::builder()
+            .resource_type(resource.resource_type().to_string())
+            .status(controller.get_status())
+            .config(resource.clone())
+            .internal_state(
+                crate::core::serialize_controller(&controller).expect("controller serialization"),
+            )
+            .lifecycle(alien_core::ResourceLifecycle::Live)
+            .dependencies(vec![])
+            .build();
+        self.state
+            .resources
+            .insert(resource.id().to_string(), state);
+        self
+    }
+
     pub(crate) fn with_cloud(mut self, cloud: ClientConfig) -> Self {
         self.cloud = Some(cloud);
         self

@@ -17,6 +17,9 @@ use crate::error::{ErrorData, Result};
 
 use super::kubernetes::KubernetesWorkerController;
 
+/// Name of the worker's container in its pod template.
+pub(super) const WORKER_CONTAINER_NAME: &str = "worker";
+
 pub(super) async fn build_worker_deployment(
     controller: &KubernetesWorkerController,
     config: &Worker,
@@ -60,7 +63,7 @@ pub(super) async fn build_worker_deployment(
     let env_vars = projected_env_vars(env_secret_plan, bindings, env_map)?;
 
     let container = Container {
-        name: "worker".to_string(),
+        name: WORKER_CONTAINER_NAME.to_string(),
         image: Some(image),
         ports: Some(vec![ContainerPort {
             container_port: 8080,
@@ -350,6 +353,107 @@ mod tests {
                 .and_then(|source| source.secret_key_ref.as_ref())
                 .map(|secret_key_ref| secret_key_ref.name.as_str()),
             Some("api-env")
+        );
+    }
+
+    /// The comparison a Ready tick makes projects the linked bindings exactly as the manifest
+    /// does, so a pod template rendered with the current bindings, even after a round trip
+    /// through the apiserver's JSON, shows no drift: an identical spec never starts a roll. Only
+    /// a binding that moved does.
+    #[tokio::test]
+    async fn a_rendered_pod_template_shows_drift_only_when_a_linked_binding_moves() {
+        use crate::core::linked_bindings::{kubernetes_linked_binding_drift, pod_template_env};
+        use crate::sandbox::KubernetesSandboxController;
+        use alien_core::{Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+
+        let sandbox = Sandbox::new("agent".to_string())
+            .code(SandboxCode::Image {
+                image: "registry.example.com/session:1".to_string(),
+            })
+            .egress(SandboxEgress::None)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(600),
+                idle_pause_seconds: None,
+            })
+            .build();
+        let serving = |broker: &str| KubernetesSandboxController {
+            state: crate::sandbox::KubernetesSandboxState::Ready,
+            sandbox_id: Some("agent".to_string()),
+            namespace: Some("test-ns".to_string()),
+            runtime_class: Some("gvisor".to_string()),
+            broker_url: Some(broker.to_string()),
+            deployment_label_key: Some("alien.dev/deployment".to_string()),
+            deployment_label_value: Some("test".to_string()),
+            egress: Some(SandboxEgress::None.into()),
+            ..Default::default()
+        };
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/api:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .link(&sandbox)
+            .build();
+        let links = worker.runtime_binding_links();
+
+        let old = KubernetesManifestTestHarness::new(Resource::new(worker.clone()), Vec::new())
+            .with_linked_resource(sandbox.clone(), serving("http://old.test-ns.svc:8080"));
+        let manifest = build_worker_deployment(
+            &KubernetesWorkerController::default(),
+            &worker,
+            "api",
+            "test-ns",
+            "api-sa",
+            None,
+            None,
+            &old.ctx(),
+        )
+        .await
+        .unwrap();
+        // As the apiserver hands it back.
+        let live: k8s_openapi::api::apps::v1::Deployment =
+            serde_json::from_value(serde_json::to_value(&manifest).unwrap()).unwrap();
+        let env = pod_template_env(
+            live.spec
+                .as_ref()
+                .and_then(|spec| spec.template.spec.as_ref()),
+            super::WORKER_CONTAINER_NAME,
+        )
+        .expect("the worker container is in the template");
+        assert!(
+            env.iter().any(|var| var.name == "ALIEN_AGENT_BINDING"),
+            "the manifest carries the sandbox binding"
+        );
+
+        assert!(
+            kubernetes_linked_binding_drift(&old.ctx(), &links, "api", env)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a template rendered with the current bindings must not drift"
+        );
+
+        let moved = KubernetesManifestTestHarness::new(Resource::new(worker.clone()), Vec::new())
+            .with_linked_resource(sandbox.clone(), serving("http://new.test-ns.svc:8080"));
+        assert_eq!(
+            kubernetes_linked_binding_drift(&moved.ctx(), &links, "api", env)
+                .await
+                .unwrap(),
+            vec!["ALIEN_AGENT_BINDING".to_string()]
+        );
+
+        let rolling = KubernetesManifestTestHarness::new(Resource::new(worker.clone()), Vec::new())
+            .with_linked_resource(sandbox, {
+                let mut controller = serving("http://new.test-ns.svc:8080");
+                controller.state = crate::sandbox::KubernetesSandboxState::UpdatingSandbox;
+                controller
+            });
+        assert!(
+            kubernetes_linked_binding_drift(&rolling.ctx(), &links, "api", env)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a sandbox in its own flow has not reached the value to compare against"
         );
     }
 }
