@@ -3212,7 +3212,9 @@ mod tests {
                     operation_id: "operation_test".to_string(),
                     attempt_id: "attempt_test".to_string(),
                 };
-                let accepted = Arc::new(Mutex::new(Vec::<ReconcileData>::new()));
+                let accepted = Arc::new(Mutex::new(Vec::<
+                    crate::traits::deployment_store::ReconcileData,
+                >::new()));
                 let refused = Arc::new(AtomicUsize::new(0));
                 let claim_live = Arc::new(AtomicBool::new(true));
                 let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
