@@ -423,13 +423,14 @@ impl Default for RemoteAccessResolver {
 mod tests {
     use super::*;
     use alien_core::{
-        GcpClientConfig, GcpCredentials, GcpEnvironmentInfo, GcpServiceOverrides, Resource,
-        ResourceLifecycle, ResourceOutputs, ResourceStatus, StackResourceState,
+        GcpClientConfig, GcpCredentials, GcpEnvironmentInfo, GcpImpersonationConfig,
+        GcpServiceOverrides, Resource, ResourceLifecycle, ResourceOutputs, ResourceStatus,
+        StackResourceState,
     };
     use httpmock::{Method::POST, MockServer};
     use serde_json::json;
 
-    fn gcp_stack_state(service_account_email: &str) -> StackState {
+    fn gcp_stack_state(service_account_email: &str, access_configuration: &str) -> StackState {
         let config = RemoteStackManagement::new("management".to_string()).build();
         let mut state = StackState::new(Platform::Gcp);
         state.resources.insert(
@@ -440,7 +441,7 @@ mod tests {
                 .config(Resource::new(config))
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
                     management_resource_id: service_account_email.to_string(),
-                    access_configuration: service_account_email.to_string(),
+                    access_configuration: access_configuration.to_string(),
                     legacy_remote_bindings_access: None,
                 }))
                 .lifecycle(ResourceLifecycle::Frozen)
@@ -519,121 +520,105 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gcp_remote_access_materializes_credentials_at_handoff() {
+    async fn gcp_remote_access_cannot_fall_back_to_direct_impersonation() {
         let server = MockServer::start_async().await;
-        let token_exchange = server
+        let exchange = server
             .mock_async(|when, then| {
                 when.method(POST);
-                then.status(200).json_body(json!({
-                    "accessToken": "target-token",
-                    "expireTime": "2026-07-16T12:00:00Z"
-                }));
+                then.status(200)
+                    .json_body(json!({"accessToken": "unexpected-token"}));
             })
             .await;
-        let service_account_email = "deployment@target-project.iam.gserviceaccount.com";
-
-        let resolved = RemoteAccessResolver::default()
-            .resolve(
-                gcp_base_config(server.url("/v1")),
-                &gcp_stack_state(service_account_email),
-                Some(&gcp_target_environment()),
-            )
-            .await
-            .expect("GCP remote access should materialize a usable target token");
-
-        token_exchange.assert_async().await;
-        let gcp = resolved
-            .gcp_config()
-            .expect("resolved remote access should remain GCP");
-        assert_eq!(gcp.project_id, "target-project");
-        assert_eq!(gcp.region, "us-east1");
-        match &gcp.credentials {
-            GcpCredentials::ImpersonatedServiceAccount { source, config } => {
-                assert_eq!(config.service_account_email, service_account_email);
-                assert_eq!(
-                    source.credentials,
-                    GcpCredentials::AccessToken {
-                        token: "source-token".to_string()
-                    }
-                );
-            }
-            credentials => panic!(
-                "resolved credentials should remain refreshable after validation, got {credentials:?}"
-            ),
+        let email = "deployment@target-project.iam.gserviceaccount.com";
+        for base in [
+            gcp_base_config(server.url("/v1")),
+            gcp_two_hop_base_config(server.url("/v1")),
+        ] {
+            let error = RemoteAccessResolver::default()
+                .resolve(
+                    base,
+                    &gcp_stack_state(email, email),
+                    Some(&gcp_target_environment()),
+                )
+                .await
+                .expect_err("GCP requires an authenticated federation scope and source");
+            assert_eq!(error.code, "REMOTE_ACCESS_INVALID");
         }
+        assert_eq!(exchange.hits_async().await, 0);
     }
 
     #[tokio::test]
-    async fn gcp_remote_access_materializes_two_hop_credentials() {
+    async fn gcp_federation_rejects_imported_scope_or_target_changes_before_exchange() {
+        use alien_core::{
+            GcpFederationAccess, GcpFederationScope, GcpFederationSource, GcpFederationTrust,
+        };
         let server = MockServer::start_async().await;
-        let token_exchanges = server
+        let exchange = server
             .mock_async(|when, then| {
                 when.method(POST);
-                then.status(200).json_body(json!({
-                    "accessToken": "impersonated-token",
-                    "expireTime": "2026-07-16T12:00:00Z"
-                }));
+                then.status(200)
+                    .json_body(json!({"accessToken": "unexpected-token"}));
             })
             .await;
-        let service_account_email = "deployment@target-project.iam.gserviceaccount.com";
-
-        let resolved = RemoteAccessResolver::default()
-            .resolve(
-                gcp_two_hop_base_config(server.url("/v1")),
-                &gcp_stack_state(service_account_email),
-                Some(&gcp_target_environment()),
-            )
-            .await
-            .expect("two-hop GCP remote access should materialize target credentials");
-
-        assert_eq!(
-            token_exchanges.hits_async().await,
-            2,
-            "management and target service accounts must each be impersonated"
-        );
-        let gcp = resolved
-            .gcp_config()
-            .expect("resolved remote access should remain GCP");
-        assert_eq!(gcp.project_id, "target-project");
-        assert_eq!(gcp.region, "us-east1");
-    }
-
-    #[tokio::test]
-    async fn gcp_remote_access_reports_token_exchange_failure_during_handoff() {
-        let server = MockServer::start_async().await;
-        let denied_exchange = server
-            .mock_async(|when, then| {
-                when.method(POST);
-                then.status(403).json_body(json!({
-                    "error": {
-                        "code": 403,
-                        "message": "Permission 'iam.serviceAccounts.getAccessToken' denied",
-                        "status": "PERMISSION_DENIED"
-                    }
-                }));
-            })
-            .await;
-        let service_account_email = "deployment@target-project.iam.gserviceaccount.com";
-
-        let error = RemoteAccessResolver::default()
-            .resolve(
-                gcp_base_config(server.url("/v1")),
-                &gcp_stack_state(service_account_email),
-                Some(&gcp_target_environment()),
-            )
-            .await
-            .expect_err("GCP token exchange failure must fail credential handoff");
-
-        assert!(
-            denied_exchange.hits_async().await > 0,
-            "credential materialization must attempt the IAM token exchange during handoff"
-        );
-        assert_eq!(error.code, "AUTHENTICATION_FAILED");
-        assert!(
-            error
-                .to_string()
-                .contains("Failed to materialize GCP service account credentials"),
-            "handoff error should identify the failed token materialization: {error}"
-        );
+        let scope = GcpFederationScope {
+            deployment_id: "dep_authorized".to_string(),
+        };
+        let access = GcpFederationAccess {
+            project_number: "987654321".to_string(),
+            pool_id: scope
+                .pool_id(&RemoteStackManagement::RESOURCE_TYPE)
+                .unwrap(),
+            provider_id: "manager".to_string(),
+            service_account_email: "deployment@target-project.iam.gserviceaccount.com".to_string(),
+            assertion_audience: scope
+                .assertion_audience(&RemoteStackManagement::RESOURCE_TYPE)
+                .unwrap(),
+            trust: GcpFederationTrust {
+                issuer: "https://accounts.google.com".to_string(),
+                subject: "123456789".to_string(),
+            },
+        };
+        let ClientConfig::Gcp(base) = gcp_base_config(server.url("/v1")) else {
+            unreachable!()
+        };
+        let source = GcpFederationSource::GoogleServiceAccount {
+            source: base,
+            service_account_email: "manager@managing-project.iam.gserviceaccount.com".to_string(),
+            service_account_unique_id: access.trust.subject.clone(),
+        };
+        let mut other_scope = access.clone();
+        other_scope.assertion_audience = GcpFederationScope {
+            deployment_id: "dep_other".to_string(),
+        }
+        .assertion_audience(&RemoteStackManagement::RESOURCE_TYPE)
+        .unwrap();
+        let mut other_purpose = access.clone();
+        other_purpose.assertion_audience = scope
+            .assertion_audience(&alien_core::RemoteBindings::RESOURCE_TYPE)
+            .unwrap();
+        let mut other_project = access.clone();
+        other_project.project_number = "111111111".to_string();
+        let mut other_account = access.clone();
+        other_account.service_account_email =
+            "deployment@other-project.iam.gserviceaccount.com".to_string();
+        for descriptor in [other_scope, other_purpose, other_project, other_account] {
+            let state = gcp_stack_state(
+                &descriptor.service_account_email,
+                &serde_json::to_string(&descriptor).unwrap(),
+            );
+            let error = RemoteAccessResolver::default()
+                .resolve_gcp_federation(
+                    source.clone(),
+                    &scope,
+                    &state,
+                    Some(&gcp_target_environment()),
+                )
+                .await
+                .expect_err(
+                    "import outputs cannot select another installation, purpose, or project",
+                );
+            assert_eq!(error.code, "REMOTE_ACCESS_INVALID");
+        }
+        assert_eq!(exchange.hits_async().await, 0);
     }
 }

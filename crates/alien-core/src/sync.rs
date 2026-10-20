@@ -376,6 +376,8 @@ pub struct ObservedApplicationReport {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncInput {
+    /// Reader ceiling of this runtime, independent of the deployment writer version.
+    max_supported_deployment_protocol_version: u32,
     #[serde(flatten)]
     request: SyncRequest,
     /// Exact immutable image identity injected by the installer. Absent for
@@ -434,6 +436,8 @@ impl SyncInputBuilder {
     /// Finish the serializable sync payload.
     pub fn build(self) -> SyncInput {
         SyncInput {
+            max_supported_deployment_protocol_version:
+                crate::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
             request: self.request,
             operator_image: self.operator_image,
             application: self.application,
@@ -748,6 +752,12 @@ mod tests {
             .build();
 
         let value = serde_json::to_value(input).unwrap();
+        assert_eq!(
+            value["maxSupportedDeploymentProtocolVersion"],
+            crate::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+        );
+        let legacy_request: SyncRequest = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(legacy_request.deployment_id, "dep_1");
         assert_eq!(value["deploymentId"], "dep_1");
         assert_eq!(value["operatorImage"]["source"], "configured");
     }
