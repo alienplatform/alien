@@ -407,6 +407,20 @@ pub enum ErrorData {
         length: usize,
     },
 
+    /// A role ARN a setup template is told to accept as its managing role is
+    /// not an IAM role ARN.
+    #[error(
+        code = "MANAGING_ROLE_ARN_INVALID",
+        message = "Managing role ARN '{arn}' is not an IAM role ARN (arn:<partition>:iam::<account>:role/<name>)",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ManagingRoleArnInvalid {
+        /// The rejected ARN.
+        arn: String,
+    },
+
     /// ImportData did not match the registered typed payload.
     #[error(
         code = "IMPORT_DATA_INVALID",

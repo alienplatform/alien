@@ -38,6 +38,7 @@ fn plugin_can_extend_registry_alongside_built_ins() {
             setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: Some("plugin extension".to_string()),
+            management_trust: Default::default(),
         },
     )
     .expect("template should render");

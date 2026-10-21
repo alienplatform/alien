@@ -27,7 +27,8 @@ use alien_core::{
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
     ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
     StackInputKind, StackInputProvider, StackSettings, Storage, TelemetryMode, UpdatesMode, Worker,
-    WorkerCode, MANAGEMENT_EXTERNAL_ID_MAX_LENGTH, MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN,
+    WorkerCode, MANAGEMENT_EXTERNAL_ID_MAX_LENGTH, MANAGEMENT_EXTERNAL_ID_MIN_LENGTH,
+    MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN, MANAGEMENT_EXTERNAL_ID_REQUIRED_PARAMETER_PATTERN,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -181,6 +182,28 @@ pub struct CloudFormationOptions<'a> {
     pub setup_fingerprint_version: u32,
     pub registration: RegistrationMode,
     pub description: Option<String>,
+    /// How strictly the template constrains who may manage the stack. The
+    /// default leaves both parameters as open as they have always been.
+    pub management_trust: ManagementTrustOptions,
+}
+
+/// Constraints on the parameters that decide who may assume the roles a
+/// template creates for its managing identity.
+///
+/// Both are off by default. Turning one on only narrows the values a
+/// parameter accepts: the resources and trust policies stay the same, so an
+/// installed stack that already satisfies the constraint updates in place.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ManagementTrustOptions {
+    /// Make `ManagementExternalId` required: no default, and an empty value is
+    /// refused at parameter validation, before anything is created or updated.
+    /// Every stack from such a template trusts the managing role only with the
+    /// `sts:ExternalId` condition.
+    pub require_external_id: bool,
+    /// When not empty, `ManagingRoleArn` must be exactly one of these IAM role
+    /// ARNs. List every role installed stacks may still name, not only the
+    /// current one, or those stacks can no longer be updated.
+    pub allowed_managing_role_arns: Vec<String>,
 }
 
 /// CloudFormation setup target.
@@ -578,6 +601,7 @@ pub fn generate_cloudformation_template_with_profile(
         profile,
     );
     add_management_external_id_parameter(&mut template);
+    apply_management_trust(&mut template, &options.management_trust)?;
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
@@ -2549,6 +2573,86 @@ fn add_management_external_id_parameter(template: &mut CfTemplate) {
             );
         }
     }
+}
+
+/// Narrow `ManagementExternalId` and `ManagingRoleArn` as [`ManagementTrustOptions`] asks.
+fn apply_management_trust(template: &mut CfTemplate, trust: &ManagementTrustOptions) -> Result<()> {
+    if trust.require_external_id {
+        if let Some(parameter) = template.parameters.get_mut(PARAM_MANAGEMENT_EXTERNAL_ID) {
+            parameter.default = None;
+            parameter.allowed_pattern =
+                Some(MANAGEMENT_EXTERNAL_ID_REQUIRED_PARAMETER_PATTERN.to_string());
+            parameter.min_length = Some(MANAGEMENT_EXTERNAL_ID_MIN_LENGTH as u32);
+            parameter.description = Some(
+                "ExternalId from the setup page. The management roles require it on every \
+                 AssumeRole, so only this installation's control plane can use them."
+                    .to_string(),
+            );
+        }
+    }
+    if !trust.allowed_managing_role_arns.is_empty() {
+        for arn in &trust.allowed_managing_role_arns {
+            if !is_iam_role_arn(arn) {
+                return Err(AlienError::new(ErrorData::ManagingRoleArnInvalid {
+                    arn: arn.clone(),
+                }));
+            }
+        }
+        let parameter = template
+            .parameters
+            .get_mut(PARAM_MANAGING_ROLE_ARN)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: format!("restrict {PARAM_MANAGING_ROLE_ARN}"),
+                    reason: "the template declares no such parameter".to_string(),
+                })
+            })?;
+        // An empty default would not be one of the allowed values. Installed
+        // stacks keep their value on update, and new installs pass it in the
+        // launch link.
+        parameter.default = None;
+        parameter.allowed_values = Some(
+            trust
+                .allowed_managing_role_arns
+                .iter()
+                .map(|arn| CfExpression::from(arn.clone()))
+                .collect(),
+        );
+        parameter.constraint_description = Some(format!(
+            "Use the management role ARN from the setup page: {}.",
+            trust.allowed_managing_role_arns.join(" or ")
+        ));
+    }
+    Ok(())
+}
+
+/// `arn:<partition>:iam::<12-digit account>:role/<optional path/><name>`. IAM
+/// allows any printable ASCII character in a role path and only letters,
+/// digits and `+=,.@_-` in the name.
+fn is_iam_role_arn(arn: &str) -> bool {
+    let parts: Vec<&str> = arn.splitn(6, ':').collect();
+    let [prefix, partition, service, region, account, resource] = parts[..] else {
+        return false;
+    };
+    let Some(role) = resource.strip_prefix("role/") else {
+        return false;
+    };
+    let (path, name) = role.rsplit_once('/').unwrap_or(("", role));
+    prefix == "arn"
+        && partition.starts_with("aws")
+        && partition
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+        && service == "iam"
+        && region.is_empty()
+        && account.len() == 12
+        && account.bytes().all(|byte| byte.is_ascii_digit())
+        && path.bytes().all(|byte| byte.is_ascii_graphic())
+        && !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"+=,.@_-".contains(&byte))
 }
 
 fn add_custom_resource(

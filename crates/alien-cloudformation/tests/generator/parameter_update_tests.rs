@@ -184,6 +184,7 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
                 setup_fingerprint_version: 1,
                 registration,
                 description: Some("parameter updates".to_string()),
+                management_trust: Default::default(),
             },
         )
         .expect("template should render");

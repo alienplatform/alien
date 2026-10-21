@@ -31,6 +31,7 @@ fn outputs_fallback_chunks_large_resource_payload() {
             setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: Some("chunked resources".to_string()),
+            management_trust: Default::default(),
         },
     )
     .expect("template should render");
@@ -77,6 +78,7 @@ fn small_payload_emits_single_resources_output() {
             setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: None,
+            management_trust: Default::default(),
         },
     )
     .expect("template should render");
@@ -120,6 +122,7 @@ fn source_function_returns_typed_error() {
             setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: None,
+            management_trust: Default::default(),
         },
     )
     .expect_err("source function should be rejected");
