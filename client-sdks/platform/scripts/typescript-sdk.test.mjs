@@ -588,3 +588,19 @@ test("history query preserves filters, null gaps and finite or overflow bounds",
     service: "api", release: "release-1", replica: "replica-1", method: "GET", statusClass: 2, outcome: "completed" });
   assert.deepEqual(result, response);
 });
+
+test("published endpoint secret helpers retain root and deep import behavior", async () => {
+  const root = await import("../typescript/esm/models/index.js");
+  const deep = await import("../typescript/esm/models/externalbindingunion.js");
+  for (const module of [root, deep]) {
+    const secret = { key: "endpoint", name: "storage" };
+    const endpoint = { secretRef: secret };
+    for (const [prefix, input] of [["endpointSecretRef", secret], ["externalBindingEndpoint", endpoint]]) {
+      const json = module[`${prefix}ToJSON`](input);
+      assert.deepEqual(JSON.parse(json), input);
+      const decoded = module[`${prefix}FromJSON`](json);
+      assert.equal(decoded.ok, true);
+      assert.deepEqual(decoded.value, input);
+    }
+  }
+});
