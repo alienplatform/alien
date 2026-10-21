@@ -2333,6 +2333,16 @@ fn management_role_definitions(
         .collect())
 }
 
+/// The runtime-roles revision a setup run would record for this stack now.
+#[cfg(test)]
+pub(crate) fn current_runtime_roles_revision(
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<String> {
+    let runtime_roles = runtime_roles(ctx)?;
+    let principals = workload_principal_ids(ctx)?;
+    runtime_roles_revision(ctx, &runtime_roles, &principals)
+}
+
 /// Every role the runtime assigns after setup for this stack.
 fn runtime_roles(ctx: &ResourceControllerContext<'_>) -> Result<AzureRuntimeRoles> {
     azure_runtime_roles(ctx.desired_stack).context(ErrorData::InfrastructureError {

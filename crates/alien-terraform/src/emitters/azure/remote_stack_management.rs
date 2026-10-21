@@ -353,7 +353,11 @@ fn runtime_role_conditions(
     if !ids.is_empty() {
         fragment.locals.insert(
             local_name,
-            expr::object(ids.iter().map(|(key, value)| (key.as_str(), value.clone())).collect()),
+            expr::object(
+                ids.iter()
+                    .map(|(key, value)| (key.as_str(), value.clone()))
+                    .collect::<Vec<_>>(),
+            ),
         );
     }
     let principal = placeholder("management-principal");
