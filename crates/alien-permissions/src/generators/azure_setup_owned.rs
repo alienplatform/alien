@@ -10,8 +10,9 @@
 //!   assignable at the subscription too. Management holds no `roleDefinitions/write`, so it can
 //!   neither create a role nor change one setup made.
 //! - Management's `roleAssignments/write` is assigned with a condition that admits only those
-//!   roles: the management roles onto the management identity, the application roles onto any
-//!   other principal.
+//!   roles onto their holders: the management roles onto the management identity, the
+//!   application roles onto the application's identities (which setup creates, so their principal
+//!   ids are known). No other role, and no other principal.
 //!
 //! The condition cannot name the assignment scope, so a listed role can be assigned anywhere in
 //! the scope management's role-assignment role is assigned at (the deployment resource group).
@@ -376,35 +377,41 @@ fn enumeration_context() -> PermissionContext {
 /// The conditions to assign management's role-assignment role with, one per role assignment.
 ///
 /// Each admits a write only when it assigns a listed management role to `management_principal_id`,
-/// or a listed application role to any other principal. Azure grants a write when any assignment
-/// of the action admits it, so a list longer than one condition holds ([`AZURE_CONDITION_SHARD_LIMIT`])
-/// is split across several assignments, each with its own role definition.
+/// or a listed application role to one of `workload_principal_ids`: the application's identities,
+/// which setup creates. Azure grants a write when any assignment of the action admits it, so a
+/// list longer than one condition holds ([`AZURE_CONDITION_SHARD_LIMIT`]) is split across several
+/// assignments, each with its own role definition; every shard repeats the principal lists.
 ///
-/// With no roles at all, a single condition that admits no write. `management_principal_id` may
-/// be a template expression.
+/// With no roles at all, a single condition that admits no write. Principal ids may be template
+/// expressions that resolve to GUIDs.
 pub fn azure_role_assignment_allowlist_conditions(
     management_principal_id: &str,
+    workload_principal_ids: &BTreeSet<String>,
     management_role_ids: &BTreeSet<String>,
     workload_role_ids: &BTreeSet<String>,
 ) -> Vec<String> {
     let deny_writes = format!("(!(ActionMatches{{'{ROLE_ASSIGNMENT_WRITE}'}}))");
-    let clause = |ids: &[&String], management: bool| {
+    let workload_principals = workload_principal_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let clause = |ids: &[&String], principals: &str| {
         let roles = ids.iter().map(|id| id.as_str()).collect::<Vec<_>>().join(", ");
-        let principal = if management {
-            format!("{REQUEST}:PrincipalId] ForAnyOfAnyValues:GuidEquals {{{management_principal_id}}}")
-        } else {
-            format!(
-                "{REQUEST}:PrincipalId] ForAnyOfAllValues:GuidNotEquals {{{management_principal_id}}}"
-            )
-        };
-        format!("({REQUEST}:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {{{roles}}} AND {principal})")
+        format!(
+            "({REQUEST}:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {{{roles}}} \
+             AND {REQUEST}:PrincipalId] ForAnyOfAnyValues:GuidEquals {{{principals}}})"
+        )
     };
     let render = |management: &[&String], workload: &[&String]| {
-        let clauses: Vec<String> = [(management, true), (workload, false)]
-            .into_iter()
-            .filter(|(ids, _)| !ids.is_empty())
-            .map(|(ids, is_management)| clause(ids, is_management))
-            .collect();
+        let mut clauses = Vec::new();
+        if !management.is_empty() {
+            clauses.push(clause(management, management_principal_id));
+        }
+        // An application role with no application identity to hold it is assignable to no one.
+        if !workload.is_empty() && !workload_principal_ids.is_empty() {
+            clauses.push(clause(workload, &workload_principals));
+        }
         if clauses.is_empty() {
             format!("({deny_writes})")
         } else {
@@ -571,10 +578,12 @@ mod tests {
     }
 
     #[test]
-    fn the_condition_pairs_management_roles_with_management_and_the_rest_with_anyone_else() {
+    fn the_condition_pairs_each_role_list_with_its_holders_only() {
         let management = BTreeSet::from(["m1".to_string()]);
         let workload = BTreeSet::from(["w1".to_string(), "w2".to_string()]);
-        let conditions = azure_role_assignment_allowlist_conditions("mp", &management, &workload);
+        let principals = BTreeSet::from(["e1".to_string(), "e2".to_string()]);
+        let conditions =
+            azure_role_assignment_allowlist_conditions("mp", &principals, &management, &workload);
         assert_eq!(
             conditions,
             vec![
@@ -582,18 +591,20 @@ mod tests {
                  (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {m1} \
                  AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {mp}) OR \
                  (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {w1, w2} \
-                 AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAllValues:GuidNotEquals {mp}))"
+                 AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {e1, e2}))"
                     .to_string()
             ]
         );
     }
 
+    /// No roles admit no write, and application roles with no application identity admit none.
     #[test]
-    fn no_runtime_roles_admit_no_role_assignment_write() {
-        assert_eq!(
-            azure_role_assignment_allowlist_conditions("mp", &BTreeSet::new(), &BTreeSet::new()),
-            vec!["((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})))".to_string()]
-        );
+    fn nothing_listed_admits_no_role_assignment_write() {
+        let deny = vec!["((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})))".to_string()];
+        let none = BTreeSet::new();
+        assert_eq!(azure_role_assignment_allowlist_conditions("mp", &none, &none, &none), deny);
+        let workload = BTreeSet::from(["w1".to_string()]);
+        assert_eq!(azure_role_assignment_allowlist_conditions("mp", &none, &none, &workload), deny);
     }
 
     /// A list longer than one condition holds is split, every shard under the limit, with every
@@ -603,8 +614,13 @@ mod tests {
         let management = ids("m", 30);
         let workload = ids("w", 250);
         let principal = "ead6f253-2dec-4841-b608-f2b9fc67dc86";
-        let conditions =
-            azure_role_assignment_allowlist_conditions(principal, &management, &workload);
+        let principals = ids("e", 5);
+        let conditions = azure_role_assignment_allowlist_conditions(
+            principal,
+            &principals,
+            &management,
+            &workload,
+        );
         assert!(conditions.len() >= 2, "{} shards", conditions.len());
         for condition in &conditions {
             assert!(condition.len() <= AZURE_CONDITION_SHARD_LIMIT, "{}", condition.len());
@@ -623,6 +639,12 @@ mod tests {
             let shard = conditions.iter().find(|c| c.contains(id.as_str())).unwrap();
             let before = management_clause(shard).expect("management clause");
             assert!(before.contains(id.as_str()), "{id} outside the management clause");
+        }
+        // Every shard with application roles names every application identity.
+        for shard in conditions.iter().filter(|c| workload.iter().any(|id| c.contains(id.as_str()))) {
+            for principal in &principals {
+                assert!(shard.contains(principal.as_str()));
+            }
         }
     }
 }

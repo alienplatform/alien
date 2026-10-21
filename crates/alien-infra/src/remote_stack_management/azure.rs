@@ -641,7 +641,9 @@ impl AzureRemoteStackManagementController {
         // the roles setup made for the runtime: management's own onto itself, the application's
         // onto any other principal. One role per condition shard.
         let runtime_roles = runtime_roles(ctx)?;
-        let conditions = role_assignment_conditions(ctx, &runtime_roles, &uami_principal_id);
+        let principals = workload_principal_ids(ctx)?;
+        let conditions =
+            role_assignment_conditions(ctx, &runtime_roles, &uami_principal_id, &principals);
         for (key, role_definition_id) in self.role_assignment_role_definition_ids.clone() {
             let (scope, shard) = role_assignment_role_scope(&key);
             let condition = conditions.get(shard).cloned().ok_or_else(|| {
@@ -687,7 +689,8 @@ impl AzureRemoteStackManagementController {
             )
             .await?;
         }
-        self.runtime_roles_revision = Some(runtime_roles_revision(ctx, &runtime_roles)?);
+        self.runtime_roles_revision =
+            Some(runtime_roles_revision(ctx, &runtime_roles, &principals)?);
 
         if let Some(vnet_resource_id) = existing_azure_vnet_resource_id(ctx) {
             let role_definition_id = format!(
@@ -1206,8 +1209,12 @@ impl AzureRemoteStackManagementController {
             // A release that adds a grant on a resource needs its role made and allowed. The
             // runtime cannot do either, so its refused step waits for this setup run.
             let runtime_roles = runtime_roles(ctx)?;
+            // An identity this setup run has yet to create is a change too.
+            let Ok(principals) = workload_principal_ids(ctx) else {
+                return Ok(true);
+            };
             if self.runtime_roles_revision.as_deref()
-                != Some(runtime_roles_revision(ctx, &runtime_roles)?.as_str())
+                != Some(runtime_roles_revision(ctx, &runtime_roles, &principals)?.as_str())
             {
                 return Ok(true);
             }
@@ -2276,12 +2283,45 @@ fn role_assignment_conditions(
     ctx: &ResourceControllerContext<'_>,
     runtime_roles: &AzureRuntimeRoles,
     management_principal_id: &str,
+    workload_principal_ids: &BTreeSet<String>,
 ) -> Vec<String> {
     azure_role_assignment_allowlist_conditions(
         management_principal_id,
+        workload_principal_ids,
         &runtime_roles.management_role_ids(ctx.resource_prefix),
         &runtime_roles.workload_role_ids(ctx.resource_prefix),
     )
+}
+
+/// The principal ids of the application's identities, which the runtime assigns roles to: every
+/// service account's managed identity and the remote-bindings identity. Setup creates them all
+/// before this controller (see the infrastructure dependencies), so each must already have one.
+fn workload_principal_ids(ctx: &ResourceControllerContext<'_>) -> Result<BTreeSet<String>> {
+    let mut principals = BTreeSet::new();
+    for (resource_id, entry) in &ctx.desired_stack.resources {
+        let resource_type = entry.config.resource_type();
+        let principal = if resource_type == alien_core::ServiceAccount::RESOURCE_TYPE {
+            ctx.require_dependency::<crate::service_account::AzureServiceAccountController>(
+                &(&entry.config).into(),
+            )?
+            .identity_principal_id
+        } else if resource_type == alien_core::RemoteBindings::RESOURCE_TYPE {
+            ctx.require_dependency::<crate::remote_bindings::AzureRemoteBindingsController>(
+                &(&entry.config).into(),
+            )?
+            .principal_id
+        } else {
+            continue;
+        };
+        let principal = principal.ok_or_else(|| {
+            AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: "management".to_string(),
+                dependency_id: resource_id.clone(),
+            })
+        })?;
+        principals.insert(principal.to_ascii_lowercase());
+    }
+    Ok(principals)
 }
 
 /// A digest of the runtime roles and what they grant, so a setup run notices a release that
@@ -2289,6 +2329,7 @@ fn role_assignment_conditions(
 fn runtime_roles_revision(
     ctx: &ResourceControllerContext<'_>,
     runtime_roles: &AzureRuntimeRoles,
+    workload_principal_ids: &BTreeSet<String>,
 ) -> Result<String> {
     let mut entries: Vec<_> = runtime_roles
         .custom_roles
@@ -2309,6 +2350,7 @@ fn runtime_roles_revision(
         "custom": entries,
         "management": runtime_roles.management_predefined_role_ids,
         "workload": runtime_roles.workload_predefined_role_ids,
+        "principals": workload_principal_ids,
     }))
     .into_alien_error()
     .context(ErrorData::InfrastructureError {
@@ -2426,7 +2468,9 @@ impl AzureRemoteStackManagementController {
         let shards = if runtime_roles.is_empty() {
             0
         } else {
-            role_assignment_conditions(ctx, &runtime_roles, &Uuid::nil().to_string()).len()
+            let principals = workload_principal_ids(ctx)?;
+            role_assignment_conditions(ctx, &runtime_roles, &Uuid::nil().to_string(), &principals)
+                .len()
         };
         management_role_definitions(
             &grant_plan,

@@ -118,6 +118,20 @@ impl InfrastructureDependenciesMutation {
             .get(resource_id)
             .and_then(alien_core::remote_bindings::remote_binding_for_entry);
 
+        // On Azure, management's role-assignment condition names the application's identities,
+        // so setup creates them before it: every service account and the remote-bindings
+        // identity. Neither depends on management, so this adds no cycle.
+        if platform == Platform::Azure && resource_type == &RemoteStackManagement::RESOURCE_TYPE {
+            for (id, entry) in &stack.resources {
+                let kind = entry.config.resource_type();
+                if kind == alien_core::ServiceAccount::RESOURCE_TYPE
+                    || kind == alien_core::RemoteBindings::RESOURCE_TYPE
+                {
+                    dependencies.push(ResourceRef::new(kind, id.clone()));
+                }
+            }
+        }
+
         if platform == Platform::Azure
             && resource_id != "default-resource-group"
             && stack.resources.contains_key("default-resource-group")
@@ -784,6 +798,58 @@ mod tests {
             .unwrap()
             .dependencies
             .contains(&remote_management));
+    }
+
+    /// On Azure, management's role-assignment condition names the application's identities, so
+    /// setup creates every service account and the remote-bindings identity before management.
+    /// Other clouds keep management independent of them.
+    #[tokio::test]
+    async fn azure_management_waits_for_the_identities_its_condition_names() {
+        for (platform, waits) in [(Platform::Azure, true), (Platform::Aws, false)] {
+            let stack = Stack::new("test-stack".to_string())
+                .add(
+                    RemoteStackManagement::new("management".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    RemoteBindings::new("remote-bindings".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    ServiceAccount::new("execution-sa".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(Storage::new("files".to_string()).build(), ResourceLifecycle::Live)
+                .build();
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let result = InfrastructureDependenciesMutation
+                .mutate(stack, &StackState::new(platform), &config)
+                .await
+                .unwrap();
+            let management = &result.resources.get("management").unwrap().dependencies;
+            for identity in [
+                ResourceRef::new(ServiceAccount::RESOURCE_TYPE, "execution-sa"),
+                ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "remote-bindings"),
+            ] {
+                assert_eq!(management.contains(&identity), waits, "{platform:?} {identity:?}");
+            }
+            // Neither identity waits for management, so the order has no cycle.
+            let management_ref =
+                ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
+            for identity in ["execution-sa", "remote-bindings"] {
+                assert!(!result
+                    .resources
+                    .get(identity)
+                    .unwrap()
+                    .dependencies
+                    .contains(&management_ref));
+            }
+        }
     }
 
     #[tokio::test]

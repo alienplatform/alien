@@ -121,7 +121,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
         let runtime_roles = azure_runtime_roles(ctx.stack).context(ErrorData::GenericError {
             message: "failed to list the Azure roles the runtime assigns".to_string(),
         })?;
-        let conditions = runtime_role_conditions(&mut fragment, label, &runtime_roles);
+        let conditions = runtime_role_conditions(ctx, &mut fragment, label, &runtime_roles);
         // The runtime assigns those roles even when the stack grants management no
         // role-assignment writes itself; the conditions make the role safe to add.
         if !runtime_roles.is_empty()
@@ -320,6 +320,7 @@ fn emit_management_roles(
 /// through `local.<label>_runtime_role_ids`. Shards are cut by the length the conditions have once
 /// Terraform resolves every reference to a GUID.
 fn runtime_role_conditions(
+    ctx: &EmitContext<'_>,
     fragment: &mut TfFragment,
     label: &str,
     runtime_roles: &AzureRuntimeRoles,
@@ -360,7 +361,32 @@ fn runtime_role_conditions(
         principal.clone(),
         format!("${{azurerm_user_assigned_identity.{label}.principal_id}}"),
     ));
-    azure_role_assignment_allowlist_conditions(&principal, &management_ids, &workload_ids)
+    // The application's identities: every service account's and the remote-bindings identity,
+    // each an `azurerm_user_assigned_identity` under its resource's label.
+    let mut workload_principals = BTreeSet::new();
+    for (resource_id, entry) in ctx.stack.resources() {
+        let kind = entry.config.resource_type();
+        if kind != alien_core::ServiceAccount::RESOURCE_TYPE
+            && kind != alien_core::RemoteBindings::RESOURCE_TYPE
+        {
+            continue;
+        }
+        let Some(identity_label) = ctx.name_for(resource_id) else {
+            continue;
+        };
+        let stand_in = placeholder(&format!("principal:{resource_id}"));
+        references.push((
+            stand_in.clone(),
+            format!("${{azurerm_user_assigned_identity.{identity_label}.principal_id}}"),
+        ));
+        workload_principals.insert(stand_in);
+    }
+    azure_role_assignment_allowlist_conditions(
+        &principal,
+        &workload_principals,
+        &management_ids,
+        &workload_ids,
+    )
         .into_iter()
         .map(|condition| {
             references
