@@ -2427,8 +2427,8 @@ fn principals_ready(ctx: &ResourceControllerContext<'_>) -> Result<Option<BTreeS
 }
 
 /// Waits for the application's identities: tries again every 10 seconds, up to 30 minutes.
-fn principal_wait() -> HandlerAction {
-    HandlerAction::Stay {
+fn principal_wait() -> AzureRemoteStackManagementHandlerAction {
+    AzureRemoteStackManagementHandlerAction::Stay {
         max_times: Some(180),
         suggested_delay: Some(Duration::from_secs(10)),
     }
