@@ -5,7 +5,8 @@ use tracing::{debug, info};
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
     delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
-    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, pod_template_annotations,
+    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, linked_bindings,
+    pod_template_annotations,
     projected_env_vars, reconcile_environment_secret_with_additional_secrets,
     EnvSecretRotationTracker, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
     ResourceController, ResourceControllerContext,
@@ -30,10 +31,10 @@ use alien_macros::controller;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Capabilities, Container as K8sContainer, ContainerPort, HTTPGetAction, LocalObjectReference,
-    PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSecurityContext, PodSpec, PodTemplateSpec,
-    Probe, ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Volume,
-    VolumeMount,
+    Capabilities, Container as K8sContainer, ContainerPort, EnvVar, HTTPGetAction,
+    LocalObjectReference, PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSecurityContext,
+    PodSpec, PodTemplateSpec, Probe, ResourceRequirements, SeccompProfile, SecretVolumeSource,
+    SecurityContext, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
@@ -114,6 +115,17 @@ fn image_needing_pull_secret<'a>(
 
 /// Longer than the gateway's 30 s resynchronization interval plus resolver caching.
 const GATEWAY_READY_DELAY_SECONDS: i32 = 45;
+
+/// Whether `config` is the sandbox gateway on an image that reads its configuration and replica
+/// secret from mounted files. Then the controller mounts both Secrets and reads neither.
+fn gateway_mounts_config(config: &Container) -> bool {
+    config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID
+        && matches!(&config.code, ContainerCode::Image { image }
+            if alien_core::sandbox_egress::gateway_image_reads_config_files(image))
+}
+
+/// Environment entry holding the gateway settings a running replica cannot refresh.
+const GATEWAY_RESTART_SETTINGS_ENV: &str = "ALIEN_EGRESS_GATEWAY_RESTART_SETTINGS";
 
 fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
@@ -775,6 +787,46 @@ impl KubernetesContainerController {
                 }
             };
 
+            // A linked resource can change what its binding publishes without this container
+            // being updated, such as a sandbox reading its broker address again on its own Ready.
+            // Compare before replica health: a stale binding can be why a replica is unhealthy.
+            let live_pod_spec = match &workload {
+                KubernetesWorkload::Deployment(deployment) => deployment
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.template.spec.as_ref()),
+                KubernetesWorkload::StatefulSet(statefulset) => statefulset
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.template.spec.as_ref()),
+                _ => None,
+            };
+            if let Some(live) = linked_bindings::pod_template_env(
+                live_pod_spec,
+                &kubernetes_resource_name("", &config.id),
+            ) {
+                let drifted = linked_bindings::kubernetes_linked_binding_drift(
+                    ctx,
+                    &config.links,
+                    &config.id,
+                    live,
+                )
+                .await?;
+                if !drifted.is_empty() {
+                    // Names only: binding values can carry secrets.
+                    info!(
+                        container = %config.id,
+                        variables = ?drifted,
+                        reason = "linked binding drift",
+                        "Refreshing the container's linked bindings"
+                    );
+                    return Ok(HandlerAction::Continue {
+                        state: UpdateStart,
+                        suggested_delay: None,
+                    });
+                }
+            }
+
             if let (Some(ready_replicas), Some(replicas)) = (ready_replicas, replicas) {
                 if ready_replicas < replicas {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
@@ -946,7 +998,17 @@ impl KubernetesContainerController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
-        let previous = ctx.previous_resource_config::<Container>()?;
+        // A refresh started from Ready (gateway configuration, linked binding drift) can come
+        // before any planned update; the configuration in place is then the current one.
+        let previous = match ctx
+            .state
+            .resources
+            .get(ctx.desired_config.id())
+            .and_then(|resource| resource.previous_config.as_ref())
+        {
+            Some(_) => ctx.previous_resource_config::<Container>()?,
+            None => config,
+        };
         if previous
             .persistent_storage
             .as_ref()
@@ -2119,7 +2181,31 @@ impl KubernetesContainerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<BTreeMap<String, String>> {
         let mut secrets = direct_monitoring_auth_headers(ctx);
-        if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
+        if gateway_mounts_config(config) {
+            // Its pods mount the replica secret, which must exist before they start. Written
+            // once and never read here; the configuration is mounted from the vault as well.
+            let vault = crate::sandbox::egress::deployment_vault(ctx).await?;
+            crate::sandbox::egress::create_replica_secret(vault.as_ref()).await?;
+            // A mounted configuration changes without the pods, but a running replica refuses
+            // a change to its peers. Keeping them in the pod's environment Secret makes such a
+            // change drift there, which restarts the pods, as any configuration change did
+            // when the whole configuration was in the environment.
+            let namespace = self.namespace.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "The sandbox gateway namespace is not known yet".to_string(),
+                })
+            })?;
+            secrets.insert(
+                GATEWAY_RESTART_SETTINGS_ENV.to_string(),
+                serde_json::json!({
+                    "peers": crate::sandbox::kubernetes_egress::gateway_peers(ctx, namespace)?
+                })
+                .to_string(),
+            );
+        } else if config.id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID {
+            // An image from before mounted configuration files gets its configuration, which
+            // embeds the replica secret, in its environment.
             let vault = crate::sandbox::egress::deployment_vault(ctx).await?;
             let value = vault
                 .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
@@ -2171,6 +2257,7 @@ impl KubernetesContainerController {
         let pod_spec = self
             .build_pod_spec(
                 config,
+                namespace,
                 service_account_name,
                 image_pull_secret_name,
                 env_secret_plan,
@@ -2225,6 +2312,7 @@ impl KubernetesContainerController {
         let pod_spec = self
             .build_pod_spec(
                 config,
+                namespace,
                 service_account_name,
                 image_pull_secret_name,
                 env_secret_plan,
@@ -2300,6 +2388,7 @@ impl KubernetesContainerController {
     async fn build_pod_spec(
         &self,
         config: &Container,
+        namespace: &str,
         service_account_name: &str,
         image_pull_secret_name: Option<&str>,
         env_secret_plan: Option<&KubernetesEnvSecretPlan>,
@@ -2340,7 +2429,7 @@ impl KubernetesContainerController {
         // Containers project Secret-kind env vars as secretKeyRefs and never
         // load secrets at runtime, so the ALIEN_SECRETS vault-load pointer is
         // stripped from the manifest.
-        let env_vars = projected_env_vars(env_secret_plan, bindings, env_map)?;
+        let mut env_vars = projected_env_vars(env_secret_plan, bindings, env_map)?;
 
         // Build volume mounts
         let mut volume_mounts = Vec::new();
@@ -2385,6 +2474,52 @@ impl KubernetesContainerController {
                 mount_path: mount.mount_path.clone(),
                 read_only: Some(true),
                 ..Default::default()
+            });
+        }
+
+        // A gateway that reads mounted files gets the vault's Secrets for its configuration and
+        // replica secret mounted by the kubelet, which keeps them current; it refreshes the
+        // configuration from the file.
+        let mut gateway_volumes = Vec::new();
+        if gateway_mounts_config(config) {
+            for (volume, directory, entry) in [
+                (
+                    "egress-gateway-config",
+                    crate::sandbox::egress::KUBERNETES_CONFIG_DIR,
+                    crate::sandbox::egress::GATEWAY_CONFIG,
+                ),
+                (
+                    "egress-gateway-replica-secret",
+                    crate::sandbox::egress::KUBERNETES_REPLICA_SECRET_DIR,
+                    crate::sandbox::egress::REPLICA_SECRET,
+                ),
+            ] {
+                volume_mounts.push(VolumeMount {
+                    name: volume.to_string(),
+                    mount_path: directory.to_string(),
+                    read_only: Some(true),
+                    ..Default::default()
+                });
+                gateway_volumes.push(Volume {
+                    name: volume.to_string(),
+                    secret: Some(SecretVolumeSource {
+                        secret_name: Some(crate::sandbox::egress::kubernetes_vault_secret_name(
+                            ctx, namespace, entry,
+                        )?),
+                        optional: Some(false),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+            }
+            env_vars.push(EnvVar {
+                name: "ALIEN_EGRESS_GATEWAY_CONFIG_FILE".to_string(),
+                value: Some(format!(
+                    "{}/{}",
+                    crate::sandbox::egress::KUBERNETES_CONFIG_DIR,
+                    alien_core::vault_naming::KUBERNETES_SECRET_VALUE_KEY
+                )),
+                value_from: None,
             });
         }
 
@@ -2509,6 +2644,7 @@ impl KubernetesContainerController {
                 ..Default::default()
             });
         }
+        volumes.extend(gateway_volumes);
         for (index, mount) in config.kubernetes_secret_mounts.iter().enumerate() {
             volumes.push(Volume {
                 name: format!("existing-secret-{index}"),
@@ -2983,8 +3119,266 @@ mod tests {
         }
     }
 
+    /// A deployment whose secrets vault is Kubernetes Secrets in `test-ns`.
+    fn secrets_vault_state() -> alien_core::StackState {
+        use crate::core::state_utils::StackResourceStateExt;
+        let mut state = alien_core::StackState::new(alien_core::Platform::Kubernetes);
+        let mut vault = alien_core::StackResourceState::new_pending(
+            "vault".into(),
+            Resource::new(alien_core::Vault::new(alien_core::SECRETS_VAULT_ID.into()).build()),
+            None,
+            vec![],
+        );
+        vault
+            .set_internal_controller(Some(Box::new(crate::vault::KubernetesVaultController {
+                namespace: Some("test-ns".into()),
+                vault_prefix: Some("test-secrets".into()),
+                ..Default::default()
+            })))
+            .unwrap();
+        state
+            .resources
+            .insert(alien_core::SECRETS_VAULT_ID.into(), vault);
+        state
+    }
+
+    fn point_at(ctx: &mut ResourceControllerContext<'_>, server: &httpmock::MockServer) {
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes config")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual config")
+        };
+        *server_url = server.base_url();
+    }
+
+    fn gateway_container(image: &str) -> Container {
+        let mut gateway = manifest_test_container(&[], false);
+        gateway.id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.to_string();
+        gateway.code = ContainerCode::Image {
+            image: image.to_string(),
+        };
+        gateway
+    }
+
+    /// A gateway on an image that reads mounted files gets the vault's configuration Secret and
+    /// replica-secret Secret mounted by the kubelet, and the controller reads neither: it only
+    /// creates the replica secret before the pods need it. An earlier image still gets the
+    /// configuration, read by the controller, in its environment.
+    #[tokio::test]
+    async fn a_mounting_gateway_gets_its_secrets_from_the_kubelet_not_the_controller() {
+        // Outside a cluster the controller is told the cluster DNS domain.
+        unsafe {
+            std::env::set_var(
+                crate::sandbox::kubernetes_egress::CLUSTER_DOMAIN_ENV,
+                "corp.example",
+            )
+        };
+        use httpmock::Method::{GET, POST};
+        let server = httpmock::MockServer::start_async().await;
+        let reads = server
+            .mock_async(|when, then| {
+                when.method(GET).path_contains("/api/v1/namespaces/test-ns/secrets/");
+                then.status(403).json_body(serde_json::json!({
+                    "kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403
+                }));
+            })
+            .await;
+        fn is_replica_secret(request: &httpmock::prelude::HttpMockRequest) -> bool {
+            request
+                .body
+                .as_deref()
+                .and_then(|body| serde_json::from_slice::<serde_json::Value>(body).ok())
+                .is_some_and(|secret| {
+                    secret["metadata"]["name"] == "test-secrets-sandbox-egress-replica-secret"
+                })
+        }
+        let replica_secret = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/api/v1/namespaces/test-ns/secrets")
+                    .matches(is_replica_secret);
+                then.status(201).json_body(serde_json::json!({
+                    "apiVersion":"v1","kind":"Secret","metadata":{"name":"test-secrets-sandbox-egress-replica-secret"}
+                }));
+            })
+            .await;
+        let gateway = gateway_container(
+            "example.invalid/gateway@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        );
+        let harness = KubernetesManifestTestHarness::new(Resource::new(gateway.clone()), vec![]);
+        let state = secrets_vault_state();
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        point_at(&mut ctx, &server);
+        let controller = manifest_test_controller();
+
+        let environment = controller
+            .additional_environment_secrets(&gateway, &ctx)
+            .await
+            .expect("the replica secret is created without a read");
+        assert!(!environment.contains_key("ALIEN_EGRESS_GATEWAY_CONFIG"));
+        // The settings a running replica cannot refresh stay in its environment Secret, whose
+        // drift restarts the pods.
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&environment[GATEWAY_RESTART_SETTINGS_ENV])
+                .unwrap(),
+            serde_json::json!({"peers": {"dns": "sandbox-egress-gateway-peers.test-ns.svc.corp.example", "port": 3129}})
+        );
+        assert_eq!(replica_secret.hits_async().await, 1);
+        assert_eq!(reads.hits_async().await, 0);
+        // The Ready pass compares them with what the pods got: a new peer address (a changed
+        // cluster domain) is drift, and drift restarts the pods.
+        let mut applied = EnvSecretRotationTracker::default();
+        applied.record(
+            environment_secret_plan_with_additional_secrets(
+                "sandbox-egress-gateway",
+                "gateway",
+                &[],
+                &environment,
+            )
+            .as_ref(),
+        );
+        assert!(!applied.drifted_with_additional_secrets(
+            "sandbox-egress-gateway",
+            "gateway",
+            &[],
+            &environment
+        ));
+        let mut moved = environment.clone();
+        moved.insert(
+            GATEWAY_RESTART_SETTINGS_ENV.to_string(),
+            serde_json::json!({"peers": {
+                "dns": "sandbox-egress-gateway-peers.test-ns.svc.other.example",
+                "port": 3129
+            }})
+            .to_string(),
+        );
+        assert!(applied.drifted_with_additional_secrets(
+            "sandbox-egress-gateway",
+            "gateway",
+            &[],
+            &moved
+        ));
+
+        let pod = controller
+            .build_deployment(
+                &gateway,
+                "gateway",
+                "test-ns",
+                "gateway-sa",
+                None,
+                None,
+                &ctx,
+            )
+            .await
+            .expect("deployment manifest")
+            .spec
+            .expect("deployment spec")
+            .template
+            .spec
+            .expect("pod spec");
+        assert_eq!(pod.automount_service_account_token, Some(false));
+        let mounted: BTreeMap<_, _> = pod
+            .volumes
+            .iter()
+            .flatten()
+            .filter_map(|volume| {
+                let secret = volume.secret.as_ref()?;
+                Some((
+                    volume.name.clone(),
+                    (secret.secret_name.clone()?, secret.optional),
+                ))
+            })
+            .collect();
+        assert_eq!(
+            mounted,
+            BTreeMap::from([
+                (
+                    "egress-gateway-config".to_string(),
+                    (
+                        "test-secrets-sandbox-egress-gateway-config".to_string(),
+                        Some(false)
+                    )
+                ),
+                (
+                    "egress-gateway-replica-secret".to_string(),
+                    (
+                        "test-secrets-sandbox-egress-replica-secret".to_string(),
+                        Some(false)
+                    )
+                ),
+            ])
+        );
+        let container = &pod.containers[0];
+        let mounts: BTreeMap<_, _> = container
+            .volume_mounts
+            .iter()
+            .flatten()
+            .map(|mount| {
+                (
+                    mount.name.clone(),
+                    (mount.mount_path.clone(), mount.read_only),
+                )
+            })
+            .collect();
+        assert_eq!(
+            mounts["egress-gateway-config"],
+            ("/etc/alien/egress-gateway/config".to_string(), Some(true))
+        );
+        assert_eq!(
+            mounts["egress-gateway-replica-secret"],
+            (
+                "/etc/alien/egress-gateway/replica-secret".to_string(),
+                Some(true)
+            )
+        );
+        let environment = container.env.as_ref().expect("env");
+        assert!(environment.iter().any(|variable| variable.name
+            == "ALIEN_EGRESS_GATEWAY_CONFIG_FILE"
+            && variable.value.as_deref() == Some("/etc/alien/egress-gateway/config/value")));
+        assert!(!environment
+            .iter()
+            .any(|variable| variable.name == "ALIEN_EGRESS_GATEWAY_CONFIG"));
+        // The pinned image from before: configuration in the environment, read by the controller.
+        let earlier = gateway_container(
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:8538880f99141888e54bedc7d290194dfee5bfe11910266b309dde53de2601b0",
+        );
+        let pod = controller
+            .build_deployment(
+                &earlier,
+                "gateway",
+                "test-ns",
+                "gateway-sa",
+                None,
+                None,
+                &ctx,
+            )
+            .await
+            .unwrap()
+            .spec
+            .unwrap()
+            .template
+            .spec
+            .unwrap();
+        assert!(pod.volumes.is_none());
+        let error = controller
+            .additional_environment_secrets(&earlier, &ctx)
+            .await
+            .expect_err("the earlier image needs the controller to read the configuration");
+        assert!(error.message.contains("not ready"), "{}", error.message);
+        assert!(reads.hits_async().await >= 1);
+    }
+
     #[tokio::test]
     async fn gateway_replicas_wait_out_a_resynchronization_and_get_no_api_token() {
+        // Outside a cluster the controller is told the cluster DNS domain.
+        unsafe {
+            std::env::set_var(
+                crate::sandbox::kubernetes_egress::CLUSTER_DOMAIN_ENV,
+                "corp.example",
+            )
+        };
         let mut gateway = manifest_test_container(&[], false);
         gateway.id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.to_string();
         let mut ordinary = manifest_test_container(&[], false);
@@ -3000,8 +3394,11 @@ mod tests {
         ] {
             let harness =
                 KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let state = secrets_vault_state();
+            let mut ctx = harness.ctx();
+            ctx.state = &state;
             let pod = manifest_test_controller()
-                .build_deployment(config, "web", "test-ns", "web-sa", None, None, &harness.ctx())
+                .build_deployment(config, "web", "test-ns", "web-sa", None, None, &ctx)
                 .await
                 .expect("deployment manifest")
                 .spec

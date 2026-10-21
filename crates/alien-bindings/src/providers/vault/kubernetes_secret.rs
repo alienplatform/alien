@@ -39,6 +39,28 @@ impl KubernetesSecretVault {
         }
     }
 
+    /// The Secret holding `value` under its `value` key, labelled for [`crate::traits::Vault::list_secrets`].
+    fn secret_resource(&self, secret_resource_name: &str, value: &str) -> Secret {
+        let mut data = BTreeMap::new();
+        data.insert(
+            "value".to_string(),
+            k8s_openapi::ByteString(value.as_bytes().to_vec()),
+        );
+        Secret {
+            metadata: ObjectMeta {
+                name: Some(secret_resource_name.to_string()),
+                namespace: Some(self.namespace.clone()),
+                labels: Some(BTreeMap::from([
+                    ("managed-by".to_string(), "operator".to_string()),
+                    ("vault-prefix".to_string(), self.vault_prefix.clone()),
+                ])),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        }
+    }
+
     /// Generate the Kubernetes Secret name for a given secret key.
     /// Format: {vault_prefix}-{secret_name}
     /// Example: "acme-monitoring-secrets-api-key"
@@ -128,29 +150,7 @@ impl crate::traits::Vault for KubernetesSecretVault {
     /// Set a secret value, creating it if it doesn't exist or updating it if it does
     async fn set_secret(&self, secret_name: &str, value: &str) -> Result<()> {
         let secret_resource_name = self.secret_resource_name(secret_name);
-
-        // Build the Secret resource
-        let mut data = BTreeMap::new();
-        data.insert(
-            "value".to_string(),
-            k8s_openapi::ByteString(value.as_bytes().to_vec()),
-        );
-
-        let secret = Secret {
-            metadata: ObjectMeta {
-                name: Some(secret_resource_name.clone()),
-                namespace: Some(self.namespace.clone()),
-                labels: Some({
-                    let mut labels = BTreeMap::new();
-                    labels.insert("managed-by".to_string(), "operator".to_string());
-                    labels.insert("vault-prefix".to_string(), self.vault_prefix.clone());
-                    labels
-                }),
-                ..Default::default()
-            },
-            data: Some(data),
-            ..Default::default()
-        };
+        let secret = self.secret_resource(&secret_resource_name, value);
 
         // Try to create the secret first
         match self.client.create_secret(&self.namespace, &secret).await {
@@ -176,6 +176,32 @@ impl crate::traits::Vault for KubernetesSecretVault {
                     }))
                 }
             }
+        }
+    }
+
+    /// A create, which the API server refuses for an existing Secret. Nothing is read.
+    async fn create_secret(&self, secret_name: &str, value: &str) -> Result<()> {
+        let secret_resource_name = self.secret_resource_name(secret_name);
+        let secret = self.secret_resource(&secret_resource_name, value);
+        match self.client.create_secret(&self.namespace, &secret).await {
+            Ok(_) => Ok(()),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                ) =>
+            {
+                Err(alien_error::AlienError::new(
+                    ErrorData::VaultSecretAlreadyExists {
+                        vault: self.vault_prefix.clone(),
+                        secret_name: secret_name.to_string(),
+                    },
+                ))
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create secret '{}'", secret_name),
+                resource_id: None,
+            })),
         }
     }
 

@@ -223,6 +223,20 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// The registry refused the push because the image's repository is under a legacy prefix: the
+    /// repository was resolved before the registry was renamed, and resolving it again names the
+    /// current one.
+    #[error(
+        code = "IMAGE_PUSH_REPOSITORY_RENAMED",
+        message = "Container registry refused image '{image}': its repository was renamed",
+        retryable = "false",
+        internal = "false"
+    )]
+    ImagePushRepositoryRenamed {
+        /// Image name/URI under the old repository name
+        image: String,
+    },
+
     /// Template generation failed for the target platform.
     #[error(
         code = "TEMPLATE_GENERATION_FAILED",

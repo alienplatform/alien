@@ -10,8 +10,12 @@ use crate::{
     network::{AzureNetworkController, validate_azure_sandbox_network},
 };
 
+/// Records the signing key's public half in `public_key` and returns the sandbox's binding. The
+/// owner writes the key once, create-only, and never reads it; every other sandbox takes the
+/// owner's recorded copy.
 pub(super) async fn initialize_key(
     ctx: &ResourceControllerContext<'_>,
+    public_key: &mut Option<egress::GatewayPublicKey>,
 ) -> Result<alien_core::bindings::SandboxEgressBinding> {
     use alien_core::bindings::{
         SandboxEgressBinding, SandboxEgressGateway, SandboxEgressSigningKey,
@@ -23,14 +27,25 @@ pub(super) async fn initialize_key(
             "Azure Internet sandboxes require the deployment gateway",
         ));
     }
-    let vault = egress::deployment_vault(ctx).await?;
-    let key = if sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
-        == Some(config.id.as_str())
-    {
-        egress::ensure_signing_key(vault.as_ref()).await?
+    let owner = sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack).unwrap_or_default();
+    if owner == config.id {
+        // Keep the key this deployment already uses, whichever sandbox recorded it; only a
+        // deployment with none writes one.
+        if public_key.is_none() {
+            *public_key = match egress::recorded_public_key::<AzureSandboxController>(ctx)? {
+                Some(key) => Some(key),
+                None => {
+                    let vault = egress::deployment_vault(ctx).await?;
+                    Some(egress::create_signing_key(vault.as_ref()).await?)
+                }
+            };
+        }
     } else {
-        egress::read_signing_public_key(vault.as_ref()).await?
-    };
+        *public_key = Some(egress::owner_public_key::<AzureSandboxController>(
+            ctx, owner,
+        )?);
+    }
+    let key = public_key.as_ref().expect("key initialized above");
     Ok(SandboxEgressBinding::Gateway(SandboxEgressGateway {
         container: sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
         audience: format!("{}/{}", ctx.resource_prefix, config.id),
@@ -38,7 +53,7 @@ pub(super) async fn initialize_key(
             vault: alien_core::SECRETS_VAULT_ID.into(),
             key: egress::SIGNING_KEY.into(),
         },
-        kid: key.kid,
+        kid: key.kid.clone(),
         admin_ca_pem: None,
         replicas: None,
     }))
@@ -47,18 +62,25 @@ pub(super) async fn initialize_key(
 pub(super) async fn publish_config(
     ctx: &ResourceControllerContext<'_>,
     binding: Option<&alien_core::bindings::SandboxEgressBinding>,
+    public_key: Option<&egress::GatewayPublicKey>,
+    published: &mut Option<String>,
+    replica_secret_ready: &mut bool,
 ) -> Result<()> {
     let facts = validate_network(ctx).await?;
-    let vault = egress::deployment_vault(ctx).await?;
-    let key = egress::read_signing_public_key(vault.as_ref()).await?;
-    if !matches!(binding, Some(alien_core::bindings::SandboxEgressBinding::Gateway(gateway)) if gateway.kid == key.kid)
-    {
-        return Err(invalid(
-            ctx,
-            "Azure sandbox gateway signing key changed during initialization",
-        ));
-    }
-    egress::publish_config(ctx, &key, &facts.vpc_cidrs).await
+    let key = match (binding, public_key) {
+        (Some(alien_core::bindings::SandboxEgressBinding::Gateway(gateway)), Some(key))
+            if gateway.kid == key.kid =>
+        {
+            key
+        }
+        _ => {
+            return Err(invalid(
+                ctx,
+                "Azure sandbox gateway signing key changed during initialization",
+            ))
+        }
+    };
+    egress::publish_azure_config(ctx, key, &facts.vpc_cidrs, published, replica_secret_ready).await
 }
 
 pub(super) async fn validate_network(

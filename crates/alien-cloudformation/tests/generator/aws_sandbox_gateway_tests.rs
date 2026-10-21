@@ -167,6 +167,7 @@ fn render(stack: &Stack, settings: StackSettings, description: &str) -> Result<C
                 callback_url: None,
             },
             description: Some(description.to_string()),
+            management_trust: Default::default(),
         },
     )
 }

@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
+use crate::core::linked_bindings;
 use crate::core::EnvironmentVariableBuilder;
 use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
@@ -2342,6 +2343,33 @@ impl AzureWorkerController {
             &container_app,
         );
 
+        // A linked resource can change what its binding publishes without this worker being
+        // updated: an Azure sandbox promoting a rebuilt disk image, or rewriting its egress, from
+        // its own Ready. Compare the bindings rendered now with the ones the Container App runs,
+        // from the read the heartbeat already made, and refresh only when they differ.
+        if let Some(live) = live_main_container_env(&container_app) {
+            let drifted = linked_bindings::linked_binding_drift(
+                ctx,
+                &func_cfg.runtime_binding_links(),
+                &func_cfg.id,
+                &live,
+            )
+            .await?;
+            if !drifted.is_empty() {
+                // Names only: binding values can carry secrets.
+                info!(
+                    worker = %func_cfg.id,
+                    variables = ?drifted,
+                    reason = "linked binding drift",
+                    "Refreshing the worker's linked bindings"
+                );
+                return Ok(HandlerAction::Continue {
+                    state: RefreshingLinkedBindings,
+                    suggested_delay: None,
+                });
+            }
+        }
+
         self.renew_certificate(ctx).await?;
 
         debug!(name = %func_cfg.id, "Heartbeat check passed");
@@ -2349,6 +2377,139 @@ impl AzureWorkerController {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
         })
+    }
+
+    /// Applies the Container App as an update would render it now, with the linked bindings as
+    /// they are now. The worker's configuration is unchanged, so only the environment differs from
+    /// what runs. The worker reports Updating meanwhile, so the planner waits for the refresh
+    /// before it starts an update (which only begins from Ready).
+    #[handler(
+        state = RefreshingLinkedBindings,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn refreshing_linked_bindings(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        let azure_cfg = ctx.get_azure_config()?;
+        let container_app_name = self.container_app_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: func_cfg.id.clone(),
+                message: "Container app name not set in state".to_string(),
+            })
+        })?;
+        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let client = ctx
+            .service_provider
+            .get_azure_container_apps_client(azure_cfg)?;
+        let desired_app = self
+            .desired_container_app(func_cfg, &container_app_name, azure_cfg, ctx)
+            .await?;
+        let operation = client
+            .update_container_app(&resource_group_name, &container_app_name, &desired_app)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to refresh the worker's linked bindings".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+        let suggested_delay = match operation {
+            OperationResult::Completed(_) => Duration::from_secs(3),
+            OperationResult::LongRunning(lro) => {
+                self.pending_operation_url = Some(lro.url.clone());
+                self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
+                lro.retry_after.unwrap_or(Duration::from_secs(15))
+            }
+        };
+        Ok(HandlerAction::Continue {
+            state: RefreshingLinkedBindingsWaitForApp,
+            suggested_delay: Some(suggested_delay),
+        })
+    }
+
+    #[handler(
+        state = RefreshingLinkedBindingsWaitForApp,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn refreshing_linked_bindings_wait_for_app(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        let azure_cfg = ctx.get_azure_config()?;
+        let container_app_name = self.container_app_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: func_cfg.id.clone(),
+                message: "Container app name not set in state".to_string(),
+            })
+        })?;
+        if let Some(url) = self.pending_operation_url.clone() {
+            let operation_client = ctx
+                .service_provider
+                .get_azure_long_running_operation_client(azure_cfg)?;
+            let operation = LongRunningOperation {
+                url,
+                retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
+                location_url: None,
+            };
+            let done = operation_client
+                .check_status(&operation, "UpdateContainerApp", &container_app_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Azure ARM operation failed for a linked binding refresh".to_string(),
+                    resource_id: Some(func_cfg.id.clone()),
+                })?;
+            if done.is_none() {
+                return Ok(HandlerAction::Stay {
+                    max_times: Some(100),
+                    suggested_delay: Some(
+                        self.pending_operation_retry_after
+                            .map(Duration::from_secs)
+                            .unwrap_or(Duration::from_secs(15)),
+                    ),
+                });
+            }
+            self.pending_operation_url = None;
+            self.pending_operation_retry_after = None;
+        }
+
+        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let client = ctx
+            .service_provider
+            .get_azure_container_apps_client(azure_cfg)?;
+        let app = client
+            .get_container_app(&resource_group_name, &container_app_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to read the Container App after a linked binding refresh"
+                    .to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+        match app
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.provisioning_state.as_ref())
+        {
+            Some(ContainerAppPropertiesProvisioningState::Succeeded) => {
+                Ok(HandlerAction::Continue {
+                    state: RefreshingLinkedBindingsReadinessProbe,
+                    suggested_delay: None,
+                })
+            }
+            Some(ContainerAppPropertiesProvisioningState::Failed) => {
+                Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: "The Container App failed to apply the refreshed linked bindings"
+                        .to_string(),
+                    resource_id: Some(func_cfg.id.clone()),
+                }))
+            }
+            _ => Ok(HandlerAction::Stay {
+                max_times: Some(60),
+                suggested_delay: Some(Duration::from_secs(10)),
+            }),
+        }
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────
@@ -2396,16 +2557,9 @@ impl AzureWorkerController {
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
         self.ready_rbac_wait_until_epoch_secs = None;
         self.update_dapr_components_deleted = false;
-        if func_cfg == previous_cfg {
-            self.update_rbac_wait_required = false;
-            return Ok(HandlerAction::Continue {
-                state: UpdateRunningReadinessProbe,
-                suggested_delay: None,
-            });
-        }
 
         let azure_cfg = ctx.get_azure_config()?;
-        let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
+        let container_app_name = self.container_app_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "container_app_name missing prior to update_start".to_string(),
                 operation: Some("update_start".to_string()),
@@ -2413,26 +2567,63 @@ impl AzureWorkerController {
             })
         })?;
         let resource_group_name = get_resource_group_name(ctx.state)?;
-        let environment_name = get_container_apps_environment_name(ctx.state)?;
         let client = ctx
             .service_provider
             .get_azure_container_apps_client(azure_cfg)?;
-        self.update_rbac_wait_required = true;
 
-        // Build desired spec
-        let desired_app = self
-            .build_container_app(
-                func_cfg,
-                &environment_name,
-                container_app_name,
-                azure_cfg,
-                ctx,
-            )
-            .await?;
-        let mut desired_app = desired_app;
-        if let (Some(fqdn), Some(keyvault_cert_id)) = (&self.fqdn, &self.keyvault_cert_id) {
-            Self::set_custom_domain(&mut desired_app, fqdn.clone(), keyvault_cert_id.clone());
+        // An update whose own configuration is unchanged was planned because a linked resource
+        // was. It still re-renders the linked bindings: the resource it links may publish a new
+        // binding, such as a sandbox's rebuilt disk image.
+        if func_cfg == previous_cfg {
+            self.update_rbac_wait_required = false;
+            let links = func_cfg.runtime_binding_links();
+            if !linked_bindings::links_settled(ctx, &links) {
+                // A linked resource is still in its own flow; wait for the value it settles on.
+                return Err(AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: func_cfg.id.clone(),
+                    dependency_id: linked_bindings::unsettled_link(ctx, &links)
+                        .map(|link| link.id().to_string())
+                        .unwrap_or_default(),
+                }));
+            }
+            let drifted = if links.is_empty() {
+                Vec::new()
+            } else {
+                let live = client
+                    .get_container_app(&resource_group_name, &container_app_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to read the Container App for an update".to_string(),
+                        resource_id: Some(func_cfg.id.clone()),
+                    })?;
+                match live_main_container_env(&live) {
+                    Some(live) => {
+                        linked_bindings::linked_binding_drift(ctx, &links, &func_cfg.id, &live)
+                            .await?
+                    }
+                    None => Vec::new(),
+                }
+            };
+            if drifted.is_empty() {
+                return Ok(HandlerAction::Continue {
+                    state: UpdateRunningReadinessProbe,
+                    suggested_delay: None,
+                });
+            }
+            info!(
+                worker = %func_cfg.id,
+                variables = ?drifted,
+                reason = "linked binding drift",
+                "Re-rendering the worker's linked bindings during its update"
+            );
+        } else {
+            self.update_rbac_wait_required = true;
         }
+
+        let desired_app = self
+            .desired_container_app(func_cfg, &container_app_name, azure_cfg, ctx)
+            .await?;
+        let container_app_name = &container_app_name;
 
         // Issue UPDATE
         let op_result = client
@@ -2882,38 +3073,41 @@ impl AzureWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        // Re‑use the same readiness‑probe helper.
-        let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        if func_cfg.readiness_probe.is_none() || func_cfg.public_endpoints.is_empty() {
-            return Ok(HandlerAction::Continue {
+        if self.readiness_probe_passes(ctx).await? {
+            Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: None,
-            });
+            })
+        } else {
+            // Probe failed, let the framework handle retries
+            Ok(HandlerAction::Stay {
+                max_times: Some(READINESS_PROBE_MAX_ATTEMPTS as u32),
+                suggested_delay: Some(Duration::from_secs(5)),
+            })
         }
+    }
 
-        let url = self
-            .url
-            .as_ref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: func_cfg.id.clone(),
-                    message: "Readiness probe configured but URL missing after update".to_string(),
-                })
-            })?
-            .clone();
-
-        match run_readiness_probe(ctx, &url).await {
-            Ok(()) => Ok(HandlerAction::Continue {
+    /// A linked binding refresh can hand the app a changed endpoint or credential, so it passes
+    /// the same readiness probe an update does before the worker reports Running again.
+    #[handler(
+        state = RefreshingLinkedBindingsReadinessProbe,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn refreshing_linked_bindings_readiness_probe(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.readiness_probe_passes(ctx).await? {
+            Ok(HandlerAction::Continue {
                 state: Ready,
-                suggested_delay: None,
-            }),
-            Err(_) => {
-                // Probe failed, let the framework handle retries
-                Ok(HandlerAction::Stay {
-                    max_times: Some(READINESS_PROBE_MAX_ATTEMPTS as u32),
-                    suggested_delay: Some(Duration::from_secs(5)),
-                })
-            }
+                suggested_delay: Some(Duration::from_secs(30)),
+            })
+        } else {
+            Ok(HandlerAction::Stay {
+                max_times: Some(READINESS_PROBE_MAX_ATTEMPTS as u32),
+                suggested_delay: Some(Duration::from_secs(5)),
+            })
         }
     }
 
@@ -4012,6 +4206,40 @@ impl AzureWorkerController {
         self.pending_operation_retry_after = None;
     }
 
+    /// Whether the worker's configured readiness probe passes, or there is none to run.
+    async fn readiness_probe_passes(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        if func_cfg.readiness_probe.is_none() || func_cfg.public_endpoints.is_empty() {
+            return Ok(true);
+        }
+        let url = self.url.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: func_cfg.id.clone(),
+                message: "Readiness probe configured but URL missing after update".to_string(),
+            })
+        })?;
+        Ok(run_readiness_probe(ctx, &url).await.is_ok())
+    }
+
+    /// The Container App an update applies: the full spec rendered now, with the custom domain
+    /// the update path binds.
+    async fn desired_container_app(
+        &self,
+        func: &Worker,
+        container_app_name: &str,
+        azure_cfg: &AzureClientConfig,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<ContainerApp> {
+        let environment_name = get_container_apps_environment_name(ctx.state)?;
+        let mut desired_app = self
+            .build_container_app(func, &environment_name, container_app_name, azure_cfg, ctx)
+            .await?;
+        if let (Some(fqdn), Some(keyvault_cert_id)) = (&self.fqdn, &self.keyvault_cert_id) {
+            Self::set_custom_domain(&mut desired_app, fqdn.clone(), keyvault_cert_id.clone());
+        }
+        Ok(desired_app)
+    }
+
     fn set_custom_domain(app: &mut ContainerApp, fqdn: String, certificate_id: String) {
         if let Some(props) = &mut app.properties {
             if let Some(config) = &mut props.configuration {
@@ -4137,7 +4365,7 @@ impl AzureWorkerController {
         let cpu = memory_gi / 2.0;
 
         let container = Container {
-            name: Some("main".to_string()),
+            name: Some(MAIN_CONTAINER_NAME.to_string()),
             image: Some(image.clone()),
             resources: Some(ContainerResources {
                 cpu: Some(cpu),
@@ -5273,6 +5501,29 @@ impl AzureWorkerController {
             _internal_stay_count: None,
         }
     }
+}
+
+/// Name of the worker's container in its Container App.
+const MAIN_CONTAINER_NAME: &str = "main";
+
+/// The plain-value environment of the worker's container in a Container App read, or `None` when
+/// the read carries no template to compare against.
+fn live_main_container_env(app: &ContainerApp) -> Option<HashMap<String, String>> {
+    let container = app
+        .properties
+        .as_ref()?
+        .template
+        .as_ref()?
+        .containers
+        .iter()
+        .find(|container| container.name.as_deref() == Some(MAIN_CONTAINER_NAME))?;
+    Some(
+        container
+            .env
+            .iter()
+            .filter_map(|var| Some((var.name.clone()?, var.value.clone()?)))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -7430,5 +7681,418 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    mod linked_binding_refresh {
+        //! A Worker linked to an Azure sandbox keeps the sandbox binding it rendered unless
+        //! something re-renders it. These drive the real Worker controller against a mocked
+        //! Container Apps API and a real Azure sandbox controller serialized in the tested state.
+
+        use super::*;
+        use crate::core::{serialize_controller, ResourceController};
+        use crate::sandbox::{AzureSandboxController, AzureSandboxState};
+        use alien_core::{ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+        use std::sync::Mutex;
+
+        const OLD_IMAGE: &str = "registry.example.com/agent:1";
+        const NEW_IMAGE: &str = "registry.example.com/agent:2";
+        const BINDING: &str = "ALIEN_SB_BINDING";
+
+        fn sandbox(image: &str) -> Sandbox {
+            Sandbox::new("sb".to_string())
+                .code(SandboxCode::Image {
+                    image: image.to_string(),
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        }
+
+        /// The sandbox serving `image`, as its controller holds it once the disk image is built.
+        fn sandbox_on(image: &str, state: AzureSandboxState) -> AzureSandboxController {
+            AzureSandboxController {
+                state,
+                sandbox_group: Some("sbg".to_string()),
+                region: Some("westus2".to_string()),
+                resource_group: Some("rg".to_string()),
+                disk_image: Some(image.to_string()),
+                disk_image_id: Some(format!("disk-{image}")),
+                retired_disk_images: Vec::new(),
+                pending_disk_image: None,
+                built_disk_images: true,
+                egress: Some(SandboxEgress::None.into()),
+                idle_pause_seconds: None,
+                limits: None,
+                egress_network_verified: false,
+                egress_public_key: None,
+                egress_config_digest: None,
+                egress_replica_secret_ready: false,
+                default_policy: None,
+                _internal_stay_count: None,
+            }
+        }
+
+        fn linked_worker() -> Worker {
+            let mut worker = basic_function();
+            worker.links = vec![ResourceRef::new(Sandbox::RESOURCE_TYPE, "sb")];
+            worker
+        }
+
+        async fn executor(
+            apps: MockContainerAppsApi,
+            controller: AzureWorkerController,
+            sandbox_controller: AzureSandboxController,
+            previous: Option<Worker>,
+        ) -> SingleControllerExecutor {
+            executor_for(linked_worker(), apps, controller, sandbox_controller, previous).await
+        }
+
+        async fn executor_for(
+            worker: Worker,
+            apps: MockContainerAppsApi,
+            controller: AzureWorkerController,
+            sandbox_controller: AzureSandboxController,
+            previous: Option<Worker>,
+        ) -> SingleControllerExecutor {
+            let image = sandbox_controller.disk_image.clone().unwrap();
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(worker)
+                .controller(controller)
+                .platform(Platform::Azure)
+                .service_provider(setup_mock_service_provider(Arc::new(apps), None))
+                .with_test_dependencies()
+                .with_dependency(sandbox(&image), sandbox_controller);
+            if let Some(previous) = previous {
+                builder = builder.previous_resource(previous);
+            }
+            builder.build().await.unwrap()
+        }
+
+        /// The worker as the stack mutations prepare it, which an update's previous
+        /// configuration is.
+        async fn prepared_worker() -> Worker {
+            let mut executor = executor(
+                MockContainerAppsApi::new(),
+                AzureWorkerController::mock_ready("basic-func"),
+                sandbox_on(NEW_IMAGE, AzureSandboxState::Ready),
+                None,
+            )
+            .await;
+            executor
+                .desired_resource_config_mut("basic-func")
+                .and_then(|config| config.downcast_ref::<Worker>().cloned())
+                .expect("the prepared worker")
+        }
+
+        fn main_env(app: &ContainerApp) -> HashMap<String, String> {
+            super::super::live_main_container_env(app).expect("the app has its main container")
+        }
+
+        /// The disk image the app's sandbox binding names.
+        fn served_image(app: &ContainerApp) -> String {
+            let binding: serde_json::Value =
+                serde_json::from_str(&main_env(app)[BINDING]).expect("the binding is JSON");
+            binding["diskImage"]
+                .as_str()
+                .expect("an Azure sandbox binding names its disk image")
+                .to_string()
+        }
+
+        /// The Container App exactly as the worker renders it while the sandbox serves `image`,
+        /// captured from a real update, and as Azure would then return it.
+        async fn rendered_app(image: &str) -> ContainerApp {
+            let captured = Arc::new(Mutex::new(None));
+            let sink = captured.clone();
+            let mut apps = MockContainerAppsApi::new();
+            apps.expect_update_container_app()
+                .returning(move |_, name, app| {
+                    *sink.lock().unwrap() = Some(app.clone());
+                    Ok(OperationResult::Completed(
+                        create_successful_container_app_response(name, false),
+                    ))
+                });
+            let mut previous = prepared_worker().await;
+            previous.code = alien_core::WorkerCode::Image {
+                image: "registry.example.com/worker:old".to_string(),
+            };
+            let mut executor = executor(
+                apps,
+                AzureWorkerController {
+                    state: AzureWorkerState::UpdateStart,
+                    ..AzureWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on(image, AzureSandboxState::Ready),
+                Some(previous),
+            )
+            .await;
+            executor.step().await.expect("the update renders the app");
+            let mut app = captured
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("the update applied the app");
+            app.properties
+                .as_mut()
+                .expect("a rendered app has properties")
+                .provisioning_state = Some(ContainerAppPropertiesProvisioningState::Succeeded);
+            assert_eq!(served_image(&app), image);
+            app
+        }
+
+        fn serving(live: ContainerApp, apps: &mut MockContainerAppsApi) {
+            apps.expect_get_container_app()
+                .returning(move |_, _| Ok(live.clone()));
+        }
+
+        /// The sandbox moved to a rebuilt image from its own Ready, and nothing planned this
+        /// worker. The heartbeat sees the difference and applies the current binding, once.
+        #[tokio::test]
+        async fn a_heartbeat_applies_a_linked_binding_that_moved() {
+            let mut apps = MockContainerAppsApi::new();
+            serving(rendered_app(OLD_IMAGE).await, &mut apps);
+            apps.expect_update_container_app()
+                .times(1)
+                .withf(|_, _, app| served_image(app) == NEW_IMAGE)
+                .returning(|_, name, _| {
+                    Ok(OperationResult::Completed(
+                        create_successful_container_app_response(name, false),
+                    ))
+                });
+            let worker = AzureWorkerController::mock_ready("basic-func");
+            let own_binding = worker.get_binding_params().unwrap();
+            let mut executor = executor(
+                apps,
+                worker,
+                sandbox_on(NEW_IMAGE, AzureSandboxState::Ready),
+                None,
+            )
+            .await;
+
+            executor.step().await.expect("the heartbeat runs");
+            assert_eq!(
+                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                AzureWorkerState::RefreshingLinkedBindings
+            );
+            assert_eq!(
+                executor.status(),
+                ResourceStatus::Updating,
+                "the planner must not start an update mid-refresh: updates begin only from Ready"
+            );
+            executor.step().await.expect("the refresh applies the binding");
+            executor.step().await.expect("the refresh settles");
+            executor.step().await.expect("the refresh passes the readiness probe");
+            let controller = executor.internal_state::<AzureWorkerController>().unwrap();
+            assert_eq!(controller.state, AzureWorkerState::Ready);
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert_eq!(
+                controller.get_binding_params().unwrap(),
+                own_binding,
+                "a refresh must not change the worker's own binding, or its dependents would follow"
+            );
+        }
+
+        /// A refresh hands the app a changed binding, so the worker reports Running again only
+        /// once its readiness probe passes, as after an update.
+        #[tokio::test]
+        async fn a_refresh_reports_running_only_after_the_readiness_probe_passes() {
+            let server = httpmock::MockServer::start();
+            let mut failing = server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path("/health/ready");
+                then.status(503);
+            });
+            let mut worker = function_with_readiness_probe();
+            worker.id = "basic-func".to_string();
+            worker.links = vec![ResourceRef::new(Sandbox::RESOURCE_TYPE, "sb")];
+            let mut apps = MockContainerAppsApi::new();
+            serving(rendered_app(NEW_IMAGE).await, &mut apps);
+            let mut executor = executor_for(
+                worker,
+                apps,
+                AzureWorkerController {
+                    state: AzureWorkerState::RefreshingLinkedBindingsWaitForApp,
+                    url: Some(server.base_url()),
+                    ..AzureWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on(NEW_IMAGE, AzureSandboxState::Ready),
+                None,
+            )
+            .await;
+
+            executor.step().await.expect("the refreshed app is provisioned");
+            executor.step().await.expect("a failed probe is retried");
+            assert_eq!(
+                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                AzureWorkerState::RefreshingLinkedBindingsReadinessProbe
+            );
+            assert_eq!(executor.status(), ResourceStatus::Updating);
+            assert!(failing.hits() >= 1);
+
+            failing.delete();
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path("/health/ready");
+                then.status(200);
+            });
+            executor.step().await.expect("the probe passes");
+            assert_eq!(
+                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                AzureWorkerState::Ready
+            );
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+
+        /// No fleet churn: a live app that already matches, even with the binding's JSON
+        /// reformatted, makes no write.
+        #[tokio::test]
+        async fn a_heartbeat_leaves_matching_bindings_alone() {
+            let current = rendered_app(NEW_IMAGE).await;
+            let mut reformatted = current.clone();
+            let container = reformatted
+                .properties
+                .as_mut()
+                .unwrap()
+                .template
+                .as_mut()
+                .unwrap()
+                .containers
+                .iter_mut()
+                .find(|container| container.name.as_deref() == Some("main"))
+                .unwrap();
+            let binding = container
+                .env
+                .iter_mut()
+                .find(|var| var.name.as_deref() == Some(BINDING))
+                .unwrap();
+            let pretty = serde_json::to_string_pretty(
+                &serde_json::from_str::<serde_json::Value>(binding.value.as_ref().unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_ne!(binding.value.as_deref(), Some(pretty.as_str()));
+            binding.value = Some(pretty);
+
+            for live in [current, reformatted] {
+                let mut apps = MockContainerAppsApi::new();
+                serving(live, &mut apps);
+                apps.expect_update_container_app().times(0);
+                let mut executor = executor(
+                    apps,
+                    AzureWorkerController::mock_ready("basic-func"),
+                    sandbox_on(NEW_IMAGE, AzureSandboxState::Ready),
+                    None,
+                )
+                .await;
+                executor.step().await.expect("the heartbeat runs");
+                assert_eq!(
+                    executor.internal_state::<AzureWorkerController>().unwrap().state,
+                    AzureWorkerState::Ready
+                );
+                assert_eq!(executor.status(), ResourceStatus::Running);
+            }
+        }
+
+        /// No new write per heartbeat: a heartbeat that finds no drift leaves the controller's
+        /// state exactly as it was, so the deployment loop has nothing new to persist.
+        #[tokio::test]
+        async fn a_heartbeat_without_drift_changes_no_state() {
+            let current = rendered_app(NEW_IMAGE).await;
+            let mut before = AzureWorkerController::mock_ready("basic-func");
+            // The heartbeat records the app's ingress host on every tick, drift or not.
+            before.container_app_url = before.extract_url_from_container_app(&current);
+            let mut apps = MockContainerAppsApi::new();
+            serving(current, &mut apps);
+            apps.expect_update_container_app().times(0);
+            let mut executor = executor(
+                apps,
+                before.clone(),
+                sandbox_on(NEW_IMAGE, AzureSandboxState::Ready),
+                None,
+            )
+            .await;
+            executor.step().await.expect("the heartbeat runs");
+            assert_eq!(
+                serialize_controller(executor.internal_state::<AzureWorkerController>().unwrap())
+                    .unwrap(),
+                serialize_controller(&before).unwrap()
+            );
+        }
+
+        /// Ordering: while the sandbox builds its new image it has not reached the value its
+        /// dependents should see, so the worker does not write.
+        #[tokio::test]
+        async fn a_heartbeat_waits_for_a_linked_resource_in_its_own_flow() {
+            let mut apps = MockContainerAppsApi::new();
+            serving(rendered_app(OLD_IMAGE).await, &mut apps);
+            apps.expect_update_container_app().times(0);
+            let mut executor = executor(
+                apps,
+                AzureWorkerController::mock_ready("basic-func"),
+                sandbox_on(NEW_IMAGE, AzureSandboxState::UpdatingDiskImage),
+                None,
+            )
+            .await;
+            executor.step().await.expect("the heartbeat runs");
+            assert_eq!(
+                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                AzureWorkerState::Ready
+            );
+        }
+
+        /// The sandbox's own update moved its image, and the executor planned this worker only
+        /// because the sandbox was planned, so the worker's configuration is unchanged. The
+        /// update must still apply the binding the sandbox publishes now.
+        #[tokio::test]
+        async fn a_dependency_only_update_applies_a_linked_binding_that_moved() {
+            let mut apps = MockContainerAppsApi::new();
+            serving(rendered_app(OLD_IMAGE).await, &mut apps);
+            apps.expect_update_container_app()
+                .times(1)
+                .withf(|_, _, app| served_image(app) == NEW_IMAGE)
+                .returning(|_, name, _| {
+                    Ok(OperationResult::Completed(
+                        create_successful_container_app_response(name, false),
+                    ))
+                });
+            let mut executor = executor(
+                apps,
+                AzureWorkerController {
+                    state: AzureWorkerState::UpdateStart,
+                    ..AzureWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on(NEW_IMAGE, AzureSandboxState::Ready),
+                Some(prepared_worker().await),
+            )
+            .await;
+            executor.step().await.expect("the update re-renders the binding");
+            assert_eq!(
+                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                AzureWorkerState::UpdatingContainerApp
+            );
+        }
+
+        /// A dependency-only update whose bindings did not move still makes no write.
+        #[tokio::test]
+        async fn a_dependency_only_update_with_current_bindings_writes_nothing() {
+            let mut apps = MockContainerAppsApi::new();
+            serving(rendered_app(NEW_IMAGE).await, &mut apps);
+            apps.expect_update_container_app().times(0);
+            let mut executor = executor(
+                apps,
+                AzureWorkerController {
+                    state: AzureWorkerState::UpdateStart,
+                    ..AzureWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on(NEW_IMAGE, AzureSandboxState::Ready),
+                Some(prepared_worker().await),
+            )
+            .await;
+            executor.step().await.expect("the update runs");
+            assert_eq!(
+                executor.internal_state::<AzureWorkerController>().unwrap().state,
+                AzureWorkerState::UpdateRunningReadinessProbe
+            );
+        }
     }
 }

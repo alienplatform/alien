@@ -32,7 +32,7 @@ mod worker;
 pub use ai::{AiBinding, BedrockAiBinding, ExternalAiBinding, FoundryAiBinding, VertexAiBinding};
 pub use artifact_registry::{
     AcrArtifactRegistryBinding, ArtifactRegistryBinding, EcrArtifactRegistryBinding,
-    GarArtifactRegistryBinding, LocalArtifactRegistryBinding,
+    GarArtifactRegistryBinding, LocalArtifactRegistryBinding, LEGACY_REPOSITORY_PUSH_REFUSAL,
 };
 pub use build::{
     AcaBuildBinding, BuildBinding, CloudbuildBuildBinding, CodebuildBuildBinding, LocalBuildBinding,

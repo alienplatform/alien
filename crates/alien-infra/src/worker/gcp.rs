@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
+use crate::core::{linked_bindings, EnvironmentVariableBuilder, ResourcePermissionsHelper};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -2324,12 +2324,152 @@ impl GcpWorkerController {
 
         emit_gcp_cloud_run_worker_heartbeat(ctx, &worker_config, &service_name, &service);
 
+        // A linked resource can change what its binding publishes without this worker being
+        // updated, such as a Cloud SQL server CA rotation the Postgres binding picks up on its
+        // own Ready. Compare the bindings rendered now with the ones the service runs, from the
+        // read the heartbeat already made, and refresh only when they differ.
+        if let Some(live) = live_service_env(&service) {
+            let drifted = linked_bindings::linked_binding_drift(
+                ctx,
+                &worker_config.runtime_binding_links(),
+                &worker_config.id,
+                &live,
+            )
+            .await?;
+            if !drifted.is_empty() {
+                // Names only: binding values can carry secrets.
+                info!(
+                    worker = %worker_config.id,
+                    variables = ?drifted,
+                    reason = "linked binding drift",
+                    "Refreshing the worker's linked bindings"
+                );
+                return Ok(HandlerAction::Continue {
+                    state: RefreshingLinkedBindings,
+                    suggested_delay: None,
+                });
+            }
+        }
+
         self.renew_certificate(ctx).await?;
 
         debug!(name = %worker_config.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)), // Check again in 30 seconds
+        })
+    }
+
+    /// Patches the service as an update would render it now, with the linked bindings as they
+    /// are now. The worker's configuration is unchanged, so only the environment differs from
+    /// what runs. The worker reports Updating meanwhile, so the planner waits for the refresh
+    /// before it starts an update (which only begins from Ready).
+    #[handler(
+        state = RefreshingLinkedBindings,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn refreshing_linked_bindings(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let gcp_config = ctx.get_gcp_config()?;
+        let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
+        let service_name = self.service_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: cfg.id.clone(),
+                message: "Service name not set in state".to_string(),
+            })
+        })?;
+        let current = client
+            .get_service(gcp_config.region.clone(), service_name.clone())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get Cloud Run service for a linked binding refresh"
+                    .to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })?;
+        let mut desired = self.build_cloud_run_service(&service_name, cfg, ctx).await?;
+        desired.name = current.name;
+        desired.etag = current.etag;
+        let operation = client
+            .patch_service(
+                gcp_config.region.clone(),
+                service_name.clone(),
+                desired,
+                None,
+                None,
+                None,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to refresh the worker's linked bindings".to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })?;
+        self.operation_name = Some(operation.name.ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: cfg.id.clone(),
+                message: "Cloud Run update operation returned without name".to_string(),
+            })
+        })?);
+        Ok(HandlerAction::Continue {
+            state: RefreshingLinkedBindingsWaitForOperation,
+            suggested_delay: Some(Duration::from_secs(2)),
+        })
+    }
+
+    #[handler(
+        state = RefreshingLinkedBindingsWaitForOperation,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn refreshing_linked_bindings_wait_for_operation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let gcp_config = ctx.get_gcp_config()?;
+        let operation_name = self.operation_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: cfg.id.clone(),
+                message: "Operation name not set in state".to_string(),
+            })
+        })?;
+        let operation_id = operation_name
+            .rsplit('/')
+            .next()
+            .unwrap_or(&operation_name)
+            .to_string();
+        let operation = ctx
+            .service_provider
+            .get_gcp_cloudrun_client(gcp_config)?
+            .get_operation(gcp_config.region.clone(), operation_id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get the Cloud Run operation of a linked binding refresh"
+                    .to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })?;
+        if !operation.done.unwrap_or(false) {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(60),
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+        if let Some(OperationResult::Error { error }) = &operation.result {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "The linked binding refresh failed: {} (code: {})",
+                    error.message, error.code
+                ),
+                resource_id: Some(cfg.id.clone()),
+            }));
+        }
+        self.operation_name = None;
+        Ok(HandlerAction::Continue {
+            state: RefreshingLinkedBindingsReadinessProbe,
+            suggested_delay: None,
         })
     }
 
@@ -2380,11 +2520,58 @@ impl GcpWorkerController {
 
         let cfg = ctx.desired_resource_config::<Worker>()?;
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
+        // An update whose own configuration is unchanged was planned because a linked resource
+        // was. It still re-renders the linked bindings: the resource it links may publish a new
+        // binding.
         if cfg == previous_cfg {
-            return Ok(HandlerAction::Continue {
-                state: UpdateEnsuringPublicExposure,
-                suggested_delay: None,
-            });
+            let links = cfg.runtime_binding_links();
+            if !linked_bindings::links_settled(ctx, &links) {
+                // A linked resource is still in its own flow; wait for the value it settles on.
+                return Err(AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: cfg.id.clone(),
+                    dependency_id: linked_bindings::unsettled_link(ctx, &links)
+                        .map(|link| link.id().to_string())
+                        .unwrap_or_default(),
+                }));
+            }
+            let drifted = if links.is_empty() {
+                Vec::new()
+            } else {
+                let gcp_config = ctx.get_gcp_config()?;
+                let service_name = self.service_name.clone().ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceControllerConfigError {
+                        resource_id: cfg.id.clone(),
+                        message: "Service name not set in state".to_string(),
+                    })
+                })?;
+                let live = ctx
+                    .service_provider
+                    .get_gcp_cloudrun_client(gcp_config)?
+                    .get_service(gcp_config.region.clone(), service_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: "Failed to get Cloud Run service for an update".to_string(),
+                        resource_id: Some(cfg.id.clone()),
+                    })?;
+                match live_service_env(&live) {
+                    Some(live) => {
+                        linked_bindings::linked_binding_drift(ctx, &links, &cfg.id, &live).await?
+                    }
+                    None => Vec::new(),
+                }
+            };
+            if drifted.is_empty() {
+                return Ok(HandlerAction::Continue {
+                    state: UpdateEnsuringPublicExposure,
+                    suggested_delay: None,
+                });
+            }
+            info!(
+                worker = %cfg.id,
+                variables = ?drifted,
+                reason = "linked binding drift",
+                "Re-rendering the worker's linked bindings during its update"
+            );
         }
 
         let gcp_config = ctx.get_gcp_config()?;
@@ -3417,40 +3604,41 @@ impl GcpWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let cfg = ctx.desired_resource_config::<Worker>()?;
-
-        // Only run readiness probe if configured and we have a URL
-        if cfg.readiness_probe.is_some() {
-            if let Some(url) = self.url.as_ref() {
-                match run_readiness_probe(ctx, url).await {
-                    Ok(()) => {
-                        // Probe succeeded, proceed to Ready
-                    }
-                    Err(error) => {
-                        // Recorded, not discarded: when the budget runs out the caller is told
-                        // only "timed out after N attempts", which cannot tell a container that
-                        // never started from one still warming up.
-                        warn!(
-                            name=%ctx.desired_config.id(),
-                            %url,
-                            "readiness probe attempt failed: {error}"
-                        );
-                        return Ok(HandlerAction::Stay {
-                            max_times: Some(GCP_READINESS_PROBE_MAX_ATTEMPTS),
-                            suggested_delay: Some(Duration::from_secs(5)),
-                        });
-                    }
-                }
-            }
+        if self.readiness_probe_passes(ctx).await? {
+            Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            })
         } else {
-            debug!(name=%ctx.desired_config.id(), "No readiness probe configured, proceeding to Ready");
+            Ok(HandlerAction::Stay {
+                max_times: Some(GCP_READINESS_PROBE_MAX_ATTEMPTS),
+                suggested_delay: Some(Duration::from_secs(5)),
+            })
         }
+    }
 
-        // Either no readiness probe needed, or probe succeeded - proceed to Ready
-        Ok(HandlerAction::Continue {
-            state: Ready,
-            suggested_delay: None,
-        })
+    /// A linked binding refresh can hand the app a changed endpoint or credential, so it passes
+    /// the same readiness probe an update does before the worker reports Running again.
+    #[handler(
+        state = RefreshingLinkedBindingsReadinessProbe,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn refreshing_linked_bindings_readiness_probe(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.readiness_probe_passes(ctx).await? {
+            Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            })
+        } else {
+            Ok(HandlerAction::Stay {
+                max_times: Some(GCP_READINESS_PROBE_MAX_ATTEMPTS),
+                suggested_delay: Some(Duration::from_secs(5)),
+            })
+        }
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
@@ -4889,6 +5077,29 @@ impl GcpWorkerController {
         ))
     }
 
+    /// Whether the worker's configured readiness probe passes, or there is none to run.
+    async fn readiness_probe_passes(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let (Some(_), Some(url)) = (cfg.readiness_probe.as_ref(), self.url.as_ref()) else {
+            debug!(name=%ctx.desired_config.id(), "No readiness probe configured, proceeding to Ready");
+            return Ok(true);
+        };
+        Ok(match run_readiness_probe(ctx, url).await {
+            Ok(()) => true,
+            Err(error) => {
+                // Recorded, not discarded: when the budget runs out the caller is told only
+                // "timed out after N attempts", which cannot tell a container that never started
+                // from one still warming up.
+                warn!(
+                    name=%ctx.desired_config.id(),
+                    %url,
+                    "readiness probe attempt failed: {error}"
+                );
+                false
+            }
+        })
+    }
+
     async fn prepare_environment_variables(
         &self,
         initial_env: &HashMap<String, String>,
@@ -5910,6 +6121,19 @@ impl GcpWorkerController {
 /// timeout up to that ceiling, as the Terraform emitter does.
 fn pubsub_ack_deadline_seconds(timeout_seconds: u32) -> i32 {
     timeout_seconds.clamp(10, 600) as i32
+}
+
+/// The plain-value environment of the worker's container in a Cloud Run service read, or `None`
+/// when the read carries no container to compare against.
+fn live_service_env(service: &Service) -> Option<HashMap<String, String>> {
+    let container = service.template.as_ref()?.containers.first()?;
+    Some(
+        container
+            .env
+            .iter()
+            .filter_map(|var| Some((var.name.clone(), var.value.clone()?)))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -8465,5 +8689,337 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    mod linked_binding_refresh {
+        //! A Cloud Run worker keeps the linked bindings it rendered unless something re-renders
+        //! them. These drive the real Worker controller against a mocked Cloud Run API and a real
+        //! linked controller serialized in the tested state: a GCP sandbox whose template's
+        //! internet access the sandbox re-reads on its own Ready.
+
+        use super::*;
+        use crate::core::{serialize_controller, ResourceController};
+        use crate::sandbox::{GcpAgentPlatformTemplateController, GcpAgentPlatformTemplateState};
+        use alien_core::{ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        const BINDING: &str = "ALIEN_SB_BINDING";
+
+        fn sandbox() -> Sandbox {
+            Sandbox::new("sb".to_string())
+                .code(SandboxCode::Image {
+                    image: "registry.example.com/agent:1".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        }
+
+        fn sandbox_on(
+            allow_egress: bool,
+            state: GcpAgentPlatformTemplateState,
+        ) -> GcpAgentPlatformTemplateController {
+            GcpAgentPlatformTemplateController {
+                state,
+                allow_egress: Some(allow_egress),
+                ..GcpAgentPlatformTemplateController::mock_ready("engine-1", "template-1")
+            }
+        }
+
+        fn binding_of(controller: &GcpAgentPlatformTemplateController) -> serde_json::Value {
+            controller
+                .get_binding_params()
+                .unwrap()
+                .expect("a serving template publishes a binding")
+        }
+
+        fn linked_worker() -> Worker {
+            let mut worker = basic_function();
+            worker.links = vec![ResourceRef::new(Sandbox::RESOURCE_TYPE, "sb")];
+            worker
+        }
+
+        async fn executor(
+            cloudrun: MockCloudRunApi,
+            controller: GcpWorkerController,
+            sandbox_controller: GcpAgentPlatformTemplateController,
+            previous: Option<Worker>,
+        ) -> SingleControllerExecutor {
+            executor_for(linked_worker(), cloudrun, controller, sandbox_controller, previous).await
+        }
+
+        async fn executor_for(
+            worker: Worker,
+            cloudrun: MockCloudRunApi,
+            controller: GcpWorkerController,
+            sandbox_controller: GcpAgentPlatformTemplateController,
+            previous: Option<Worker>,
+        ) -> SingleControllerExecutor {
+            let mut builder = SingleControllerExecutor::builder()
+                .resource(worker)
+                .controller(controller)
+                .platform(Platform::Gcp)
+                .service_provider(setup_mock_service_provider(Arc::new(cloudrun), None))
+                .with_test_dependencies()
+                .with_dependency(sandbox(), sandbox_controller);
+            if let Some(previous) = previous {
+                builder = builder.previous_resource(previous);
+            }
+            builder.build().await.unwrap()
+        }
+
+        /// The worker as the stack mutations prepare it, which an update's previous
+        /// configuration is.
+        async fn prepared_worker() -> Worker {
+            let mut executor = executor(
+                MockCloudRunApi::new(),
+                GcpWorkerController::mock_ready("basic-func"),
+                sandbox_on(true, GcpAgentPlatformTemplateState::Ready),
+                None,
+            )
+            .await;
+            executor
+                .desired_resource_config_mut("basic-func")
+                .and_then(|config| config.downcast_ref::<Worker>().cloned())
+                .expect("the prepared worker")
+        }
+
+        /// The sandbox binding the service runs, as JSON.
+        fn served_binding(service: &Service) -> serde_json::Value {
+            let env: HashMap<String, String> =
+                super::super::live_service_env(service).expect("the service has its container");
+            serde_json::from_str(&env[BINDING]).expect("the binding is JSON")
+        }
+
+        /// The service exactly as the worker renders it while the sandbox allows egress or
+        /// not, captured from a real update, and as Cloud Run would then return it.
+        async fn rendered_service(allow_egress: bool) -> Service {
+            let captured = Arc::new(Mutex::new(None));
+            let sink = captured.clone();
+            let mut cloudrun = MockCloudRunApi::new();
+            cloudrun
+                .expect_get_service()
+                .returning(|_, name| Ok(create_successful_service_response(&name)));
+            cloudrun
+                .expect_patch_service()
+                .returning(move |_, name, service, _, _, _| {
+                    *sink.lock().unwrap() = Some(service);
+                    Ok(create_successful_operation_response(&name))
+                });
+            let mut previous = prepared_worker().await;
+            previous.code = alien_core::WorkerCode::Image {
+                image: "registry.example.com/worker:old".to_string(),
+            };
+            let sandbox_controller = sandbox_on(allow_egress, GcpAgentPlatformTemplateState::Ready);
+            let expected = binding_of(&sandbox_controller);
+            let mut executor = executor(
+                cloudrun,
+                GcpWorkerController {
+                    state: GcpWorkerState::UpdateStart,
+                    ..GcpWorkerController::mock_ready("basic-func")
+                },
+                sandbox_controller,
+                Some(previous),
+            )
+            .await;
+            executor.step().await.expect("the update renders the service");
+            let mut service = captured
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("the update patched the service");
+            service.conditions = vec![Condition::builder()
+                .r#type("Ready".to_string())
+                .state(ConditionState::ConditionSucceeded)
+                .build()];
+            assert_eq!(served_binding(&service), expected);
+            service
+        }
+
+        fn serving(live: Service, cloudrun: &mut MockCloudRunApi) {
+            cloudrun
+                .expect_get_service()
+                .returning(move |_, _| Ok(live.clone()));
+        }
+
+        /// The sandbox's template stopped allowing egress, which the sandbox picked up on its own
+        /// Ready, and nothing planned this worker. The heartbeat applies the current binding once.
+        #[tokio::test]
+        async fn a_heartbeat_applies_a_linked_binding_that_moved() {
+            let mut cloudrun = MockCloudRunApi::new();
+            serving(rendered_service(true).await, &mut cloudrun);
+            let expected = binding_of(&sandbox_on(false, GcpAgentPlatformTemplateState::Ready));
+            cloudrun
+                .expect_patch_service()
+                .times(1)
+                .withf(move |_, _, service, _, _, _| served_binding(service) == expected)
+                .returning(|_, name, _, _, _, _| Ok(create_successful_operation_response(&name)));
+            cloudrun
+                .expect_get_operation()
+                .returning(|_, name| Ok(create_completed_operation_response(&name)));
+            let worker = GcpWorkerController::mock_ready("basic-func");
+            let own_binding = worker.get_binding_params().unwrap();
+            let mut executor = executor(
+                cloudrun,
+                worker,
+                sandbox_on(false, GcpAgentPlatformTemplateState::Ready),
+                None,
+            )
+            .await;
+
+            executor.step().await.expect("the heartbeat runs");
+            assert_eq!(
+                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                GcpWorkerState::RefreshingLinkedBindings
+            );
+            assert_eq!(
+                executor.status(),
+                ResourceStatus::Updating,
+                "the planner must not start an update mid-refresh: updates begin only from Ready"
+            );
+            executor.step().await.expect("the refresh patches the service");
+            executor.step().await.expect("the refresh settles");
+            executor.step().await.expect("the refresh passes the readiness probe");
+            let controller = executor.internal_state::<GcpWorkerController>().unwrap();
+            assert_eq!(controller.state, GcpWorkerState::Ready);
+            assert_eq!(controller.operation_name, None);
+            assert_eq!(
+                controller.get_binding_params().unwrap(),
+                own_binding,
+                "a refresh must not change the worker's own binding, or its dependents would follow"
+            );
+        }
+
+        /// A refresh hands the app a changed binding, so the worker reports Running again only
+        /// once its readiness probe passes, as after an update.
+        #[tokio::test]
+        async fn a_refresh_reports_running_only_after_the_readiness_probe_passes() {
+            let server = MockServer::start();
+            let mut failing = server.mock(|when, then| {
+                when.method(GET).path("/health/ready");
+                then.status(503);
+            });
+            let mut worker = function_with_readiness_probe();
+            worker.id = "basic-func".to_string();
+            worker.links = vec![ResourceRef::new(Sandbox::RESOURCE_TYPE, "sb")];
+            let mut cloudrun = MockCloudRunApi::new();
+            cloudrun
+                .expect_get_operation()
+                .returning(|_, name| Ok(create_completed_operation_response(&name)));
+            let mut executor = executor_for(
+                worker,
+                cloudrun,
+                GcpWorkerController {
+                    state: GcpWorkerState::RefreshingLinkedBindingsWaitForOperation,
+                    operation_name: Some("refresh-1".to_string()),
+                    url: Some(server.base_url()),
+                    ..GcpWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on(false, GcpAgentPlatformTemplateState::Ready),
+                None,
+            )
+            .await;
+
+            executor.step().await.expect("the refresh operation completes");
+            executor.step().await.expect("a failed probe is retried");
+            assert_eq!(
+                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                GcpWorkerState::RefreshingLinkedBindingsReadinessProbe
+            );
+            assert_eq!(executor.status(), ResourceStatus::Updating);
+            assert!(failing.hits() >= 1);
+
+            failing.delete();
+            server.mock(|when, then| {
+                when.method(GET).path("/health/ready");
+                then.status(200);
+            });
+            executor.step().await.expect("the probe passes");
+            assert_eq!(
+                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                GcpWorkerState::Ready
+            );
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+
+        /// No churn and no new state: a service that already matches makes no write, and the
+        /// heartbeat leaves the controller's state exactly as it was.
+        #[tokio::test]
+        async fn a_heartbeat_without_drift_writes_nothing() {
+            let mut cloudrun = MockCloudRunApi::new();
+            serving(rendered_service(true).await, &mut cloudrun);
+            cloudrun.expect_patch_service().times(0);
+            let before = GcpWorkerController::mock_ready("basic-func");
+            let mut executor = executor(
+                cloudrun,
+                before.clone(),
+                sandbox_on(true, GcpAgentPlatformTemplateState::Ready),
+                None,
+            )
+            .await;
+            executor.step().await.expect("the heartbeat runs");
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert_eq!(
+                serialize_controller(executor.internal_state::<GcpWorkerController>().unwrap())
+                    .unwrap(),
+                serialize_controller(&before).unwrap()
+            );
+        }
+
+        /// The executor planned this worker only because a linked resource was planned, so its
+        /// own configuration is unchanged. The update must still apply the binding that moved.
+        #[tokio::test]
+        async fn a_dependency_only_update_applies_a_linked_binding_that_moved() {
+            let mut cloudrun = MockCloudRunApi::new();
+            serving(rendered_service(true).await, &mut cloudrun);
+            let expected = binding_of(&sandbox_on(false, GcpAgentPlatformTemplateState::Ready));
+            cloudrun
+                .expect_patch_service()
+                .times(1)
+                .withf(move |_, _, service, _, _, _| served_binding(service) == expected)
+                .returning(|_, name, _, _, _, _| Ok(create_successful_operation_response(&name)));
+            let mut executor = executor(
+                cloudrun,
+                GcpWorkerController {
+                    state: GcpWorkerState::UpdateStart,
+                    ..GcpWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on(false, GcpAgentPlatformTemplateState::Ready),
+                Some(prepared_worker().await),
+            )
+            .await;
+            executor.step().await.expect("the update re-renders the binding");
+            assert_eq!(
+                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                GcpWorkerState::UpdatingService
+            );
+        }
+
+        /// A dependency-only update whose bindings did not move still makes no write.
+        #[tokio::test]
+        async fn a_dependency_only_update_with_current_bindings_writes_nothing() {
+            let mut cloudrun = MockCloudRunApi::new();
+            serving(rendered_service(true).await, &mut cloudrun);
+            cloudrun.expect_patch_service().times(0);
+            let mut executor = executor(
+                cloudrun,
+                GcpWorkerController {
+                    state: GcpWorkerState::UpdateStart,
+                    ..GcpWorkerController::mock_ready("basic-func")
+                },
+                sandbox_on(true, GcpAgentPlatformTemplateState::Ready),
+                Some(prepared_worker().await),
+            )
+            .await;
+            executor.step().await.expect("the update runs");
+            assert_eq!(
+                executor.internal_state::<GcpWorkerController>().unwrap().state,
+                GcpWorkerState::UpdateEnsuringPublicExposure
+            );
+        }
     }
 }

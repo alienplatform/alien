@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
 
+use crate::core::linked_bindings;
 use crate::core::EnvironmentVariableBuilder;
 
 use crate::core::aws_tag_scoped::{
@@ -2718,7 +2719,7 @@ impl AwsWorkerController {
                 // it until the next window instead of failing a healthy worker.
                 match client.get_function_environment(&aws_worker_name).await {
                     Ok(live) => {
-                        let drifted = drifted_variables(&expected, &live);
+                        let drifted = linked_bindings::drifted_bindings(&expected, &live);
                         if !drifted.is_empty() {
                             // Names only: binding values can carry secrets.
                             info!(
@@ -3046,29 +3047,19 @@ impl AwsWorkerController {
                                 .to_string(),
                             resource_id: Some(current_config.id.clone()),
                         })?;
-                    !drifted_variables(&expected, &live).is_empty()
+                    !linked_bindings::drifted_bindings(&expected, &live).is_empty()
                 }
-                None if current_config.links.is_empty()
-                    && current_config.runtime_binding_links().is_empty() =>
-                {
-                    false
-                }
+                None if current_config.runtime_binding_links().is_empty() => false,
                 // A linked resource is still in its own flow; wait for the value it settles on.
                 None => {
                     return Err(AlienError::new(ErrorData::DependencyNotReady {
                         resource_id: current_config.id.clone(),
-                        dependency_id: current_config
-                            .links
-                            .iter()
-                            .chain(current_config.runtime_binding_links().iter())
-                            .find(|link| {
-                                ctx.state
-                                    .resources
-                                    .get(link.id())
-                                    .is_none_or(|state| state.status != ResourceStatus::Running)
-                            })
-                            .map(|link| link.id().to_string())
-                            .unwrap_or_default(),
+                        dependency_id: linked_bindings::unsettled_link(
+                            ctx,
+                            &current_config.runtime_binding_links(),
+                        )
+                        .map(|link| link.id().to_string())
+                        .unwrap_or_default(),
                     }))
                 }
             };
@@ -5648,27 +5639,13 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
         worker_config: &Worker,
     ) -> Result<Option<HashMap<String, String>>> {
-        let mut links = worker_config.links.clone();
-        for link in worker_config.runtime_binding_links() {
-            if !links.contains(&link) {
-                links.push(link);
-            }
-        }
-        if links.is_empty()
-            || links.iter().any(|link| {
-                ctx.state
-                    .resources
-                    .get(link.id())
-                    .is_none_or(|state| state.status != ResourceStatus::Running)
-            })
-        {
-            return Ok(None);
-        }
-        let rendered = EnvironmentVariableBuilder::try_new(&HashMap::new())?
-            .add_linked_resources(&links, ctx, &worker_config.id)
-            .await?
-            .build();
-        Ok(Some(rendered))
+        Ok(linked_bindings::render_linked_bindings(
+            ctx,
+            &worker_config.runtime_binding_links(),
+            &worker_config.id,
+        )
+        .await?
+        .map(|rendered| rendered.variables))
     }
 
     async fn prepare_environment_variables(
@@ -5776,31 +5753,6 @@ fn binding_window_open(worker_name: &str, now: chrono::DateTime<Utc>) -> bool {
     });
     (now.timestamp() / LINKED_BINDING_CHECK_SLOT_SECONDS).rem_euclid(LINKED_BINDING_CHECK_SLOTS)
         == offset
-}
-
-/// Names of the variables in `expected` that `live` lacks or holds with another value. Binding
-/// variables are JSON, compared as values: key order and formatting are not a difference.
-fn drifted_variables(
-    expected: &HashMap<String, String>,
-    live: &HashMap<String, String>,
-) -> Vec<String> {
-    let same = |expected: &str, live: &str| {
-        expected == live
-            || matches!(
-                (
-                    serde_json::from_str::<serde_json::Value>(expected),
-                    serde_json::from_str::<serde_json::Value>(live),
-                ),
-                (Ok(expected), Ok(live)) if expected == live
-            )
-    };
-    let mut drifted: Vec<String> = expected
-        .iter()
-        .filter(|(name, value)| live.get(*name).is_none_or(|live| !same(value, live)))
-        .map(|(name, _)| name.clone())
-        .collect();
-    drifted.sort();
-    drifted
 }
 
 #[cfg(test)]

@@ -633,62 +633,15 @@ async fn release_task_core(
                 rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir)?;
             }
 
-            // Get push settings per-platform — each cloud platform has its own
-            // registry prefix (ECR, GAR, ACR, local Docker). In platform mode,
-            // resolve_manager calls the platform API to get the per-project
-            // repo name for this specific platform.
-            let (push_settings, public_registry_host) =
-                if let Some(ref image_repo) = args.image_repo {
-                    (create_manual_push_settings(&args, image_repo)?, None)
-                } else {
-                    let per_platform = ctx
-                        .resolve_manager(&project_link.project_id, platform_str)
-                        .await?;
-                    build_proxy_push_settings(&per_platform, &platform, &project_link.project_id)
-                        .await?
-                };
-
-            let needs_sandbox_push = platform == Platform::Aws && args.image_repo.is_none() && !ctx.is_dev()
-                && built_stack.resources().any(|(_, entry)| {
-                    entry.config.downcast_ref::<Sandbox>().is_some_and(|sandbox| {
-                        matches!(&sandbox.code, SandboxCode::Image { image } if Path::new(image).is_dir())
-                    })
-                });
-            let sandbox_repository = if needs_sandbox_push {
-                let manager = ctx
-                    .resolve_manager(&project_link.project_id, platform_str)
-                    .await?;
-                provision_sandbox_push_repository(
-                    &manager,
-                    &platform,
-                    &project_link.project_id,
-                    ctx.is_platform(),
-                )
-                .await?
-            } else {
-                None
-            };
-            let mut pushed = push_stack_with_cache_and_sandbox(
-                built_stack,
+            push_platform_stack(
+                &args,
+                ctx,
+                &project_link.project_id,
                 platform,
+                built_stack,
                 &output_dir,
-                &push_settings,
-                sandbox_repository.as_deref(),
             )
-            .await
-            .context(ErrorData::ReleaseFailed {
-                message: format!("Failed to push images for {} platform", platform_str),
-            })?;
-            if let Some(public_host) = public_registry_host {
-                let push_host = push_settings
-                    .repository
-                    .split('/')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string();
-                retarget_stack_registry(&mut pushed, &push_host, &public_host);
-            }
-            pushed
+            .await?
         } else {
             built_stack
         };
@@ -1325,6 +1278,124 @@ fn load_built_stack(output_dir: &PathBuf, platform: &str) -> Result<Stack> {
             })?;
 
     Ok(stack)
+}
+
+/// Where a platform's images are pushed.
+struct PushDestinations {
+    settings: PushSettings,
+    /// Registry host deployments pull from, when it differs from the one pushed through.
+    public_registry_host: Option<String>,
+    sandbox_repository: Option<String>,
+}
+
+/// Resolves the platform's push destinations. Each cloud platform has its own registry prefix
+/// (ECR, GAR, ACR, local Docker); in platform mode the manager names the project's repository
+/// for this platform.
+async fn resolve_push_destinations(
+    args: &ReleaseArgs,
+    ctx: &ExecutionMode,
+    project_id: &str,
+    platform: Platform,
+    built_stack: &Stack,
+) -> Result<PushDestinations> {
+    let platform_str = platform.as_str();
+    let (settings, public_registry_host) = if let Some(ref image_repo) = args.image_repo {
+        (create_manual_push_settings(args, image_repo)?, None)
+    } else {
+        let per_platform = ctx.resolve_manager(project_id, platform_str).await?;
+        build_proxy_push_settings(&per_platform, &platform, project_id).await?
+    };
+
+    let needs_sandbox_push = platform == Platform::Aws
+        && args.image_repo.is_none()
+        && !ctx.is_dev()
+        && built_stack.resources().any(|(_, entry)| {
+            entry.config.downcast_ref::<Sandbox>().is_some_and(|sandbox| {
+                matches!(&sandbox.code, SandboxCode::Image { image } if Path::new(image).is_dir())
+            })
+        });
+    let sandbox_repository = if needs_sandbox_push {
+        let manager = ctx.resolve_manager(project_id, platform_str).await?;
+        provision_sandbox_push_repository(&manager, &platform, project_id, ctx.is_platform())
+            .await?
+    } else {
+        None
+    };
+    Ok(PushDestinations {
+        settings,
+        public_registry_host,
+        sandbox_repository,
+    })
+}
+
+/// Pushes the platform's images and returns the stack that names them.
+///
+/// A manager rollout that renames the registry's repositories can refuse a push to the name
+/// resolved before it. The destinations are then resolved once more and, when they changed, the
+/// whole stack is pushed again under them, so the release names only current repositories.
+async fn push_platform_stack(
+    args: &ReleaseArgs,
+    ctx: &ExecutionMode,
+    project_id: &str,
+    platform: Platform,
+    built_stack: Stack,
+    output_dir: &PathBuf,
+) -> Result<Stack> {
+    let push_failed = || ErrorData::ReleaseFailed {
+        message: format!("Failed to push images for {} platform", platform.as_str()),
+    };
+    let mut destinations =
+        resolve_push_destinations(args, ctx, project_id, platform, &built_stack).await?;
+    let first = push_stack_with_cache_and_sandbox(
+        built_stack.clone(),
+        platform,
+        output_dir,
+        &destinations.settings,
+        destinations.sandbox_repository.as_deref(),
+    )
+    .await;
+    let mut pushed = match first {
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_build::error::ErrorData::ImagePushRepositoryRenamed { .. })
+            ) =>
+        {
+            let current =
+                resolve_push_destinations(args, ctx, project_id, platform, &built_stack).await?;
+            if current.settings.repository == destinations.settings.repository
+                && current.sandbox_repository == destinations.sandbox_repository
+            {
+                return Err(error).context(push_failed());
+            }
+            info!(
+                "   The registry renamed its repositories during the push; pushing again to {}",
+                current.settings.repository
+            );
+            destinations = current;
+            push_stack_with_cache_and_sandbox(
+                built_stack,
+                platform,
+                output_dir,
+                &destinations.settings,
+                destinations.sandbox_repository.as_deref(),
+            )
+            .await
+            .context(push_failed())?
+        }
+        result => result.context(push_failed())?,
+    };
+    if let Some(public_host) = destinations.public_registry_host {
+        let push_host = destinations
+            .settings
+            .repository
+            .split('/')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        retarget_stack_registry(&mut pushed, &push_host, &public_host);
+    }
+    Ok(pushed)
 }
 
 /// Create push settings from manual CLI arguments
@@ -2498,6 +2569,9 @@ fn collect_push_cache_entries(
 mod tests {
     use super::*;
     use alien_core::ResourceLifecycle;
+    use axum::response::IntoResponse;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn proxy_push_provisions_the_requested_gcp_project() {
@@ -3321,6 +3395,174 @@ mod tests {
                 rebuild: false,
                 pull_base_images: false,
             },
+        }
+    }
+
+    /// A manager mid-rollout: its repository resolution names `acme-artifacts/prj_a` until the
+    /// registry is renamed after the first resolve, then `artifacts/prj_a`. Its registry refuses
+    /// the writes `refuses` picks under the old name exactly as a renamed manager does, and serves
+    /// every other request from a real registry. Returns the manager URL and how often the
+    /// repository was resolved.
+    async fn start_renaming_manager(
+        refuses: fn(&http::request::Parts) -> bool,
+    ) -> (String, Arc<AtomicUsize>) {
+        let registry = container_registry::ContainerRegistry::builder()
+            .build_for_testing()
+            .run_in_background();
+        let upstream = format!("http://{}", registry.bound_addr());
+        let resolves = Arc::new(AtomicUsize::new(0));
+        let resolved = resolves.clone();
+        let client = reqwest::Client::new();
+        let app = axum::Router::new()
+            .route(
+                "/v1/build-config",
+                axum::routing::get(move || {
+                    let resolved = resolved.clone();
+                    async move {
+                        let repository = if resolved.fetch_add(1, Ordering::SeqCst) == 0 {
+                            "acme-artifacts/prj_a"
+                        } else {
+                            "artifacts/prj_a"
+                        };
+                        axum::Json(serde_json::json!({ "repositoryName": repository }))
+                    }
+                }),
+            )
+            .fallback(move |request: axum::extract::Request| {
+                let client = client.clone();
+                let upstream = upstream.clone();
+                async move {
+                    let (parts, body) = request.into_parts();
+                    if parts.uri.path().starts_with("/v2/acme-artifacts/") && refuses(&parts) {
+                        let refusal = serde_json::json!({"errors": [{
+                            "code": "DENIED",
+                            "message": alien_core::bindings::LEGACY_REPOSITORY_PUSH_REFUSAL,
+                        }]});
+                        return (http::StatusCode::FORBIDDEN, refusal.to_string()).into_response();
+                    }
+                    let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+                    let mut forwarded = client
+                        .request(parts.method, format!("{upstream}{}", parts.uri))
+                        .body(body);
+                    for (name, value) in &parts.headers {
+                        if name != http::header::AUTHORIZATION && name != http::header::HOST {
+                            forwarded = forwarded.header(name, value);
+                        }
+                    }
+                    let response = forwarded.send().await.unwrap();
+                    let mut answer = http::Response::builder().status(response.status());
+                    for (name, value) in response.headers() {
+                        answer = answer.header(name, value);
+                    }
+                    answer
+                        .body(axum::body::Body::from(response.bytes().await.unwrap()))
+                        .unwrap()
+                        .into_response()
+                }
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let _registry = registry;
+            axum::serve(listener, app).await.unwrap()
+        });
+        (url, resolves)
+    }
+
+    fn is_write(parts: &http::request::Parts) -> bool {
+        !matches!(parts.method, http::Method::GET | http::Method::HEAD)
+    }
+
+    /// The rename lands between the per-architecture pushes and the image index that joins them.
+    fn is_image_index_push(parts: &http::request::Parts) -> bool {
+        parts.method == http::Method::PUT
+            && parts
+                .headers
+                .get(http::header::CONTENT_TYPE)
+                .is_some_and(|value| value == "application/vnd.oci.image.index.v1+json")
+    }
+
+    /// A push refused because the registry was renamed after the repository was resolved is
+    /// pushed again under the name resolution gives now, and the stack names only that one:
+    /// whether the rename refuses the first upload of a single-architecture image or only the
+    /// image index of a multi-architecture one.
+    #[tokio::test]
+    async fn a_push_refused_by_a_registry_rename_is_pushed_again_under_the_current_name() {
+        let cases: [(fn(&http::request::Parts) -> bool, &[&str]); 2] = [
+            (is_write, &["linux-x64"]),
+            (is_image_index_push, &["linux-x64", "linux-aarch64"]),
+        ];
+        for (refuses, targets) in cases {
+            let (manager_url, resolves) = start_renaming_manager(refuses).await;
+            let output = tempfile::tempdir().unwrap();
+            let output_dir = output.path().to_path_buf();
+            let artifact = output_dir.join("build/kubernetes/web-hash");
+            std::fs::create_dir_all(&artifact).unwrap();
+            for target in targets {
+                let layer = dockdash::Layer::builder()
+                    .unwrap()
+                    .data("/app/web", target.as_bytes(), Some(0o755))
+                    .unwrap()
+                    .build()
+                    .await
+                    .unwrap();
+                let arch = if *target == "linux-x64" {
+                    dockdash::Arch::Amd64
+                } else {
+                    dockdash::Arch::ARM64
+                };
+                dockdash::Image::builder()
+                    .platform("linux", &arch)
+                    .layer(layer)
+                    .output_to(artifact.join(format!("{target}.oci.tar")))
+                    .build()
+                    .await
+                    .unwrap();
+            }
+            let stack = Stack::new("renamed".to_string())
+                .add(
+                    test_container("web", artifact.display().to_string()),
+                    ResourceLifecycle::Live,
+                )
+                .build();
+            let ctx = ExecutionMode::Standalone {
+                server_url: manager_url.clone(),
+                api_key: "test-token".to_string(),
+            };
+            let args = ReleaseArgs::try_parse_from(["release"]).unwrap();
+
+            let pushed = push_platform_stack(
+                &args,
+                &ctx,
+                "prj_a",
+                Platform::Kubernetes,
+                stack,
+                &output_dir,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{targets:?}: the push is retried: {e:?}"));
+
+            let host = manager_url.trim_start_matches("http://");
+            let images: Vec<String> = pushed
+                .resources()
+                .filter_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+                .map(|container| container_image(container).to_string())
+                .collect();
+            assert_eq!(images.len(), 1, "{targets:?}");
+            assert!(
+                images[0].starts_with(&format!("{host}/artifacts/prj_a:")),
+                "{targets:?}: {images:?}"
+            );
+            assert_eq!(resolves.load(Ordering::SeqCst), 2, "{targets:?}");
+            let reference = oci_client::Reference::try_from(images[0].as_str()).unwrap();
+            let client = oci_client::Client::new(oci_client::client::ClientConfig {
+                protocol: oci_client::client::ClientProtocol::Http,
+                ..Default::default()
+            });
+            client
+                .fetch_manifest_digest(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
+                .await
+                .unwrap_or_else(|e| panic!("{targets:?}: the released image is missing: {e}"));
         }
     }
 

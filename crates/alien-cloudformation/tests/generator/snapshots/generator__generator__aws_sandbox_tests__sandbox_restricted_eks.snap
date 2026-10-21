@@ -815,4 +815,93 @@ Resources:
               - Ref: AWS::NoValue
             availabilityZones: []
             isByoVpc: true
+      ConditionalDependencies:
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkInternetGateway
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkNatEip
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkNatGateway
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkPrivateDefaultRoute
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkPrivateRouteTable
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkPrivateSubnet1
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkPrivateSubnet1RouteTableAssociation
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkCreateUseAz2
+        - Ref: DefaultNetworkPrivateSubnet2
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkCreateUseAz2
+        - Ref: DefaultNetworkPrivateSubnet2RouteTableAssociation
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkCreateUseAz3
+        - Ref: DefaultNetworkPrivateSubnet3
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkCreateUseAz3
+        - Ref: DefaultNetworkPrivateSubnet3RouteTableAssociation
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkPublicDefaultRoute
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkPublicRouteTable
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkPublicSubnet1
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkPublicSubnet1RouteTableAssociation
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkCreateUseAz2
+        - Ref: DefaultNetworkPublicSubnet2
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkCreateUseAz2
+        - Ref: DefaultNetworkPublicSubnet2RouteTableAssociation
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkCreateUseAz3
+        - Ref: DefaultNetworkPublicSubnet3
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkCreateUseAz3
+        - Ref: DefaultNetworkPublicSubnet3RouteTableAssociation
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkSecurityGroup
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkVpc
+        - Ref: AWS::NoValue
+      - Fn::If:
+        - NetworkModeCreate
+        - Ref: DefaultNetworkVpcGatewayAttachment
+        - Ref: AWS::NoValue
       BasePlatform: aws

@@ -75,6 +75,17 @@ pub struct AzureSandboxController {
     /// Withhold new Internet bindings until actual Azure network facts have been verified.
     #[serde(default)]
     pub(crate) egress_network_verified: bool,
+    /// Public signing material; the private key remains only in the secrets vault and is never
+    /// read back. Other internet sandboxes take the key from the owner's copy of this field.
+    #[serde(default)]
+    pub(crate) egress_public_key: Option<super::egress::GatewayPublicKey>,
+    /// Digest of the gateway configuration this owner last published. An unchanged
+    /// configuration is not written again.
+    #[serde(default)]
+    pub(crate) egress_config_digest: Option<String>,
+    /// The owner has written the gateway's replica secret, which it never reads.
+    #[serde(default)]
+    pub(crate) egress_replica_secret_ready: bool,
     /// The resource default is independent of the shared gateway metadata.
     #[serde(default)]
     pub(crate) default_policy: Option<alien_core::EgressPolicy>,
@@ -112,6 +123,12 @@ pub struct AzureSandboxController {
     /// Ceilings every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) limits: Option<SandboxLimits>,
+}
+
+impl super::egress::RecordsEgressKey for AzureSandboxController {
+    fn egress_public_key(&self) -> Option<&super::egress::GatewayPublicKey> {
+        self.egress_public_key.as_ref()
+    }
 }
 
 #[controller]
@@ -168,7 +185,8 @@ impl AzureSandboxController {
     ) -> Result<HandlerAction> {
         self.egress_network_verified = false;
         self.capture_session_inputs(ctx.desired_resource_config::<Sandbox>()?)?;
-        self.egress = Some(super::azure_egress::initialize_key(ctx).await?);
+        self.egress =
+            Some(super::azure_egress::initialize_key(ctx, &mut self.egress_public_key).await?);
         Ok(HandlerAction::Continue {
             state: PublishingEgressConfig,
             suggested_delay: None,
@@ -181,7 +199,14 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         self.egress_network_verified = false;
-        super::azure_egress::publish_config(ctx, self.egress.as_ref()).await?;
+        super::azure_egress::publish_config(
+            ctx,
+            self.egress.as_ref(),
+            self.egress_public_key.as_ref(),
+            &mut self.egress_config_digest,
+            &mut self.egress_replica_secret_ready,
+        )
+        .await?;
         self.egress_network_verified = true;
         let config = ctx.desired_resource_config::<Sandbox>()?;
         Ok(HandlerAction::Continue {
@@ -1050,6 +1075,9 @@ mod tests {
             idle_pause_seconds: Some(300),
             limits: None,
             egress_network_verified: false,
+            egress_public_key: None,
+            egress_config_digest: None,
+            egress_replica_secret_ready: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1100,6 +1128,9 @@ mod tests {
             idle_pause_seconds: None,
             limits: None,
             egress_network_verified: false,
+            egress_public_key: None,
+            egress_config_digest: None,
+            egress_replica_secret_ready: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1260,6 +1291,9 @@ mod tests {
             idle_pause_seconds: None,
             limits: None,
             egress_network_verified: false,
+            egress_public_key: None,
+            egress_config_digest: None,
+            egress_replica_secret_ready: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1307,6 +1341,9 @@ mod tests {
             idle_pause_seconds: None,
             limits: None,
             egress_network_verified: false,
+            egress_public_key: None,
+            egress_config_digest: None,
+            egress_replica_secret_ready: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1362,6 +1399,9 @@ mod tests {
                 max_processes: None,
             }),
             egress_network_verified: false,
+            egress_public_key: None,
+            egress_config_digest: None,
+            egress_replica_secret_ready: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1394,6 +1434,9 @@ mod tests {
             idle_pause_seconds: None,
             limits: None,
             egress_network_verified: false,
+            egress_public_key: None,
+            egress_config_digest: None,
+            egress_replica_secret_ready: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1499,6 +1542,9 @@ mod tests {
                 idle_pause_seconds: None,
                 limits: None,
                 egress_network_verified: false,
+                egress_public_key: None,
+                egress_config_digest: None,
+                egress_replica_secret_ready: false,
                 default_policy: None,
                 _internal_stay_count: None,
             }

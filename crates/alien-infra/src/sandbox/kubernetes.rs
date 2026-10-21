@@ -34,6 +34,18 @@ pub struct KubernetesSandboxController {
     /// Bound installed with the parent and published to runtime bindings.
     #[serde(default)]
     pub(crate) egress: Option<alien_core::bindings::SandboxEgressBinding>,
+    /// Public signing material; the private key stays in the secrets vault and is not read
+    /// back. Other internet sandboxes take the key from the owner's copy of this field.
+    #[serde(default)]
+    pub(crate) egress_public_key: Option<super::egress::GatewayPublicKey>,
+    /// Digest of the gateway configuration this owner last published. An unchanged
+    /// configuration is not read or written again.
+    #[serde(default)]
+    pub(crate) egress_config_digest: Option<String>,
+    /// The owner has published a configuration that names the mounted replica secret. From
+    /// then on it never embeds one again, whatever the gateway's state.
+    #[serde(default)]
+    pub(crate) egress_replica_secret_sourced: bool,
     /// Default policy supplied to newly created sessions.
     #[serde(default)]
     pub(crate) default_policy: Option<alien_core::EgressPolicy>,
@@ -56,6 +68,12 @@ pub struct KubernetesSandboxController {
     pub(crate) deployment_label_key: Option<String>,
     #[serde(default)]
     pub(crate) deployment_label_value: Option<String>,
+}
+
+impl super::egress::RecordsEgressKey for KubernetesSandboxController {
+    fn egress_public_key(&self) -> Option<&super::egress::GatewayPublicKey> {
+        self.egress_public_key.as_ref()
+    }
 }
 
 #[controller]
@@ -116,7 +134,17 @@ impl KubernetesSandboxController {
                 Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
         }
 
-        self.egress = Some(super::kubernetes_egress::configure(ctx, config, &namespace).await?);
+        self.egress = Some(
+            super::kubernetes_egress::configure(
+                ctx,
+                config,
+                &namespace,
+                &mut self.egress_public_key,
+                &mut self.egress_config_digest,
+                &mut self.egress_replica_secret_sourced,
+            )
+            .await?,
+        );
 
         info!(sandbox_id = %config.id, "Cluster can run sandboxes");
 
@@ -141,7 +169,17 @@ impl KubernetesSandboxController {
         self.deployment_label_value = Some(deployment_label_value);
         self.capability_public_key =
             Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
-        self.egress = Some(super::kubernetes_egress::configure(ctx, config, &namespace).await?);
+        self.egress = Some(
+            super::kubernetes_egress::configure(
+                ctx,
+                config,
+                &namespace,
+                &mut self.egress_public_key,
+                &mut self.egress_config_digest,
+                &mut self.egress_replica_secret_sourced,
+            )
+            .await?,
+        );
         let sessions = list_session_pods(ctx, &namespace, &config.id).await?;
 
         let pool = replenish_warm_pool(
@@ -204,7 +242,17 @@ impl KubernetesSandboxController {
         self.default_policy = config.default_policy.clone();
         self.broker_url = Some(broker_url(&config.id)?);
         let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
-        self.egress = Some(super::kubernetes_egress::configure(ctx, config, &namespace).await?);
+        self.egress = Some(
+            super::kubernetes_egress::configure(
+                ctx,
+                config,
+                &namespace,
+                &mut self.egress_public_key,
+                &mut self.egress_config_digest,
+                &mut self.egress_replica_secret_sourced,
+            )
+            .await?,
+        );
 
         // Config applies to pods created after it. Running sessions are not rolled: a session
         // is a unit of work someone is waiting on, not a replica.
@@ -604,6 +652,9 @@ mod tests {
 
         let controller = KubernetesSandboxController {
             egress: None,
+            egress_public_key: None,
+            egress_config_digest: None,
+            egress_replica_secret_sourced: false,
             default_policy: None,
             state: KubernetesSandboxState::Ready,
             sandbox_id: Some("sbx".to_string()),

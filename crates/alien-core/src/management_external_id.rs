@@ -19,6 +19,10 @@ pub const MANAGEMENT_EXTERNAL_ID_MAX_LENGTH: usize = 128;
 /// role trust unchanged, so stacks created before the parameter existed can be
 /// updated without one.
 pub const MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN: &str = "^$|^[A-Za-z0-9]{32,128}$";
+/// CloudFormation `AllowedPattern` for the setup parameter when a template
+/// requires it: empty is refused, so every install and update sets the trust
+/// condition.
+pub const MANAGEMENT_EXTERNAL_ID_REQUIRED_PARAMETER_PATTERN: &str = "^[A-Za-z0-9]{32,128}$";
 
 /// A validated management ExternalId.
 ///
@@ -90,6 +94,27 @@ mod tests {
                 ManagementExternalId::new(candidate.clone()).is_ok(),
                 pattern.is_match(&candidate),
                 "validation and the CloudFormation pattern disagree on {} characters",
+                candidate.len()
+            );
+        }
+    }
+
+    #[test]
+    fn the_required_pattern_accepts_exactly_the_valid_values() {
+        let pattern = regex::Regex::new(MANAGEMENT_EXTERNAL_ID_REQUIRED_PARAMETER_PATTERN).unwrap();
+        for candidate in [
+            String::new(),
+            VALUE.to_string(),
+            "a".repeat(128),
+            "a".repeat(31),
+            "a".repeat(129),
+            format!("{}-", &VALUE[..31]),
+            format!("{VALUE} "),
+        ] {
+            assert_eq!(
+                ManagementExternalId::new(candidate.clone()).is_ok(),
+                pattern.is_match(&candidate),
+                "validation and the required CloudFormation pattern disagree on {} characters",
                 candidate.len()
             );
         }

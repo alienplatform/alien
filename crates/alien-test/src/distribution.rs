@@ -1249,6 +1249,7 @@ async fn run_cloudformation_aws(
             setup_fingerprint_version: 1,
             registration: alien_cloudformation::RegistrationMode::OutputsFallback,
             description: Some(format!("Alien E2E distribution stack {stack_name}")),
+            management_trust: Default::default(),
         },
         profile,
     )
@@ -1455,6 +1456,7 @@ async fn run_cloudformation_k8s(
                 setup_fingerprint_version: 1,
                 registration: alien_cloudformation::RegistrationMode::OutputsFallback,
                 description: Some(format!("Alien E2E EKS distribution stack {stack_name}")),
+                management_trust: Default::default(),
             },
         )
         .map_err(|error| anyhow::anyhow!("CloudFormation render failed: {error}"))?;

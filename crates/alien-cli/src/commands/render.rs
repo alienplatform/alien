@@ -344,6 +344,7 @@ fn render_cloudformation(
             setup_fingerprint_version: 1,
             registration,
             description: None,
+            management_trust: Default::default(),
         },
     )
     .map_err(render_error)?;

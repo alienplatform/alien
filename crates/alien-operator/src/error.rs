@@ -57,6 +57,17 @@ pub enum ErrorData {
     )]
     DeploymentFailed { message: String },
 
+    /// A maintenance refresh found newer deployment state (such as a new target)
+    /// and did not overwrite it.
+    #[error(
+        code = "MAINTENANCE_SUPERSEDED",
+        message = "The maintenance refresh was superseded by newer deployment state",
+        retryable = "false",
+        internal = "true",
+        http_status_code = 409
+    )]
+    MaintenanceSuperseded,
+
     #[error(
         code = "TELEMETRY_PUSH_FAILED",
         message = "Failed to push telemetry: {message}",

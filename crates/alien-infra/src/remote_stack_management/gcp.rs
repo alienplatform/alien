@@ -37,7 +37,8 @@ pub struct GcpRemoteStackManagementController {
     /// Whether the management service account has its resource permissions.
     pub(crate) role_bound: bool,
     /// Whether the deployment's exact federated principal has been granted access.
-    /// Older checkpoints used impersonation; loading them must not claim federation.
+    /// Missing (false) on controllers from before federation, so their delete flow can
+    /// still run during setup teardown; nothing reads such a controller as federated.
     #[serde(default)]
     pub(crate) federation_granted: bool,
     #[serde(default)]
@@ -1309,6 +1310,52 @@ mod tests {
             ..ready_management_controller(prefix)
         };
         let deleted = delete_management_roles(prefix, controller, project_roles).await;
+
+        assert_eq!(deleted, role_names(&own));
+    }
+
+    /// Controller state as a release before federation stored it: it records the old direct
+    /// impersonation grant and has no federation fields.
+    fn pre_federation_state(resource_prefix: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "GcpRemoteStackManagementController",
+            "state": "ready",
+            "roleBound": true,
+            "customRoleNaming": "hashedLongPrefix",
+            "internalStayCount": null,
+            "serviceAccountEmail": format!("{resource_prefix}-management@{PROJECT}.iam.gserviceaccount.com"),
+            "impersonationGranted": true,
+            "serviceAccountUniqueId": "123456789012345678901",
+            "_controllerStateVersion": 1,
+            "managementPermissionsRevision": "0".repeat(64),
+        })
+    }
+
+    #[test]
+    fn pre_federation_state_loads_without_a_federation_grant() {
+        let state = pre_federation_state("ab12cd34");
+        crate::core::deserialize_controller(state.clone()).expect("the stored controller loads");
+
+        let controller: GcpRemoteStackManagementController =
+            serde_json::from_value(state).expect("the stored controller loads");
+        assert!(!controller.federation_granted);
+        assert!(controller.federation_access.is_none());
+        assert!(controller.role_bound);
+        assert_eq!(
+            controller.service_account_email.as_deref(),
+            Some("ab12cd34-management@test-project-123.iam.gserviceaccount.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn setup_teardown_deletes_a_pre_federation_management_account() {
+        let prefix = "ab12cd34";
+        let own = deployment_roles(&deployment_context(prefix), &["storage/data-read"]);
+        let controller: GcpRemoteStackManagementController =
+            serde_json::from_value(pre_federation_state(prefix))
+                .expect("the stored controller loads");
+
+        let deleted = delete_management_roles(prefix, controller, own.clone()).await;
 
         assert_eq!(deleted, role_names(&own));
     }

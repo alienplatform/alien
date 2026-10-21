@@ -854,6 +854,12 @@ async fn release(
 
 #[cfg(test)]
 mod tests {
+    use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
+    use alien_commands::{
+        dispatchers::NullCommandDispatcher,
+        server::{CommandDispatcher, CommandRegistry, CommandServer},
+        InMemoryCommandRegistry,
+    };
     use alien_core::{
         sync::{
             ObservedApplicationImage, ObservedApplicationReport, ObservedApplicationSource,
@@ -864,11 +870,34 @@ mod tests {
         ResourceHeartbeatData, RuntimeMetadata, Stack, StackSettings, StackState,
         CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
     use chrono::Utc;
     use serde_json::{json, Value};
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+    use tower::ServiceExt;
 
-    use crate::traits::DeploymentRecord;
+    use crate::{
+        config::ManagerConfig,
+        providers::{
+            local_credentials::LocalCredentialResolver, permissive_auth::PermissiveAuthValidator,
+            NullTelemetryBackend, OssAuthz, SingleWorkspaceProjects,
+        },
+        routes::{
+            registry_proxy::{CredentialCache, PullValidationCache, RegistryRoutingTable},
+            AppState,
+        },
+        stores::sqlite::{SqliteDatabase, SqliteReleaseStore, SqliteTokenStore},
+        traits::{
+            deployment_store::{MockDeploymentStore, ReconcileData, ReconcileOutcome},
+            CreateReleaseParams, DeploymentRecord, ReleaseStore,
+        },
+    };
 
     use super::{
         acquired_deployment_response, agent_needs_initial_state_hydration,
@@ -950,6 +979,219 @@ mod tests {
         .await
         .expect("live claim is not recovered")
         .is_none());
+    }
+
+    /// A pull Operator that syncs while its deployment has an update it holds
+    /// no claim for: the control plane did not grant one (the target cannot run
+    /// yet, or it failed). Its report must not acknowledge that target, but it
+    /// still proves the Operator is connected.
+    ///
+    /// Returns the response and every reconcile the store received.
+    async fn sync_operator_without_claim(record: DeploymentRecord) -> (Value, Vec<ReconcileData>) {
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let release_store = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let current_release = release_store
+            .create_release(
+                &crate::auth::Subject::system(),
+                CreateReleaseParams {
+                    project_id: record.project_id.clone(),
+                    stacks: HashMap::from([(
+                        Platform::Kubernetes,
+                        Stack::new("app".to_string()).build(),
+                    )]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .expect("current release");
+        let mut record = record;
+        record.current_release_id = Some(current_release.id.clone());
+
+        let reconciled = Arc::new(Mutex::new(Vec::new()));
+        let mut store = MockDeploymentStore::new();
+        // A control plane with durable operations, like Platform.
+        store.expect_requires_execution_claims().return_const(true);
+        let stored = record.clone();
+        store
+            .expect_get_deployment()
+            .returning(move |_, _| Ok(Some(stored.clone())));
+        // The control plane hands the claim back: nothing to execute.
+        store
+            .expect_acquire()
+            .times(1)
+            .returning(|_, _, _, _| Ok(Vec::new()));
+        let received = reconciled.clone();
+        let reconciled_record = record.clone();
+        store.expect_reconcile().returning(move |_, data| {
+            received.lock().expect("reconcile log").push(data);
+            Ok(ReconcileOutcome {
+                record: reconciled_record.clone(),
+                target_operations_bundle_set: None,
+                target_dynamic_containers: None,
+            })
+        });
+
+        let kv: Arc<dyn alien_bindings::traits::Kv> =
+            Arc::new(LocalKv::new(temp.path().join("kv")).await.expect("kv"));
+        let command_storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
+            LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
+                .expect("command storage"),
+        );
+        let command_dispatcher: Arc<dyn CommandDispatcher> = Arc::new(NullCommandDispatcher);
+        let command_registry: Arc<dyn CommandRegistry> =
+            Arc::new(InMemoryCommandRegistry::default());
+        let state = AppState {
+            deployment_store: Arc::new(store),
+            release_store,
+            project_store: Arc::new(SingleWorkspaceProjects),
+            token_store: Arc::new(SqliteTokenStore::new(db)),
+            auth_validator: Arc::new(PermissiveAuthValidator::new()),
+            authz: Arc::new(OssAuthz),
+            telemetry_backend: Arc::new(NullTelemetryBackend),
+            credential_resolver: Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf())),
+            command_server: Arc::new(CommandServer::new(
+                kv.clone(),
+                command_storage,
+                command_dispatcher,
+                command_registry,
+                "http://localhost:0/v1".to_string(),
+                b"test-signing-key".to_vec(),
+            )),
+            config: Arc::new(ManagerConfig::default()),
+            bindings_provider: None,
+            target_bindings_providers: HashMap::new(),
+            kv,
+            http_client: reqwest::Client::new(),
+            credential_cache: Arc::new(CredentialCache::new()),
+            pull_validation_cache: Arc::new(PullValidationCache::new()),
+            registry_routing_table: Arc::new(
+                RegistryRoutingTable::new(vec![]).expect("empty routing table"),
+            ),
+            import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+            tunnels: None,
+            charts: None,
+            release_channels: None,
+            bundle_signing_key: None,
+            bundle_sources: None,
+            log_buffer: Arc::new(crate::dev::LogBuffer::new()),
+        };
+
+        // The Operator's report claims the pending target is already running.
+        // Accepting it would acknowledge work the Operator never received.
+        let mut body = sync_body_with_container_heartbeat(Value::Null);
+        body["session"] = json!("operator-session");
+        body["supportsExecutionClaims"] = json!(true);
+        body["operatorVersion"] = json!("1.2.3");
+        body["currentState"] = json!({
+            "platform": "kubernetes",
+            "status": "running",
+            "currentRelease": { "releaseId": "rel_target", "stack": { "id": "app", "resources": {} } },
+            "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        });
+        let response = super::router()
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sync")
+                    .header("authorization", "Bearer operator-token")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("sync response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let response: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .expect("response body"),
+        )
+        .expect("response json");
+        let reconciled = reconciled.lock().expect("reconcile log").clone();
+        (response, reconciled)
+    }
+
+    /// Assert the one reconcile recorded the Operator as connected, with its
+    /// observations, against the stored state rather than its report.
+    fn assert_heartbeat_against_stored_state(
+        response: &Value,
+        reconciled: &[ReconcileData],
+        expected_status: DeploymentStatus,
+    ) -> DeploymentState {
+        assert!(
+            response.get("target").is_none(),
+            "no target without a claim: {response}"
+        );
+        assert!(response.get("executionClaim").is_none(), "{response}");
+        assert_eq!(reconciled.len(), 1, "one heartbeat reconcile per sync");
+        let data = &reconciled[0];
+        assert!(data.update_heartbeat);
+        assert!(data.execution_claim.is_none());
+        assert_eq!(data.operator_version.as_deref(), Some("1.2.3"));
+        assert_eq!(data.heartbeats.len(), 1);
+        assert_eq!(data.heartbeats[0].resource_id, "api");
+        assert_eq!(data.state.status, expected_status);
+        let current = data
+            .state
+            .current_release
+            .as_ref()
+            .and_then(|release| release.release_id.as_deref());
+        assert!(
+            current.is_some_and(|id| id != "rel_target"),
+            "the stored current release, not the unaccepted target: {current:?}"
+        );
+        assert!(data.state.target_release.is_none());
+        data.state.clone()
+    }
+
+    #[tokio::test]
+    async fn operator_heartbeat_is_recorded_while_an_update_waits_for_a_claim() {
+        let mut record = deployment_record_with_state("running", None);
+        record.desired_release_id = Some("rel_target".to_string());
+
+        let (response, reconciled) = sync_operator_without_claim(record).await;
+
+        let state = assert_heartbeat_against_stored_state(
+            &response,
+            &reconciled,
+            DeploymentStatus::Running,
+        );
+        assert!(state.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn operator_heartbeat_keeps_a_failed_update_failed() {
+        // A failed operation keeps its desired release for diagnosis. The
+        // Operator's healthy report must not turn the failure back into running.
+        let mut record = deployment_record_with_state("update-failed", None);
+        record.desired_release_id = Some("rel_target".to_string());
+        record.error = Some(json!({
+            "code": "RELEASE_NOT_AVAILABLE_FOR_PLATFORM",
+            "message": "Release 'rel_target' does not contain platform 'kubernetes'",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 400,
+        }));
+
+        let (response, reconciled) = sync_operator_without_claim(record).await;
+
+        let state = assert_heartbeat_against_stored_state(
+            &response,
+            &reconciled,
+            DeploymentStatus::UpdateFailed,
+        );
+        assert_eq!(
+            state.error.map(|error| error.code),
+            Some("RELEASE_NOT_AVAILABLE_FOR_PLATFORM".to_string())
+        );
     }
 
     #[test]
@@ -2093,9 +2335,17 @@ async fn agent_sync(
     let mut target_dynamic_containers = None;
     // A target-bearing row without an echoed claim belongs to work the agent
     // has not accepted yet. Do not let its idle state acknowledge that target.
-    if let Some(current_state_value) = req.current_state.as_ref().filter(|_| {
-        report_has_claim || !requires_execution_claims || deployment.desired_release_id.is_none()
-    }) {
+    let reported_state_owns_target =
+        report_has_claim || !requires_execution_claims || deployment.desired_release_id.is_none();
+    // The skipped report still proves the agent is connected. Its heartbeat and
+    // observations are recorded below against the manager's own state, so an
+    // update the agent cannot take yet does not make it look disconnected.
+    let unaccepted_target_report = req.current_state.is_some() && !reported_state_owns_target;
+    if let Some(current_state_value) = req
+        .current_state
+        .as_ref()
+        .filter(|_| reported_state_owns_target)
+    {
         match serde_json::from_value::<DeploymentState>(current_state_value.clone()) {
             Ok(mut agent_state) => {
                 reported_claim_is_terminal =
@@ -2346,7 +2596,20 @@ async fn agent_sync(
         agent_state_uninitialized,
         &deployment,
     );
-    let current_state = if should_return_current_state {
+    // Without a claim, the agent's liveness and observations are recorded
+    // against the manager's own state, never the agent's report.
+    let record_unclaimed_observations = execution_claim.is_none()
+        && (unaccepted_target_report
+            || (should_return_current_state
+                && (!req.heartbeats.is_empty()
+                    || !req.observed_inventory_batches.is_empty()
+                    || !req.capabilities.is_empty()
+                    || req.operator_version.is_some()
+                    || operator_image.is_some()
+                    || application.is_some()
+                    || operations_config.is_some()
+                    || req.operations_report.is_some())));
+    let current_state = if should_return_current_state || record_unclaimed_observations {
         let release_stack_platform = release_stack_platform(deployment.platform);
         let current_release = if let Some(ref release_id) = deployment.current_release_id {
             let system = crate::auth::Subject::system();
@@ -2369,16 +2632,7 @@ async fn agent_sync(
         let target_release = target.as_ref().map(|t| t.release_info.clone());
         match deployment_state_from_record(&deployment, current_release, target_release) {
             Some(deployment_state) => {
-                if execution_claim.is_none()
-                    && (!req.heartbeats.is_empty()
-                        || !req.observed_inventory_batches.is_empty()
-                        || !req.capabilities.is_empty()
-                        || req.operator_version.is_some()
-                        || operator_image.is_some()
-                        || application.is_some()
-                        || operations_config.is_some()
-                        || req.operations_report.is_some())
-                {
+                if record_unclaimed_observations {
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
                         session: "agent-sync".to_string(),
@@ -2418,12 +2672,16 @@ async fn agent_sync(
                     }
                 }
 
-                match serde_json::to_value(deployment_state) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        tracing::warn!("Failed to serialize deployment state: {e}");
-                        return ErrorData::internal("Failed to serialize deployment state")
-                            .into_response();
+                if !should_return_current_state {
+                    None
+                } else {
+                    match serde_json::to_value(deployment_state) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            tracing::warn!("Failed to serialize deployment state: {e}");
+                            return ErrorData::internal("Failed to serialize deployment state")
+                                .into_response();
+                        }
                     }
                 }
             }

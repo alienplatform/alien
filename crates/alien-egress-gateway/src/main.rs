@@ -8,7 +8,7 @@ use alien_bindings::Bindings;
 use alien_egress_gateway::{
     admin,
     error::{ErrorData, Result},
-    runtime::{self, LiveGateway},
+    runtime::{self, ConfigSource, LiveGateway},
     server,
 };
 use alien_error::{Context, IntoAlienError};
@@ -32,26 +32,31 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let bindings = Arc::new(Bindings::from_env().context(failed("load deployment bindings"))?);
+    // An inline configuration or a command-line file is static. A refreshing gateway reads a
+    // file someone else keeps current (`ALIEN_EGRESS_GATEWAY_CONFIG_FILE`, a Kubernetes Secret
+    // the kubelet mounts), or else its vault binding.
     let (encoded, refresh) = match env::var("ALIEN_EGRESS_GATEWAY_CONFIG") {
-        Ok(encoded) => (encoded, false),
+        Ok(encoded) => (encoded, None),
         Err(_) => match env::args().nth(1) {
             Some(path) => (
                 tokio::fs::read_to_string(path)
                     .await
                     .into_alien_error()
                     .context(failed("read config override"))?,
-                false,
+                None,
             ),
-            None => (
-                tokio::time::timeout(
+            None => {
+                let source = env::var_os("ALIEN_EGRESS_GATEWAY_CONFIG_FILE")
+                    .map_or(ConfigSource::Vault, |path| ConfigSource::File(path.into()));
+                let encoded = tokio::time::timeout(
                     Duration::from_secs(10),
-                    runtime::read_vault_config(&bindings),
+                    runtime::read_config(&bindings, &source),
                 )
                 .await
                 .into_alien_error()
-                .context(failed("boot config timeout"))??,
-                true,
-            ),
+                .context(failed("boot config timeout"))??;
+                (encoded, Some(source))
+            }
         },
     };
     let gateway = runtime::build(
@@ -69,13 +74,13 @@ async fn main() -> Result<()> {
         .await
         .into_alien_error()
         .context(failed("bind admin"))?;
-    let gateway = Arc::new(if refresh {
-        LiveGateway::new(gateway)
-    } else {
-        LiveGateway::static_config(gateway)
+    let refreshing = refresh.is_some();
+    let gateway = Arc::new(match refresh {
+        Some(source) => LiveGateway::refreshing(gateway, source),
+        None => LiveGateway::static_config(gateway),
     });
     let refresh_config = async {
-        if !refresh {
+        if !refreshing {
             std::future::pending::<()>().await;
         }
         let mut interval = tokio::time::interval(refresh_interval());

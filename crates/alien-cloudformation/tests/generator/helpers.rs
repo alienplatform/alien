@@ -100,6 +100,7 @@ pub fn try_render_built_ins(
             setup_fingerprint_version: 1,
             registration,
             description: Some(description.to_string()),
+            management_trust: Default::default(),
         },
     )
 }
@@ -312,6 +313,7 @@ pub fn render_sample(
             setup_fingerprint_version: 1,
             registration,
             description: Some(description.to_string()),
+            management_trust: Default::default(),
         },
     )
     .expect("template should render");

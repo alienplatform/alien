@@ -576,7 +576,11 @@ async fn destroy_tracked_deployment(
                 message: "Failed to deserialize runtime_metadata".to_string(),
             })?,
         retry_requested: deployment.retry_requested,
-        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        // The manager rejects a report that changes the recorded protocol.
+        protocol_version: super::deploy::recorded_protocol_version(
+            &deployment.id,
+            deployment.deployment_protocol_version,
+        )?,
     };
 
     // Deployer secrets were written by the deployer, not Alien, so deletion

@@ -531,6 +531,7 @@ fn dump_sandbox_template_for_live_validation() {
             setup_fingerprint_version: 1,
             registration: alien_cloudformation::RegistrationMode::OutputsFallback,
             description: None,
+            management_trust: Default::default(),
         },
     )
     .expect("template generates");

@@ -157,6 +157,7 @@ fn encrypted_container_volume_generates_an_acyclic_dependency_graph() {
             setup_fingerprint_version: 1,
             registration: RegistrationMode::OutputsFallback,
             description: None,
+            management_trust: Default::default(),
         },
     )
     .expect("encrypted volume stack should generate");

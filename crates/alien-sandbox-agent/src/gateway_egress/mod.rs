@@ -683,34 +683,7 @@ impl GatewayEgress {
                 .await
                 .into_alien_error()
                 .context(failed("proxy header timeout"))??;
-            // Reserve one gateway field for the identity header inserted below.
-            let mut headers = [httparse::EMPTY_HEADER; 127];
-            let mut parsed = httparse::Request::new(&mut headers);
-            let httparse::Status::Complete(end) = parsed
-                .parse(&request)
-                .map_err(|_| invalid("invalid proxy request"))?
-            else {
-                return Err(invalid("incomplete proxy request"));
-            };
-            let mut head = format!(
-                "{} {} HTTP/1.1\r\n",
-                parsed.method.ok_or_else(|| invalid("missing method"))?,
-                parsed.path.ok_or_else(|| invalid("missing URI"))?
-            );
-            for header in parsed.headers {
-                if !header.name.eq_ignore_ascii_case("proxy-authorization") {
-                    head.push_str(header.name);
-                    head.push_str(": ");
-                    head.push_str(
-                        std::str::from_utf8(header.value).map_err(|_| invalid("invalid header"))?,
-                    );
-                    head.push_str("\r\n");
-                }
-            }
-            head.push_str(&format!(
-                "Proxy-Authorization: Bearer {}\r\n\r\n",
-                self.current_token()?
-            ));
+            let (head, end) = gateway_request_head(&request, &self.current_token()?)?;
             upstream
                 .write_all(head.as_bytes())
                 .await
@@ -812,4 +785,106 @@ fn token_identity(token: &str) -> Result<(String, String)> {
         .into_alien_error()
         .context(failed("parse token identity"))?;
     Ok((identity.aud, identity.sub))
+}
+
+/// The guest's proxy request head as the gateway receives it: HTTP/1.1, the guest's headers
+/// without any proxy credentials it sent, and the session's identity token. Returns the head and
+/// where the guest's buffered body starts.
+///
+/// HTTP/1.1 requires a `Host` header and the gateway refuses a request without exactly one.
+/// Clients that speak HTTP/1.0 to a proxy, such as Python 3.11 and earlier opening a tunnel
+/// (`CONNECT host:443 HTTP/1.0`), send none. The head takes it from the request target then: the
+/// authority of a `CONNECT`, or of an absolute `http://` URI. A `Host` the guest sent is kept as
+/// sent, so the gateway still checks it against the target.
+fn gateway_request_head(request: &[u8], token: &str) -> Result<(String, usize)> {
+    // Reserve one gateway field for the identity header inserted below.
+    let mut headers = [httparse::EMPTY_HEADER; 127];
+    let mut parsed = httparse::Request::new(&mut headers);
+    let httparse::Status::Complete(end) = parsed
+        .parse(request)
+        .map_err(|_| invalid("invalid proxy request"))?
+    else {
+        return Err(invalid("incomplete proxy request"));
+    };
+    let method = parsed.method.ok_or_else(|| invalid("missing method"))?;
+    let target = parsed.path.ok_or_else(|| invalid("missing URI"))?;
+    let mut head = format!("{method} {target} HTTP/1.1\r\n");
+    let mut has_host = false;
+    for header in parsed.headers.iter() {
+        if header.name.eq_ignore_ascii_case("proxy-authorization") {
+            continue;
+        }
+        has_host |= header.name.eq_ignore_ascii_case("host");
+        head.push_str(header.name);
+        head.push_str(": ");
+        head.push_str(std::str::from_utf8(header.value).map_err(|_| invalid("invalid header"))?);
+        head.push_str("\r\n");
+    }
+    if !has_host {
+        let authority = if method.eq_ignore_ascii_case("CONNECT") {
+            target.to_string()
+        } else {
+            let rest = target
+                .get(..7)
+                .filter(|scheme| scheme.eq_ignore_ascii_case("http://"))
+                .map(|_| &target[7..])
+                .ok_or_else(|| invalid("a proxy request needs an absolute http URI"))?;
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+            if authority.is_empty() {
+                return Err(invalid("a proxy request needs an absolute http URI"));
+            }
+            authority.to_string()
+        };
+        head.push_str(&format!("Host: {authority}\r\n"));
+    }
+    head.push_str(&format!("Proxy-Authorization: Bearer {token}\r\n\r\n"));
+    Ok((head, end))
+}
+
+#[cfg(test)]
+mod forwarder_tests {
+    use super::gateway_request_head;
+
+    fn hosts(head: &str) -> Vec<&str> {
+        head.lines()
+            .filter_map(|line| line.strip_prefix("Host: "))
+            .collect()
+    }
+
+    /// Python 3.11 and earlier open a tunnel with `CONNECT host:443 HTTP/1.0` and no Host. The
+    /// gateway refuses an HTTP/1.1 request without exactly one Host, so every HTTPS request from
+    /// such a guest got 403. The forwarded head carries the target's authority as its Host.
+    #[test]
+    fn an_http_1_0_tunnel_without_host_gets_its_target_as_host() {
+        let (head, end) =
+            gateway_request_head(b"CONNECT example.com:443 HTTP/1.0\r\n\r\nbody", "token")
+                .unwrap();
+        assert!(head.starts_with("CONNECT example.com:443 HTTP/1.1\r\n"), "{head}");
+        assert_eq!(hosts(&head), ["example.com:443"]);
+        assert!(head.ends_with("Proxy-Authorization: Bearer token\r\n\r\n"));
+        assert_eq!(end, "CONNECT example.com:443 HTTP/1.0\r\n\r\n".len());
+    }
+
+    /// A plain HTTP/1.0 proxy request without Host takes the absolute URI's authority.
+    #[test]
+    fn an_http_1_0_plain_request_without_host_gets_the_uri_authority() {
+        let (head, _) =
+            gateway_request_head(b"GET http://example.com/path HTTP/1.0\r\n\r\n", "token")
+                .unwrap();
+        assert_eq!(hosts(&head), ["example.com"]);
+    }
+
+    /// A Host the guest sent is forwarded as sent, never replaced or duplicated, so the
+    /// gateway's own mismatch check still applies; guest proxy credentials never pass.
+    #[test]
+    fn a_guest_host_is_kept_and_guest_credentials_are_dropped() {
+        let (head, _) = gateway_request_head(
+            b"CONNECT example.com:443 HTTP/1.1\r\nHost: other.com:443\r\nProxy-Authorization: Basic guest\r\n\r\n",
+            "token",
+        )
+        .unwrap();
+        assert_eq!(hosts(&head), ["other.com:443"]);
+        assert!(!head.contains("Basic guest"));
+        assert_eq!(head.matches("Proxy-Authorization").count(), 1);
+    }
 }

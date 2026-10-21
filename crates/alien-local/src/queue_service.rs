@@ -83,7 +83,11 @@ async fn execute(
         .expect("queue registry poisoned")
         .get(deployment)
         .cloned()
-        .ok_or_else(|| AlienError::new(error("Local queue owner is not ready")))?;
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::LocalQueueOwnerNotReady {
+                deployment: deployment.to_string(),
+            })
+        })?;
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
