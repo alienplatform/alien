@@ -749,10 +749,12 @@ mod tests {
         // The sync loop accepts new work for the same release.
         let newer = state(DeploymentStatus::UpdatePending, "rel_installed");
         db.set_deployment_state(&newer).await.unwrap();
-        let error = transport
+        let Err(error) = transport
             .reconcile_step("dep", &loaded, &config, true, None, vec![], vec![])
             .await
-            .expect_err("a stale observation must not checkpoint");
+        else {
+            panic!("a stale observation must not checkpoint");
+        };
         assert_eq!(error.code, "MAINTENANCE_SUPERSEDED");
         assert!(!error.retryable);
         assert!(transport.superseded.load(Ordering::Relaxed));
