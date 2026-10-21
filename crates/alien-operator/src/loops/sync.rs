@@ -627,9 +627,12 @@ fn accept_target_release(
     // A target can change runtime configuration while retaining the same
     // release. A corrective target must also restart a failed update from
     // preflights, rather than reusing the failed target's prepared stack.
+    // A failed health check does not block new work either.
     if matches!(
         deployment_state.status,
-        alien_core::DeploymentStatus::Running | alien_core::DeploymentStatus::UpdateFailed
+        alien_core::DeploymentStatus::Running
+            | alien_core::DeploymentStatus::UpdateFailed
+            | alien_core::DeploymentStatus::RefreshFailed
     ) {
         deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
         if let Some(metadata) = deployment_state.runtime_metadata.as_mut() {
@@ -925,7 +928,13 @@ mod tests {
         accept_target_release(&mut state, release.clone());
 
         assert_eq!(state.status, DeploymentStatus::UpdatePending);
-        assert_eq!(state.target_release, Some(release));
+        assert_eq!(state.target_release, Some(release.clone()));
+
+        // New work also reaches a deployment whose health check failed.
+        state.status = DeploymentStatus::RefreshFailed;
+        state.target_release = None;
+        accept_target_release(&mut state, release.clone());
+        assert_eq!(state.status, DeploymentStatus::UpdatePending);
     }
 
     #[test]
@@ -1349,7 +1358,11 @@ mod tests {
             .as_ref()
             .and_then(|stack| stack.resources.get("files"))
             .and_then(|resource| resource.internal_state.as_ref())
-            .and_then(|internal| internal.get("readyChecks").or_else(|| internal.get("ready_checks")))
+            .and_then(|internal| {
+                internal
+                    .get("readyChecks")
+                    .or_else(|| internal.get("ready_checks"))
+            })
             .and_then(Value::as_u64)
             .unwrap_or(0)
     }
@@ -1393,7 +1406,9 @@ mod tests {
 
         let data_dir = tempfile::tempdir().unwrap();
         let directory = data_dir.path().to_str().unwrap();
-        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY).await.unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
         db.set_deployment_id("dep_maintenance").await.unwrap();
         let state = OperatorState {
             config: OperatorConfig::builder()
@@ -1430,19 +1445,24 @@ mod tests {
             .external_bindings(Default::default())
             .build();
         let target = json!({ "releaseInfo": release, "config": config });
-        let claim = |operation: &str, attempt: &str| {
-            json!({ "operationId": operation, "attemptId": attempt })
-        };
+        let claim = |operation: &str, attempt: &str| json!({ "operationId": operation, "attemptId": attempt });
 
         // The first apply installs the release and records its operation.
         *response.lock().unwrap() =
             json!({ "executionClaim": claim("duop_install", "att_1"), "target": target });
-        sync_with_manager(&state, &client, &url, false, None).await.unwrap();
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
         run_deployment_until_idle(&state).await;
         let installed = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(installed.status, DeploymentStatus::Running);
         assert_eq!(
-            state.db.get_applied_operation_id().await.unwrap().as_deref(),
+            state
+                .db
+                .get_applied_operation_id()
+                .await
+                .unwrap()
+                .as_deref(),
             Some("duop_install")
         );
         let ready_before = storage_ready_checks(&installed);
@@ -1451,7 +1471,9 @@ mod tests {
         // the deployment Running and runs every Ready handler once.
         *response.lock().unwrap() =
             json!({ "executionClaim": claim("duop_install", "att_2"), "target": target });
-        sync_with_manager(&state, &client, &url, false, None).await.unwrap();
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
         let accepted = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(accepted.status, DeploymentStatus::Running);
         run_deployment_until_idle(&state).await;
@@ -1466,7 +1488,12 @@ mod tests {
         assert!(refreshed.target_release.is_none());
         assert!(state.db.get_deployment_config().await.unwrap().is_none());
         assert_eq!(
-            state.db.get_applied_operation_id().await.unwrap().as_deref(),
+            state
+                .db
+                .get_applied_operation_id()
+                .await
+                .unwrap()
+                .as_deref(),
             Some("duop_install")
         );
 
@@ -1474,12 +1501,19 @@ mod tests {
         // change), is still applied as an update.
         *response.lock().unwrap() =
             json!({ "executionClaim": claim("duop_config", "att_1"), "target": target });
-        sync_with_manager(&state, &client, &url, false, None).await.unwrap();
+        sync_with_manager(&state, &client, &url, false, None)
+            .await
+            .unwrap();
         let update = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(update.status, DeploymentStatus::UpdatePending);
         run_deployment_until_idle(&state).await;
         assert_eq!(
-            state.db.get_applied_operation_id().await.unwrap().as_deref(),
+            state
+                .db
+                .get_applied_operation_id()
+                .await
+                .unwrap()
+                .as_deref(),
             Some("duop_config")
         );
 

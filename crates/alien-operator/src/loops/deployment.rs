@@ -170,7 +170,9 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
 
 /// Run deployment steps continuously until synced or long delay.
 /// Returns the number of steps executed and the delay before resuming.
-pub(crate) async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Duration)> {
+pub(crate) async fn run_deployment_continuously(
+    state: &OperatorState,
+) -> Result<(usize, Duration)> {
     // Get deployment state and config
     let mut current = match state.db.get_deployment_state().await? {
         Some(s) => s,
@@ -417,7 +419,10 @@ fn has_resources_in_flight(state: &DeploymentState) -> bool {
 /// installed release again, so passive health reporting resumes and the next
 /// tick does not refresh again. A state the sync loop changed meanwhile (for
 /// example a newer target) is left for the next tick.
-async fn finish_maintenance_refresh(state: &OperatorState, refreshed: &DeploymentState) -> Result<()> {
+async fn finish_maintenance_refresh(
+    state: &OperatorState,
+    refreshed: &DeploymentState,
+) -> Result<()> {
     let mut settled = refreshed.clone();
     settled.target_release = None;
     if state
