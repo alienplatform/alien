@@ -167,10 +167,18 @@ fn azure_secret_grants(module: &ModuleFiles, principal: &str, action: &str) -> V
                 && block.body.contains(&format!("principal_id = {principal}"))
         })
         .filter(|assignment| {
+            // The role the assignment grants, not ids a condition merely lists.
             (action == AZURE_GET_SECRET
-                && AZURE_SECRET_READ_ROLES
-                    .iter()
-                    .any(|role| assignment.body.contains(role)))
+                && assignment
+                    .body
+                    .split("role_definition_id = ")
+                    .nth(1)
+                    .and_then(|rest| rest.split_whitespace().next())
+                    .is_some_and(|role| {
+                        AZURE_SECRET_READ_ROLES
+                            .iter()
+                            .any(|read_role| role.contains(read_role))
+                    }))
                 || custom_role(&blocks, assignment, "azurerm_role_definition")
                     .is_some_and(|definition| azure_definition_allows(definition, action))
         })
