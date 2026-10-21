@@ -19,56 +19,59 @@ let value: Point = {
   responseWireBytes: 982.78,
   rps: 5785.86,
   p95: {
-    lower: 245.59,
-    upper: 4425.35,
+    lower: 0.01,
+    upper: 0.025,
   },
-  p99: {
-    lower: 717.53,
-    upper: null,
-  },
+  p99: null,
   ttfbP95: {
-    lower: 6631.9,
-    upper: 884.18,
+    lower: 0.01,
+    upper: 0.025,
   },
-  cpuPercent: 3467.7,
-  memoryBytes: 2111.12,
-  activeRequests: 3746.2,
-  cpuPeakPercent: 84.16,
-  memoryPeakBytes: 8758.02,
-  activePeakRequests: 7356.52,
-  statusCounts: {},
-  availableReplicaSeconds: 1981.96,
-  unavailableReplicaSeconds: 3474.25,
-  captureQuality: [],
+  cpuPercent: 9939.21,
+  memoryBytes: null,
+  activeRequests: null,
+  cpuPeakPercent: 6631.9,
+  memoryPeakBytes: 884.18,
+  activePeakRequests: 3467.7,
+  statusCounts: {
+    "key": 2111.12,
+    "key1": 6140.12,
+    "key2": 3746.2,
+  },
+  availableReplicaSeconds: 7050.06,
+  unavailableReplicaSeconds: 84.16,
+  captureQuality: [
+    8758.02,
+  ],
 };
 ```
 
 ## Fields
 
-| Field                                                    | Type                                                     | Required                                                 | Description                                              |
-| -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
-| `timestamp`                                              | *string*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `sourceStart`                                            | *string*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `sourceEnd`                                              | *string*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `requests`                                               | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `completed`                                              | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `aborted`                                                | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `probeExpired`                                           | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `captureStopped`                                         | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `unsupported`                                            | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `serverErrors`                                           | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `responseWireBytes`                                      | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `rps`                                                    | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `p95`                                                    | [operations.P95](../../models/operations/p95.md)         | :heavy_check_mark:                                       | N/A                                                      |
-| `p99`                                                    | [operations.P99](../../models/operations/p99.md)         | :heavy_check_mark:                                       | N/A                                                      |
-| `ttfbP95`                                                | [operations.TtfbP95](../../models/operations/ttfbp95.md) | :heavy_check_mark:                                       | N/A                                                      |
-| `cpuPercent`                                             | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `memoryBytes`                                            | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `activeRequests`                                         | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `cpuPeakPercent`                                         | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `memoryPeakBytes`                                        | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `activePeakRequests`                                     | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `statusCounts`                                           | Record<string, *number*>                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `availableReplicaSeconds`                                | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `unavailableReplicaSeconds`                              | *number*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `captureQuality`                                         | *number*[]                                               | :heavy_check_mark:                                       | N/A                                                      |
+| Field                                                                         | Type                                                                          | Required                                                                      | Description                                                                   |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `timestamp`                                                                   | *string*                                                                      | :heavy_check_mark:                                                            | N/A                                                                           |
+| `sourceStart`                                                                 | *string*                                                                      | :heavy_check_mark:                                                            | Null means no source coverage for this bucket.                                |
+| `sourceEnd`                                                                   | *string*                                                                      | :heavy_check_mark:                                                            | Null means no source coverage for this bucket.                                |
+| `requests`                                                                    | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `completed`                                                                   | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `aborted`                                                                     | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `probeExpired`                                                                | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `captureStopped`                                                              | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `unsupported`                                                                 | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `serverErrors`                                                                | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `responseWireBytes`                                                           | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `rps`                                                                         | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `p95`                                                                         | [operations.P95](../../models/operations/p95.md)                              | :heavy_check_mark:                                                            | Histogram percentile bounds in seconds; null means no completed observations. |
+| `p99`                                                                         | [operations.P99](../../models/operations/p99.md)                              | :heavy_check_mark:                                                            | Histogram percentile bounds in seconds; null means no completed observations. |
+| `ttfbP95`                                                                     | [operations.TtfbP95](../../models/operations/ttfbp95.md)                      | :heavy_check_mark:                                                            | Histogram percentile bounds in seconds; null means no completed observations. |
+| `cpuPercent`                                                                  | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `memoryBytes`                                                                 | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `activeRequests`                                                              | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `cpuPeakPercent`                                                              | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `memoryPeakBytes`                                                             | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `activePeakRequests`                                                          | *number*                                                                      | :heavy_check_mark:                                                            | Null means no observed data, not zero.                                        |
+| `statusCounts`                                                                | Record<string, *number*>                                                      | :heavy_check_mark:                                                            | N/A                                                                           |
+| `availableReplicaSeconds`                                                     | *number*                                                                      | :heavy_check_mark:                                                            | N/A                                                                           |
+| `unavailableReplicaSeconds`                                                   | *number*                                                                      | :heavy_check_mark:                                                            | N/A                                                                           |
+| `captureQuality`                                                              | *number*[]                                                                    | :heavy_check_mark:                                                            | N/A                                                                           |

@@ -26,16 +26,16 @@ let value: GetDeploymentMetricsHistoryResponse = {
       responseWireBytes: 7262.34,
       rps: 9401.87,
       p95: {
-        lower: 245.59,
-        upper: 4425.35,
+        lower: 0.01,
+        upper: 0.025,
       },
       p99: {
-        lower: 717.53,
-        upper: null,
+        lower: 0.01,
+        upper: 0.025,
       },
       ttfbP95: {
-        lower: 6631.9,
-        upper: 884.18,
+        lower: 0.01,
+        upper: 0.025,
       },
       cpuPercent: 13.74,
       memoryBytes: 3321.37,

@@ -2444,7 +2444,7 @@ import {
 
 ### Response
 
-**Promise\<[ReadableStream<Uint8Array>](../../models/.md)\>**
+**Promise\<ReadableStream<Uint8Array>\>**
 
 ### Errors
 

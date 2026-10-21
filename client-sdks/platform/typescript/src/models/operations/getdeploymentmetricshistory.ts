@@ -67,42 +67,129 @@ export const BoundarySemantics = {
 } as const;
 export type BoundarySemantics = ClosedEnum<typeof BoundarySemantics>;
 
+/**
+ * Histogram percentile bounds in seconds; null means no completed observations.
+ */
 export type P95 = {
+  /**
+   * Lower histogram bound in seconds.
+   */
   lower: number;
+  /**
+   * Upper histogram bound in seconds; null means overflow with no finite upper bound.
+   */
   upper: number | null;
 };
 
+/**
+ * Histogram percentile bounds in seconds; null means no completed observations.
+ */
 export type P99 = {
+  /**
+   * Lower histogram bound in seconds.
+   */
   lower: number;
+  /**
+   * Upper histogram bound in seconds; null means overflow with no finite upper bound.
+   */
   upper: number | null;
 };
 
+/**
+ * Histogram percentile bounds in seconds; null means no completed observations.
+ */
 export type TtfbP95 = {
+  /**
+   * Lower histogram bound in seconds.
+   */
   lower: number;
+  /**
+   * Upper histogram bound in seconds; null means overflow with no finite upper bound.
+   */
   upper: number | null;
 };
 
 export type Point = {
   timestamp: string;
+  /**
+   * Null means no source coverage for this bucket.
+   */
   sourceStart: string | null;
+  /**
+   * Null means no source coverage for this bucket.
+   */
   sourceEnd: string | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   requests: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   completed: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   aborted: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   probeExpired: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   captureStopped: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   unsupported: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   serverErrors: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   responseWireBytes: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   rps: number | null;
+  /**
+   * Histogram percentile bounds in seconds; null means no completed observations.
+   */
   p95: P95 | null;
+  /**
+   * Histogram percentile bounds in seconds; null means no completed observations.
+   */
   p99: P99 | null;
+  /**
+   * Histogram percentile bounds in seconds; null means no completed observations.
+   */
   ttfbP95: TtfbP95 | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   cpuPercent: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   memoryBytes: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   activeRequests: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   cpuPeakPercent: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   memoryPeakBytes: number | null;
+  /**
+   * Null means no observed data, not zero.
+   */
   activePeakRequests: number | null;
   statusCounts: { [k: string]: number };
   availableReplicaSeconds: number;
