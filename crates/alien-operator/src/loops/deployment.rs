@@ -17,7 +17,7 @@ use crate::OperatorState;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, KubernetesClientConfig, ObservedInventoryBatch, Platform,
-    ResourceHeartbeat, ResourceStatus, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    ResourceHeartbeat, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -278,9 +278,11 @@ pub(crate) async fn run_deployment_continuously(
     };
 
     // A target that left the deployment Running or RefreshFailed is maintenance of
-    // the installed release (see `sync::accept_target`). Run the Running refresh,
-    // as the manager does for push deployments: every Ready handler runs, so
-    // health checks and in-place repairs such as linked-binding drift happen.
+    // the installed release (see `sync::accept_target`). Run one Running refresh
+    // step, as the manager does for each maintenance claim of a push deployment:
+    // every Ready handler runs, so health checks and in-place repairs such as a
+    // linked-binding refresh happen. A repair a handler starts continues on the
+    // next maintenance claim.
     let refresh = operation == LoopOperation::Deploy
         && matches!(
             current.status,
@@ -297,15 +299,18 @@ pub(crate) async fn run_deployment_continuously(
             &transport,
         )
         .await?;
-        if has_resources_in_flight(&current) {
-            // A Ready handler started a repair (for example a linked-binding refresh).
-            // Keep the target and config so the next tick continues it.
-            let delay = Duration::from_millis(transport.suggested_delay_ms.load(Ordering::Relaxed));
-            return Ok((steps, delay));
-        }
         finish_maintenance_refresh(state, &current).await?;
         return Ok((steps, Duration::ZERO));
     }
+
+    // The claim whose target this loop applies. Captured before stepping: the
+    // sync loop replaces the durable claim once it reports this apply complete.
+    let applying_operation_id = state
+        .db
+        .get_sync_execution()
+        .await?
+        .and_then(|execution| execution.claim)
+        .map(|claim| claim.operation_id);
 
     let result = alien_deployment::runner::run_step_loop(
         &mut current,
@@ -340,7 +345,9 @@ pub(crate) async fn run_deployment_continuously(
             if operation == LoopOperation::Deploy
                 && loop_result.final_status == DeploymentStatus::Running
             {
-                record_applied_operation(state).await?;
+                if let Some(operation_id) = applying_operation_id.as_deref() {
+                    state.db.set_applied_operation_id(operation_id).await?;
+                }
             }
             debug!("Deployment synced, clearing deployment config");
             state.db.clear_deployment_config().await?;
@@ -402,23 +409,11 @@ async fn run_maintenance_refresh(
     Ok(result.steps_executed)
 }
 
-/// Whether a refresh left a resource mid-flow, such as a container whose Ready
-/// handler found a stale linked binding and started its update.
-fn has_resources_in_flight(state: &DeploymentState) -> bool {
-    state.stack_state.as_ref().is_some_and(|stack| {
-        stack.resources.values().any(|resource| {
-            matches!(
-                resource.status,
-                ResourceStatus::Provisioning | ResourceStatus::Updating | ResourceStatus::Deleting
-            )
-        })
-    })
-}
-
 /// Consume a finished maintenance target: the deployment is settled on its
 /// installed release again, so passive health reporting resumes and the next
-/// tick does not refresh again. A state the sync loop changed meanwhile (for
-/// example a newer target) is left for the next tick.
+/// tick does not refresh again. Sync right away, so the claim completes with
+/// this refresh's result. A state the sync loop changed meanwhile (for example
+/// a newer target) is left, with its config, for the next tick.
 async fn finish_maintenance_refresh(
     state: &OperatorState,
     refreshed: &DeploymentState,
@@ -427,27 +422,10 @@ async fn finish_maintenance_refresh(
     settled.target_release = None;
     if state
         .db
-        .compare_and_set_deployment_state(refreshed, &settled)
+        .finish_target_if_unchanged(refreshed, &settled)
         .await?
     {
-        state.db.clear_deployment_config().await?;
-    }
-    Ok(())
-}
-
-/// Remember the operation whose apply just completed, so a later maintenance
-/// claim on it is served by a refresh (see `sync::accept_target`).
-async fn record_applied_operation(state: &OperatorState) -> Result<()> {
-    let claim = state
-        .db
-        .get_sync_execution()
-        .await?
-        .and_then(|execution| execution.claim);
-    if let Some(claim) = claim {
-        state
-            .db
-            .set_applied_operation_id(&claim.operation_id)
-            .await?;
+        state.db.request_sync();
     }
     Ok(())
 }

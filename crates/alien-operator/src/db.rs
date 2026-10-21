@@ -380,6 +380,40 @@ impl OperatorDb {
         expected: &DeploymentState,
         next: &DeploymentState,
     ) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        Self::compare_and_set_deployment_state_locked(&conn, expected, next).await
+    }
+
+    /// Finish a target the deployment loop consumed: save `next` and drop the
+    /// target's config, only if nothing changed the state since `expected`.
+    /// Both happen under one lock, so a target the sync loop accepts meanwhile
+    /// keeps its config.
+    pub(crate) async fn finish_target_if_unchanged(
+        &self,
+        expected: &DeploymentState,
+        next: &DeploymentState,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        if !Self::compare_and_set_deployment_state_locked(&conn, expected, next).await? {
+            return Ok(false);
+        }
+        conn.execute(
+            "DELETE FROM state WHERE key = ?",
+            (Self::KEY_DEPLOYMENT_CONFIG,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to clear deployment_config".to_string(),
+        })?;
+        Ok(true)
+    }
+
+    async fn compare_and_set_deployment_state_locked(
+        conn: &Connection,
+        expected: &DeploymentState,
+        next: &DeploymentState,
+    ) -> Result<bool> {
         let expected = serde_json::to_value(expected).into_alien_error().context(
             ErrorData::DatabaseError {
                 message: "Failed to serialize expected deployment state".to_string(),
@@ -391,7 +425,6 @@ impl OperatorDb {
                 .context(ErrorData::DatabaseError {
                     message: "Failed to serialize observed deployment state".to_string(),
                 })?;
-        let conn = self.conn.lock().await;
         let mut rows = conn
             .query("SELECT value FROM state WHERE key = 'deployment_state'", ())
             .await
@@ -2148,6 +2181,76 @@ mod tests {
 
     const TEST_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn settled_state(target: Option<&str>) -> alien_core::DeploymentState {
+        let release = |id: &str| alien_core::ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("finish".to_string()).build(),
+        };
+        alien_core::DeploymentState {
+            platform: alien_core::Platform::Test,
+            status: alien_core::DeploymentStatus::Running,
+            current_release: Some(release("rel_installed")),
+            target_release: target.map(release),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn empty_config() -> alien_core::DeploymentConfig {
+        alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build()
+    }
+
+    /// Finishing a consumed target must not delete the config of a target the
+    /// sync loop accepted after the deployment loop read the state.
+    #[tokio::test]
+    async fn finishing_a_target_keeps_the_config_of_a_newer_target() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let refreshed = settled_state(Some("rel_installed"));
+        let settled = settled_state(None);
+
+        // Nothing changed: the target is consumed and its config dropped.
+        db.set_deployment_state(&refreshed).await.unwrap();
+        db.set_deployment_config(&empty_config()).await.unwrap();
+        assert!(db.finish_target_if_unchanged(&refreshed, &settled).await.unwrap());
+        assert!(db.get_deployment_state().await.unwrap().unwrap().target_release.is_none());
+        assert!(db.get_deployment_config().await.unwrap().is_none());
+
+        // A newer target arrived meanwhile: its state and config stay.
+        let newer = settled_state(Some("rel_newer"));
+        db.set_deployment_state(&newer).await.unwrap();
+        db.set_deployment_config(&empty_config()).await.unwrap();
+        assert!(!db.finish_target_if_unchanged(&refreshed, &settled).await.unwrap());
+        assert_eq!(
+            db.get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .target_release
+                .and_then(|release| release.release_id)
+                .as_deref(),
+            Some("rel_newer")
+        );
+        assert!(db.get_deployment_config().await.unwrap().is_some());
+    }
 
     #[tokio::test]
     async fn pod_log_handoff_survives_operator_restart() {
