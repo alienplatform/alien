@@ -24,18 +24,20 @@ use alien_core::{
     RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use alien_permissions::{
     generators::{
-        azure_role_assignment_delegation_condition, dedupe_azure_role_bindings,
-        management_roles_by_scope, protected_management_assignable_scopes, AzureGrantPlan,
-        AzureManagementScopeKind, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
+        azure_role_assignment_allowlist_conditions, azure_runtime_roles,
+        dedupe_azure_role_bindings, management_roles_by_scope,
+        protected_management_assignable_scopes, AzureGrantPlan, AzureManagementScopeKind,
+        AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator, AzureRuntimeRoles,
         AzureScopedCustomRole,
     },
     get_permission_set, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[cfg(not(test))]
@@ -46,10 +48,28 @@ const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 0;
 const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
 
 /// The layout of the management roles this version creates: role-assignment writes in their own
-/// role assigned with the "never itself" condition, and every role also assignable at the
-/// subscription. A controller saved with an older layout rebuilds its roles on the next direct
-/// setup, even when the permissions themselves did not change.
-pub(crate) const MANAGEMENT_ROLE_LAYOUT: u32 = 1;
+/// role, assigned with conditions that admit only the roles setup made for the runtime; no
+/// role-definition writes; and every role also assignable at the subscription. A controller saved
+/// with an older layout rebuilds its roles on the next direct setup, even when the permissions
+/// themselves did not change.
+pub(crate) const MANAGEMENT_ROLE_LAYOUT: u32 = 2;
+
+/// Key under which a role-assignment role past the first condition shard is recorded.
+fn role_assignment_role_key(scope: &str, shard: usize) -> String {
+    if shard == 0 {
+        scope.to_string()
+    } else {
+        format!("{scope}#shard-{shard}")
+    }
+}
+
+/// The scope and condition shard a role-assignment role key names.
+fn role_assignment_role_scope(key: &str) -> (&str, usize) {
+    match key.rsplit_once("#shard-") {
+        Some((scope, shard)) => (scope, shard.parse().unwrap_or(0)),
+        None => (key, 0),
+    }
+}
 // The absolute wait deadline controls Azure RBAC propagation. Terraform-imported
 // setup can drive this state quickly, so keep the Stay guard comfortably above
 // the number of reconciles that can happen inside the deadline.
@@ -197,6 +217,15 @@ pub struct AzureRemoteStackManagementController {
     /// layout was recorded.
     #[serde(default)]
     pub(crate) role_layout: u32,
+    /// Full resource IDs of the roles setup creates for the runtime to assign on resources after
+    /// setup, keyed by role definition GUID. Updates keep them, since assignments on Live
+    /// resources use them; delete removes them.
+    #[serde(default)]
+    pub(crate) runtime_role_definition_ids: BTreeMap<String, String>,
+    /// Revision of the runtime roles and the conditions last applied. Missing on controllers
+    /// from before setup created those roles.
+    #[serde(default)]
+    pub(crate) runtime_roles_revision: Option<String>,
     /// Resource IDs of created role assignments
     pub(crate) role_assignment_ids: Vec<String>,
     /// Deadline for Azure RBAC propagation after management assignments.
@@ -450,12 +479,67 @@ impl AzureRemoteStackManagementController {
             );
             if role.role_assignments {
                 self.role_assignment_role_definition_ids
-                    .insert(role.scope, role_id);
+                    .insert(role_assignment_role_key(&role.scope, role.shard), role_id);
             } else {
                 self.scoped_role_definition_ids.insert(role.scope, role_id);
             }
         }
         self.role_layout = MANAGEMENT_ROLE_LAYOUT;
+
+        // The roles the runtime assigns after setup. Setup creates them so management, which may
+        // not write role definitions, finds each already made and only assigns it.
+        let runtime_roles = runtime_roles(ctx)?;
+        let resource_group_scope = Scope::ResourceGroup {
+            resource_group_name: resource_group_name.clone(),
+        };
+        let subscription_scope = format!("/subscriptions/{}", azure_cfg.subscription_id);
+        let resource_group_id =
+            format!("{subscription_scope}/resourceGroups/{resource_group_name}");
+        for role in &runtime_roles.custom_roles {
+            let uuid = role.uuid(ctx.resource_prefix);
+            let definition = &role.role_definition;
+            let role_definition = RoleDefinition {
+                properties: Some(RoleDefinitionProperties {
+                    role_name: Some(role.role_name(ctx.resource_prefix)),
+                    description: Some(format!(
+                        "{} Assigned after setup by the management identity. Resource prefix: {}.",
+                        definition.description, ctx.resource_prefix
+                    )),
+                    type_: Some("CustomRole".to_string()),
+                    permissions: vec![Permission {
+                        actions: definition.actions.clone(),
+                        not_actions: definition.not_actions.clone(),
+                        data_actions: definition.data_actions.clone(),
+                        not_data_actions: definition.not_data_actions.clone(),
+                    }],
+                    assignable_scopes: protected_management_assignable_scopes(
+                        &resource_group_id,
+                        &subscription_scope,
+                    ),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let created = client
+                .create_or_update_role_definition(&resource_group_scope, uuid.clone(), &role_definition)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create role '{}' the runtime assigns",
+                        role.role_name(ctx.resource_prefix)
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            let role_id = created.id.ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: "Created role definition missing ID".to_string(),
+                    operation: Some("create_runtime_role_definition".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+            info!(role_definition_id = %role_id, "Runtime role definition created");
+            self.runtime_role_definition_ids.insert(uuid, role_id);
+        }
 
         Ok(HandlerAction::Continue {
             state: CreatingRoleAssignments,
@@ -553,19 +637,36 @@ impl AzureRemoteStackManagementController {
             )
             .await?;
         }
-        // Role-assignment writes sit in their own role, assigned with a condition that keeps the
-        // identity from assigning any role to itself.
-        let condition = azure_role_assignment_delegation_condition(&uami_principal_id);
-        for (scope, role_definition_id) in self.role_assignment_role_definition_ids.clone() {
+        // Role-assignment writes sit in their own role, assigned with conditions that admit only
+        // the roles setup made for the runtime: management's own onto itself, the application's
+        // onto any other principal. One role per condition shard.
+        let runtime_roles = runtime_roles(ctx)?;
+        let conditions = role_assignment_conditions(ctx, &runtime_roles, &uami_principal_id);
+        for (key, role_definition_id) in self.role_assignment_role_definition_ids.clone() {
+            let (scope, shard) = role_assignment_role_scope(&key);
+            let condition = conditions.get(shard).cloned().ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "No role-assignment condition for shard {shard} at '{scope}'"
+                    ),
+                    operation: Some("create_role_assignments".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+            let shard_suffix = if shard == 0 {
+                String::new()
+            } else {
+                format!(":shard-{shard}")
+            };
             let assignment_id = Uuid::new_v5(
                 &Uuid::NAMESPACE_OID,
                 format!(
-                    "{}:role-assignments",
+                    "{}:role-assignments{shard_suffix}",
                     management_role_assignment_key(
                         ctx.resource_prefix,
                         &uami_principal_id,
                         &role_definition_id,
-                        &scope,
+                        scope,
                     )
                 )
                 .as_bytes(),
@@ -576,16 +677,17 @@ impl AzureRemoteStackManagementController {
                 &assignment_id,
                 &uami_principal_id,
                 &role_definition_id,
-                &scope,
+                scope,
                 &format!(
-                    "management uami role assignments for workloads ({})",
+                    "management uami role assignments for the stack's roles ({})",
                     ctx.resource_prefix
                 ),
-                Some(condition.clone()),
+                Some(condition),
                 &config.id,
             )
             .await?;
         }
+        self.runtime_roles_revision = Some(runtime_roles_revision(ctx, &runtime_roles)?);
 
         if let Some(vnet_resource_id) = existing_azure_vnet_resource_id(ctx) {
             let role_definition_id = format!(
@@ -936,6 +1038,28 @@ impl AzureRemoteStackManagementController {
             self.role_assignment_role_definition_ids.clear();
         }
 
+        if !self.runtime_role_definition_ids.is_empty() {
+            let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
+            let azure_cfg = ctx.get_azure_config()?;
+            let client = ctx
+                .service_provider
+                .get_azure_authorization_client(azure_cfg)?;
+            let scope = Scope::ResourceGroup {
+                resource_group_name,
+            };
+            for (uuid, role_def_id) in self.runtime_role_definition_ids.clone() {
+                delete_management_role_definition(
+                    &client,
+                    &role_def_id,
+                    &scope,
+                    "the runtime assigned, on delete",
+                    &config.id,
+                )
+                .await?;
+                self.runtime_role_definition_ids.remove(&uuid);
+            }
+        }
+
         Ok(HandlerAction::Continue {
             state: DeletingFederatedCredential,
             suggested_delay: None,
@@ -1079,6 +1203,14 @@ impl AzureRemoteStackManagementController {
             if self.role_layout < MANAGEMENT_ROLE_LAYOUT {
                 return Ok(true);
             }
+            // A release that adds a grant on a resource needs its role made and allowed. The
+            // runtime cannot do either, so its refused step waits for this setup run.
+            let runtime_roles = runtime_roles(ctx)?;
+            if self.runtime_roles_revision.as_deref()
+                != Some(runtime_roles_revision(ctx, &runtime_roles)?.as_str())
+            {
+                return Ok(true);
+            }
         }
         super::management_permissions_need_refresh(
             ctx,
@@ -1215,7 +1347,7 @@ mod tests {
             bindings: vec![],
         };
         let roles =
-            management_role_definitions(&plan, "test", "Management role.", "sub-123", "rg-123")
+            management_role_definitions(&plan, "test", "Management role.", "sub-123", "rg-123", 1)
                 .unwrap();
         let names: BTreeSet<String> = roles
             .iter()
@@ -1389,6 +1521,7 @@ mod tests {
             "Management role.",
             "sub-123",
             "rg-123",
+            1,
         )
         .unwrap();
 
@@ -1714,6 +1847,7 @@ mod tests {
                 "Management role.",
                 "sub-123",
                 "rg-123",
+                1,
             )
             .unwrap();
 
@@ -2009,8 +2143,10 @@ struct ManagementRoleDefinition {
     scope_kind: AzureManagementScopeKind,
     uuid: String,
     properties: RoleDefinitionProperties,
-    /// Holds only role-assignment writes, assigned with the "never itself" condition.
+    /// Holds only role-assignment writes, assigned with the allowlist conditions.
     role_assignments: bool,
+    /// Which allowlist condition a role-assignment role is assigned with; 0 for other roles.
+    shard: usize,
 }
 
 /// Builds one custom role per scope the plan's custom grants bind at. Each role carries only the
@@ -2025,25 +2161,52 @@ fn management_role_definitions(
     description: &str,
     subscription_id: &str,
     resource_group_name: &str,
+    role_assignment_shards: usize,
 ) -> Result<Vec<ManagementRoleDefinition>> {
     let subscription_scope = format!("/subscriptions/{subscription_id}");
     let resource_group_scope = format!("{subscription_scope}/resourceGroups/{resource_group_name}");
-    let roles = management_roles_by_scope(grant_plan).context(ErrorData::InfrastructureError {
-        message: "Failed to group Azure management grants by scope".to_string(),
-        operation: Some("generate_management_role_definitions".to_string()),
-        resource_id: Some("management".to_string()),
-    })?;
-    let definition = |role: AzureScopedCustomRole, role_assignments: bool| {
+    let mut roles =
+        management_roles_by_scope(grant_plan).context(ErrorData::InfrastructureError {
+            message: "Failed to group Azure management grants by scope".to_string(),
+            operation: Some("generate_management_role_definitions".to_string()),
+            resource_id: Some("management".to_string()),
+        })?;
+    // The runtime assigns roles on resources it creates after setup even when the stack grants
+    // management no role-assignment writes itself (a setup that is not automatic). The
+    // conditions limit those writes to the stack's roles, so the role is safe to add.
+    if role_assignment_shards > 0
+        && !roles
+            .role_assignment_roles
+            .iter()
+            .any(|role| role.scope.eq_ignore_ascii_case(&resource_group_scope))
+    {
+        roles.role_assignment_roles.push(AzureScopedCustomRole {
+            scope: resource_group_scope.clone(),
+            scope_kind: AzureManagementScopeKind::ResourceGroup,
+            actions: vec![
+                "Microsoft.Authorization/roleAssignments/delete".to_string(),
+                "Microsoft.Authorization/roleAssignments/write".to_string(),
+            ],
+            data_actions: Vec::new(),
+            not_actions: Vec::new(),
+        });
+    }
+    let definition = |role: &AzureScopedCustomRole, role_assignments: bool, shard: usize| {
         let kind = role.scope_kind.as_str();
         let (id_part, name_part) = if role_assignments {
             ("mgmt-role-assignments-role-def", "-role-assignments")
         } else {
             ("mgmt-role-def", "")
         };
+        let shard_part = if shard == 0 {
+            String::new()
+        } else {
+            format!(":shard-{shard}")
+        };
         let uuid = Uuid::new_v5(
             &Uuid::NAMESPACE_OID,
             format!(
-                "deployment:azure:{id_part}:{resource_prefix}:{}",
+                "deployment:azure:{id_part}:{resource_prefix}:{}{shard_part}",
                 role.scope
             )
             .as_bytes(),
@@ -2051,11 +2214,16 @@ fn management_role_definitions(
         .to_string();
         let own_scope = role.scope.eq_ignore_ascii_case(&subscription_scope)
             || role.scope.eq_ignore_ascii_case(&resource_group_scope);
+        let shard_name = if shard == 0 {
+            String::new()
+        } else {
+            format!("-{shard}")
+        };
         let role_name = if own_scope {
-            format!("{resource_prefix}-management{name_part}-{kind}-role")
+            format!("{resource_prefix}-management{name_part}-{kind}-role{shard_name}")
         } else {
             format!(
-                "{resource_prefix}-management{name_part}-{kind}-role-{}",
+                "{resource_prefix}-management{name_part}-{kind}-role-{}{shard_name}",
                 &uuid[..8]
             )
         };
@@ -2066,9 +2234,9 @@ fn management_role_definitions(
                 description: Some(format!("{description} Scope: {kind}.")),
                 type_: Some("CustomRole".to_string()),
                 permissions: vec![Permission {
-                    actions: role.actions,
-                    not_actions: vec![],
-                    data_actions: role.data_actions,
+                    actions: role.actions.clone(),
+                    not_actions: role.not_actions.clone(),
+                    data_actions: role.data_actions.clone(),
                     not_data_actions: vec![],
                 }],
                 assignable_scopes: protected_management_assignable_scopes(
@@ -2077,22 +2245,78 @@ fn management_role_definitions(
                 ),
                 ..Default::default()
             },
-            scope: role.scope,
+            scope: role.scope.clone(),
             scope_kind: role.scope_kind,
             role_assignments,
+            shard,
         }
     };
+    let shards = role_assignment_shards.max(1);
     Ok(roles
         .roles
-        .into_iter()
-        .map(|role| definition(role, false))
-        .chain(
-            roles
-                .role_assignment_roles
-                .into_iter()
-                .map(|role| definition(role, true)),
-        )
+        .iter()
+        .map(|role| definition(role, false, 0))
+        .chain(roles.role_assignment_roles.iter().flat_map(|role| {
+            (0..shards).map(move |shard| (role, shard))
+        }).map(|(role, shard)| definition(role, true, shard)))
         .collect())
+}
+
+/// Every role the runtime assigns after setup for this stack.
+fn runtime_roles(ctx: &ResourceControllerContext<'_>) -> Result<AzureRuntimeRoles> {
+    azure_runtime_roles(ctx.desired_stack).context(ErrorData::InfrastructureError {
+        message: "Failed to list the roles the runtime assigns".to_string(),
+        operation: Some("runtime_roles".to_string()),
+        resource_id: Some("management".to_string()),
+    })
+}
+
+/// The conditions management's role-assignment roles are assigned with, one per shard.
+fn role_assignment_conditions(
+    ctx: &ResourceControllerContext<'_>,
+    runtime_roles: &AzureRuntimeRoles,
+    management_principal_id: &str,
+) -> Vec<String> {
+    azure_role_assignment_allowlist_conditions(
+        management_principal_id,
+        &runtime_roles.management_role_ids(ctx.resource_prefix),
+        &runtime_roles.workload_role_ids(ctx.resource_prefix),
+    )
+}
+
+/// A digest of the runtime roles and what they grant, so a setup run notices a release that
+/// adds or changes one.
+fn runtime_roles_revision(
+    ctx: &ResourceControllerContext<'_>,
+    runtime_roles: &AzureRuntimeRoles,
+) -> Result<String> {
+    let mut entries: Vec<_> = runtime_roles
+        .custom_roles
+        .iter()
+        .map(|role| {
+            let definition = &role.role_definition;
+            serde_json::json!([
+                role.uuid(ctx.resource_prefix),
+                definition.actions,
+                definition.not_actions,
+                definition.data_actions,
+                definition.not_data_actions,
+            ])
+        })
+        .collect();
+    entries.sort_by_key(|entry| entry.to_string());
+    let digest = serde_json::to_vec(&serde_json::json!({
+        "custom": entries,
+        "management": runtime_roles.management_predefined_role_ids,
+        "workload": runtime_roles.workload_predefined_role_ids,
+    }))
+    .into_alien_error()
+    .context(ErrorData::InfrastructureError {
+        message: "Failed to serialize the runtime roles".to_string(),
+        operation: Some("runtime_roles_revision".to_string()),
+        resource_id: Some("management".to_string()),
+    })?;
+    Ok(format!("{:x}", Sha256::digest(&digest)))
 }
 
 async fn delete_management_role_assignment(
@@ -2196,12 +2420,21 @@ impl AzureRemoteStackManagementController {
         };
         let azure_cfg = ctx.get_azure_config()?;
         let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
+        // How many conditions the allowlist needs. A principal id is a fixed-length GUID, so the
+        // count does not depend on which one.
+        let runtime_roles = runtime_roles(ctx)?;
+        let shards = if runtime_roles.is_empty() {
+            0
+        } else {
+            role_assignment_conditions(ctx, &runtime_roles, &Uuid::nil().to_string()).len()
+        };
         management_role_definitions(
             &grant_plan,
             ctx.resource_prefix,
             &description,
             &azure_cfg.subscription_id,
             &resource_group_name,
+            shards,
         )
     }
 
@@ -2244,7 +2477,8 @@ impl AzureRemoteStackManagementController {
                 self.scoped_role_definition_ids
                     .iter()
                     .chain(&self.role_assignment_role_definition_ids)
-                    .map(|(scope, id)| {
+                    .map(|(key, id)| {
+                        let (scope, _) = role_assignment_role_scope(key);
                         (
                             id.clone(),
                             role_definition_scope_for(scope, subscription_id),
@@ -2446,6 +2680,8 @@ impl AzureRemoteStackManagementController {
             )]),
             role_assignment_role_definition_ids: BTreeMap::new(),
             role_layout: MANAGEMENT_ROLE_LAYOUT,
+            runtime_role_definition_ids: BTreeMap::new(),
+            runtime_roles_revision: None,
             role_assignment_ids: vec![],
             role_assignment_wait_until_epoch_secs: None,
             management_permissions_revision: None,

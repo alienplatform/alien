@@ -527,13 +527,11 @@ mod tests {
         assert_eq!(write.role_name("p1"), format!("p1-{} [mgmt]", write.role_definition.name));
         assert_eq!(roles.management_role_ids("p1"), BTreeSet::from([write.uuid("p1")]));
 
-        let read = roles
-            .custom_roles
-            .iter()
-            .find(|role| role.holder == AzureRuntimeRoleHolder::Profile("execution".to_string()))
-            .expect("execution role");
-        assert!(roles.workload_role_ids("p1").contains(&read.uuid("p1")));
-        assert!(!roles.management_role_ids("p1").contains(&read.uuid("p1")));
+        // The application's read is a built-in: listed for the application's identities only.
+        let secrets_user = "4633458b-17de-408a-b874-0445c86b69e6".to_string();
+        assert!(roles.workload_predefined_role_ids.contains(&secrets_user));
+        assert!(roles.workload_role_ids("p1").contains(&secrets_user));
+        assert!(!roles.management_role_ids("p1").contains(&secrets_user));
     }
 
     /// Setup binds `/provision` sets at the resource group itself; the runtime never assigns them.

@@ -18,8 +18,9 @@ use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_error::{AlienError, Context, ContextError};
 use alien_permissions::{
     generators::{
-        dedupe_azure_role_bindings, AzureCustomRole, AzureRoleBinding, AzureRoleDefinitionRef,
-        AzureRuntimePermissionsGenerator,
+        azure_runtime_role_definition_uuid, dedupe_azure_role_bindings, AzureCustomRole,
+        AzureRoleBinding, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
+        AzureRuntimeRoleHolder,
     },
     BindingTarget, PermissionContext,
 };
@@ -557,8 +558,7 @@ impl AzurePermissionsHelper {
                 "{}-{} [{}]",
                 ctx.resource_prefix, custom_role.role_definition.name, profile_name
             );
-
-            Self::create_or_update_custom_role_definition(
+            Self::ensure_runtime_role_definition(
                 authorization_client,
                 azure_config,
                 role_definition_scope,
@@ -590,33 +590,7 @@ impl AzurePermissionsHelper {
                 "{}-{} [mgmt]",
                 resource_prefix, custom_role.role_definition.name
             );
-            // Setup creates these roles assignable at the subscription too, so management cannot
-            // change a role it holds. Rewriting one would need that subscription-wide right and
-            // would drop the protection, so a role setup protected is left as setup made it. A
-            // role the runtime created itself is rewritten as before, so a permission set that
-            // changes in a later release still reaches it.
-            match authorization_client
-                .get_role_definition(role_definition_scope, role_definition_id.clone())
-                .await
-            {
-                Ok(existing) if Self::setup_protected(&existing, azure_config) => continue,
-                Ok(_) => {}
-                Err(error)
-                    if matches!(
-                        error.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) => {}
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to read Azure custom role definition '{role_name}'"
-                        ),
-                        resource_id: Some(permission_set_id.clone()),
-                    }));
-                }
-            }
-
-            Self::create_or_update_custom_role_definition(
+            Self::ensure_runtime_role_definition(
                 authorization_client,
                 azure_config,
                 role_definition_scope,
@@ -631,19 +605,73 @@ impl AzurePermissionsHelper {
         Ok(())
     }
 
-    /// Whether setup created this role assignable at the subscription, which management cannot
-    /// change.
-    fn setup_protected(
-        role: &RoleDefinition,
+    /// Makes sure a role the runtime assigns grants what the permission set asks for.
+    ///
+    /// Setup creates these roles, and a setup that keeps management from writing role
+    /// definitions leaves the runtime nothing to write: a role that already grants the set's
+    /// actions is used as it is. A role that is missing or grants something else is written,
+    /// which works on a setup from before setup owned these roles; on a newer one the write is
+    /// refused, and the failure asks for setup to run again, which creates the role.
+    async fn ensure_runtime_role_definition(
+        authorization_client: &Arc<dyn AuthorizationApi>,
         azure_config: &alien_azure_clients::AzureClientConfig,
-    ) -> bool {
-        let subscription = format!("/subscriptions/{}", azure_config.subscription_id);
-        role.properties.as_ref().is_some_and(|properties| {
-            properties.assignable_scopes.iter().any(|scope| {
-                scope
-                    .trim_end_matches('/')
-                    .eq_ignore_ascii_case(&subscription)
-            })
+        role_definition_scope: &Scope,
+        role_definition_id: &str,
+        role_name: String,
+        custom_role: AzureCustomRole,
+        permission_set_id: &str,
+    ) -> Result<()> {
+        match authorization_client
+            .get_role_definition(role_definition_scope, role_definition_id.to_string())
+            .await
+        {
+            Ok(existing) if Self::grants_role(&existing, &custom_role) => return Ok(()),
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) => {}
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to read Azure custom role definition '{role_name}'"),
+                    resource_id: Some(permission_set_id.to_string()),
+                }));
+            }
+        }
+
+        Self::create_or_update_custom_role_definition(
+            authorization_client,
+            azure_config,
+            role_definition_scope,
+            role_definition_id,
+            role_name,
+            custom_role,
+            permission_set_id,
+        )
+        .await
+    }
+
+    /// Whether an existing role grants exactly what `custom_role` asks for. Azure keeps action
+    /// lists in its own order.
+    fn grants_role(existing: &RoleDefinition, custom_role: &AzureCustomRole) -> bool {
+        let set = |items: &[String]| -> std::collections::BTreeSet<String> {
+            items.iter().map(|item| item.to_ascii_lowercase()).collect()
+        };
+        let wanted = &custom_role.role_definition;
+        existing.properties.as_ref().is_some_and(|properties| {
+            let permissions = properties.permissions.first();
+            let actions = permissions.map(|p| p.actions.as_slice()).unwrap_or_default();
+            let not_actions = permissions.map(|p| p.not_actions.as_slice()).unwrap_or_default();
+            let data_actions = permissions.map(|p| p.data_actions.as_slice()).unwrap_or_default();
+            let not_data_actions = permissions
+                .map(|p| p.not_data_actions.as_slice())
+                .unwrap_or_default();
+            properties.permissions.len() <= 1
+                && set(actions) == set(&wanted.actions)
+                && set(not_actions) == set(&wanted.not_actions)
+                && set(data_actions) == set(&wanted.data_actions)
+                && set(not_data_actions) == set(&wanted.not_data_actions)
         })
     }
 
@@ -682,9 +710,19 @@ impl AzurePermissionsHelper {
                 &role_definition,
             )
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create Azure custom role definition '{role_name}'"),
-                resource_id: Some(permission_set_id.to_string()),
+            .map_err(|error| {
+                role_write_error(
+                    error,
+                    permission_set_id,
+                    &format!("write role definition '{role_name}'"),
+                    "Microsoft.Authorization/roleDefinitions/write",
+                    ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to create Azure custom role definition '{role_name}'"
+                        ),
+                        resource_id: Some(permission_set_id.to_string()),
+                    },
+                )
             })?;
 
         info!(
@@ -703,16 +741,12 @@ impl AzurePermissionsHelper {
         permission_set_id: &str,
         key: &str,
     ) -> String {
-        let role_segment = azure_role_key_segment(key);
-        Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            format!(
-                "deployment:azure:res-role-def:{}:{}:{}:{}",
-                resource_prefix, profile_name, permission_set_id, role_segment
-            )
-            .as_bytes(),
+        azure_runtime_role_definition_uuid(
+            &AzureRuntimeRoleHolder::Profile(profile_name.to_string()),
+            resource_prefix,
+            permission_set_id,
+            key,
         )
-        .to_string()
     }
 
     pub(crate) fn management_resource_custom_role_definition_uuid(
@@ -720,16 +754,12 @@ impl AzurePermissionsHelper {
         permission_set_id: &str,
         key: &str,
     ) -> String {
-        let role_segment = azure_role_key_segment(key);
-        Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            format!(
-                "deployment:azure:mgmt-res-role-def:{}:{}:{}",
-                resource_prefix, permission_set_id, role_segment
-            )
-            .as_bytes(),
+        azure_runtime_role_definition_uuid(
+            &AzureRuntimeRoleHolder::Management,
+            resource_prefix,
+            permission_set_id,
+            key,
         )
-        .to_string()
     }
 
     /// Create an Azure role assignment
@@ -800,10 +830,20 @@ impl AzurePermissionsHelper {
                 return Ok(full_assignment_id);
             }
 
-            return Err(error.context(ErrorData::CloudPlatformError {
-                message: "Failed to create Azure role assignment".to_string(),
-                resource_id: Some(role_assignment_id.to_string()),
-            }));
+            let operation = format!(
+                "assign role '{}' to principal '{principal_id}'",
+                role_definition_id.rsplit('/').next().unwrap_or(role_definition_id)
+            );
+            return Err(role_write_error(
+                error,
+                role_assignment_id,
+                &operation,
+                "Microsoft.Authorization/roleAssignments/write for that role",
+                ErrorData::CloudPlatformError {
+                    message: "Failed to create Azure role assignment".to_string(),
+                    resource_id: Some(role_assignment_id.to_string()),
+                },
+            ));
         }
 
         Ok(full_assignment_id)
@@ -1380,23 +1420,32 @@ fn is_worker_command_transport_permission(resource_type: &str, permission_set_id
     resource_type == "worker" && permission_set_id == "worker/dispatch-command"
 }
 
-fn azure_role_key_segment(key: &str) -> String {
-    key.rsplit(':')
-        .next()
-        .map(|segment| {
-            segment
-                .chars()
-                .map(|ch| {
-                    if ch.is_ascii_alphanumeric() {
-                        ch.to_ascii_lowercase()
-                    } else {
-                        '-'
-                    }
-                })
-                .collect::<String>()
-        })
-        .filter(|segment| !segment.is_empty())
-        .unwrap_or_else(|| "custom".to_string())
+
+/// A failed role write, with `context`. A refused one also carries
+/// [`ErrorData::ManagementPermissionMissing`], which waits for setup to run again instead of
+/// failing: on a setup that owns the runtime's roles, a role or an assignment the runtime is
+/// refused is one the installed setup did not provide for, such as a grant a newer release added.
+fn role_write_error(
+    error: AlienError<CloudClientErrorData>,
+    resource_id: &str,
+    operation: &str,
+    action: &str,
+    context: ErrorData,
+) -> AlienError<ErrorData> {
+    if matches!(
+        error.error,
+        Some(CloudClientErrorData::RemoteAccessDenied { .. })
+    ) {
+        error
+            .context(ErrorData::ManagementPermissionMissing {
+                resource_id: resource_id.to_string(),
+                operation: operation.to_string(),
+                action: action.to_string(),
+            })
+            .context(context)
+    } else {
+        error.context(context)
+    }
 }
 
 #[cfg(test)]
@@ -1519,11 +1568,13 @@ mod tests {
         }
     }
 
-    /// The runtime still rewrites a management role it created itself, so a permission set that
-    /// changes in a later release reaches it. A role setup protected (assignable at the
-    /// subscription) is left alone: rewriting it would drop that protection.
+    /// A role that already grants the set's actions is used as it is, whoever made it: setup
+    /// creates these roles and a newer setup leaves management no right to write them. A role
+    /// that is missing or grants something else is written (a setup from before setup owned
+    /// them, or a set a later release changed), and on a setup that refuses the write the step
+    /// waits for setup to run again instead of failing.
     #[tokio::test]
-    async fn management_roles_are_rewritten_unless_setup_protected_them() {
+    async fn runtime_roles_are_written_only_when_they_differ() {
         let permission_set = alien_permissions::get_permission_set("vault/data-write").unwrap();
         let context = PermissionContext::new()
             .with_subscription_id("sub-123")
@@ -1536,32 +1587,36 @@ mod tests {
             .into_iter()
             .map(|role| (permission_set.id.clone(), role))
             .collect();
-        assert!(!custom_roles.is_empty());
+        assert_eq!(custom_roles.len(), 1);
+        let wanted = custom_roles[0].1.role_definition.clone();
         let scope = Scope::ResourceGroup {
             resource_group_name: "rg-123".to_string(),
         };
-        let existing = |assignable: &[&str]| RoleDefinition {
+        let existing = |data_actions: Vec<String>, assignable: &[&str]| RoleDefinition {
             properties: Some(RoleDefinitionProperties {
                 assignable_scopes: assignable.iter().map(|s| s.to_string()).collect(),
+                permissions: vec![Permission {
+                    actions: wanted.actions.clone(),
+                    not_actions: Vec::new(),
+                    // Azure returns its own order and case.
+                    data_actions: data_actions.into_iter().rev().map(|a| a.to_uppercase()).collect(),
+                    not_data_actions: Vec::new(),
+                }],
                 ..Default::default()
             }),
             ..Default::default()
         };
-        for (found, rewrites) in [
-            // Created by the runtime: assignable only in the resource group.
-            (
-                Some(existing(&["/subscriptions/sub-123/resourceGroups/rg-123"])),
-                true,
-            ),
-            // Created by setup: also assignable at the subscription.
-            (
-                Some(existing(&[
-                    "/subscriptions/sub-123/resourceGroups/rg-123",
-                    "/subscriptions/sub-123",
-                ])),
-                false,
-            ),
-            (None, true),
+        let setup_scopes = ["/subscriptions/sub-123/resourceGroups/rg-123", "/subscriptions/sub-123"];
+        let runtime_scopes = ["/subscriptions/sub-123/resourceGroups/rg-123"];
+        let mut stale = wanted.data_actions.clone();
+        stale.push("Microsoft.KeyVault/vaults/secrets/getSecret/action".to_string());
+        // (found, write attempted, write refused)
+        for (found, writes, refused) in [
+            (Some(existing(wanted.data_actions.clone(), &setup_scopes)), false, false),
+            (Some(existing(wanted.data_actions.clone(), &runtime_scopes)), false, false),
+            (Some(existing(stale.clone(), &runtime_scopes)), true, false),
+            (None, true, false),
+            (None, true, true),
         ] {
             let mut authorization = MockAuthorizationApi::new();
             authorization
@@ -1577,18 +1632,68 @@ mod tests {
                 });
             authorization
                 .expect_create_or_update_role_definition()
-                .times(if rewrites { custom_roles.len() } else { 0 })
-                .returning(|_, _, definition| Ok(definition.clone()));
+                .times(usize::from(writes))
+                .returning(move |_, id, definition| {
+                    if refused {
+                        Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                            resource_type: "Role definition".to_string(),
+                            resource_name: id,
+                        }))
+                    } else {
+                        Ok(definition.clone())
+                    }
+                });
             let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
-            AzurePermissionsHelper::ensure_management_custom_role_definitions(
+            let result = AzurePermissionsHelper::ensure_management_custom_role_definitions(
                 "test",
                 &authorization,
                 custom_roles.clone(),
                 &scope,
                 &azure_config(),
             )
+            .await;
+            if refused {
+                let error = result.expect_err("a refused write fails the step");
+                assert!(crate::requires_setup_rerun(&error), "{error:?}");
+            } else {
+                result.unwrap();
+            }
+        }
+    }
+
+    /// A refused role assignment waits for setup to run again; other failures do not.
+    #[tokio::test]
+    async fn a_refused_role_assignment_waits_for_setup() {
+        for (denied, waits) in [(true, true), (false, false)] {
+            let mut authorization = MockAuthorizationApi::new();
+            authorization
+                .expect_create_or_update_role_assignment_by_id()
+                .returning(move |id, _| {
+                    Err(AlienError::new(if denied {
+                        CloudClientErrorData::RemoteAccessDenied {
+                            resource_type: "Role assignment".to_string(),
+                            resource_name: id,
+                        }
+                    } else {
+                        CloudClientErrorData::RemoteServiceUnavailable {
+                            message: "busy".to_string(),
+                        }
+                    }))
+                });
+            let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+            let error = AzurePermissionsHelper::create_role_assignment(
+                &authorization,
+                &azure_config(),
+                &Scope::ResourceGroup {
+                    resource_group_name: "rg-123".to_string(),
+                },
+                "assignment",
+                "principal",
+                "/subscriptions/sub-123/providers/Microsoft.Authorization/roleDefinitions/role",
+            )
             .await
-            .unwrap();
+            .expect_err("the assignment fails");
+            assert_eq!(crate::requires_setup_rerun(&error), waits, "{error:?}");
         }
     }
 
