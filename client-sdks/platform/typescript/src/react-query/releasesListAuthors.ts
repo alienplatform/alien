@@ -53,7 +53,7 @@ export type ReleasesListAuthorsQueryError =
   | SDKValidationError;
 
 /**
- * List distinct commit authors across releases. Used for filter dropdowns.
+ * List distinct commit authors across releases. Used for filter dropdowns. Empty for deployment and deployment-group tokens.
  */
 export function useReleasesListAuthors(
   request?: operations.ListReleaseAuthorsRequest | undefined,
@@ -74,7 +74,7 @@ export function useReleasesListAuthors(
 }
 
 /**
- * List distinct commit authors across releases. Used for filter dropdowns.
+ * List distinct commit authors across releases. Used for filter dropdowns. Empty for deployment and deployment-group tokens.
  */
 export function useReleasesListAuthorsSuspense(
   request?: operations.ListReleaseAuthorsRequest | undefined,

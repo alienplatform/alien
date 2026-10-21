@@ -145,6 +145,10 @@ export type UpdateProjectPackagesConfigCloudformation = {
    * Human-friendly application name shown in generated install artifacts
    */
   displayName?: string | null | undefined;
+  /**
+   * Require AWS External ID. When true, AWS setup templates require the ManagementExternalId parameter (every install and update must enter the deployment group's ExternalId) and, on a hosted manager, accept only its management roles as ManagingRoleArn. Applies to packages built after the change. Missing means false; new projects are created with true.
+   */
+  requireManagementExternalId?: boolean | undefined;
 };
 
 /**
@@ -395,6 +399,10 @@ export type PackagesConfigPatchCloudformation = {
    * Human-friendly application name shown in generated install artifacts
    */
   displayName?: string | null | undefined;
+  /**
+   * Require AWS External ID. When true, AWS setup templates require the ManagementExternalId parameter (every install and update must enter the deployment group's ExternalId) and, on a hosted manager, accept only its management roles as ManagingRoleArn. Applies to packages built after the change. Missing means false; new projects are created with true.
+   */
+  requireManagementExternalId?: boolean | undefined;
 };
 
 export type PackagesConfigPatchTerraform = {
@@ -657,6 +665,7 @@ export function updateProjectPackagesConfigCliToJSON(
 export type UpdateProjectPackagesConfigCloudformation$Outbound = {
   enabled: boolean;
   displayName?: string | null | undefined;
+  requireManagementExternalId?: boolean | undefined;
 };
 
 /** @internal */
@@ -667,6 +676,7 @@ export const UpdateProjectPackagesConfigCloudformation$outboundSchema:
   > = z.object({
     enabled: z.boolean(),
     displayName: z.nullable(z.string()).optional(),
+    requireManagementExternalId: z.boolean().optional(),
   });
 
 export function updateProjectPackagesConfigCloudformationToJSON(
@@ -1074,6 +1084,7 @@ export function packagesConfigPatchCliToJSON(
 export type PackagesConfigPatchCloudformation$Outbound = {
   enabled?: boolean | undefined;
   displayName?: string | null | undefined;
+  requireManagementExternalId?: boolean | undefined;
 };
 
 /** @internal */
@@ -1083,6 +1094,7 @@ export const PackagesConfigPatchCloudformation$outboundSchema: z.ZodType<
 > = z.object({
   enabled: z.boolean().optional(),
   displayName: z.nullable(z.string()).optional(),
+  requireManagementExternalId: z.boolean().optional(),
 });
 
 export function packagesConfigPatchCloudformationToJSON(

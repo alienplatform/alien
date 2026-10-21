@@ -1,13 +1,13 @@
-# EndpointSecretRef
+# EndpointSecretRef2
 
 Reference to a Kubernetes Secret
 
 ## Example Usage
 
 ```typescript
-import { EndpointSecretRef } from "@alienplatform/platform-api/models";
+import { EndpointSecretRef2 } from "@alienplatform/platform-api/models";
 
-let value: EndpointSecretRef = {
+let value: EndpointSecretRef2 = {
   key: "<key>",
   name: "<value>",
 };

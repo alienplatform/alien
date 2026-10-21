@@ -1360,6 +1360,17 @@ export type TypeArtifactRegistry1 = ClosedEnum<typeof TypeArtifactRegistry1>;
  * AWS ECR (Elastic Container Registry) binding configuration
  */
 export type ExternalBindingEcr = {
+  /**
+   * Repository prefixes this registry used before `repositoryPrefix`. Images already released
+   *
+   * @remarks
+   * under them stay readable and keep their cross-account grants; nothing new is written there.
+   */
+  legacyRepositoryPrefixes?: Array<string> | undefined;
+  /**
+   * Sandbox namespaces this registry used before `sandboxRepositoryPrefix`, read the same way.
+   */
+  legacySandboxRepositoryPrefixes?: Array<string> | undefined;
   pullRoleArn?: any | null | undefined;
   pushRoleArn?: any | null | undefined;
   /**
@@ -6106,6 +6117,8 @@ export const ExternalBindingEcr$inboundSchema: z.ZodType<
   ExternalBindingEcr,
   unknown
 > = z.object({
+  legacyRepositoryPrefixes: z.array(z.string()).optional(),
+  legacySandboxRepositoryPrefixes: z.array(z.string()).optional(),
   pullRoleArn: z.nullable(z.any()).optional(),
   pushRoleArn: z.nullable(z.any()).optional(),
   repositoryPrefix: z.nullable(z.any()),
@@ -6115,6 +6128,8 @@ export const ExternalBindingEcr$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type ExternalBindingEcr$Outbound = {
+  legacyRepositoryPrefixes?: Array<string> | undefined;
+  legacySandboxRepositoryPrefixes?: Array<string> | undefined;
   pullRoleArn?: any | null | undefined;
   pushRoleArn?: any | null | undefined;
   repositoryPrefix: any | null;
@@ -6128,6 +6143,8 @@ export const ExternalBindingEcr$outboundSchema: z.ZodType<
   ExternalBindingEcr$Outbound,
   ExternalBindingEcr
 > = z.object({
+  legacyRepositoryPrefixes: z.array(z.string()).optional(),
+  legacySandboxRepositoryPrefixes: z.array(z.string()).optional(),
   pullRoleArn: z.nullable(z.any()).optional(),
   pushRoleArn: z.nullable(z.any()).optional(),
   repositoryPrefix: z.nullable(z.any()),

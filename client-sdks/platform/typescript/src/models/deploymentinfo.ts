@@ -2131,6 +2131,10 @@ export type InstallContextTargets = {
     | null
     | undefined;
   awsManagingAccountId?: string | undefined;
+  /**
+   * AWS only: the ExternalId to enter as the ManagementExternalId setup parameter. Issued per deployment group; the management roles require it on every AssumeRole.
+   */
+  managementExternalId?: string | undefined;
 };
 
 export type DeploymentInfoInstallContext = {
@@ -5059,6 +5063,7 @@ export const InstallContextTargets$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   awsManagingAccountId: z.string().optional(),
+  managementExternalId: z.string().optional(),
 });
 
 export function installContextTargetsFromJSON(

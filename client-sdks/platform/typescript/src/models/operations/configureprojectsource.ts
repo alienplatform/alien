@@ -223,6 +223,10 @@ export type ConfigureProjectSourceCloudformation = {
    * Human-friendly application name shown in generated install artifacts
    */
   displayName?: string | null | undefined;
+  /**
+   * Require AWS External ID. When true, AWS setup templates require the ManagementExternalId parameter (every install and update must enter the deployment group's ExternalId) and, on a hosted manager, accept only its management roles as ManagingRoleArn. Applies to packages built after the change. Missing means false; new projects are created with true.
+   */
+  requireManagementExternalId?: boolean | undefined;
 };
 
 /**
@@ -882,6 +886,7 @@ export const ConfigureProjectSourceCloudformation$inboundSchema: z.ZodType<
 > = z.object({
   enabled: z.boolean(),
   displayName: z.nullable(z.string()).optional(),
+  requireManagementExternalId: z.boolean().optional(),
 });
 
 export function configureProjectSourceCloudformationFromJSON(

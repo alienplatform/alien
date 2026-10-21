@@ -90,6 +90,7 @@ async function $do(
   const path = pathToFunc("/v1/packages")();
 
   const query = encodeFormQuery({
+    "compatibleWithReleaseId": payload?.compatibleWithReleaseId,
     "cursor": payload?.cursor,
     "limit": payload?.limit,
     "project": payload?.project,
