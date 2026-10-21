@@ -254,7 +254,8 @@ resource "azurerm_role_definition" "setup_management_manage_sandbox_disk_images_
   }
 
   assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
+    "/subscriptions/${var.azure_subscription_id}"
   ]
 }
 
