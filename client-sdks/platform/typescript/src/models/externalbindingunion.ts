@@ -3582,3 +3582,11 @@ export function externalBindingUnionFromJSON(
     `Failed to parse 'ExternalBindingUnion' from JSON`,
   );
 }
+
+// Published endpoint-secret compatibility exports.
+export type { EndpointSecretRef1 as EndpointSecretRef, EndpointSecretRef1$Outbound as EndpointSecretRef$Outbound };
+export { EndpointSecretRef1$inboundSchema as EndpointSecretRef$inboundSchema, EndpointSecretRef1$outboundSchema as EndpointSecretRef$outboundSchema };
+export { endpointSecretRef1FromJSON as endpointSecretRefFromJSON, endpointSecretRef1ToJSON as endpointSecretRefToJSON };
+export type { ExternalBindingEndpoint1 as ExternalBindingEndpoint, ExternalBindingEndpoint1$Outbound as ExternalBindingEndpoint$Outbound };
+export { ExternalBindingEndpoint1$inboundSchema as ExternalBindingEndpoint$inboundSchema, ExternalBindingEndpoint1$outboundSchema as ExternalBindingEndpoint$outboundSchema };
+export { externalBindingEndpoint1FromJSON as externalBindingEndpointFromJSON, externalBindingEndpoint1ToJSON as externalBindingEndpointToJSON };

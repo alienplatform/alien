@@ -528,3 +528,19 @@ test("execution and target configs retain saved quota overrides and explicit cle
     }
   }
 });
+
+test("published endpoint secret helpers retain root and deep import behavior", async () => {
+  const root = await import("../typescript/esm/models/index.js");
+  const deep = await import("../typescript/esm/models/externalbindingunion.js");
+  for (const module of [root, deep]) {
+    const secret = { key: "endpoint", name: "storage" };
+    const endpoint = { secretRef: secret };
+    for (const [prefix, input] of [["endpointSecretRef", secret], ["externalBindingEndpoint", endpoint]]) {
+      const json = module[`${prefix}ToJSON`](input);
+      assert.deepEqual(JSON.parse(json), input);
+      const decoded = module[`${prefix}FromJSON`](json);
+      assert.equal(decoded.ok, true);
+      assert.deepEqual(decoded.value, input);
+    }
+  }
+});

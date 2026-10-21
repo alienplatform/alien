@@ -515,3 +515,17 @@ const deploymentInfoAliases = ["Heartbeats", "Telemetry", "Updates"].flatMap(nam
   `export { SetupUpdate${name}$inboundSchema as DeploymentInfo${name}$inboundSchema };`,
 ]);
 await writeFile(deploymentInfoUrl, `${deploymentInfoSource}${deploymentInfoMarker}${deploymentInfoAliases.join("\n")}\n`);
+
+// Keep existing endpoint-secret imports when inline schemas gain numeric suffixes.
+const endpointUrl = new URL("externalbindingunion.ts", models);
+const endpointMarker = "\n// Published endpoint-secret compatibility exports.\n";
+const endpointSource = (await readFile(endpointUrl, "utf8")).split(endpointMarker)[0];
+const endpointAliases = ["EndpointSecretRef", "ExternalBindingEndpoint"].flatMap(name => {
+  const helper = name[0].toLowerCase() + name.slice(1);
+  return [
+    `export type { ${name}1 as ${name}, ${name}1$Outbound as ${name}$Outbound };`,
+    `export { ${name}1$inboundSchema as ${name}$inboundSchema, ${name}1$outboundSchema as ${name}$outboundSchema };`,
+    `export { ${helper}1FromJSON as ${helper}FromJSON, ${helper}1ToJSON as ${helper}ToJSON };`,
+  ];
+});
+await writeFile(endpointUrl, `${endpointSource}${endpointMarker}${endpointAliases.join("\n")}\n`);
