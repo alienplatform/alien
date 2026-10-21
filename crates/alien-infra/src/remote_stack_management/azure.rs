@@ -417,6 +417,11 @@ impl AzureRemoteStackManagementController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        // The role-assignment conditions name the application's identities.
+        if !runtime_roles(ctx)?.is_empty() && principals_ready(ctx)?.is_none() {
+            info!("Waiting for the application's identities before creating management roles");
+            return Ok(principal_wait());
+        }
         let role_definitions = self.generate_management_role_definitions(ctx)?;
 
         let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
@@ -641,7 +646,10 @@ impl AzureRemoteStackManagementController {
         // the roles setup made for the runtime: management's own onto itself, the application's
         // onto any other principal. One role per condition shard.
         let runtime_roles = runtime_roles(ctx)?;
-        let principals = workload_principal_ids(ctx)?;
+        let Some(principals) = principals_ready(ctx)? else {
+            info!("Waiting for the application's identities before assigning management roles");
+            return Ok(principal_wait());
+        };
         let conditions =
             role_assignment_conditions(ctx, &runtime_roles, &uami_principal_id, &principals);
         for (key, role_definition_id) in self.role_assignment_role_definition_ids.clone() {
@@ -2368,8 +2376,12 @@ fn role_assignment_conditions(
 }
 
 /// The principal ids of the application's identities, which the runtime assigns roles to: every
-/// service account's managed identity and the remote-bindings identity. Setup creates them all
-/// before this controller (see the infrastructure dependencies), so each must already have one.
+/// service account's managed identity and the remote-bindings identity.
+///
+/// Setup creates them alongside this controller. They are not its declared dependencies: adding
+/// one would change this Frozen resource's entry on every existing installation, and the runtime
+/// would then run its update with credentials that may not rebuild management's own roles. So the
+/// steps that need them wait for them instead ([`principals_ready`]).
 fn workload_principal_ids(ctx: &ResourceControllerContext<'_>) -> Result<BTreeSet<String>> {
     let mut principals = BTreeSet::new();
     for (resource_id, entry) in &ctx.desired_stack.resources {
@@ -2396,6 +2408,30 @@ fn workload_principal_ids(ctx: &ResourceControllerContext<'_>) -> Result<BTreeSe
         principals.insert(principal.to_ascii_lowercase());
     }
     Ok(principals)
+}
+
+/// The application's principal ids, or `None` while an identity setup is creating is not ready.
+fn principals_ready(ctx: &ResourceControllerContext<'_>) -> Result<Option<BTreeSet<String>>> {
+    match workload_principal_ids(ctx) {
+        Ok(principals) => Ok(Some(principals)),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(ErrorData::DependencyNotReady { .. } | ErrorData::DependencyNotFound { .. })
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Waits for the application's identities: tries again every 10 seconds, up to 30 minutes.
+fn principal_wait() -> HandlerAction {
+    HandlerAction::Stay {
+        max_times: Some(180),
+        suggested_delay: Some(Duration::from_secs(10)),
+    }
 }
 
 /// A digest of the runtime roles and what they grant, so a setup run notices a release that
