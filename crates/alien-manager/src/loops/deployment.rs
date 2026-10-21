@@ -1689,7 +1689,8 @@ fn is_initial_gcp_iam_propagation(deployment: &DeploymentRecord, error: &AlienEr
                     .as_ref()?
                     .downcast_ref::<alien_core::RemoteStackManagementOutputs>()
             })
-            .map(|outputs| outputs.access_configuration.as_str())
+            // The email, under both protocols; a federated access configuration is a descriptor.
+            .map(|outputs| outputs.management_resource_id.as_str())
     });
     let Some(target_email) = target_email else {
         return false;
@@ -3950,6 +3951,50 @@ mod tests {
         assert!(
             credential_error_retry_remaining(&deployment, &error, now).is_none(),
             "only the freshly granted target identity gets propagation grace"
+        );
+    }
+
+    /// A federated deployment stores its federation descriptor as the access configuration; the
+    /// freshly granted target identity is still the management email.
+    #[tokio::test]
+    async fn federated_gcp_provisioning_retries_target_credential_handoff_during_grace_period() {
+        let now = Utc::now();
+        let mut stack = gcp_stack_with_target_identity();
+        stack
+            .resources
+            .get_mut("remote-stack-management")
+            .unwrap()
+            .outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+            management_resource_id: "target@example.invalid".to_string(),
+            access_configuration: serde_json::json!({
+                "assertionAudience": "urn:deployment-access:v1:0123456789abcdef",
+                "poolId": "deployment-0123456789abcdef0123",
+                "projectNumber": "123456789012",
+                "providerId": "manager",
+                "serviceAccountEmail": "target@example.invalid",
+                "trust": {
+                    "issuer": "https://issuer.example.com",
+                    "subject": "system:serviceaccount:platform:manager"
+                }
+            })
+            .to_string(),
+            legacy_remote_bindings_access: None,
+        }));
+        let mut deployment = deployment_record(DeploymentStatus::Provisioning, Some(stack));
+        deployment.platform = Platform::Gcp;
+        deployment.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            credential_retry: Some(alien_core::CredentialRetry {
+                started_at: now - chrono::Duration::minutes(2),
+                status: DeploymentStatus::Provisioning,
+            }),
+            ..Default::default()
+        });
+        let error = gcp_target_iam_denial().await;
+
+        assert_eq!(
+            credential_error_retry_remaining(&deployment, &error, now),
+            Some(CREDENTIAL_ERROR_GRACE_PERIOD - Duration::from_secs(2 * 60)),
+            "the freshly granted target identity gets propagation grace"
         );
     }
 

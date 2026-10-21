@@ -965,7 +965,8 @@ impl GcpStorageController {
             .find(|state| state.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref())
             .and_then(|state| state.outputs.as_ref())
             .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>())
-            .map(|outputs| format!("serviceAccount:{}", outputs.access_configuration));
+            // The email; a federated access configuration is a descriptor.
+            .map(|outputs| format!("serviceAccount:{}", outputs.resource_id));
 
         // Apply desired bindings, or remove stale Remote Bindings grants when opt-in was removed.
         if !all_bindings.is_empty() || remote_bindings_member.is_some() {
