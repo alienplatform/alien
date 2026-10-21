@@ -1,9 +1,17 @@
 //! Deployment cleanup preserves failures and waits for setup-owned permission removal.
-use alien_aws_clients::sqs::{MockSqsApi, SqsApi};
+use alien_aws_clients::{
+    iam::{
+        IamApi, IamClient, ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi,
+        PolicyNames,
+    },
+    sqs::{CreateQueueRequest, GetQueueUrlRequest, MockSqsApi, SendMessageRequest, SqsApi},
+};
+use alien_core::permissions::{PermissionProfile, PermissionSet, PermissionsConfig};
 use alien_core::{
-    AwsClientConfig, AwsCredentials, ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
-    ExternalBindings, Platform, Queue, Resource, ResourceLifecycle, ResourceStatus,
-    StackResourceState, StackSettings, StackState,
+    AwsClientConfig, AwsCredentials, ClientConfig, DeploymentConfig, DeploymentStatus,
+    EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority, Platform, Queue,
+    ReleaseInfo, Resource, ResourceLifecycle, ResourceStatus, RuntimeMetadata, ServiceAccount,
+    Stack, StackResourceState, StackSettings, StackState,
 };
 use alien_error::AlienError;
 use alien_infra::{deserialize_controller, MockPlatformServiceProvider, StackResourceStateExt};
@@ -147,8 +155,6 @@ async fn denied_deployment_delete_preserves_disk_checkpoint_and_explicit_retry()
 }
 
 async fn update_removal_observation(denied: bool, setup: bool) {
-    use alien_core::permissions::{PermissionProfile, PermissionSet, PermissionsConfig};
-    use alien_core::{DeploymentStatus, ReleaseInfo, RuntimeMetadata, ServiceAccount, Stack};
     let permission_text =
         include_str!("../../alien-permissions/permission-sets/queue/data-write.jsonc")
             .lines()
@@ -390,15 +396,8 @@ async fn setup_scoped_grant_cleanup(
     removed_profile: bool,
     legacy_checkpoint: Option<u32>,
     pruned: bool,
+    frozen: bool,
 ) {
-    use alien_aws_clients::iam::{
-        ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames,
-    };
-    use alien_core::permissions::{PermissionProfile, PermissionSet, PermissionsConfig};
-    use alien_core::{
-        DeploymentStatus, InitialSetupAuthority, ReleaseInfo, RuntimeMetadata, ServiceAccount,
-        Stack,
-    };
     let permission_text =
         include_str!("../../alien-permissions/permission-sets/queue/data-write.jsonc")
             .lines()
@@ -423,11 +422,31 @@ async fn setup_scoped_grant_cleanup(
     if legacy_capture {
         old_account.resource_permission_sets.clear();
     }
-    let installed = Stack::new("synthetic".into())
+    let mut installed = Stack::new("synthetic".into())
         .permissions(PermissionsConfig::new().with_profile("sender", profile))
         .add(old_account.clone(), ResourceLifecycle::Frozen)
-        .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Live)
+        .add(
+            Queue::new("jobs".into()).build(),
+            if frozen {
+                ResourceLifecycle::Frozen
+            } else {
+                ResourceLifecycle::Live
+            },
+        )
         .build();
+    if frozen {
+        installed
+            .resources
+            .insert("other-jobs".into(), installed.resources["jobs"].clone());
+        installed.resources.get_mut("other-jobs").unwrap().config =
+            Resource::new(Queue::new("other-jobs".into()).build());
+        installed.resources.insert(
+            "removed-sa".into(),
+            installed.resources["sender-sa"].clone(),
+        );
+        installed.resources.get_mut("removed-sa").unwrap().config =
+            Resource::new(ServiceAccount::new("removed-sa".into()).build());
+    }
     let desired = Stack::new("synthetic".into())
         .permissions(if removed_profile {
             PermissionsConfig::new()
@@ -440,6 +459,9 @@ async fn setup_scoped_grant_cleanup(
         )
         .build();
     let mut stack_state = saved_queue("synthetic-url", "synthetic-jobs");
+    if frozen {
+        stack_state.resources.get_mut("jobs").unwrap().lifecycle = Some(ResourceLifecycle::Frozen);
+    }
     let mut account = StackResourceState::new_pending(
         "service-account".into(),
         Resource::new(old_account),
@@ -449,6 +471,17 @@ async fn setup_scoped_grant_cleanup(
     account.status = ResourceStatus::Running;
     account.set_internal_controller(Some(deserialize_controller(json!({"type":"AwsServiceAccountController","_controllerStateVersion":1,"state":"ready","stackPermissionsApplied":true,"roleName":"synthetic-sender","roleArn":"arn:aws:iam::123456789012:role/synthetic-sender"})).unwrap())).unwrap();
     stack_state.resources.insert("sender-sa".into(), account);
+    let removed_role_exists = Arc::new(Mutex::new(frozen));
+    if frozen {
+        let mut other = stack_state.resources["jobs"].clone();
+        other.config = installed.resources["other-jobs"].config.clone();
+        other.set_internal_controller(Some(deserialize_controller(json!({"type":"AwsQueueController", "_controllerStateVersion":1, "state":"ready", "queueUrl":"synthetic-other-url", "queueName":"synthetic-other-jobs"})).unwrap())).unwrap();
+        stack_state.resources.insert("other-jobs".into(), other);
+        let mut removed = stack_state.resources["sender-sa"].clone();
+        removed.config = installed.resources["removed-sa"].config.clone();
+        removed.set_internal_controller(Some(deserialize_controller(json!({"type":"AwsServiceAccountController", "_controllerStateVersion":1, "state":"ready", "stackPermissionsApplied":true, "roleName":"synthetic-removed", "roleArn":"arn:aws:iam::123456789012:role/synthetic-removed"})).unwrap())).unwrap();
+        stack_state.resources.insert("removed-sa".into(), removed);
+    }
     let current = "deployment-jobs-queue-data-write".to_string();
     let legacy = "alien-jobs-queue-data-write".to_string();
     let policies = Arc::new(Mutex::new(vec![
@@ -460,30 +493,63 @@ async fn setup_scoped_grant_cleanup(
         "unrelated-metadata-control".into(),
     ]));
     let exists = Arc::new(Mutex::new(true));
+    let setup_started = Arc::new(Mutex::new(!frozen));
+    let setup = setup_started.clone();
     let remote = exists.clone();
     let mut sqs = MockSqsApi::new();
-    sqs.expect_delete_queue().times(1).returning(move |_| {
-        *remote.lock().unwrap() = false;
-        Ok(())
-    });
+    sqs.expect_delete_queue()
+        .times(if frozen { 2 } else { 1 })
+        .returning(move |_| {
+            assert!(
+                *setup.lock().unwrap(),
+                "runtime must never delete a Frozen queue"
+            );
+            *remote.lock().unwrap() = false;
+            Ok(())
+        });
     let mut iam = MockIamApi::new();
+    if frozen {
+        iam.expect_list_attached_role_policies().returning(|role| {
+            assert_eq!(role, "synthetic-removed");
+            Ok(serde_json::from_value(json!({"ListAttachedRolePoliciesResult": {"AttachedPolicies": {"member": []}, "IsTruncated": false}})).unwrap())
+        });
+        let setup = setup_started.clone();
+        let removed = removed_role_exists.clone();
+        iam.expect_delete_role().times(1).returning(move |role| {
+            assert!(
+                *setup.lock().unwrap(),
+                "runtime must never delete a Frozen role"
+            );
+            assert_eq!(role, "synthetic-removed");
+            *removed.lock().unwrap() = false;
+            Ok(())
+        });
+    }
     let remote = exists.clone();
     iam.expect_update_assume_role_policy()
         .times(1)
         .returning(move |_, _| {
             assert!(
-                !*remote.lock().unwrap(),
+                frozen || !*remote.lock().unwrap(),
                 "no IAM mutation before live cleanup"
             );
             Ok(())
         });
     let retained = policies.clone();
+    let setup = setup_started.clone();
     let remote = exists.clone();
     iam.expect_delete_role_policy()
         .returning(move |role, name| {
+            assert!(
+                *setup.lock().unwrap(),
+                "runtime must never delete Frozen role policies"
+            );
+            if role == "synthetic-removed" {
+                return Ok(());
+            }
             assert_eq!(role, "synthetic-sender");
             assert!(
-                !*remote.lock().unwrap(),
+                frozen || !*remote.lock().unwrap(),
                 "no policy removal before live cleanup"
             );
             assert_ne!(name, "unrelated-metadata-control");
@@ -491,11 +557,15 @@ async fn setup_scoped_grant_cleanup(
             Ok(())
         });
     let retained = policies.clone();
-    iam.expect_list_role_policies().returning(move |_| {
+    iam.expect_list_role_policies().returning(move |role| {
         Ok(ListRolePoliciesResponse {
             list_role_policies_result: ListRolePoliciesResult {
                 policy_names: Some(PolicyNames {
-                    member: retained.lock().unwrap().clone(),
+                    member: if role == "synthetic-removed" {
+                        vec!["deployment-permissions".into()]
+                    } else {
+                        retained.lock().unwrap().clone()
+                    },
                 }),
                 is_truncated: Some(false),
                 marker: None,
@@ -526,6 +596,60 @@ async fn setup_scoped_grant_cleanup(
         pending_prepared_stack: Some(desired),
         ..Default::default()
     });
+    if frozen {
+        state.status = DeploymentStatus::Updating;
+        for _ in 0..32 {
+            state = alien_deployment::step(state, config(), fake_config(), Some(services.clone()))
+                .await
+                .unwrap()
+                .state;
+            state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+            if matches!(
+                state.status,
+                DeploymentStatus::UpdateFailed | DeploymentStatus::Running
+            ) {
+                break;
+            }
+        }
+        assert_eq!(state.status, DeploymentStatus::UpdateFailed);
+        assert_eq!(
+            state.error.as_ref().unwrap().code,
+            "DEPLOYMENT_SETUP_REQUIRED"
+        );
+        assert!(*exists.lock().unwrap());
+        assert!(*removed_role_exists.lock().unwrap());
+        let saved = state.stack_state.as_ref().unwrap();
+        assert_eq!(
+            saved.resources["jobs"].internal_state.as_ref().unwrap()["queueUrl"],
+            "synthetic-url"
+        );
+        assert_eq!(
+            saved.resources["other-jobs"]
+                .internal_state
+                .as_ref()
+                .unwrap()["queueUrl"],
+            "synthetic-other-url"
+        );
+        assert_eq!(
+            saved.resources["removed-sa"]
+                .internal_state
+                .as_ref()
+                .unwrap()["roleName"],
+            "synthetic-removed"
+        );
+        state = alien_deployment::step(state, config(), fake_config(), Some(services.clone()))
+            .await
+            .unwrap()
+            .state;
+        assert_eq!(
+            state.status,
+            DeploymentStatus::UpdateFailed,
+            "no implicit retry"
+        );
+        *setup_started.lock().unwrap() = true;
+        state.status = DeploymentStatus::InitialSetup;
+        state.error = None;
+    }
     if pruned {
         // The prepared target excludes a declined gate while the release still
         // declares it. Exercise the real updater's deletion and pruning path.
@@ -595,6 +719,7 @@ async fn setup_scoped_grant_cleanup(
         );
     }
     assert!(!*exists.lock().unwrap());
+    assert!(!*removed_role_exists.lock().unwrap());
     assert_eq!(*policies.lock().unwrap(), ["unrelated-metadata-control"]);
     assert!(state
         .runtime_metadata
@@ -605,17 +730,17 @@ async fn setup_scoped_grant_cleanup(
 
 #[tokio::test]
 async fn setup_drains_live_resources_then_removes_current_and_legacy_owned_grants() {
-    setup_scoped_grant_cleanup(false, false, None, false).await;
+    setup_scoped_grant_cleanup(false, false, None, false, false).await;
 }
 
 #[tokio::test]
 async fn setup_reconciles_legacy_uncaptured_inline_grants() {
-    setup_scoped_grant_cleanup(true, false, None, false).await;
+    setup_scoped_grant_cleanup(true, false, None, false, false).await;
 }
 
 #[tokio::test]
 async fn setup_removes_profile_grants_from_a_retained_identity() {
-    setup_scoped_grant_cleanup(false, true, None, false).await;
+    setup_scoped_grant_cleanup(false, true, None, false, false).await;
 }
 
 async fn live_until(
@@ -684,13 +809,6 @@ async fn assert_live_queue_absent(client: &dyn SqsApi, url: &str) {
 #[tokio::test]
 #[ignore = "mutates only an explicitly supplied disposable queue and sender role; requires scoped setup and preissued workload credentials"]
 async fn live_setup_removes_permissions_after_cleanup() {
-    use alien_aws_clients::iam::{IamApi, IamClient};
-    use alien_aws_clients::sqs::{CreateQueueRequest, GetQueueUrlRequest, SendMessageRequest};
-    use alien_core::permissions::{PermissionProfile, PermissionSet, PermissionsConfig};
-    use alien_core::{
-        DeploymentStatus, InitialSetupAuthority, ReleaseInfo, RuntimeMetadata, ServiceAccount,
-        Stack,
-    };
     let dir = std::path::PathBuf::from(std::env::var("ALIEN_DELETE_TEST_DIR").unwrap());
     let fixture: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("fixture.json")).unwrap()).unwrap();
@@ -1019,7 +1137,7 @@ async fn live_workload_permission_probe() {
 
 #[tokio::test]
 async fn setup_resumes_legacy_prepared_desired_and_stale_pending_checkpoint() {
-    setup_scoped_grant_cleanup(false, false, Some(1), false).await;
+    setup_scoped_grant_cleanup(false, false, Some(1), false, false).await;
 }
 
 #[tokio::test]
@@ -1065,10 +1183,258 @@ async fn unchanged_running_protocol_one_remains_usable_without_upgrade() {
 
 #[tokio::test]
 async fn setup_removes_historical_grants_after_deleted_resource_record_was_pruned() {
-    setup_scoped_grant_cleanup(false, false, None, true).await;
+    setup_scoped_grant_cleanup(false, false, None, true, false).await;
 }
 
 #[tokio::test]
 async fn setup_resumes_protocol_two_legacy_setup_representation() {
-    setup_scoped_grant_cleanup(false, false, Some(2), false).await;
+    setup_scoped_grant_cleanup(false, false, Some(2), false, false).await;
+}
+
+#[tokio::test]
+async fn runtime_preserves_removed_frozen_resources_for_privileged_setup() {
+    setup_scoped_grant_cleanup(false, false, None, false, true).await;
+}
+
+#[tokio::test]
+#[ignore = "requires two disposable Frozen queues, removed/retained roles and exact scoped credentials"]
+async fn live_frozen_removal_requires_setup_and_preserves_owned_grants() {
+    let dir = std::path::PathBuf::from(std::env::var("ALIEN_DELETE_TEST_DIR").unwrap());
+    let fixture: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("fixture.json")).unwrap()).unwrap();
+    let queues = fixture["queues"].as_array().unwrap();
+    assert_eq!(queues.len(), 2);
+    let setup_cfg = live_config(&dir, &fixture, "setup");
+    let runtime_cfg = live_config(&dir, &fixture, "runtime-denied");
+    let observer = live_client(live_config(&dir, &fixture, "observer"));
+    let setup_sqs = live_client(setup_cfg.clone());
+    let mut http = reqwest::Client::builder();
+    if let Ok(path) =
+        std::env::var("ALIEN_LIVE_TEST_CA_CERT").or_else(|_| std::env::var("SSL_CERT_FILE"))
+    {
+        http = http.add_root_certificate(
+            reqwest::Certificate::from_pem(&std::fs::read(path).unwrap()).unwrap(),
+        );
+    }
+    let iam: Arc<dyn IamApi> = Arc::new(IamClient::new(
+        http.build().unwrap(),
+        alien_aws_clients::AwsCredentialProvider::from_config_sync(setup_cfg.clone()),
+    ));
+    let role = fixture["senderRoleName"].as_str().unwrap();
+    let removed_role = fixture["removedRoleName"].as_str().unwrap();
+    let permission_text =
+        include_str!("../../alien-permissions/permission-sets/queue/data-write.jsonc")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    let permission: PermissionSet = serde_json::from_str(&permission_text).unwrap();
+    let profile = PermissionProfile::new()
+        .resource("jobs", ["queue/data-write"])
+        .resource("other-jobs", ["queue/data-write"]);
+    let account = ServiceAccount::from_permission_profile("sender-sa".into(), &profile, |_| {
+        Some(permission.clone())
+    })
+    .unwrap();
+    let removed_account = ServiceAccount::new("removed-sa".into()).build();
+    let installed = Stack::new("frozen-cleanup".into())
+        .permissions(PermissionsConfig::new().with_profile("sender", profile))
+        .add(account.clone(), ResourceLifecycle::Frozen)
+        .add(removed_account.clone(), ResourceLifecycle::Frozen)
+        .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Queue::new("other-jobs".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let desired = Stack::new("frozen-cleanup".into())
+        .permissions(PermissionsConfig::new().with_profile("sender", PermissionProfile::new()))
+        .add(
+            ServiceAccount::new("sender-sa".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let mut saved = StackState::new(Platform::Aws);
+    saved.resource_prefix = fixture["prefix"].as_str().unwrap().into();
+    for (id, queue) in ["jobs", "other-jobs"].into_iter().zip(queues) {
+        let mut record = saved_queue(
+            queue["url"].as_str().unwrap(),
+            queue["name"].as_str().unwrap(),
+        )
+        .resources
+        .remove("jobs")
+        .unwrap();
+        record.config = installed.resources[id].config.clone();
+        record.lifecycle = Some(ResourceLifecycle::Frozen);
+        saved.resources.insert(id.into(), record);
+        observer
+            .get_queue_url(
+                alien_aws_clients::sqs::GetQueueUrlRequest::builder()
+                    .queue_name(queue["name"].as_str().unwrap().into())
+                    .build(),
+            )
+            .await
+            .expect("independent observer sees initial queue");
+    }
+    for (id, config, name, arn) in [
+        ("sender-sa", account, role, &fixture["senderRoleArn"]),
+        (
+            "removed-sa",
+            removed_account,
+            removed_role,
+            &fixture["removedRoleArn"],
+        ),
+    ] {
+        let mut record = StackResourceState::new_pending(
+            "service-account".into(),
+            Resource::new(config),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        record.status = ResourceStatus::Running;
+        record.set_internal_controller(Some(deserialize_controller(json!({"type":"AwsServiceAccountController","_controllerStateVersion":1,"state":"ready","stackPermissionsApplied":true,"roleName":name,"roleArn":arn})).unwrap())).unwrap();
+        saved.resources.insert(id.into(), record);
+    }
+    // Historical grants are exact fixture policies, not discovered or adopted by prefix.
+    for (id, queue) in ["jobs", "other-jobs"].into_iter().zip(queues) {
+        let document = json!({"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sqs:SendMessage","Resource":queue["arn"]}]}).to_string();
+        for name in [
+            format!("deployment-{id}-queue-data-write"),
+            format!("alien-{id}-queue-data-write"),
+        ] {
+            iam.put_role_policy(role, &name, &document)
+                .await
+                .expect("seed exact historical grant");
+        }
+    }
+    let mut state = deployment(saved);
+    state.status = DeploymentStatus::Updating;
+    state.target_release = Some(ReleaseInfo {
+        release_id: Some("desired".into()),
+        version: None,
+        description: None,
+        stack: desired.clone(),
+    });
+    state.runtime_metadata = Some(RuntimeMetadata {
+        initial_setup_authority: InitialSetupAuthority::DirectSetup,
+        prepared_stack: Some(installed),
+        pending_prepared_stack: Some(desired),
+        ..Default::default()
+    });
+    // A runtime provider with no mutation clients makes accidental Frozen access a hard failure.
+    let mut runtime = MockPlatformServiceProvider::new();
+    runtime.expect_runtime_setup_authority().returning(|_| None);
+    state = live_until(
+        state,
+        ClientConfig::Aws(Box::new(runtime_cfg.clone())),
+        Arc::new(runtime),
+        DeploymentStatus::UpdateFailed,
+    )
+    .await;
+    assert_eq!(
+        state.error.as_ref().unwrap().code,
+        "DEPLOYMENT_SETUP_REQUIRED"
+    );
+    std::fs::write(
+        dir.join("frozen-setup-required.json"),
+        serde_json::to_vec(&state).unwrap(),
+    )
+    .unwrap();
+    state = serde_json::from_slice(&std::fs::read(dir.join("frozen-setup-required.json")).unwrap())
+        .unwrap();
+    let saved = state.stack_state.as_ref().unwrap();
+    for (id, queue) in ["jobs", "other-jobs"].into_iter().zip(queues) {
+        assert_eq!(
+            saved.resources[id].internal_state.as_ref().unwrap()["queueUrl"],
+            queue["url"]
+        );
+        observer
+            .get_queue_url(
+                alien_aws_clients::sqs::GetQueueUrlRequest::builder()
+                    .queue_name(queue["name"].as_str().unwrap().into())
+                    .build(),
+            )
+            .await
+            .expect("runtime preserved queue");
+    }
+    assert_eq!(
+        saved.resources["removed-sa"]
+            .internal_state
+            .as_ref()
+            .unwrap()["roleName"],
+        removed_role
+    );
+    iam.get_role(removed_role)
+        .await
+        .expect("runtime preserved removed role");
+    state = alien_deployment::step(
+        state,
+        config(),
+        ClientConfig::Aws(Box::new(runtime_cfg)),
+        Some(Arc::new(MockPlatformServiceProvider::new())),
+    )
+    .await
+    .unwrap()
+    .state;
+    assert_eq!(
+        state.status,
+        DeploymentStatus::UpdateFailed,
+        "no implicit retry"
+    );
+    println!("runtime made no Frozen mutations; both queue IDs and removed role remain tracked; setup required persists across disk reload");
+    let mut setup = MockPlatformServiceProvider::new();
+    let sqs = setup_sqs.clone();
+    setup
+        .expect_get_aws_sqs_client()
+        .returning(move |_| Ok(sqs.clone()));
+    let iam_client = iam.clone();
+    setup
+        .expect_get_aws_iam_client()
+        .returning(move |_| Ok(iam_client.clone()));
+    state.status = DeploymentStatus::InitialSetup;
+    state.error = None;
+    state = live_until(
+        state,
+        ClientConfig::Aws(Box::new(setup_cfg)),
+        Arc::new(setup),
+        DeploymentStatus::Provisioning,
+    )
+    .await;
+    for queue in queues {
+        assert_live_queue_absent(observer.as_ref(), queue["url"].as_str().unwrap()).await;
+    }
+    let missing = iam
+        .get_role(removed_role)
+        .await
+        .expect_err("removed role must be absent");
+    assert_eq!(missing.code, "REMOTE_RESOURCE_NOT_FOUND");
+    let names = iam
+        .list_role_policies(role)
+        .await
+        .unwrap()
+        .list_role_policies_result
+        .policy_names
+        .unwrap()
+        .member;
+    assert!(names.contains(&"unrelated-metadata-control".to_string()));
+    for id in ["jobs", "other-jobs"] {
+        for name in [
+            format!("deployment-{id}-queue-data-write"),
+            format!("alien-{id}-queue-data-write"),
+        ] {
+            assert!(!names.contains(&name));
+        }
+    }
+    assert!(state
+        .runtime_metadata
+        .as_ref()
+        .unwrap()
+        .pending_prepared_stack
+        .is_none());
+    std::fs::write(
+        dir.join("frozen-setup-complete.json"),
+        serde_json::to_vec(&state).unwrap(),
+    )
+    .unwrap();
+    println!("privileged setup deleted both Frozen queues and role; owned historical grants removed; unrelated policy preserved");
 }
