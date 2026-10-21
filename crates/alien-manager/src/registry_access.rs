@@ -43,7 +43,7 @@ async fn ensure_registry_access(
     stack_state: Option<&StackState>,
     declares_sandbox: bool,
 ) -> GrantOutcome {
-    let rsm_access = extract_rsm_access_configuration(stack_state);
+    let rsm_access = extract_rsm_management_identity(stack_state);
     // The project number is what names the compute agents, and an import predating that field
     // leaves it empty — the write then carries the management identity alone and would seal a
     // grant no agent is on, which nothing the record compares could ever reopen.
@@ -111,7 +111,7 @@ async fn revoke_registry_access(
     project_id: &str,
 ) -> Result<()> {
     if let EnvironmentInfo::Gcp(GcpEnvironmentInfo { project_number, .. }) = environment_info {
-        if let Some(service_account_email) = extract_rsm_access_configuration(stack_state) {
+        if let Some(service_account_email) = extract_rsm_management_identity(stack_state) {
             remove_registry_access(
                 artifact_registry,
                 repo_id,
@@ -1186,14 +1186,18 @@ fn needs_registry_access(status: &DeploymentStatus) -> bool {
     )
 }
 
-/// Extract RSM access configuration from stack state to include in cross-account access.
-fn extract_rsm_access_configuration(stack_state: Option<&StackState>) -> Option<String> {
+/// The management identity from the stack's remote management outputs, to include in
+/// cross-account access: the role ARN on AWS, the service account email on GCP.
+///
+/// This is `management_resource_id`, not `access_configuration`: a federated GCP deployment's
+/// access configuration is its federation descriptor, not an email.
+fn extract_rsm_management_identity(stack_state: Option<&StackState>) -> Option<String> {
     let stack_state = stack_state?;
     for (_id, resource) in &stack_state.resources {
         if resource.resource_type == "remote-stack-management" {
             if let Some(ref outputs) = resource.outputs {
                 if let Some(rsm) = outputs.downcast_ref::<RemoteStackManagementOutputs>() {
-                    return Some(rsm.access_configuration.clone());
+                    return Some(rsm.management_resource_id.clone());
                 }
             }
         }
@@ -1206,7 +1210,7 @@ fn build_cross_account_access(
     stack_state: Option<&StackState>,
     declares_sandbox: bool,
 ) -> Option<CrossAccountAccess> {
-    let rsm_access = extract_rsm_access_configuration(stack_state);
+    let rsm_access = extract_rsm_management_identity(stack_state);
 
     match environment_info {
         EnvironmentInfo::Aws(AwsEnvironmentInfo {
@@ -2418,6 +2422,110 @@ mod tests {
             "default",
         )
         .await
+    }
+
+    const GCP_MANAGEMENT_EMAIL: &str = "a-dep-management@customer-project.iam.gserviceaccount.com";
+
+    /// The remote management outputs of a GCP deployment under both protocols: a federated one
+    /// stores its federation descriptor as the access configuration, an older one the email.
+    fn gcp_management_outputs() -> [(&'static str, RemoteStackManagementOutputs); 2] {
+        let descriptor = serde_json::json!({
+            "assertionAudience": "urn:deployment-access:v1:0123456789abcdef",
+            "poolId": "deployment-0123456789abcdef0123",
+            "projectNumber": PROJECT_NUMBER,
+            "providerId": "manager",
+            "serviceAccountEmail": GCP_MANAGEMENT_EMAIL,
+            "trust": {
+                "issuer": "https://issuer.example.com",
+                "subject": "system:serviceaccount:platform:manager"
+            }
+        });
+        [
+            (
+                "federated",
+                RemoteStackManagementOutputs {
+                    management_resource_id: GCP_MANAGEMENT_EMAIL.to_string(),
+                    access_configuration: descriptor.to_string(),
+                    legacy_remote_bindings_access: None,
+                },
+            ),
+            (
+                "before federation",
+                RemoteStackManagementOutputs {
+                    management_resource_id: GCP_MANAGEMENT_EMAIL.to_string(),
+                    access_configuration: GCP_MANAGEMENT_EMAIL.to_string(),
+                    legacy_remote_bindings_access: None,
+                },
+            ),
+        ]
+    }
+
+    fn gcp_stack_state(outputs: RemoteStackManagementOutputs) -> StackState {
+        let remote_management = RemoteStackManagement::new("management".to_string()).build();
+        let mut stack_state =
+            StackState::with_resource_prefix(Platform::Gcp, "test-prefix".to_string());
+        stack_state.resources.insert(
+            remote_management.id.clone(),
+            StackResourceState::builder()
+                .resource_type(RemoteStackManagement::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(Resource::new(remote_management))
+                .outputs(ResourceOutputs::new(outputs))
+                .lifecycle(ResourceLifecycle::Frozen)
+                .dependencies(vec![])
+                .build(),
+        );
+        stack_state
+    }
+
+    #[test]
+    fn gcp_grant_names_the_management_service_account_under_both_protocols() {
+        for (case, outputs) in gcp_management_outputs() {
+            let stack_state = gcp_stack_state(outputs);
+            let access = build_cross_account_access(&gcp_environment(), Some(&stack_state), false)
+                .expect("GCP cross-account access should be configured");
+            let CrossAccountAccess::Gcp(access) = access else {
+                panic!("GCP environment must produce GCP cross-account access");
+            };
+            assert_eq!(
+                access.service_account_emails,
+                vec![GCP_MANAGEMENT_EMAIL.to_string()],
+                "{case}"
+            );
+            assert_eq!(
+                access.project_numbers,
+                vec![PROJECT_NUMBER.to_string()],
+                "{case}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn gcp_revoke_removes_the_management_service_account_under_both_protocols() {
+        for (case, outputs) in gcp_management_outputs() {
+            let registry = RecordingGcpRegistry::default();
+            // Another deployment still uses the project, so only the deployment's own member goes.
+            let store = store_answering(Ok(true));
+            let stack_state = gcp_stack_state(outputs);
+
+            revoke_registry_access(
+                &registry,
+                "vendor-project/alien-artifacts-default",
+                &gcp_environment(),
+                Some(&stack_state),
+                &store,
+                "dep_deleted",
+                "default",
+            )
+            .await
+            .expect("revoke should succeed");
+
+            assert_eq!(
+                *registry.removals.lock().expect("removals lock"),
+                vec![(Vec::<String>::new(), vec![GCP_MANAGEMENT_EMAIL.to_string()])],
+                "{case}"
+            );
+        }
     }
 
     #[tokio::test]
