@@ -858,6 +858,22 @@ impl AzureRemoteStackManagementController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
+        // Only a setup run rebuilds the management identity's roles. Under runtime credentials
+        // (any change to this Frozen resource's entry reaches here during a release) management
+        // would delete the assignments that grant it the rights to finish, and it may not write
+        // the roles it holds anyway. A change that needs new roles makes the runtime's refused
+        // step wait for setup, which rebuilds them.
+        if !ctx.deployment_config.setup_run {
+            info!(
+                config_id = %config.id,
+                "Management roles are setup-owned; leaving them as setup made them"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
         info!(config_id = %config.id, "Reconciling management role assignments and FIC");
 
         let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
@@ -1513,6 +1529,58 @@ mod tests {
             state.state,
             AzureRemoteStackManagementState::CreatingRoleAssignments
         );
+    }
+
+    /// A release that changes this Frozen resource's entry runs its update under runtime
+    /// credentials. That update must not touch management's roles or assignments: deleting them
+    /// first would remove the rights management needs to finish. Only a setup run rebuilds them.
+    #[tokio::test]
+    async fn a_runtime_update_leaves_the_management_roles_as_setup_made_them() {
+        use crate::core::controller_test::SingleControllerExecutor;
+        use crate::core::{MockPlatformServiceProvider, PlatformServiceProvider};
+        use alien_azure_clients::authorization::{AuthorizationApi, MockAuthorizationApi};
+        use std::sync::Arc;
+
+        let mut authorization = MockAuthorizationApi::new();
+        authorization.expect_delete_role_assignment_by_id().times(0);
+        authorization.expect_delete_role_definition().times(0);
+        authorization.expect_create_or_update_role_definition().times(0);
+        authorization.expect_create_or_update_role_assignment_by_id().times(0);
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_authorization_client()
+            .returning(move |_| Ok(authorization.clone()));
+        let provider: Arc<dyn PlatformServiceProvider> = Arc::new(provider);
+
+        let mut controller = AzureRemoteStackManagementController::mock_ready("test");
+        controller.state = AzureRemoteStackManagementState::UpdateStart;
+        controller.role_assignment_ids = vec![
+            "/subscriptions/sub-1234/resourceGroups/test-rg/providers/Microsoft.Authorization/roleAssignments/granted".to_string(),
+        ];
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .controller(controller)
+            .platform(Platform::Azure)
+            .service_provider(provider)
+            .setup_run(false)
+            .with_dependency(
+                alien_core::AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                    "default-resource-group",
+                ),
+            )
+            .build()
+            .await
+            .expect("executor builds");
+
+        executor.step().await.expect("runtime update");
+        let state = executor
+            .internal_state::<AzureRemoteStackManagementController>()
+            .expect("controller");
+        assert_eq!(state.state, AzureRemoteStackManagementState::Ready);
+        assert_eq!(state.role_assignment_ids.len(), 1, "assignments kept");
+        assert!(!state.scoped_role_definition_ids.is_empty(), "roles kept");
     }
 
     /// A custom role grants its actions on everything under the scope it is assigned at, so each
