@@ -385,9 +385,10 @@ fn enumeration_context() -> PermissionContext {
 ///
 /// Each admits a write only when it assigns a listed management role to `management_principal_id`,
 /// or a listed application role to one of `workload_principal_ids`: the application's identities,
-/// which setup creates. Azure grants a write when any assignment of the action admits it, so a
-/// list longer than one condition holds ([`AZURE_CONDITION_SHARD_LIMIT`]) is split across several
-/// assignments, each with its own role definition; every shard repeats the principal lists.
+/// which setup creates. Azure grants a write when any assignment of the action admits it, so lists
+/// longer than one condition holds ([`AZURE_CONDITION_SHARD_LIMIT`]) are split across several
+/// assignments, each with its own role definition. Both the role lists and the principal list are
+/// split: every (role chunk, principal chunk) pair becomes its own clause.
 ///
 /// With no roles at all, a single condition that admits no write. Principal ids may be template
 /// expressions that resolve to GUIDs.
@@ -398,67 +399,79 @@ pub fn azure_role_assignment_allowlist_conditions(
     workload_role_ids: &BTreeSet<String>,
 ) -> Vec<String> {
     let deny_writes = format!("(!(ActionMatches{{'{ROLE_ASSIGNMENT_WRITE}'}}))");
-    let workload_principals = workload_principal_ids
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let clause = |ids: &[&String], principals: &str| {
-        let roles = ids.iter().map(|id| id.as_str()).collect::<Vec<_>>().join(", ");
+    let clause = |roles: &[&str], principals: &[&str]| {
         format!(
-            "({REQUEST}:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {{{roles}}} \
-             AND {REQUEST}:PrincipalId] ForAnyOfAnyValues:GuidEquals {{{principals}}})"
+            "({REQUEST}:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {{{}}} \
+             AND {REQUEST}:PrincipalId] ForAnyOfAnyValues:GuidEquals {{{}}})",
+            roles.join(", "),
+            principals.join(", ")
         )
     };
-    let render = |management: &[&String], workload: &[&String]| {
-        let mut clauses = Vec::new();
-        if !management.is_empty() {
-            clauses.push(clause(management, management_principal_id));
-        }
-        // An application role with no application identity to hold it is assignable to no one.
-        if !workload.is_empty() && !workload_principal_ids.is_empty() {
-            clauses.push(clause(workload, &workload_principals));
-        }
+    let shard = |clauses: &[String]| {
         if clauses.is_empty() {
             format!("({deny_writes})")
         } else {
             format!("({deny_writes} OR {})", clauses.join(" OR "))
         }
     };
+    // What one clause in its own shard costs before its lists, and what that leaves for them.
+    let overhead = shard(&[clause(&[], &[])]).len();
+    let budget = AZURE_CONDITION_SHARD_LIMIT.saturating_sub(overhead);
 
-    // Fill each shard greedily, management roles first, so a short list stays in one condition.
-    let all: Vec<(&String, bool)> = management_role_ids
-        .iter()
-        .map(|id| (id, true))
-        .chain(workload_role_ids.iter().map(|id| (id, false)))
-        .collect();
-    let mut conditions = Vec::new();
-    let mut management = Vec::new();
-    let mut workload = Vec::new();
-    for (id, is_management) in all {
-        let (mut next_management, mut next_workload) = (management.clone(), workload.clone());
-        if is_management {
-            next_management.push(id);
-        } else {
-            next_workload.push(id);
-        }
-        if render(&next_management, &next_workload).len() > AZURE_CONDITION_SHARD_LIMIT
-            && !(management.is_empty() && workload.is_empty())
-        {
-            conditions.push(render(&management, &workload));
-            management.clear();
-            workload.clear();
-        }
-        if is_management {
-            management.push(id);
-        } else {
-            workload.push(id);
+    let management_roles: Vec<&str> = management_role_ids.iter().map(String::as_str).collect();
+    let workload_roles: Vec<&str> = workload_role_ids.iter().map(String::as_str).collect();
+    let workload_principals: Vec<&str> =
+        workload_principal_ids.iter().map(String::as_str).collect();
+
+    let mut clauses = Vec::new();
+    let management_principal = [management_principal_id];
+    for roles in chunks(&management_roles, budget.saturating_sub(management_principal_id.len())) {
+        clauses.push(clause(&roles, &management_principal));
+    }
+    // An application role with no application identity to hold it is assignable to no one.
+    if !workload_principals.is_empty() {
+        for roles in chunks(&workload_roles, budget / 2) {
+            for principals in chunks(&workload_principals, budget / 2) {
+                clauses.push(clause(&roles, &principals));
+            }
         }
     }
-    if conditions.is_empty() || !(management.is_empty() && workload.is_empty()) {
-        conditions.push(render(&management, &workload));
+
+    // Pack clauses greedily, management first, so a short allowlist stays in one condition.
+    let mut conditions = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    for next in clauses {
+        current.push(next);
+        if current.len() > 1 && shard(&current).len() > AZURE_CONDITION_SHARD_LIMIT {
+            let next = current.pop().expect("just pushed");
+            conditions.push(shard(&current));
+            current = vec![next];
+        }
+    }
+    if conditions.is_empty() || !current.is_empty() {
+        conditions.push(shard(&current));
     }
     conditions
+}
+
+/// Splits `ids` into runs whose comma-joined length fits `budget`; an id longer than `budget`
+/// still gets a run of its own.
+fn chunks<'a>(ids: &[&'a str], budget: usize) -> Vec<Vec<&'a str>> {
+    let mut runs: Vec<Vec<&'a str>> = Vec::new();
+    let mut length = 0;
+    for &id in ids {
+        match runs.last_mut() {
+            Some(run) if length + 2 + id.len() <= budget => {
+                run.push(id);
+                length += 2 + id.len();
+            }
+            _ => {
+                runs.push(vec![id]);
+                length = id.len();
+            }
+        }
+    }
+    runs
 }
 
 #[cfg(test)]
@@ -670,6 +683,40 @@ mod tests {
             for principal in &principals {
                 assert!(shard.contains(principal.as_str()));
             }
+        }
+    }
+
+    /// Many application identities with one role: the principal list is split too, every shard
+    /// stays under the limit, and every identity is still paired with the role.
+    #[test]
+    fn a_long_principal_list_is_split_into_shards_under_the_limit() {
+        let management = ids("m", 1);
+        let workload = ids("w", 1);
+        let principals = ids("e", 400);
+        let conditions = azure_role_assignment_allowlist_conditions(
+            "ead6f253-2dec-4841-b608-f2b9fc67dc86",
+            &principals,
+            &management,
+            &workload,
+        );
+        assert!(conditions.len() >= 2, "{} shards", conditions.len());
+        for condition in &conditions {
+            assert!(condition.len() <= AZURE_CONDITION_SHARD_LIMIT, "{}", condition.len());
+        }
+        let role = workload.iter().next().unwrap();
+        for principal in &principals {
+            let shard = conditions
+                .iter()
+                .find(|c| c.contains(principal.as_str()))
+                .unwrap_or_else(|| panic!("{principal} in no shard"));
+            assert!(shard.contains(role.as_str()), "{principal} without the role");
+        }
+        // The management role is never paired with an application identity.
+        let management_role = management.iter().next().unwrap();
+        for shard in conditions.iter().filter(|c| c.contains(management_role.as_str())) {
+            let clause_end = shard.find(management_role.as_str()).unwrap();
+            let clause = &shard[clause_end..shard[clause_end..].find(')').unwrap() + clause_end];
+            assert!(principals.iter().all(|p| !clause.contains(p.as_str())));
         }
     }
 }
