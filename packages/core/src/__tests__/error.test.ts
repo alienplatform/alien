@@ -622,6 +622,45 @@ describe("External API Sanitization", async () => {
       httpStatusCode: 500,
     })
   })
+
+  it("keeps retryable and 5xx status of internal errors", async () => {
+    const connectionLostError = (
+      await AlienError.from(new Error("server closed the connection"))
+    ).withContext(
+      defineError({
+        code: "DATABASE_CONNECTION_LOST",
+        context: z.object({ host: z.string(), sqlState: z.string() }),
+        message: ({ host, sqlState }) => `Connection to '${host}' lost (SQLSTATE ${sqlState})`,
+        retryable: true,
+        internal: true,
+        httpStatusCode: 503,
+      }).create({ host: "pgbouncer.internal", sqlState: "08P01" }),
+    )
+
+    expect(connectionLostError.toExternal()).toEqual({
+      code: "GENERIC_ERROR",
+      message: "Internal server error",
+      retryable: true,
+      internal: false,
+      httpStatusCode: 503,
+    })
+  })
+
+  it("maps non-5xx status of internal errors to 500", async () => {
+    const upstreamError = await AlienError.from(
+      new Response(JSON.stringify({ message: "token expired" }), { status: 401 }),
+    )
+    expect(upstreamError.internal).toBe(true)
+    expect(upstreamError.httpStatusCode).toBe(401)
+
+    expect(upstreamError.toExternal()).toEqual({
+      code: "GENERIC_ERROR",
+      message: "Internal server error",
+      retryable: false,
+      internal: false,
+      httpStatusCode: 500,
+    })
+  })
 })
 
 describe("Error Metadata and Properties", () => {
