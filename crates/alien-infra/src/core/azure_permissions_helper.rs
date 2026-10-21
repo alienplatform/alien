@@ -574,7 +574,7 @@ impl AzurePermissionsHelper {
     }
 
     async fn ensure_management_custom_role_definitions(
-        ctx: &ResourceControllerContext<'_>,
+        resource_prefix: &str,
         authorization_client: &Arc<dyn AuthorizationApi>,
         custom_roles: Vec<(String, AzureCustomRole)>,
         role_definition_scope: &Scope,
@@ -582,14 +582,39 @@ impl AzurePermissionsHelper {
     ) -> Result<()> {
         for (permission_set_id, custom_role) in custom_roles {
             let role_definition_id = Self::management_resource_custom_role_definition_uuid(
-                ctx.resource_prefix,
+                resource_prefix,
                 &permission_set_id,
                 &custom_role.key,
             );
             let role_name = format!(
                 "{}-{} [mgmt]",
-                ctx.resource_prefix, custom_role.role_definition.name
+                resource_prefix, custom_role.role_definition.name
             );
+            // Setup creates these roles assignable at the subscription too, so management cannot
+            // change a role it holds. Rewriting one would need that subscription-wide right and
+            // would drop the protection, so a role setup protected is left as setup made it. A
+            // role the runtime created itself is rewritten as before, so a permission set that
+            // changes in a later release still reaches it.
+            match authorization_client
+                .get_role_definition(role_definition_scope, role_definition_id.clone())
+                .await
+            {
+                Ok(existing) if Self::setup_protected(&existing, azure_config) => continue,
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to read Azure custom role definition '{role_name}'"
+                        ),
+                        resource_id: Some(permission_set_id.clone()),
+                    }));
+                }
+            }
 
             Self::create_or_update_custom_role_definition(
                 authorization_client,
@@ -604,6 +629,22 @@ impl AzurePermissionsHelper {
         }
 
         Ok(())
+    }
+
+    /// Whether setup created this role assignable at the subscription, which management cannot
+    /// change.
+    fn setup_protected(
+        role: &RoleDefinition,
+        azure_config: &alien_azure_clients::AzureClientConfig,
+    ) -> bool {
+        let subscription = format!("/subscriptions/{}", azure_config.subscription_id);
+        role.properties.as_ref().is_some_and(|properties| {
+            properties.assignable_scopes.iter().any(|scope| {
+                scope
+                    .trim_end_matches('/')
+                    .eq_ignore_ascii_case(&subscription)
+            })
+        })
     }
 
     async fn create_or_update_custom_role_definition(
@@ -674,7 +715,7 @@ impl AzurePermissionsHelper {
         .to_string()
     }
 
-    fn management_resource_custom_role_definition_uuid(
+    pub(crate) fn management_resource_custom_role_definition_uuid(
         resource_prefix: &str,
         permission_set_id: &str,
         key: &str,
@@ -874,42 +915,16 @@ impl AzurePermissionsHelper {
         role_assignment_ids: &mut Vec<String>,
         apply: bool,
     ) -> Result<()> {
-        let management_profile = match ctx.desired_stack.management().profile() {
-            Some(profile) => profile,
-            None => return Ok(()),
+        let Some(ManagementSelfAssignmentRefs {
+            resource_refs,
+            all_wildcard_refs,
+            self_refs,
+        }) = management_self_assignment_refs(ctx.desired_stack, resource_id, resource_type)
+        else {
+            return Ok(());
         };
 
-        let type_prefix = format!("{}/", resource_type);
-
-        let mut combined_refs = Vec::new();
-        if let Some(refs) = management_profile.0.get(resource_id) {
-            combined_refs.extend(
-                refs.iter()
-                    .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
-                    .cloned(),
-            );
-        }
-        if let Some(wildcard_refs) = management_profile.0.get("*") {
-            combined_refs.extend(
-                wildcard_refs
-                    .iter()
-                    .filter(|r| r.id().starts_with(&type_prefix))
-                    .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
-                    .cloned(),
-            );
-        }
-
-        if combined_refs.is_empty() {
-            return Ok(());
-        }
-
-        // Skip /provision sets — handled by RSM at RG scope
-        let non_provision_refs: Vec<_> = combined_refs
-            .into_iter()
-            .filter(|r| !r.id().ends_with("/provision"))
-            .collect();
-
-        if non_provision_refs.is_empty() {
+        if resource_refs.is_empty() && all_wildcard_refs.is_empty() {
             return Ok(());
         }
 
@@ -931,10 +946,184 @@ impl AzurePermissionsHelper {
         let role_definition_scope =
             Self::role_definition_scope_for_assignment_scope(resource_scope);
 
+        // The earlier plan: resource refs, then every stack-wide ref, numbered together.
+        let legacy_refs: Vec<_> = resource_refs
+            .iter()
+            .chain(&all_wildcard_refs)
+            .cloned()
+            .collect();
+        let (_, legacy) = Self::plan_management_self_assignments(
+            ctx,
+            resource_id,
+            resource_scope,
+            permission_context,
+            &legacy_refs,
+            &management_principal_id,
+            &role_definition_scope,
+            "mgmt-res-role-assign",
+        )?;
+        let (custom_roles, assignments) = Self::plan_management_self_assignments(
+            ctx,
+            resource_id,
+            resource_scope,
+            permission_context,
+            &self_refs,
+            &management_principal_id,
+            &role_definition_scope,
+            "mgmt-res-role-assign-v2",
+        )?;
+
+        if !apply {
+            Self::record_planned_role_assignment_ids(&assignments, role_assignment_ids);
+            return Ok(());
+        }
+
+        // Remove the earlier self-assignments this plan no longer makes. One that grants the
+        // same role at the same scope stays: the new plan finds it already there.
+        for stale in legacy.iter().filter(|stale| {
+            !assignments.iter().any(|kept| {
+                kept.scope == stale.scope && kept.role_definition_id == stale.role_definition_id
+            })
+        }) {
+            let full_id =
+                Self::role_assignment_resource_id(&stale.scope, &stale.role_assignment_id);
+            match authorization_client
+                .delete_role_assignment_by_id(full_id.clone())
+                .await
+            {
+                Ok(Some(_)) => info!(
+                    role_assignment_id = %full_id,
+                    permission_set = %stale.permission_set_id,
+                    "Removed a management self-assignment setup now covers"
+                ),
+                Ok(None) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to remove management self-assignment for '{}'",
+                            stale.permission_set_id
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    }));
+                }
+            }
+        }
+
+        // Roles first: a permission set that changed must reach a role the runtime created even
+        // when every assignment below already exists. A role setup protected is left alone.
+        if !assignments.is_empty() {
+            Self::ensure_management_custom_role_definitions(
+                ctx.resource_prefix,
+                &authorization_client,
+                custom_roles,
+                &role_definition_scope,
+                azure_config,
+            )
+            .await?;
+        }
+
+        // A grant already assigned stays in place, under the id this version uses or one an
+        // earlier version used. Asking for it again would fail once setup keeps management from
+        // assigning roles to itself, even though nothing changes. An id is only trusted when the
+        // assignment it names grants this role, at this scope, to the management identity: an
+        // earlier version numbered its ids by position, so the same id can hold another grant.
+        let mut missing = Vec::new();
+        for assignment in assignments {
+            let candidates = std::iter::once(&assignment).chain(legacy.iter());
+            let mut found = None;
+            for candidate in candidates {
+                let full_id = Self::role_assignment_resource_id(
+                    &candidate.scope,
+                    &candidate.role_assignment_id,
+                );
+                match authorization_client
+                    .get_role_assignment_by_id(full_id.clone())
+                    .await
+                {
+                    Ok(existing) if Self::grants(&existing, &assignment) => {
+                        found = Some(full_id);
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to read management role assignment for '{}'",
+                                assignment.permission_set_id
+                            ),
+                            resource_id: Some(resource_id.to_string()),
+                        }));
+                    }
+                }
+            }
+            match found {
+                Some(full_id) => {
+                    if !role_assignment_ids.contains(&full_id) {
+                        role_assignment_ids.push(full_id);
+                    }
+                }
+                None => missing.push(assignment),
+            }
+        }
+
+        if missing.is_empty() {
+            return Ok(());
+        }
+        Self::apply_planned_role_assignments(
+            &authorization_client,
+            resource_id,
+            missing,
+            role_assignment_ids,
+        )
+        .await
+    }
+
+    /// Whether `existing` gives `planned`'s principal its role at its scope. Azure reports a
+    /// custom role's id at the subscription even when it was created in a resource group, so
+    /// roles are compared by their definition GUID.
+    fn grants(existing: &RoleAssignment, planned: &PlannedRoleAssignment) -> bool {
+        let guid = |id: &str| id.rsplit('/').next().unwrap_or(id).to_ascii_lowercase();
+        let normalize = |scope: &str| scope.trim_matches('/').to_ascii_lowercase();
+        existing.properties.as_ref().is_some_and(|properties| {
+            properties
+                .principal_id
+                .eq_ignore_ascii_case(&planned.principal_id)
+                && guid(&properties.role_definition_id) == guid(&planned.role_definition_id)
+                && properties
+                    .scope
+                    .as_deref()
+                    .is_none_or(|scope| normalize(scope) == normalize(&planned.scope))
+        })
+    }
+
+    /// The role assignments that give the management identity `refs` on this resource, and the
+    /// custom roles they need. `id_namespace` names the assignment ids.
+    #[allow(clippy::too_many_arguments)]
+    fn plan_management_self_assignments(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_scope: &Scope,
+        permission_context: &PermissionContext,
+        refs: &[alien_core::permissions::PermissionSetReference],
+        management_principal_id: &str,
+        role_definition_scope: &Scope,
+        id_namespace: &str,
+    ) -> Result<(Vec<(String, AzureCustomRole)>, Vec<PlannedRoleAssignment>)> {
+        let azure_config = ctx.get_azure_config()?;
         let mut custom_roles = Vec::new();
         let mut bindings = Vec::new();
         let generator = AzureRuntimePermissionsGenerator::new();
-        for permission_set_ref in &non_provision_refs {
+        for permission_set_ref in refs {
             let permission_set = permission_set_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 .ok_or_else(|| {
@@ -957,13 +1146,6 @@ impl AzurePermissionsHelper {
                     resource_id: Some(resource_id.to_string()),
                 })?;
 
-            info!(
-                profile = "management",
-                permission_set = %permission_set.id,
-                bindings_count = grant_plan.bindings.len(),
-                "Generated management role assignments"
-            );
-
             custom_roles.extend(
                 grant_plan
                     .custom_roles
@@ -971,17 +1153,6 @@ impl AzurePermissionsHelper {
                     .map(|custom_role| (permission_set.id.clone(), custom_role)),
             );
             bindings.extend(grant_plan.bindings);
-        }
-
-        if apply {
-            Self::ensure_management_custom_role_definitions(
-                ctx,
-                &authorization_client,
-                custom_roles,
-                &role_definition_scope,
-                azure_config,
-            )
-            .await?;
         }
 
         let assignments = dedupe_azure_role_bindings(bindings)
@@ -1015,7 +1186,7 @@ impl AzurePermissionsHelper {
                 let role_assignment_id = Uuid::new_v5(
                     &Uuid::NAMESPACE_OID,
                     format!(
-                        "deployment:azure:mgmt-res-role-assign:{}:{}:{}",
+                        "deployment:azure:{id_namespace}:{}:{}:{}",
                         ctx.resource_prefix, resource_id, binding_index
                     )
                     .as_bytes(),
@@ -1025,7 +1196,7 @@ impl AzurePermissionsHelper {
                 PlannedRoleAssignment {
                     scope: assignment_scope,
                     role_assignment_id,
-                    principal_id: management_principal_id.clone(),
+                    principal_id: management_principal_id.to_string(),
                     role_definition_id,
                     failure_message: format!(
                         "Failed to create management role assignment for '{}'",
@@ -1035,19 +1206,7 @@ impl AzurePermissionsHelper {
                 }
             })
             .collect();
-
-        if apply {
-            Self::apply_planned_role_assignments(
-                &authorization_client,
-                resource_id,
-                assignments,
-                role_assignment_ids,
-            )
-            .await
-        } else {
-            Self::record_planned_role_assignment_ids(&assignments, role_assignment_ids);
-            Ok(())
-        }
+        Ok((custom_roles, assignments))
     }
 
     /// Get the management UAMI principal ID from the RSM controller
@@ -1139,6 +1298,82 @@ impl AzurePermissionsHelper {
                 })
             })
     }
+}
+
+/// The management identity's grants a resource's reconcile deals with.
+#[derive(Debug, PartialEq)]
+struct ManagementSelfAssignmentRefs {
+    /// Grants named for this resource.
+    resource_refs: Vec<alien_core::permissions::PermissionSetReference>,
+    /// Every stack-wide grant for this resource type, in profile order.
+    all_wildcard_refs: Vec<alien_core::permissions::PermissionSetReference>,
+    /// What the runtime still assigns onto the management identity at this resource.
+    self_refs: Vec<alien_core::permissions::PermissionSetReference>,
+}
+
+/// Splits the management identity's grants for a resource into what setup covers and what the
+/// runtime still assigns onto management itself. `None` when the stack has no management
+/// profile.
+fn management_self_assignment_refs(
+    stack: &alien_core::Stack,
+    resource_id: &str,
+    resource_type: &str,
+) -> Option<ManagementSelfAssignmentRefs> {
+    let management_profile = stack.management().profile()?;
+    let type_prefix = format!("{}/", resource_type);
+    // `/provision` sets are bound at the resource group by setup.
+    let keep = |reference: &&alien_core::permissions::PermissionSetReference| {
+        !is_worker_command_transport_permission(resource_type, reference.id())
+            && !reference.id().ends_with("/provision")
+    };
+    // Grants named for this resource. Setup cannot assign them before the resource exists, so
+    // the runtime does, onto the management identity itself.
+    let resource_refs: Vec<_> = management_profile
+        .0
+        .get(resource_id)
+        .into_iter()
+        .flatten()
+        .filter(keep)
+        .cloned()
+        .collect();
+    // Stack-wide grants. Setup assigns the ones the management identity keeps at the resource
+    // group, which covers this resource. Earlier versions also assigned them here, onto the
+    // management identity: those assignments are removed, because a custom role the runtime
+    // created for them is one the identity could change, and a setup that keeps management from
+    // assigning roles to itself would refuse them.
+    let all_wildcard_refs: Vec<_> = management_profile
+        .0
+        .get("*")
+        .into_iter()
+        .flatten()
+        .filter(|reference| reference.id().starts_with(&type_prefix))
+        .filter(keep)
+        .cloned()
+        .collect();
+    // A stack-wide set the remote-bindings identity claims is left out of setup's grants, so the
+    // runtime still assigns it here as earlier versions did, rather than silently taking that
+    // access away.
+    let kept_global: Vec<&str> = alien_permissions::management_identity_global_refs(
+        stack.resources.values(),
+        management_profile,
+    )
+    .into_iter()
+    .map(|reference| reference.id())
+    .collect();
+    let self_refs = resource_refs
+        .iter()
+        .chain(
+            all_wildcard_refs
+                .iter()
+                .filter(|reference| !kept_global.contains(&reference.id())),
+        )
+        .cloned()
+        .collect();
+    Some(ManagementSelfAssignmentRefs {
+        resource_refs,
+        all_wildcard_refs,
+        self_refs,
+    })
 }
 
 fn is_worker_command_transport_permission(resource_type: &str, permission_set_id: &str) -> bool {
@@ -1280,6 +1515,122 @@ mod tests {
             assert_eq!(
                 grant_plan.bindings[0].scope, expected_scope,
                 "{permission_set_id} must be scoped to the referenced blob container"
+            );
+        }
+    }
+
+    /// The runtime still rewrites a management role it created itself, so a permission set that
+    /// changes in a later release reaches it. A role setup protected (assignable at the
+    /// subscription) is left alone: rewriting it would drop that protection.
+    #[tokio::test]
+    async fn management_roles_are_rewritten_unless_setup_protected_them() {
+        let permission_set = alien_permissions::get_permission_set("vault/data-write").unwrap();
+        let context = PermissionContext::new()
+            .with_subscription_id("sub-123")
+            .with_resource_group("rg-123")
+            .with_resource_name("test-app-secrets");
+        let custom_roles: Vec<_> = AzureRuntimePermissionsGenerator::new()
+            .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+            .unwrap()
+            .custom_roles
+            .into_iter()
+            .map(|role| (permission_set.id.clone(), role))
+            .collect();
+        assert!(!custom_roles.is_empty());
+        let scope = Scope::ResourceGroup {
+            resource_group_name: "rg-123".to_string(),
+        };
+        let existing = |assignable: &[&str]| RoleDefinition {
+            properties: Some(RoleDefinitionProperties {
+                assignable_scopes: assignable.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        for (found, rewrites) in [
+            // Created by the runtime: assignable only in the resource group.
+            (
+                Some(existing(&["/subscriptions/sub-123/resourceGroups/rg-123"])),
+                true,
+            ),
+            // Created by setup: also assignable at the subscription.
+            (
+                Some(existing(&[
+                    "/subscriptions/sub-123/resourceGroups/rg-123",
+                    "/subscriptions/sub-123",
+                ])),
+                false,
+            ),
+            (None, true),
+        ] {
+            let mut authorization = MockAuthorizationApi::new();
+            authorization
+                .expect_get_role_definition()
+                .returning(move |_, id| match &found {
+                    Some(role) => Ok(role.clone()),
+                    None => Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "Role definition".to_string(),
+                            resource_name: id,
+                        },
+                    )),
+                });
+            authorization
+                .expect_create_or_update_role_definition()
+                .times(if rewrites { custom_roles.len() } else { 0 })
+                .returning(|_, _, definition| Ok(definition.clone()));
+            let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+            AzurePermissionsHelper::ensure_management_custom_role_definitions(
+                "test",
+                &authorization,
+                custom_roles.clone(),
+                &scope,
+                &azure_config(),
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    /// A stack-wide set the remote-bindings identity claims is not in setup's management grants,
+    /// so the runtime keeps assigning it onto management at the resource, as before. Stack-wide
+    /// sets setup grants at the resource group are not assigned again.
+    #[test]
+    fn a_remotely_claimed_stack_wide_set_stays_assigned_at_runtime() {
+        let storage = |remote_access| alien_core::ResourceEntry {
+            config: alien_core::Resource::new(
+                alien_core::Storage::new("files".to_string()).build(),
+            ),
+            // Remote bindings exist for setup-owned resources.
+            lifecycle: alien_core::ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access,
+            enabled_when: None,
+        };
+        for (remote_access, expected) in
+            [(true, vec!["storage/remote-data-write"]), (false, vec![])]
+        {
+            let mut stack = alien_core::Stack::new("test".to_string())
+                .management(alien_core::ManagementPermissions::Extend(
+                    alien_core::permissions::PermissionProfile::new()
+                        .global(["storage/remote-data-write", "storage/heartbeat"]),
+                ))
+                .build();
+            stack
+                .resources
+                .insert("files".to_string(), storage(remote_access));
+            let refs = management_self_assignment_refs(&stack, "files", "storage").unwrap();
+            assert_eq!(
+                refs.all_wildcard_refs
+                    .iter()
+                    .map(|r| r.id())
+                    .collect::<Vec<_>>(),
+                ["storage/remote-data-write", "storage/heartbeat"]
+            );
+            assert_eq!(
+                refs.self_refs.iter().map(|r| r.id()).collect::<Vec<_>>(),
+                expected,
+                "remote_access={remote_access}"
             );
         }
     }

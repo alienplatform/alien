@@ -216,6 +216,30 @@ mod tests {
         }
     }
 
+    /// An Azure direct setup saved before role-assignment writes had their own conditioned role
+    /// rebuilds its roles on the next setup run, although its permissions are unchanged. Only
+    /// setup credentials do; the runtime never rewrites the management roles.
+    #[tokio::test]
+    async fn direct_setup_rebuilds_azure_roles_saved_before_the_role_assignment_role() {
+        for (authority, setup_run, expected) in [
+            (InitialSetupAuthority::DirectSetup, true, true),
+            (InitialSetupAuthority::ImportedHandoff, true, false),
+            (InitialSetupAuthority::DirectSetup, false, false),
+        ] {
+            let (_, current) = needs_update(Platform::Azure, authority, None, setup_run).await;
+            let mut controller = AzureRemoteStackManagementController::mock_ready("test");
+            controller.management_permissions_revision = Some(current);
+            // Saved by the previous version: no layout recorded.
+            controller.role_layout = 0;
+            let executor = executor(Platform::Azure, controller, authority, setup_run).await;
+            assert_eq!(
+                executor.needs_update().expect("needs_update"),
+                expected,
+                "{authority:?} with setup_run={setup_run}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn runtime_credentials_never_refresh_management_permissions() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {

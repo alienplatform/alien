@@ -142,14 +142,20 @@ powers that can change IAM or deploy code using a workload identity:
   `roles/iam.denyAdmin` cannot be granted on a project. Admin Activity logs
   record `SetIamPolicy`, `google.iam.admin.v1.UpdateRole`, and
   `google.cloud.secretmanager.v1.SecretManagerService.CreateSecret`.
-- Azure management retains resource-group role-assignment writes and vault
-  configuration powers. Those can grant payload access or change the vault's
-  authorization model; infrastructure teardown can also delete the containing
-  vault/resource group. Activity Log operations include
-  `Microsoft.Authorization/roleAssignments/write`,
+- Azure management assigns roles to the identities its workloads run as, but its
+  role-assignment writes sit in a role of their own, assigned with a condition
+  that excludes the management identity itself. Azure treats a conditioned
+  role-assignment write as restricted, so management also cannot switch a Key
+  Vault from RBAC to access policies. Every custom role setup creates for
+  management is also assignable at the subscription, where management cannot
+  change role definitions, so it cannot add a read to a role it holds. It keeps
+  vault configuration and teardown powers, and it can still deploy code that
+  runs as a workload identity. Self-assignments made by the runtime before this
+  are removed when that resource is next reconciled; until then the custom
+  roles they use are ones management can change. Activity Log operations
+  include `Microsoft.Authorization/roleAssignments/write`,
   `Microsoft.Authorization/roleDefinitions/write`,
-  `Microsoft.KeyVault/vaults/write`, `Microsoft.KeyVault/vaults/accessPolicies/write`,
-  and `Microsoft.KeyVault/vaults/delete`.
+  `Microsoft.KeyVault/vaults/write`, and `Microsoft.KeyVault/vaults/delete`.
 
 These are accepted infrastructure privileges, not a hard boundary against a
 compromised infrastructure manager. Customer-owned deny policies (for example,
