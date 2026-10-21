@@ -1012,7 +1012,38 @@ mod permission_update_tests {
     /// assigning roles to itself, so an existing one is not requested again; a missing one is.
     #[tokio::test]
     async fn a_grant_an_earlier_version_assigned_is_not_requested_again() {
-        for exists in [true, false] {
+        // The custom role `vault/data-write` grants management at the vault.
+        let data_write = alien_permissions::get_permission_set("vault/data-write").unwrap();
+        let key = alien_permissions::generators::AzureRuntimePermissionsGenerator::new()
+            .generate_grant_plan(
+                data_write,
+                alien_permissions::BindingTarget::Resource,
+                &alien_permissions::PermissionContext::new()
+                    .with_subscription_id("sub")
+                    .with_resource_group("rg")
+                    .with_resource_name("vault"),
+            )
+            .unwrap()
+            .custom_roles[0]
+            .key
+            .clone();
+        let data_write_role =
+            crate::core::AzurePermissionsHelper::management_resource_custom_role_definition_uuid(
+                "test",
+                "vault/data-write",
+                &key,
+            );
+        // What a lookup of an assignment id finds: the grant itself, another grant an earlier
+        // version numbered with the same id, or nothing.
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Found {
+            TheGrant,
+            AnotherGrant,
+            Nothing,
+        }
+        for found in [Found::TheGrant, Found::AnotherGrant, Found::Nothing] {
+            let exists = found == Found::TheGrant;
+            let data_write_role = data_write_role.clone();
             const MANAGEMENT: &str = "11111111-2222-3333-4444-555555555555";
             const WORKLOAD: &str = "87654321-4321-4321-4321-210987654321";
             let created = Arc::new(Mutex::new(Vec::new()));
@@ -1033,8 +1064,10 @@ mod permission_update_tests {
                     removed.lock().unwrap().push(id);
                     Ok(None)
                 });
+            // The runtime-created role is refreshed even when its assignment already exists.
             authorization
                 .expect_create_or_update_role_definition()
+                .times(1)
                 .returning(|_, _, definition| Ok(definition.clone()));
             authorization
             .expect_get_role_definition()
@@ -1044,12 +1077,34 @@ mod permission_update_tests {
             authorization
             .expect_get_role_assignment_by_id()
             .returning(move |id| {
-                if exists {
+                let role = match found {
+                    Found::TheGrant => data_write_role.clone(),
+                    Found::AnotherGrant => "acdd72a7-3385-48ef-bd42-f606fba81ae7".to_string(),
+                    Found::Nothing => String::new(),
+                };
+                if found != Found::Nothing {
                     Ok(alien_azure_clients::models::authorization_role_assignments::RoleAssignment {
                         id: Some(id),
                         name: None,
                         type_: None,
-                        properties: None,
+                        properties: Some(
+                            alien_azure_clients::models::authorization_role_assignments::RoleAssignmentProperties {
+                                principal_id: MANAGEMENT.to_string(),
+                                role_definition_id: format!(
+                                    "/subscriptions/sub/providers/Microsoft.Authorization/roleDefinitions/{role}"
+                                ),
+                                scope: None,
+                                principal_type: alien_azure_clients::models::authorization_role_assignments::RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                                condition: None,
+                                condition_version: None,
+                                created_by: None,
+                                created_on: None,
+                                delegated_managed_identity_resource_id: None,
+                                description: None,
+                                updated_by: None,
+                                updated_on: None,
+                            },
+                        ),
                     })
                 } else {
                     Err(AlienError::new(CloudError::RemoteResourceNotFound {
@@ -1169,7 +1224,7 @@ mod permission_update_tests {
             assert_eq!(
                 to_management,
                 usize::from(!exists),
-                "exists={exists}: {created:?}"
+                "{found:?}: {created:?}"
             );
             assert!(created.iter().any(|(_, principal)| principal == WORKLOAD));
             assert!(deleted.lock().unwrap().is_empty());

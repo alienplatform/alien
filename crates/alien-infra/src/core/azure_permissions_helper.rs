@@ -715,7 +715,7 @@ impl AzurePermissionsHelper {
         .to_string()
     }
 
-    fn management_resource_custom_role_definition_uuid(
+    pub(crate) fn management_resource_custom_role_definition_uuid(
         resource_prefix: &str,
         permission_set_id: &str,
         key: &str,
@@ -1014,28 +1014,42 @@ impl AzurePermissionsHelper {
             }
         }
 
-        // A grant an earlier version already assigned stays in place under its earlier id.
-        // Asking for it again under the new id would fail once setup keeps management from
-        // assigning roles to itself, even though nothing changes, so it is left alone.
+        // Roles first: a permission set that changed must reach a role the runtime created even
+        // when every assignment below already exists. A role setup protected is left alone.
+        if !assignments.is_empty() {
+            Self::ensure_management_custom_role_definitions(
+                ctx.resource_prefix,
+                &authorization_client,
+                custom_roles,
+                &role_definition_scope,
+                azure_config,
+            )
+            .await?;
+        }
+
+        // A grant already assigned stays in place, under the id this version uses or one an
+        // earlier version used. Asking for it again would fail once setup keeps management from
+        // assigning roles to itself, even though nothing changes. An id is only trusted when the
+        // assignment it names grants this role, at this scope, to the management identity: an
+        // earlier version numbered its ids by position, so the same id can hold another grant.
         let mut missing = Vec::new();
         for assignment in assignments {
-            let existing = legacy.iter().find(|earlier| {
-                earlier.scope == assignment.scope
-                    && earlier.role_definition_id == assignment.role_definition_id
-            });
-            if let Some(earlier) = existing {
-                let full_id =
-                    Self::role_assignment_resource_id(&earlier.scope, &earlier.role_assignment_id);
+            let candidates = std::iter::once(&assignment).chain(legacy.iter());
+            let mut found = None;
+            for candidate in candidates {
+                let full_id = Self::role_assignment_resource_id(
+                    &candidate.scope,
+                    &candidate.role_assignment_id,
+                );
                 match authorization_client
                     .get_role_assignment_by_id(full_id.clone())
                     .await
                 {
-                    Ok(_) => {
-                        if !role_assignment_ids.contains(&full_id) {
-                            role_assignment_ids.push(full_id);
-                        }
-                        continue;
+                    Ok(existing) if Self::grants(&existing, &assignment) => {
+                        found = Some(full_id);
+                        break;
                     }
+                    Ok(_) => {}
                     Err(error)
                         if matches!(
                             error.error,
@@ -1052,28 +1066,44 @@ impl AzurePermissionsHelper {
                     }
                 }
             }
-            missing.push(assignment);
+            match found {
+                Some(full_id) => {
+                    if !role_assignment_ids.contains(&full_id) {
+                        role_assignment_ids.push(full_id);
+                    }
+                }
+                None => missing.push(assignment),
+            }
         }
-        let assignments = missing;
 
-        if assignments.is_empty() {
+        if missing.is_empty() {
             return Ok(());
         }
-        Self::ensure_management_custom_role_definitions(
-            ctx.resource_prefix,
-            &authorization_client,
-            custom_roles,
-            &role_definition_scope,
-            azure_config,
-        )
-        .await?;
         Self::apply_planned_role_assignments(
             &authorization_client,
             resource_id,
-            assignments,
+            missing,
             role_assignment_ids,
         )
         .await
+    }
+
+    /// Whether `existing` gives `planned`'s principal its role at its scope. Azure reports a
+    /// custom role's id at the subscription even when it was created in a resource group, so
+    /// roles are compared by their definition GUID.
+    fn grants(existing: &RoleAssignment, planned: &PlannedRoleAssignment) -> bool {
+        let guid = |id: &str| id.rsplit('/').next().unwrap_or(id).to_ascii_lowercase();
+        let normalize = |scope: &str| scope.trim_matches('/').to_ascii_lowercase();
+        existing.properties.as_ref().is_some_and(|properties| {
+            properties
+                .principal_id
+                .eq_ignore_ascii_case(&planned.principal_id)
+                && guid(&properties.role_definition_id) == guid(&planned.role_definition_id)
+                && properties
+                    .scope
+                    .as_deref()
+                    .is_none_or(|scope| normalize(scope) == normalize(&planned.scope))
+        })
     }
 
     /// The role assignments that give the management identity `refs` on this resource, and the
