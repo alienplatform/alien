@@ -468,6 +468,8 @@ resource "time_sleep" "target_role_propagation" {
   triggers = {
     target_provider_email = var.target_provider_email
     target_roles          = sha1(jsonencode(sort(local.manager_roles)))
+    # Rerun the wait when the target-only grant changes, including on existing installs.
+    target_only_roles = google_project_iam_member.target_workload_identity_pool_admin.role
   }
 
   depends_on = [
