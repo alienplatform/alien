@@ -2665,11 +2665,38 @@ fn add_custom_resource(
     input_values: CfExpression,
     callback_url: Option<&str>,
 ) {
+    // On stack delete the registration must go first: its delete callback
+    // tears down the runtime resources, which still run on the setup's roles
+    // and network. Every other resource is therefore a dependency.
     let depends_on = template
         .resources
         .iter()
         .filter_map(|(logical_id, resource)| {
             resource.condition.is_none().then_some(logical_id.clone())
+        })
+        .collect();
+    // DependsOn cannot name a conditional resource: CloudFormation rejects the
+    // template when that resource's condition is false. A `Ref` inside a
+    // matching `Fn::If` is a dependency only when the resource exists.
+    let mut conditional: Vec<(&String, &String)> = template
+        .resources
+        .iter()
+        .filter_map(|(logical_id, resource)| {
+            resource
+                .condition
+                .as_ref()
+                .map(|condition| (logical_id, condition))
+        })
+        .collect();
+    conditional.sort();
+    let conditional_dependencies: Vec<CfExpression> = conditional
+        .into_iter()
+        .map(|(logical_id, condition)| {
+            CfExpression::if_(
+                condition.clone(),
+                CfExpression::ref_(logical_id.clone()),
+                CfExpression::no_value(),
+            )
         })
         .collect();
     let mut resource = CfResource::new(
@@ -2700,6 +2727,13 @@ fn add_custom_resource(
         resource
             .properties
             .insert("InputValues".to_string(), input_values);
+    }
+    // The callback ignores this property. It exists only for its dependencies.
+    if !conditional_dependencies.is_empty() {
+        resource.properties.insert(
+            "ConditionalDependencies".to_string(),
+            CfExpression::list(conditional_dependencies),
+        );
     }
     // Registration compares this with the value the control plane issued, so
     // a typo fails the install with a clear message instead of a later
