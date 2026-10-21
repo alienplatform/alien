@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "3.3.34"
+version = "3.3.38"
 dependencies = [
  "alien-client-config",
  "alien-client-core",
@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "3.3.34"
+version = "3.3.38"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "3.3.34"
+version = "3.3.38"
 dependencies = [
  "alien-error",
  "async-trait",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "3.3.34"
+version = "3.3.38"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "alien-egress-gateway"
-version = "3.3.34"
+version = "3.3.38"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error"
-version = "3.3.34"
+version = "3.3.38"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "3.3.34"
+version = "3.3.38"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "3.3.34"
+version = "3.3.38"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permission-types"
-version = "3.3.34"
+version = "3.3.38"
 dependencies = [
  "indexmap",
  "serde",
@@ -2019,9 +2019,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -2802,9 +2802,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]
