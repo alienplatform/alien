@@ -241,13 +241,23 @@ impl AzureVaultController {
             (&self.vault_name, &self.resource_group_name, &self.vault_uri)
         {
             if let Some(client) = &self.vault_client {
-                client
+                match client
                     .delete_vault(resource_group_name.clone(), vault_name.clone())
                     .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete Azure Key Vault '{}'", vault_name),
-                        resource_id: Some(vault_name.clone()),
-                    })?;
+                {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    Err(error) => {
+                        return Err(error).context(ErrorData::CloudPlatformError {
+                            message: format!("Failed to delete Azure Key Vault '{}'", vault_name),
+                            resource_id: Some(vault_name.clone()),
+                        });
+                    }
+                }
 
                 info!(
                     vault_id = %config.id,
