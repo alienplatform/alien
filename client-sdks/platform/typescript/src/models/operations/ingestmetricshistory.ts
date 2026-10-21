@@ -5,6 +5,13 @@
 import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 
+export type IngestMetricsHistoryGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type IngestMetricsHistoryRequest = {
   /**
    * Unique identifier for the deployment.

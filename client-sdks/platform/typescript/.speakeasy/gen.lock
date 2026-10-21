@@ -6,9 +6,9 @@ management:
   generationVersion: 2.941.0
   releaseVersion: 3.3.39
 persistentEdits:
-  generation_id: 45ef5a06-b22a-4065-8d27-c7ddeb16eab6
-  pristine_commit_hash: 42d8e6df0d5302fe10b5799ecfe193a96744d5b6
-  pristine_tree_hash: 5e8a1eaa0580271ed982346fdb9dac4f6d94cddb
+  generation_id: 118ecba0-e819-42d9-b07e-08bee5d38d33
+  pristine_commit_hash: 8e87c1c2edf0035865746c8be758efe9374f0ea3
+  pristine_tree_hash: cdf547210d4b6b6364f574fbfaca286aa0dd914d
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -20752,6 +20752,10 @@ trackedFiles:
     id: dfa37e7d5350
     last_write_checksum: sha1:bf218d3e55a61cff4a44fdc86a3b037158839740
     pristine_git_object: d12e53cc648bb412f5abd68e5377aeafd08f83d7
+  docs/models/operations/ingestmetricshistoryglobals.md:
+    id: bf3e5510f67e
+    last_write_checksum: sha1:e096367ec4f51d4d23f70cec7ae47235ed9644d1
+    pristine_git_object: 504e6dfcd77186038e42cb58f9e4ead52a48dd41
   docs/models/operations/ingestmetricshistoryrequest.md:
     id: 06cbd3559b58
     last_write_checksum: sha1:8c033d2b24a09aca7d957b8e2ccebd5042aa40ea
@@ -35842,8 +35846,8 @@ trackedFiles:
     pristine_git_object: 923adc8aaf5883b07748508f464e794450a19fb2
   docs/sdks/alien/README.md:
     id: 53ee18ef5fbf
-    last_write_checksum: sha1:e4fd1964c431a2c5195b9ddaf7c29ef7e222f4bb
-    pristine_git_object: 1f7c95e2c7eae1dbca521af8f509c9bd7b6993dc
+    last_write_checksum: sha1:df517d91a12c17a112ee02d3da7e33b43acc2ecf
+    pristine_git_object: 4e4ce46d6457b7399c7730d9d2f58b1f88c4d11d
   docs/sdks/apikeys/README.md:
     id: e2bd25998427
     last_write_checksum: sha1:1b84b6cdb7cfff201df1d4c8ef1afb6ccc23a395
@@ -36490,8 +36494,8 @@ trackedFiles:
     pristine_git_object: 9cd2ecd034a8251387c6a622b060c570c7011244
   src/funcs/ingestMetricsHistory.ts:
     id: b60abbb6c0c1
-    last_write_checksum: sha1:a7130b83864541c2e83a9b791af825a17d11fdc7
-    pristine_git_object: 803bad3281bc3034d67de1ba854f45a100adc9c1
+    last_write_checksum: sha1:5df81c8ab7e00ea994cf6179e2fff504bfd2a85c
+    pristine_git_object: 1375134b36116654e42095e90d71cd2081ec5273
   src/funcs/listAwsKeySetupCleanup.ts:
     id: 56d2267b2e00
     last_write_checksum: sha1:cc1d44e81a0139673590a4391fcf0c114df03550
@@ -38630,8 +38634,8 @@ trackedFiles:
     pristine_git_object: c921ee460d88308952bdae65d4ccfa97e0c5f54a
   src/models/operations/ingestmetricshistory.ts:
     id: bc2deb91f725
-    last_write_checksum: sha1:e3a6cee50178654589c320b0453eb151b6f5f0c5
-    pristine_git_object: 4bac530f5581f2db53d7545e4f4b5fa4a16b3dfe
+    last_write_checksum: sha1:8f139ee97c20d29318ff0c5d63807bcf9569b3b9
+    pristine_git_object: 3a59a8440bb654e9e435c905c234b09d608b10f6
   src/models/operations/invokeoperation.ts:
     id: 7c5d24402bdf
     last_write_checksum: sha1:bfe93e2406e9c9c5f9fc67d821f82b1f0ef7ceb7
@@ -44452,6 +44456,8 @@ examples:
       parameters:
         path:
           deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc"
+        query:
+          workspace: "my-workspace"
       requestBody:
         application/octet-stream: "x-file: example.file"
       responses:

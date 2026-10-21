@@ -2373,6 +2373,7 @@ import { Alien } from "@alienplatform/platform-api";
 import { openAsBlob } from "node:fs";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -2397,6 +2398,7 @@ import { openAsBlob } from "node:fs";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 

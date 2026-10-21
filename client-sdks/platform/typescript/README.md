@@ -1167,6 +1167,7 @@ import { Alien } from "@alienplatform/platform-api";
 import { openAsBlob } from "node:fs";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 

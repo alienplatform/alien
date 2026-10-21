@@ -528,3 +528,63 @@ test("execution and target configs retain saved quota overrides and explicit cle
     }
   }
 });
+
+test("metrics ingestion sends selected workspace and unmodified binary payload", async () => {
+  const payload = new Uint8Array([10, 2, 18, 0]);
+  let calls = 0;
+  const sdk = new Alien({
+    serverURL: "https://api.example.invalid",
+    apiKey: "manager-test-key",
+    workspace: "selected-workspace",
+    httpClient: new HTTPClient({ fetcher: async request => {
+      calls++;
+      assert.equal(request.method, "POST");
+      const url = new URL(request.url);
+      assert.equal(url.pathname, "/v1/sync/dep_example/metrics-history");
+      assert.equal(url.searchParams.get("workspace"), "selected-workspace");
+      assert.equal(request.headers.get("content-type"), "application/octet-stream");
+      assert.equal(request.headers.get("authorization"), "Bearer manager-test-key");
+      assert.deepEqual(new Uint8Array(await request.arrayBuffer()), payload);
+      if (calls === 1) return new Response("retry", { status: 503 });
+      return new Response(new Uint8Array(), {
+        status: 200, headers: { "content-type": "application/x-protobuf" },
+      });
+    } }),
+  });
+  const receipt = await sdk.ingestMetricsHistory("dep_example", payload, { retries: { strategy: "backoff", backoff: { initialInterval: 1, maxInterval: 5, exponent: 1, maxElapsedTime: 1000 } } });
+  assert.equal((await new Response(receipt).arrayBuffer()).byteLength, 0);
+  assert.equal(calls, 2);
+});
+
+
+test("history query preserves filters, null gaps and finite or overflow bounds", async () => {
+  const gap = {
+    timestamp: "2026-10-20T12:00:00.000Z", sourceStart: null, sourceEnd: null,
+    requests: null, completed: null, aborted: null, probeExpired: null,
+    captureStopped: null, unsupported: null, serverErrors: null, responseWireBytes: null,
+    rps: null, p95: null, p99: null, ttfbP95: null, cpuPercent: null,
+    memoryBytes: null, activeRequests: null, cpuPeakPercent: null, memoryPeakBytes: null,
+    activePeakRequests: null, statusCounts: {}, availableReplicaSeconds: 0,
+    unavailableReplicaSeconds: 0, captureQuality: [0, 0, 0, 0, 0],
+  };
+  const observed = { ...gap, timestamp: "2026-10-20T12:00:10.000Z",
+    sourceStart: "2026-10-20T12:00:00.000Z", sourceEnd: "2026-10-20T12:00:10.000Z",
+    requests: 100, completed: 100, rps: 10, p95: { lower: 0.01, upper: 0.025 },
+    p99: { lower: 3600, upper: null }, statusCounts: { "200": 100 }, availableReplicaSeconds: 10 };
+  const response = { capability: "plaintext-http1", boundarySemantics: "source-window-end",
+    bucketSeconds: 10, points: [gap, observed], services: ["api"], releases: ["release-1"], replicas: ["replica-1"] };
+  const sdk = client(async request => {
+    assert.equal(request.method, "GET");
+    const url = new URL(request.url);
+    assert.equal(url.pathname, "/v1/deployments/dep_example/metrics-history");
+    assert.deepEqual(Object.fromEntries(url.searchParams), {
+      workspace: "test-workspace", from: "2026-10-20T12:00:00.000Z", to: "2026-10-20T13:00:00.000Z",
+      service: "api", release: "release-1", replica: "replica-1", method: "GET", statusClass: "2", outcome: "completed",
+    });
+    return Response.json(response);
+  });
+  const result = await sdk.getDeploymentMetricsHistory({ id: "dep_example",
+    from: new Date("2026-10-20T12:00:00Z"), to: new Date("2026-10-20T13:00:00Z"),
+    service: "api", release: "release-1", replica: "replica-1", method: "GET", statusClass: 2, outcome: "completed" });
+  assert.deepEqual(result, response);
+});
