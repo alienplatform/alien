@@ -2230,15 +2230,27 @@ mod tests {
         // Nothing changed: the target is consumed and its config dropped.
         db.set_deployment_state(&refreshed).await.unwrap();
         db.set_deployment_config(&empty_config()).await.unwrap();
-        assert!(db.finish_target_if_unchanged(&refreshed, &settled).await.unwrap());
-        assert!(db.get_deployment_state().await.unwrap().unwrap().target_release.is_none());
+        assert!(db
+            .finish_target_if_unchanged(&refreshed, &settled)
+            .await
+            .unwrap());
+        assert!(db
+            .get_deployment_state()
+            .await
+            .unwrap()
+            .unwrap()
+            .target_release
+            .is_none());
         assert!(db.get_deployment_config().await.unwrap().is_none());
 
         // A newer target arrived meanwhile: its state and config stay.
         let newer = settled_state(Some("rel_newer"));
         db.set_deployment_state(&newer).await.unwrap();
         db.set_deployment_config(&empty_config()).await.unwrap();
-        assert!(!db.finish_target_if_unchanged(&refreshed, &settled).await.unwrap());
+        assert!(!db
+            .finish_target_if_unchanged(&refreshed, &settled)
+            .await
+            .unwrap());
         assert_eq!(
             db.get_deployment_state()
                 .await

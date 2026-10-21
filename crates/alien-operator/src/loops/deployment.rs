@@ -26,7 +26,7 @@ use alien_error::{AlienError, Context};
 use alien_infra::ClientConfigExt;
 use async_trait::async_trait;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 use std::time::Duration;
@@ -41,6 +41,12 @@ struct OperatorTransport {
     operator_config: OperatorConfig,
     platform: Platform,
     suggested_delay_ms: AtomicU64,
+    /// Set for a maintenance refresh: the state its last checkpoint saw. A
+    /// refresh is an observation and must not overwrite a newer target the sync
+    /// loop accepted meanwhile, so its checkpoints compare and set.
+    observed_from: Option<tokio::sync::Mutex<DeploymentState>>,
+    /// Whether a compare-and-set checkpoint found newer state.
+    superseded: AtomicBool,
 }
 
 #[async_trait]
@@ -71,10 +77,26 @@ impl DeploymentLoopTransport for OperatorTransport {
                 .as_ref()
                 .map(|metadata| &metadata.deployer_secrets);
         // Persist state to local DB after each step
-        self.db
-            .set_deployment_state(state)
-            .await
-            .map_err(|e| e.into_generic())?;
+        match &self.observed_from {
+            Some(observed_from) => {
+                let mut observed_from = observed_from.lock().await;
+                if !self
+                    .db
+                    .compare_and_set_deployment_state(&observed_from, state)
+                    .await
+                    .map_err(|e| e.into_generic())?
+                {
+                    self.superseded.store(true, Ordering::Relaxed);
+                    return Err(AlienError::new(ErrorData::MaintenanceSuperseded).into_generic());
+                }
+                *observed_from = state.clone();
+            }
+            None => self
+                .db
+                .set_deployment_state(state)
+                .await
+                .map_err(|e| e.into_generic())?,
+        }
 
         if !heartbeats.is_empty() {
             self.db
@@ -270,26 +292,34 @@ pub(crate) async fn run_deployment_continuously(
         delay_strategy: alien_deployment::runner::DelayStrategy::Yield,
     };
 
+    // A target held while Running or RefreshFailed on the same release is
+    // maintenance of the installed release (see `sync::accept_target`). Run one
+    // Running refresh step, as the manager does for each maintenance claim of a
+    // push deployment: every Ready handler runs, so health checks and in-place
+    // repairs such as a linked-binding refresh happen. A repair a handler starts
+    // continues on the next maintenance claim.
+    let refresh = operation == LoopOperation::Deploy
+        && matches!(
+            current.status,
+            DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+        )
+        && current
+            .current_release
+            .as_ref()
+            .and_then(|release| release.release_id.as_deref())
+            == Some(target_release_id);
+
     let transport = OperatorTransport {
         db: Arc::clone(&state.db),
         operator_config: state.config.clone(),
         platform: current.platform,
         suggested_delay_ms: AtomicU64::new(0),
+        observed_from: refresh.then(|| tokio::sync::Mutex::new(current.clone())),
+        superseded: AtomicBool::new(false),
     };
 
-    // A target that left the deployment Running or RefreshFailed is maintenance of
-    // the installed release (see `sync::accept_target`). Run one Running refresh
-    // step, as the manager does for each maintenance claim of a push deployment:
-    // every Ready handler runs, so health checks and in-place repairs such as a
-    // linked-binding refresh happen. A repair a handler starts continues on the
-    // next maintenance claim.
-    let refresh = operation == LoopOperation::Deploy
-        && matches!(
-            current.status,
-            DeploymentStatus::Running | DeploymentStatus::RefreshFailed
-        );
     if refresh {
-        let steps = run_maintenance_refresh(
+        let steps = match run_maintenance_refresh(
             state,
             &mut current,
             &mut enriched_config,
@@ -298,7 +328,15 @@ pub(crate) async fn run_deployment_continuously(
             &policy,
             &transport,
         )
-        .await?;
+        .await
+        {
+            Ok(steps) => steps,
+            Err(_) if transport.superseded.load(Ordering::Relaxed) => {
+                debug!("Maintenance refresh superseded by newer deployment state");
+                return Ok((0, Duration::ZERO));
+            }
+            Err(error) => return Err(error),
+        };
         finish_maintenance_refresh(state, &current).await?;
         return Ok((steps, Duration::ZERO));
     }
@@ -646,6 +684,82 @@ mod tests {
             native_image_host: None,
             volume_restores: Vec::new(),
         }
+    }
+
+    /// A maintenance refresh is an observation. If the sync loop accepted newer
+    /// work while it ran (the claim may already be complete), its checkpoint must
+    /// not overwrite that target.
+    #[tokio::test]
+    async fn a_maintenance_checkpoint_never_overwrites_a_newer_target() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), encryption_key)
+                .await
+                .unwrap(),
+        );
+        let release = |id: &str| alien_core::ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("observe".to_string()).build(),
+        };
+        let state = |status, target: &str| DeploymentState {
+            platform: Platform::Test,
+            status,
+            current_release: Some(release("rel_installed")),
+            target_release: Some(release(target)),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let loaded = state(DeploymentStatus::Running, "rel_installed");
+        db.set_deployment_state(&loaded).await.unwrap();
+        let transport = OperatorTransport {
+            db: Arc::clone(&db),
+            operator_config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(encryption_key)
+                .build(),
+            platform: Platform::Test,
+            suggested_delay_ms: AtomicU64::new(0),
+            observed_from: Some(tokio::sync::Mutex::new(loaded.clone())),
+            superseded: AtomicBool::new(false),
+        };
+        let config = test_deployment_config();
+
+        // Unchanged: the refresh checkpoints normally, twice.
+        let mut observed = loaded.clone();
+        observed.retry_requested = true;
+        for _ in 0..2 {
+            transport
+                .reconcile_step("dep", &observed, &config, true, None, vec![], vec![])
+                .await
+                .expect("checkpoint over the loaded state");
+            assert_eq!(
+                serde_json::to_value(db.get_deployment_state().await.unwrap()).unwrap(),
+                serde_json::to_value(Some(&observed)).unwrap()
+            );
+        }
+
+        // The sync loop accepts new work for the same release.
+        let newer = state(DeploymentStatus::UpdatePending, "rel_installed");
+        db.set_deployment_state(&newer).await.unwrap();
+        let error = transport
+            .reconcile_step("dep", &loaded, &config, true, None, vec![], vec![])
+            .await
+            .expect_err("a stale observation must not checkpoint");
+        assert_eq!(error.code, "MAINTENANCE_SUPERSEDED");
+        assert!(!error.retryable);
+        assert!(transport.superseded.load(Ordering::Relaxed));
+        assert_eq!(
+            serde_json::to_value(db.get_deployment_state().await.unwrap()).unwrap(),
+            serde_json::to_value(Some(&newer)).unwrap()
+        );
     }
 
     #[tokio::test]
