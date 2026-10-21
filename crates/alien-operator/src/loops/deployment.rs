@@ -15,9 +15,9 @@ use crate::config::OperatorConfig;
 use crate::db::OperatorDb;
 use crate::OperatorState;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, EnvironmentVariable, EnvironmentVariableType,
-    KubernetesClientConfig, ObservedInventoryBatch, Platform, ResourceHeartbeat,
-    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
+    EnvironmentVariableType, KubernetesClientConfig, ObservedInventoryBatch, Platform,
+    ResourceHeartbeat, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -26,7 +26,7 @@ use alien_error::{AlienError, Context};
 use alien_infra::ClientConfigExt;
 use async_trait::async_trait;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 use std::time::Duration;
@@ -41,6 +41,12 @@ struct OperatorTransport {
     operator_config: OperatorConfig,
     platform: Platform,
     suggested_delay_ms: AtomicU64,
+    /// Set for a maintenance refresh: the state its last checkpoint saw. A
+    /// refresh is an observation and must not overwrite a newer target the sync
+    /// loop accepted meanwhile, so its checkpoints compare and set.
+    observed_from: Option<tokio::sync::Mutex<DeploymentState>>,
+    /// Whether a compare-and-set checkpoint found newer state.
+    superseded: AtomicBool,
 }
 
 #[async_trait]
@@ -71,10 +77,26 @@ impl DeploymentLoopTransport for OperatorTransport {
                 .as_ref()
                 .map(|metadata| &metadata.deployer_secrets);
         // Persist state to local DB after each step
-        self.db
-            .set_deployment_state(state)
-            .await
-            .map_err(|e| e.into_generic())?;
+        match &self.observed_from {
+            Some(observed_from) => {
+                let mut observed_from = observed_from.lock().await;
+                if !self
+                    .db
+                    .compare_and_set_deployment_state(&observed_from, state)
+                    .await
+                    .map_err(|e| e.into_generic())?
+                {
+                    self.superseded.store(true, Ordering::Relaxed);
+                    return Err(AlienError::new(ErrorData::MaintenanceSuperseded).into_generic());
+                }
+                *observed_from = state.clone();
+            }
+            None => self
+                .db
+                .set_deployment_state(state)
+                .await
+                .map_err(|e| e.into_generic())?,
+        }
 
         if !heartbeats.is_empty() {
             self.db
@@ -170,7 +192,9 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
 
 /// Run deployment steps continuously until synced or long delay.
 /// Returns the number of steps executed and the delay before resuming.
-async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Duration)> {
+pub(crate) async fn run_deployment_continuously(
+    state: &OperatorState,
+) -> Result<(usize, Duration)> {
     // Get deployment state and config
     let mut current = match state.db.get_deployment_state().await? {
         Some(s) => s,
@@ -268,12 +292,63 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Du
         delay_strategy: alien_deployment::runner::DelayStrategy::Yield,
     };
 
+    // A target held while Running or RefreshFailed on the same release is
+    // maintenance of the installed release (see `sync::accept_target`). Run one
+    // Running refresh step, as the manager does for each maintenance claim of a
+    // push deployment: every Ready handler runs, so health checks and in-place
+    // repairs such as a linked-binding refresh happen. A repair a handler starts
+    // continues on the next maintenance claim.
+    let refresh = operation == LoopOperation::Deploy
+        && matches!(
+            current.status,
+            DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+        )
+        && current
+            .current_release
+            .as_ref()
+            .and_then(|release| release.release_id.as_deref())
+            == Some(target_release_id);
+
     let transport = OperatorTransport {
         db: Arc::clone(&state.db),
         operator_config: state.config.clone(),
         platform: current.platform,
         suggested_delay_ms: AtomicU64::new(0),
+        observed_from: refresh.then(|| tokio::sync::Mutex::new(current.clone())),
+        superseded: AtomicBool::new(false),
     };
+
+    if refresh {
+        let steps = match run_maintenance_refresh(
+            state,
+            &mut current,
+            &mut enriched_config,
+            &client_config,
+            &deployment_id,
+            &policy,
+            &transport,
+        )
+        .await
+        {
+            Ok(steps) => steps,
+            Err(_) if transport.superseded.load(Ordering::Relaxed) => {
+                debug!("Maintenance refresh superseded by newer deployment state");
+                return Ok((0, Duration::ZERO));
+            }
+            Err(error) => return Err(error),
+        };
+        finish_maintenance_refresh(state, &current).await?;
+        return Ok((steps, Duration::ZERO));
+    }
+
+    // The claim whose target this loop applies. Captured before stepping: the
+    // sync loop replaces the durable claim once it reports this apply complete.
+    let applying_operation_id = state
+        .db
+        .get_sync_execution()
+        .await?
+        .and_then(|execution| execution.claim)
+        .map(|claim| claim.operation_id);
 
     let result = alien_deployment::runner::run_step_loop(
         &mut current,
@@ -305,6 +380,13 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Du
         );
     } else if loop_result.stop_reason != LoopStopReason::Handoff {
         if loop_result.outcome == LoopOutcome::Success {
+            if operation == LoopOperation::Deploy
+                && loop_result.final_status == DeploymentStatus::Running
+            {
+                if let Some(operation_id) = applying_operation_id.as_deref() {
+                    state.db.set_applied_operation_id(operation_id).await?;
+                }
+            }
             debug!("Deployment synced, clearing deployment config");
             state.db.clear_deployment_config().await?;
         }
@@ -331,6 +413,59 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Du
         Duration::ZERO
     };
     Ok((steps_executed, delay))
+}
+
+/// One Running refresh pass over the installed release.
+async fn run_maintenance_refresh(
+    state: &OperatorState,
+    current: &mut DeploymentState,
+    config: &mut DeploymentConfig,
+    client_config: &ClientConfig,
+    deployment_id: &str,
+    policy: &RunnerPolicy,
+    transport: &OperatorTransport,
+) -> Result<usize> {
+    let result = alien_deployment::runner::run_running_refresh_step_loop(
+        current,
+        config,
+        client_config,
+        deployment_id,
+        policy,
+        transport,
+        state.service_provider.clone(),
+        None,
+    )
+    .await
+    .context(ErrorData::DeploymentFailed {
+        message: "Maintenance refresh failed".to_string(),
+    })?;
+    debug!(
+        status = ?result.loop_result.final_status,
+        steps = result.steps_executed,
+        "Maintenance refresh step completed"
+    );
+    Ok(result.steps_executed)
+}
+
+/// Consume a finished maintenance target: the deployment is settled on its
+/// installed release again, so passive health reporting resumes and the next
+/// tick does not refresh again. Sync right away, so the claim completes with
+/// this refresh's result. A state the sync loop changed meanwhile (for example
+/// a newer target) is left, with its config, for the next tick.
+async fn finish_maintenance_refresh(
+    state: &OperatorState,
+    refreshed: &DeploymentState,
+) -> Result<()> {
+    let mut settled = refreshed.clone();
+    settled.target_release = None;
+    if state
+        .db
+        .finish_target_if_unchanged(refreshed, &settled)
+        .await?
+    {
+        state.db.request_sync();
+    }
+    Ok(())
 }
 
 /// Enrich a deployment config with operator-specific settings.
@@ -549,6 +684,84 @@ mod tests {
             native_image_host: None,
             volume_restores: Vec::new(),
         }
+    }
+
+    /// A maintenance refresh is an observation. If the sync loop accepted newer
+    /// work while it ran (the claim may already be complete), its checkpoint must
+    /// not overwrite that target.
+    #[tokio::test]
+    async fn a_maintenance_checkpoint_never_overwrites_a_newer_target() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), encryption_key)
+                .await
+                .unwrap(),
+        );
+        let release = |id: &str| alien_core::ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("observe".to_string()).build(),
+        };
+        let state = |status, target: &str| DeploymentState {
+            platform: Platform::Test,
+            status,
+            current_release: Some(release("rel_installed")),
+            target_release: Some(release(target)),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let loaded = state(DeploymentStatus::Running, "rel_installed");
+        db.set_deployment_state(&loaded).await.unwrap();
+        let transport = OperatorTransport {
+            db: Arc::clone(&db),
+            operator_config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(encryption_key)
+                .build(),
+            platform: Platform::Test,
+            suggested_delay_ms: AtomicU64::new(0),
+            observed_from: Some(tokio::sync::Mutex::new(loaded.clone())),
+            superseded: AtomicBool::new(false),
+        };
+        let config = test_deployment_config();
+
+        // Unchanged: the refresh checkpoints normally, twice.
+        let mut observed = loaded.clone();
+        observed.retry_requested = true;
+        for _ in 0..2 {
+            transport
+                .reconcile_step("dep", &observed, &config, true, None, vec![], vec![])
+                .await
+                .expect("checkpoint over the loaded state");
+            assert_eq!(
+                serde_json::to_value(db.get_deployment_state().await.unwrap()).unwrap(),
+                serde_json::to_value(Some(&observed)).unwrap()
+            );
+        }
+
+        // The sync loop accepts new work for the same release.
+        let newer = state(DeploymentStatus::UpdatePending, "rel_installed");
+        db.set_deployment_state(&newer).await.unwrap();
+        let Err(error) = transport
+            .reconcile_step("dep", &loaded, &config, true, None, vec![], vec![])
+            .await
+        else {
+            panic!("a stale observation must not checkpoint");
+        };
+        assert_eq!(error.code, "MAINTENANCE_SUPERSEDED");
+        assert!(!error.retryable);
+        assert!(transport.superseded.load(Ordering::Relaxed));
+        assert_eq!(
+            serde_json::to_value(db.get_deployment_state().await.unwrap()).unwrap(),
+            serde_json::to_value(Some(&newer)).unwrap()
+        );
     }
 
     #[tokio::test]
