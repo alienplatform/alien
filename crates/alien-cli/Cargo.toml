@@ -70,7 +70,7 @@ urlencoding = { workspace = true }
 futures = { workspace = true }
 console = "0.16"
 comfy-table = "7.2.2"
-deepstore-client = "1.1.5"
+deepstore-client = "1.2"
 
 # Platform dependencies (behind "platform" feature)
 open = { version = "5", optional = true }
