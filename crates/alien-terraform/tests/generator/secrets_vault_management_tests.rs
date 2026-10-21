@@ -234,11 +234,14 @@ async fn azure_management_writes_but_cannot_read_the_secrets_vault() {
     assert!(!workload.is_empty(), "the workload keeps its read");
 }
 
-/// Azure: management assigns roles to the workload identities it runs, so it holds
-/// `roleAssignments/write`. It must not be able to use that to give itself a read on the
-/// secrets vault, nor add `getSecret` to a role it holds. So:
-/// - every unconditioned role management holds leaves out role-assignment writes;
-/// - the role that has them is assigned with a condition that excludes management itself;
+/// Azure: management assigns roles to the workload identities it runs and to itself, so it holds
+/// `roleAssignments/write`. It must not be able to use that to give itself or anyone a role the
+/// stack does not declare, such as a read on the secrets vault, nor write a role definition. So:
+/// - every unconditioned role management holds leaves out role-assignment writes, and no role it
+///   holds can write role definitions;
+/// - the role that has the writes is assigned with a condition that pairs every listed role with
+///   an exact list of principals: management's own roles with management, the application's
+///   with the application's identities, and the secrets read only with the application's;
 /// - every custom role management holds is also assignable at the subscription, where it
 ///   cannot change role definitions.
 #[tokio::test]
@@ -258,6 +261,9 @@ async fn azure_management_cannot_assign_itself_roles_or_change_its_own() {
             || block.body.contains("\"Microsoft.Authorization/*\"")
             || block.body.contains("actions = [ \"*\"")
     };
+    let role_definition_write = "\"Microsoft.Authorization/roleDefinitions/write\"";
+    let management_principal = "{${azurerm_user_assigned_identity.management.principal_id}}";
+    let secrets_user = "4633458b-17de-408a-b874-0445c86b69e6";
 
     let mut conditioned = 0;
     for assignment in blocks
@@ -275,14 +281,46 @@ async fn azure_management_cannot_assign_itself_roles_or_change_its_own() {
             definition.label,
             definition.body
         );
+        let actions = definition
+            .body
+            .split("not_actions")
+            .next()
+            .unwrap_or_default();
+        assert!(
+            !actions.contains(role_definition_write),
+            "{} lets management write role definitions: {}",
+            definition.label,
+            definition.body
+        );
         if writes(definition) {
+            let body = &assignment.body;
+            let roles = body
+                .matches("@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals")
+                .count();
+            let principals = body
+                .matches("@Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals")
+                .count();
             assert!(
-                assignment.body.contains(
-                    "@Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAllValues:GuidNotEquals {${azurerm_user_assigned_identity.management.principal_id}}"
-                ) && assignment.body.contains("condition_version = \"2.0\""),
-                "{} lets management assign roles without excluding itself: {}",
+                body.contains("condition_version = \"2.0\"")
+                    && body.contains("(!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'}))")
+                    && roles > 0
+                    && roles == principals
+                    && !body.contains("GuidNotEquals"),
+                "{} lets management assign roles it does not list to principals it does not list: {}",
                 assignment.label,
-                assignment.body
+                body
+            );
+            let own_clause = body
+                .split(" OR ")
+                .find(|clause| clause.contains(management_principal))
+                .expect("a clause for management's own roles");
+            assert!(
+                !own_clause.contains(secrets_user),
+                "management may give itself a secrets read: {own_clause}"
+            );
+            assert!(
+                body.contains("{${azurerm_user_assigned_identity.execution_sa.principal_id}}"),
+                "the application's roles name the application's identity: {body}"
             );
             conditioned += 1;
         }
