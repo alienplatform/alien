@@ -372,6 +372,13 @@ fn enumeration_context() -> PermissionContext {
         .with_managing_subscription_id("00000000-0000-0000-0000-000000000000".to_string())
         .with_managing_resource_group("resource-group".to_string())
         .with_resource_name("resource".to_string())
+        .with_resource_id("resource".to_string())
+        .with_storage_account_name("storageaccount".to_string())
+        .with_deployment_name("deployment".to_string())
+        .with_stack_name("stack".to_string())
+        .with_service_account_name("service-account".to_string())
+        .with_principal_id("00000000-0000-0000-0000-000000000000".to_string())
+        .with_region("region".to_string())
 }
 
 /// The conditions to assign management's role-assignment role with, one per role assignment.
@@ -539,6 +546,24 @@ mod tests {
         assert!(roles.workload_predefined_role_ids.contains(&secrets_user));
         assert!(roles.workload_role_ids("p1").contains(&secrets_user));
         assert!(!roles.management_role_ids("p1").contains(&secrets_user));
+    }
+
+    /// Every grant a resource-bound Azure set can name plans, including those that name the
+    /// storage account.
+    #[test]
+    fn storage_grants_plan_with_their_storage_account_variable() {
+        let mut stack = Stack::new("app".to_string())
+            .add(
+                alien_core::Storage::new("files".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        stack.permissions.profiles.insert(
+            "execution".to_string(),
+            profile(&[("files", &["storage/data-read", "storage/data-write"])]),
+        );
+        let roles = azure_runtime_roles(&stack).expect("storage grants plan");
+        assert!(!roles.workload_role_ids("p").is_empty());
     }
 
     /// Setup binds `/provision` sets at the resource group itself; the runtime never assigns them.
