@@ -2581,17 +2581,12 @@ fn runtime_roles_revision(
 
 /// Whether Azure refused to delete a role definition because assignments still reference it.
 fn role_still_assigned(error: &AlienError<CloudClientErrorData>) -> bool {
-    error
-        .to_string()
-        .to_ascii_lowercase()
-        .contains("existing role assignments referencing role")
+    const REFUSAL: &str = "existing role assignments referencing role";
+    let mentions = |text: &str| text.to_ascii_lowercase().contains(REFUSAL);
+    mentions(&error.message)
+        || matches!(&error.error, Some(CloudClientErrorData::InvalidInput { message, .. }) if mentions(message))
         || std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
-            .any(|source| {
-                source
-                    .message
-                    .to_ascii_lowercase()
-                    .contains("existing role assignments referencing role")
-            })
+            .any(|source| mentions(&source.message))
 }
 
 async fn delete_management_role_assignment(
