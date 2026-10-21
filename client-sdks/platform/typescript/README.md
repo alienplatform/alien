@@ -32,6 +32,7 @@ Developer-friendly & type-safe Typescript SDK specifically catered to leverage _
   * [Standalone functions](#standalone-functions)
   * [React hooks with TanStack Query](#react-hooks-with-tanstack-query)
   * [Global Parameters](#global-parameters)
+  * [File uploads](#file-uploads)
   * [Retries](#retries)
   * [Error Handling](#error-handling)
   * [Server Selection](#server-selection)
@@ -177,10 +178,12 @@ run();
 * [revokeWorkspaceInviteLink](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
 * [resumeDeploymentInstallation](docs/sdks/alien/README.md#resumedeploymentinstallation)
 * [requestDeploymentCheck](docs/sdks/alien/README.md#requestdeploymentcheck)
+* [getDeploymentMetricsHistory](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Source HTTP and resource windows selected by end timestamp in [from,to). Gaps stay null; histogram percentiles are bounds. Capture supports plaintext HTTP/1 only.
 * [getDeploymentCredentialRotation](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
 * [prepareDeploymentCredentialRotation](docs/sdks/alien/README.md#preparedeploymentcredentialrotation)
 * [cancelDeploymentCredentialRotation](docs/sdks/alien/README.md#canceldeploymentcredentialrotation)
 * [getDeploymentCredentialRotationValues](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
+* [ingestMetricsHistory](docs/sdks/alien/README.md#ingestmetricshistory) - Durably accept source OTLP metrics for a deployment assigned to the authenticated manager. Retries preserve window IDs. The body is OTLP protobuf bytes; application/x-protobuf is also accepted.
 * [claimAwsXksStoreRetirement](docs/sdks/alien/README.md#claimawsxksstoreretirement)
 * [completeAwsXksStoreRetirement](docs/sdks/alien/README.md#completeawsxksstoreretirement)
 * [listAwsVirtualKeys](docs/sdks/alien/README.md#listawsvirtualkeys)
@@ -655,6 +658,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`getAwsVirtualKey`](docs/sdks/alien/README.md#getawsvirtualkey)
 - [`getDeploymentCredentialRotation`](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
 - [`getDeploymentCredentialRotationValues`](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
+- [`getDeploymentMetricsHistory`](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Source HTTP and resource windows selected by end timestamp in [from,to). Gaps stay null; histogram percentiles are bounds. Capture supports plaintext HTTP/1 only.
 - [`getLogExportDeliveryConfig`](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
 - [`getPendingWorkspaceInvitation`](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
 - [`getProjectLogExport`](docs/sdks/alien/README.md#getprojectlogexport)
@@ -662,6 +666,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`getWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
 - [`incidentsGet`](docs/sdks/incidents/README.md#get) - Get an authorized incident without Slack transport metadata.
 - [`incidentsList`](docs/sdks/incidents/README.md#list) - List authorized incidents without Slack transport metadata.
+- [`ingestMetricsHistory`](docs/sdks/alien/README.md#ingestmetricshistory) - Durably accept source OTLP metrics for a deployment assigned to the authenticated manager. Retries preserve window IDs. The body is OTLP protobuf bytes; application/x-protobuf is also accepted.
 - [`listAwsKeySetupCleanup`](docs/sdks/alien/README.md#listawskeysetupcleanup)
 - [`listAwsVirtualKeys`](docs/sdks/alien/README.md#listawsvirtualkeys)
 - [`listWorkspaceInvitations`](docs/sdks/alien/README.md#listworkspaceinvitations)
@@ -947,6 +952,7 @@ To learn about this feature and how to get started, check
 - [`useGetAwsVirtualKey`](docs/sdks/alien/README.md#getawsvirtualkey)
 - [`useGetDeploymentCredentialRotation`](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
 - [`useGetDeploymentCredentialRotationValuesMutation`](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
+- [`useGetDeploymentMetricsHistory`](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Source HTTP and resource windows selected by end timestamp in [from,to). Gaps stay null; histogram percentiles are bounds. Capture supports plaintext HTTP/1 only.
 - [`useGetLogExportDeliveryConfig`](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
 - [`useGetPendingWorkspaceInvitation`](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
 - [`useGetProjectLogExport`](docs/sdks/alien/README.md#getprojectlogexport)
@@ -954,6 +960,7 @@ To learn about this feature and how to get started, check
 - [`useGetWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
 - [`useIncidentsGet`](docs/sdks/incidents/README.md#get) - Get an authorized incident without Slack transport metadata.
 - [`useIncidentsList`](docs/sdks/incidents/README.md#list) - List authorized incidents without Slack transport metadata.
+- [`useIngestMetricsHistoryMutation`](docs/sdks/alien/README.md#ingestmetricshistory) - Durably accept source OTLP metrics for a deployment assigned to the authenticated manager. Retries preserve window IDs. The body is OTLP protobuf bytes; application/x-protobuf is also accepted.
 - [`useListAwsKeySetupCleanup`](docs/sdks/alien/README.md#listawskeysetupcleanup)
 - [`useListAwsVirtualKeys`](docs/sdks/alien/README.md#listawsvirtualkeys)
 - [`useListWorkspaceInvitations`](docs/sdks/alien/README.md#listworkspaceinvitations)
@@ -1140,6 +1147,42 @@ run();
 
 ```
 <!-- End Global Parameters [global-parameters] -->
+
+<!-- Start File uploads [file-upload] -->
+## File uploads
+
+Certain SDK methods accept files as part of a multi-part request. It is possible and typically recommended to upload files as a stream rather than reading the entire contents into memory. This avoids excessive memory consumption and potentially crashing with out-of-memory errors when working with very large files. The following example demonstrates how to attach a file stream to a request.
+
+> [!TIP]
+>
+> Depending on your JavaScript runtime, there are convenient utilities that return a handle to a file without reading the entire contents into memory:
+>
+> - **Node.js v20+:** Since v20, Node.js comes with a native `openAsBlob` function in [`node:fs`](https://nodejs.org/docs/latest-v20.x/api/fs.html#fsopenasblobpath-options).
+> - **Bun:** The native [`Bun.file`](https://bun.sh/docs/api/file-io#reading-files-bun-file) function produces a file handle that can be used for streaming file uploads.
+> - **Browsers:** All supported browsers return an instance to a [`File`](https://developer.mozilla.org/en-US/docs/Web/API/File) when reading the value from an `<input type="file">` element.
+> - **Node.js v18:** A file stream can be created using the `fileFrom` helper from [`fetch-blob/from.js`](https://www.npmjs.com/package/fetch-blob).
+
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+import { openAsBlob } from "node:fs";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.ingestMetricsHistory(
+    "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    await openAsBlob("example.file"),
+  );
+
+  console.log(result);
+}
+
+run();
+
+```
+<!-- End File uploads [file-upload] -->
 
 <!-- Start Retries [retries] -->
 ## Retries

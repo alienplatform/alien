@@ -16,11 +16,13 @@ import { finalizeAwsVirtualKeyDeletion } from "../funcs/finalizeAwsVirtualKeyDel
 import { getAwsVirtualKey } from "../funcs/getAwsVirtualKey.js";
 import { getDeploymentCredentialRotation } from "../funcs/getDeploymentCredentialRotation.js";
 import { getDeploymentCredentialRotationValues } from "../funcs/getDeploymentCredentialRotationValues.js";
+import { getDeploymentMetricsHistory } from "../funcs/getDeploymentMetricsHistory.js";
 import { getLogExportDeliveryConfig } from "../funcs/getLogExportDeliveryConfig.js";
 import { getPendingWorkspaceInvitation } from "../funcs/getPendingWorkspaceInvitation.js";
 import { getProjectLogExport } from "../funcs/getProjectLogExport.js";
 import { getWorkspaceInvitationPreview } from "../funcs/getWorkspaceInvitationPreview.js";
 import { getWorkspaceInviteLink } from "../funcs/getWorkspaceInviteLink.js";
+import { ingestMetricsHistory } from "../funcs/ingestMetricsHistory.js";
 import { listAwsKeySetupCleanup } from "../funcs/listAwsKeySetupCleanup.js";
 import { listAwsVirtualKeys } from "../funcs/listAwsVirtualKeys.js";
 import { listWorkspaceInvitations } from "../funcs/listWorkspaceInvitations.js";
@@ -428,6 +430,20 @@ export class Alien extends ClientSDK {
     ));
   }
 
+  /**
+   * Source HTTP and resource windows selected by end timestamp in [from,to). Gaps stay null; histogram percentiles are bounds. Capture supports plaintext HTTP/1 only.
+   */
+  async getDeploymentMetricsHistory(
+    request: operations.GetDeploymentMetricsHistoryRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetDeploymentMetricsHistoryResponse> {
+    return unwrapAsync(getDeploymentMetricsHistory(
+      this,
+      request,
+      options,
+    ));
+  }
+
   async getDeploymentCredentialRotation(
     request: operations.GetDeploymentCredentialRotationRequest,
     options?: RequestOptions,
@@ -473,6 +489,22 @@ export class Alien extends ClientSDK {
     return unwrapAsync(getDeploymentCredentialRotationValues(
       this,
       id,
+      requestBody,
+      options,
+    ));
+  }
+
+  /**
+   * Durably accept source OTLP metrics for a deployment assigned to the authenticated manager. Retries preserve window IDs. The body is OTLP protobuf bytes; application/x-protobuf is also accepted.
+   */
+  async ingestMetricsHistory(
+    deploymentId: string,
+    requestBody: ReadableStream<Uint8Array> | Blob | ArrayBuffer | Uint8Array,
+    options?: RequestOptions,
+  ): Promise<ReadableStream<Uint8Array>> {
+    return unwrapAsync(ingestMetricsHistory(
+      this,
+      deploymentId,
       requestBody,
       options,
     ));

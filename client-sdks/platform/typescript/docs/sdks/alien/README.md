@@ -21,10 +21,12 @@
 * [revokeWorkspaceInviteLink](#revokeworkspaceinvitelink)
 * [resumeDeploymentInstallation](#resumedeploymentinstallation)
 * [requestDeploymentCheck](#requestdeploymentcheck)
+* [getDeploymentMetricsHistory](#getdeploymentmetricshistory) - Source HTTP and resource windows selected by end timestamp in [from,to). Gaps stay null; histogram percentiles are bounds. Capture supports plaintext HTTP/1 only.
 * [getDeploymentCredentialRotation](#getdeploymentcredentialrotation)
 * [prepareDeploymentCredentialRotation](#preparedeploymentcredentialrotation)
 * [cancelDeploymentCredentialRotation](#canceldeploymentcredentialrotation)
 * [getDeploymentCredentialRotationValues](#getdeploymentcredentialrotationvalues)
+* [ingestMetricsHistory](#ingestmetricshistory) - Durably accept source OTLP metrics for a deployment assigned to the authenticated manager. Retries preserve window IDs. The body is OTLP protobuf bytes; application/x-protobuf is also accepted.
 * [claimAwsXksStoreRetirement](#claimawsxksstoreretirement)
 * [completeAwsXksStoreRetirement](#completeawsxksstoreretirement)
 * [listAwsVirtualKeys](#listawsvirtualkeys)
@@ -1868,6 +1870,115 @@ import {
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## getDeploymentMetricsHistory
+
+Source HTTP and resource windows selected by end timestamp in [from,to). Gaps stay null; histogram percentiles are bounds. Capture supports plaintext HTTP/1 only.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getDeploymentMetricsHistory" method="get" path="/v1/deployments/{id}/metrics-history" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.getDeploymentMetricsHistory({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    from: new Date("2025-03-25T20:46:12.593Z"),
+    to: new Date("2026-01-25T21:50:47.879Z"),
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { getDeploymentMetricsHistory } from "@alienplatform/platform-api/funcs/getDeploymentMetricsHistory.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await getDeploymentMetricsHistory(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    from: new Date("2025-03-25T20:46:12.593Z"),
+    to: new Date("2026-01-25T21:50:47.879Z"),
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("getDeploymentMetricsHistory failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useGetDeploymentMetricsHistory,
+  useGetDeploymentMetricsHistorySuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchGetDeploymentMetricsHistory,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateGetDeploymentMetricsHistory,
+  invalidateAllGetDeploymentMetricsHistory,
+} from "@alienplatform/platform-api/react-query/getDeploymentMetricsHistory.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetDeploymentMetricsHistoryRequest](../../models/operations/getdeploymentmetricshistoryrequest.md)                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.GetDeploymentMetricsHistoryResponse](../../models/operations/getdeploymentmetricshistoryresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404            | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## getDeploymentCredentialRotation
 
 ### Example Usage
@@ -2248,6 +2359,97 @@ import {
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 403, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## ingestMetricsHistory
+
+Durably accept source OTLP metrics for a deployment assigned to the authenticated manager. Retries preserve window IDs. The body is OTLP protobuf bytes; application/x-protobuf is also accepted.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="ingestMetricsHistory" method="post" path="/v1/sync/{deploymentId}/metrics-history" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+import { openAsBlob } from "node:fs";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.ingestMetricsHistory("dep_0c29fq4a2yjb7kx3smwdgxlc", await openAsBlob("example.file"));
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { ingestMetricsHistory } from "@alienplatform/platform-api/funcs/ingestMetricsHistory.js";
+import { openAsBlob } from "node:fs";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await ingestMetricsHistory(alien, "dep_0c29fq4a2yjb7kx3smwdgxlc", await openAsBlob("example.file"));
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("ingestMetricsHistory failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useIngestMetricsHistoryMutation
+} from "@alienplatform/platform-api/react-query/ingestMetricsHistory.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    | Example                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `deploymentId`                                                                                                                                                                 | *string*                                                                                                                                                                       | :heavy_check_mark:                                                                                                                                                             | Unique identifier for the deployment.                                                                                                                                          | dep_0c29fq4a2yjb7kx3smwdgxlc                                                                                                                                                   |
+| `requestBody`                                                                                                                                                                  | *ReadableStream<Uint8Array>*                                                                                                                                                   | :heavy_check_mark:                                                                                                                                                             | N/A                                                                                                                                                                            |                                                                                                                                                                                |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |                                                                                                                                                                                |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |                                                                                                                                                                                |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |                                                                                                                                                                                |
+
+### Response
+
+**Promise\<[ReadableStream<Uint8Array>](../../models/.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404, 413       | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## claimAwsXksStoreRetirement
