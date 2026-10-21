@@ -12,7 +12,7 @@ use crate::{
 };
 use alien_core::{
     compute_planner::{
-        capacity_group_requirements, check_pool_capacity, default_persistent_failure_domains,
+        capacity_group_requirements, check_pool_capacity, default_failure_domains,
         generated_pool_scale_policy, plan_compute_with_state, validate_compute_pool_selection,
     },
     instance_catalog::{self, WorkloadRequirements},
@@ -571,13 +571,13 @@ impl ComputeClusterMutation {
                         continue;
                     }
                 }
-                // A persistent pool that does not exist yet gets the planner's default. Leaving
-                // it aggregate would spread its machines over every zone while its volumes are
-                // created in one.
+                // A persistent pool that does not exist yet gets the planner's default: the
+                // release's declared spread, or one domain. Leaving it aggregate would spread
+                // its machines over every zone while its volumes are created in one.
+                let declared_spread = cluster.failure_domain_spread.get(&group.group_id).copied();
                 let Some(selection) = explicit_selection.or_else(|| {
-                    fresh_persistent_pools
-                        .contains(&group.group_id)
-                        .then(default_persistent_failure_domains)
+                    default_failure_domains(declared_spread, true)
+                        .filter(|_| fresh_persistent_pools.contains(&group.group_id))
                 }) else {
                     continue;
                 };
@@ -2279,6 +2279,95 @@ mod tests {
         assert!(
             !cluster.selected_failure_domains.contains_key("stateful"),
             "the provider picks the concrete zone"
+        );
+    }
+
+    /// A setup template carries no failure-domain choice, so the release's declared
+    /// `failureDomainSpread` is the only source of the pool's topology on install.
+    #[test]
+    fn fresh_persistent_pool_without_failure_domain_choice_gets_the_declared_spread() {
+        let container = Container::new("database".to_string())
+            .code(ContainerCode::Image {
+                image: "database:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .persistent_storage(PersistentStorage {
+                encryption_key: None,
+                size: "20Gi".to_string(),
+                mount_path: "/data".to_string(),
+                backups: VolumeBackups::default(),
+            })
+            .stateful(true)
+            .replicas(2)
+            .port(8080)
+            .cluster("compute".to_string())
+            .pool("stateful".to_string())
+            .permissions("database".to_string())
+            .build();
+        let mut cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "stateful".to_string(),
+                instance_type: None,
+                profile: None,
+                min_size: 2,
+                max_size: 2,
+                scale_policy: None,
+                nested_virtualization: None,
+            })
+            .build();
+        cluster
+            .failure_domain_spread
+            .insert("stateful".to_string(), 2);
+        let stack = Stack::new("test-stack".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let machines_without_domains = ComputeSettings {
+            containers: Default::default(),
+            pools: [(
+                "stateful".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 2,
+                    machine: Some("t4g.medium".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                compute: Some(machines_without_domains),
+                ..StackSettings::default()
+            })
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result = ComputeClusterMutation
+            .materialize_capacity_groups(stack, &stack_state, &config)
+            .expect("declared persistent pool should materialize");
+        let cluster = result.resources["compute"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .expect("compute cluster should remain present");
+        assert_eq!(cluster.failure_domain_spread.get("stateful"), Some(&2));
+        assert!(
+            !cluster.selected_failure_domains.contains_key("stateful"),
+            "the provider picks the concrete zones"
         );
     }
 
