@@ -1209,14 +1209,16 @@ impl AzureRemoteStackManagementController {
             // A release that adds a grant on a resource needs its role made and allowed. The
             // runtime cannot do either, so its refused step waits for this setup run.
             let runtime_roles = runtime_roles(ctx)?;
-            // An identity this setup run has yet to create is a change too.
-            let Ok(principals) = workload_principal_ids(ctx) else {
-                return Ok(true);
-            };
-            if self.runtime_roles_revision.as_deref()
-                != Some(runtime_roles_revision(ctx, &runtime_roles, &principals)?.as_str())
-            {
-                return Ok(true);
+            if !(runtime_roles.is_empty() && self.runtime_roles_revision.is_none()) {
+                // An identity this setup run has yet to create is a change too.
+                let Ok(principals) = workload_principal_ids(ctx) else {
+                    return Ok(true);
+                };
+                if self.runtime_roles_revision.as_deref()
+                    != Some(runtime_roles_revision(ctx, &runtime_roles, &principals)?.as_str())
+                {
+                    return Ok(true);
+                }
             }
         }
         super::management_permissions_need_refresh(
@@ -1354,7 +1356,7 @@ mod tests {
             bindings: vec![],
         };
         let roles =
-            management_role_definitions(&plan, "test", "Management role.", "sub-123", "rg-123", 1)
+            management_role_definitions(&plan, "test", "Management role.", "sub-123", "rg-123", 0)
                 .unwrap();
         let names: BTreeSet<String> = roles
             .iter()
@@ -1509,6 +1511,68 @@ mod tests {
     /// management role is assignable at one scope and holds only what is bound there. The
     /// subscription role carries SKU and usage discovery; the scale set and gateway writes stay
     /// in the resource-group role.
+    /// A setup that grants management no role-assignment writes of its own (one that is not
+    /// automatic) still gets the conditioned role-assignment role when the runtime assigns roles
+    /// after setup, one role per condition shard, each under its own id. Without runtime roles
+    /// nothing is added.
+    #[test]
+    fn runtime_roles_give_even_a_manual_setup_its_conditioned_role_assignment_roles() {
+        let plan = AzureGrantPlan {
+            custom_roles: vec![],
+            bindings: vec![],
+        };
+        let none =
+            management_role_definitions(&plan, "test", "Management role.", "sub-123", "rg-123", 0)
+                .unwrap();
+        assert!(none.is_empty());
+
+        let roles =
+            management_role_definitions(&plan, "test", "Management role.", "sub-123", "rg-123", 3)
+                .unwrap();
+        assert_eq!(roles.len(), 3);
+        assert!(roles.iter().all(|role| role.role_assignments
+            && role.scope == "/subscriptions/sub-123/resourceGroups/rg-123"
+            && role.properties.permissions[0].actions
+                == vec![
+                    "Microsoft.Authorization/roleAssignments/delete",
+                    "Microsoft.Authorization/roleAssignments/write"
+                ]
+            && role.properties.assignable_scopes
+                == vec![
+                    "/subscriptions/sub-123/resourceGroups/rg-123",
+                    "/subscriptions/sub-123"
+                ]));
+        let shards: Vec<usize> = roles.iter().map(|role| role.shard).collect();
+        assert_eq!(shards, vec![0, 1, 2]);
+        let ids: BTreeSet<&str> = roles.iter().map(|role| role.uuid.as_str()).collect();
+        assert_eq!(ids.len(), 3, "each shard has its own role");
+        let names: BTreeSet<String> = roles
+            .iter()
+            .map(|role| role.properties.role_name.clone().unwrap())
+            .collect();
+        assert_eq!(names.len(), 3, "each shard has its own name");
+        // Shard 0 keeps the id the role had before shards, so an update finds it.
+        assert_eq!(
+            roles[0].uuid,
+            Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                b"deployment:azure:mgmt-role-assignments-role-def:test:/subscriptions/sub-123/resourceGroups/rg-123"
+            )
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn role_assignment_role_keys_round_trip_their_scope_and_shard() {
+        let scope = "/subscriptions/sub-123/resourceGroups/rg-123";
+        for shard in [0, 1, 7] {
+            assert_eq!(
+                role_assignment_role_scope(&role_assignment_role_key(scope, shard)),
+                (scope, shard)
+            );
+        }
+    }
+
     #[test]
     fn management_roles_hold_only_the_grants_bound_at_their_scope() {
         let profile = PermissionProfile::new().global([
@@ -1528,7 +1592,7 @@ mod tests {
             "Management role.",
             "sub-123",
             "rg-123",
-            1,
+            0,
         )
         .unwrap();
 
@@ -1854,7 +1918,7 @@ mod tests {
                 "Management role.",
                 "sub-123",
                 "rg-123",
-                1,
+                0,
             )
             .unwrap();
 
