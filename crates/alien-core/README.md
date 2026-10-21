@@ -142,14 +142,27 @@ powers that can change IAM or deploy code using a workload identity:
   `roles/iam.denyAdmin` cannot be granted on a project. Admin Activity logs
   record `SetIamPolicy`, `google.iam.admin.v1.UpdateRole`, and
   `google.cloud.secretmanager.v1.SecretManagerService.CreateSecret`.
-- Azure management retains resource-group role-assignment writes and vault
-  configuration powers. Those can grant payload access or change the vault's
-  authorization model; infrastructure teardown can also delete the containing
-  vault/resource group. Activity Log operations include
+- Azure setup creates every custom role the runtime assigns, for management
+  and for each permission profile, and management holds no
+  `roleDefinitions/write`. Management's role-assignment writes sit in a role of
+  their own, assigned with a condition that admits two pairs only: a declared
+  management role to the management identity, and a declared application role
+  to one of the deployment's own workload identities. The built-in Key Vault and
+  Service Bus roles the controllers assign are listed the same way. It cannot give itself any other
+  role, assign a built-in such as Owner, or grant a role to an identity it
+  created. A condition cannot constrain scope, so a declared role can be
+  assigned at the resource group rather than on one resource. Azure treats a
+  conditioned role-assignment write as restricted, so management also cannot
+  switch a Key Vault from RBAC to access policies. It keeps vault configuration
+  and teardown powers, Managed Identity Contributor, and it can still deploy
+  code that runs as a workload identity. A release that needs a new role or a
+  new workload identity waits for setup to run again. Self-assignments the
+  runtime made before this are removed when that resource is next reconciled,
+  except one that grants the same role at the same scope as a declared grant,
+  which is kept. Activity Log operations include
   `Microsoft.Authorization/roleAssignments/write`,
   `Microsoft.Authorization/roleDefinitions/write`,
-  `Microsoft.KeyVault/vaults/write`, `Microsoft.KeyVault/vaults/accessPolicies/write`,
-  and `Microsoft.KeyVault/vaults/delete`.
+  `Microsoft.KeyVault/vaults/write`, and `Microsoft.KeyVault/vaults/delete`.
 
 These are accepted infrastructure privileges, not a hard boundary against a
 compromised infrastructure manager. Customer-owned deny policies (for example,

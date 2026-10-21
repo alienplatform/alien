@@ -786,6 +786,46 @@ mod tests {
             .contains(&remote_management));
     }
 
+    /// Management's entry is the same on every release: a dependency added to it would change
+    /// this Frozen resource on existing installations, and the runtime would then run its update
+    /// with credentials that may not rebuild management's own roles. Management waits for the
+    /// identities its role-assignment condition names in its own steps instead.
+    #[tokio::test]
+    async fn azure_management_does_not_depend_on_the_application_identities() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteBindings::new("remote-bindings".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(Storage::new("files".to_string()).build(), ResourceLifecycle::Live)
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &StackState::new(Platform::Azure), &config)
+            .await
+            .unwrap();
+        let management = &result.resources.get("management").unwrap().dependencies;
+        for identity in [
+            ResourceRef::new(ServiceAccount::RESOURCE_TYPE, "execution-sa"),
+            ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "remote-bindings"),
+        ] {
+            assert!(!management.contains(&identity), "{identity:?}");
+        }
+    }
+
     #[tokio::test]
     async fn published_storage_waits_for_both_identities_without_inverting_management() {
         let storage = Storage::new("archive".to_string()).build();
