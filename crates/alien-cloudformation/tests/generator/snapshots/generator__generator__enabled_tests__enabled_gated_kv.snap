@@ -185,3 +185,8 @@ Resources:
       InputValues:
         storeEnabled:
           Ref: InputStoreEnabled
+      ConditionalDependencies:
+      - Fn::If:
+        - InputStoreEnabledIsTrue
+        - Ref: Store
+        - Ref: AWS::NoValue

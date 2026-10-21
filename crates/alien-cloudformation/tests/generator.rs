@@ -30,6 +30,7 @@ mod generator {
     pub mod output_chunking_tests;
     pub mod parameter_update_tests;
     pub mod plugin_tests;
+    pub mod registration_delete_order_tests;
     pub mod registration_tests;
     pub mod stack_input_tests;
     pub mod volume_key_dependency_tests;

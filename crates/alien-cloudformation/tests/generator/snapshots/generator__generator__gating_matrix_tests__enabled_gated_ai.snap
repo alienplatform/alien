@@ -205,5 +205,10 @@ Resources:
       InputValues:
         fixtureEnabled:
           Ref: InputFixtureEnabled
+      ConditionalDependencies:
+      - Fn::If:
+        - InputFixtureEnabledIsTrue
+        - Ref: FixtureExecutionSaRoleAiPermission00
+        - Ref: AWS::NoValue
     DependsOn:
     - ExecutionSaRole
