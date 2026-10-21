@@ -444,6 +444,16 @@ resource "google_project_iam_member" "target_roles" {
   member   = "serviceAccount:${google_service_account.target.email}"
 }
 
+# GCP setup creates each deployment's own workload identity pool and provider in the
+# target project. Granted on the target project only, not through manager_roles, which
+# the management project also uses.
+resource "google_project_iam_member" "target_workload_identity_pool_admin" {
+  provider = google.target
+  project  = var.target_project_id
+  role     = "roles/iam.workloadIdentityPoolAdmin"
+  member   = "serviceAccount:${google_service_account.target.email}"
+}
+
 resource "google_project_iam_member" "target_provider_container_admin" {
   provider = google.target
   for_each = var.target_provider_email != "" && var.target_provider_email != google_service_account.target.email ? toset([var.target_provider_email]) : toset([])
@@ -462,6 +472,7 @@ resource "time_sleep" "target_role_propagation" {
 
   depends_on = [
     google_project_iam_member.target_roles,
+    google_project_iam_member.target_workload_identity_pool_admin,
     google_project_iam_member.target_provider_container_admin,
   ]
 }
