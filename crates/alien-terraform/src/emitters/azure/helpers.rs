@@ -654,14 +654,10 @@ fn setup_resource_custom_roles(
         .custom_roles
         .into_iter()
         .map(|mut custom_role| {
-            // These roles are assigned to the management identity or to the remote-bindings
-            // identity the vendor uses. Assignable at the subscription too, so management, which
-            // can change role definitions only in the resource group, cannot widen them.
-            custom_role.role_definition.assignable_scopes =
-                alien_permissions::generators::protected_management_assignable_scopes(
-                    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
-                    "/subscriptions/${var.azure_subscription_id}",
-                );
+            custom_role.role_definition.assignable_scopes = vec![
+                "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+                    .to_string(),
+            ];
             custom_role
         })
         .collect())
