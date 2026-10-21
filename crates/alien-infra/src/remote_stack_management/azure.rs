@@ -1075,14 +1075,32 @@ impl AzureRemoteStackManagementController {
                 resource_group_name,
             };
             for (uuid, role_def_id) in self.runtime_role_definition_ids.clone() {
-                delete_management_role_definition(
-                    &client,
-                    &role_def_id,
-                    &scope,
-                    "the runtime assigned, on delete",
-                    &config.id,
-                )
-                .await?;
+                match client.delete_role_definition(&scope, uuid.clone()).await {
+                    Ok(_) => info!(role_definition_id = %role_def_id, "Runtime role definition deleted"),
+                    Err(error)
+                        if matches!(
+                            &error.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    // A resource the runtime assigned the role on can outlive the deployment
+                    // soft-deleted (a purge-protected Key Vault), and Azure keeps its assignments
+                    // until it is purged. The role then grants nothing anyone can use; it is left,
+                    // as roles the runtime made itself always were, rather than failing the delete.
+                    Err(error) if role_still_assigned(&error) => {
+                        tracing::warn!(
+                            role_definition_id = %role_def_id,
+                            "Runtime role definition still assigned on a deleted resource; leaving it"
+                        );
+                    }
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to delete runtime role definition '{role_def_id}' on delete"
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        }));
+                    }
+                }
                 self.runtime_role_definition_ids.remove(&uuid);
             }
         }
@@ -1636,6 +1654,28 @@ mod tests {
             )
             .to_string()
         );
+    }
+
+    /// Azure keeps the assignments on a soft-deleted, purge-protected resource, so a runtime
+    /// role can stay referenced after the deployment's resources are gone. Only that refusal
+    /// leaves the role; other failures still fail the delete.
+    #[test]
+    fn only_a_still_assigned_runtime_role_is_left_on_delete() {
+        let still_assigned = AlienError::new(CloudClientErrorData::InvalidInput {
+            message: "Bad request for Resource '0e86725b': There are existing role assignments referencing role 0e86725b. The role assignments must be deleted before the role can be deleted.".to_string(),
+            field_name: None,
+        });
+        assert!(role_still_assigned(&still_assigned));
+        let other = AlienError::new(CloudClientErrorData::InvalidInput {
+            message: "Bad request for Resource '0e86725b': malformed role".to_string(),
+            field_name: None,
+        });
+        assert!(!role_still_assigned(&other));
+        let denied = AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: "Role definition".to_string(),
+            resource_name: "0e86725b".to_string(),
+        });
+        assert!(!role_still_assigned(&denied));
     }
 
     #[test]
@@ -2537,6 +2577,21 @@ fn runtime_roles_revision(
         resource_id: Some("management".to_string()),
     })?;
     Ok(format!("{:x}", Sha256::digest(&digest)))
+}
+
+/// Whether Azure refused to delete a role definition because assignments still reference it.
+fn role_still_assigned(error: &AlienError<CloudClientErrorData>) -> bool {
+    error
+        .to_string()
+        .to_ascii_lowercase()
+        .contains("existing role assignments referencing role")
+        || std::iter::successors(error.source.as_deref(), |source| source.source.as_deref())
+            .any(|source| {
+                source
+                    .message
+                    .to_ascii_lowercase()
+                    .contains("existing role assignments referencing role")
+            })
 }
 
 async fn delete_management_role_assignment(
