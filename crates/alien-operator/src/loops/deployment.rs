@@ -15,9 +15,9 @@ use crate::config::OperatorConfig;
 use crate::db::OperatorDb;
 use crate::OperatorState;
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, EnvironmentVariable, EnvironmentVariableType,
-    KubernetesClientConfig, ObservedInventoryBatch, Platform, ResourceHeartbeat,
-    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
+    EnvironmentVariableType, KubernetesClientConfig, ObservedInventoryBatch, Platform,
+    ResourceHeartbeat, ResourceStatus, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -170,7 +170,7 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
 
 /// Run deployment steps continuously until synced or long delay.
 /// Returns the number of steps executed and the delay before resuming.
-async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Duration)> {
+pub(crate) async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Duration)> {
     // Get deployment state and config
     let mut current = match state.db.get_deployment_state().await? {
         Some(s) => s,
@@ -275,6 +275,36 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Du
         suggested_delay_ms: AtomicU64::new(0),
     };
 
+    // A target that left the deployment Running or RefreshFailed is maintenance of
+    // the installed release (see `sync::accept_target`). Run the Running refresh,
+    // as the manager does for push deployments: every Ready handler runs, so
+    // health checks and in-place repairs such as linked-binding drift happen.
+    let refresh = operation == LoopOperation::Deploy
+        && matches!(
+            current.status,
+            DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+        );
+    if refresh {
+        let steps = run_maintenance_refresh(
+            state,
+            &mut current,
+            &mut enriched_config,
+            &client_config,
+            &deployment_id,
+            &policy,
+            &transport,
+        )
+        .await?;
+        if has_resources_in_flight(&current) {
+            // A Ready handler started a repair (for example a linked-binding refresh).
+            // Keep the target and config so the next tick continues it.
+            let delay = Duration::from_millis(transport.suggested_delay_ms.load(Ordering::Relaxed));
+            return Ok((steps, delay));
+        }
+        finish_maintenance_refresh(state, &current).await?;
+        return Ok((steps, Duration::ZERO));
+    }
+
     let result = alien_deployment::runner::run_step_loop(
         &mut current,
         &mut enriched_config,
@@ -305,6 +335,11 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Du
         );
     } else if loop_result.stop_reason != LoopStopReason::Handoff {
         if loop_result.outcome == LoopOutcome::Success {
+            if operation == LoopOperation::Deploy
+                && loop_result.final_status == DeploymentStatus::Running
+            {
+                record_applied_operation(state).await?;
+            }
             debug!("Deployment synced, clearing deployment config");
             state.db.clear_deployment_config().await?;
         }
@@ -331,6 +366,85 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<(usize, Du
         Duration::ZERO
     };
     Ok((steps_executed, delay))
+}
+
+/// One Running refresh pass over the installed release.
+async fn run_maintenance_refresh(
+    state: &OperatorState,
+    current: &mut DeploymentState,
+    config: &mut DeploymentConfig,
+    client_config: &ClientConfig,
+    deployment_id: &str,
+    policy: &RunnerPolicy,
+    transport: &OperatorTransport,
+) -> Result<usize> {
+    let result = alien_deployment::runner::run_running_refresh_step_loop(
+        current,
+        config,
+        client_config,
+        deployment_id,
+        policy,
+        transport,
+        state.service_provider.clone(),
+        None,
+    )
+    .await
+    .context(ErrorData::DeploymentFailed {
+        message: "Maintenance refresh failed".to_string(),
+    })?;
+    debug!(
+        status = ?result.loop_result.final_status,
+        steps = result.steps_executed,
+        "Maintenance refresh step completed"
+    );
+    Ok(result.steps_executed)
+}
+
+/// Whether a refresh left a resource mid-flow, such as a container whose Ready
+/// handler found a stale linked binding and started its update.
+fn has_resources_in_flight(state: &DeploymentState) -> bool {
+    state.stack_state.as_ref().is_some_and(|stack| {
+        stack.resources.values().any(|resource| {
+            matches!(
+                resource.status,
+                ResourceStatus::Provisioning | ResourceStatus::Updating | ResourceStatus::Deleting
+            )
+        })
+    })
+}
+
+/// Consume a finished maintenance target: the deployment is settled on its
+/// installed release again, so passive health reporting resumes and the next
+/// tick does not refresh again. A state the sync loop changed meanwhile (for
+/// example a newer target) is left for the next tick.
+async fn finish_maintenance_refresh(state: &OperatorState, refreshed: &DeploymentState) -> Result<()> {
+    let mut settled = refreshed.clone();
+    settled.target_release = None;
+    if state
+        .db
+        .compare_and_set_deployment_state(refreshed, &settled)
+        .await?
+    {
+        state.db.clear_deployment_config().await?;
+    }
+    Ok(())
+}
+
+/// Remember the operation whose apply just completed, so a later maintenance
+/// claim on it is served by a refresh (see `sync::accept_target`).
+async fn record_applied_operation(state: &OperatorState) -> Result<()> {
+    let claim = state
+        .db
+        .get_sync_execution()
+        .await?
+        .and_then(|execution| execution.claim);
+    if let Some(claim) = claim {
+        state
+            .db
+            .set_applied_operation_id(&claim.operation_id)
+            .await?;
+    }
+    Ok(())
 }
 
 /// Enrich a deployment config with operator-specific settings.

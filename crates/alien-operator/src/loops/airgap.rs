@@ -193,7 +193,7 @@ async fn apply_pending_target(state: &OperatorState, secret_name: &str) -> Resul
                 .await?;
         }
     }
-    crate::loops::sync::accept_target(state, &target).await?;
+    crate::loops::sync::accept_target(state, &target, false).await?;
     state.db.set_airgap_sequence(sequence).await?;
     Ok(())
 }

@@ -729,6 +729,62 @@ impl OperatorDb {
     }
 
     // =========================================================================
+    // Applied Operation
+    // =========================================================================
+
+    const KEY_APPLIED_OPERATION_ID: &str = "applied_operation_id";
+
+    /// The operation whose apply this Operator last completed. Platform claims
+    /// maintenance on exactly this operation, so a claim naming it observes the
+    /// installed release instead of applying new work.
+    pub async fn get_applied_operation_id(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = ?",
+                (Self::KEY_APPLIED_OPERATION_ID,),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query applied_operation_id".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch applied_operation_id row".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let operation_id: String =
+            row.get(0)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to read applied_operation_id value".to_string(),
+                })?;
+        Ok(Some(operation_id))
+    }
+
+    /// Record the operation whose apply just completed.
+    pub async fn set_applied_operation_id(&self, operation_id: &str) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES (?, ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (Self::KEY_APPLIED_OPERATION_ID, operation_id),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set applied_operation_id".to_string(),
+        })?;
+        Ok(())
+    }
+
+    // =========================================================================
     // Deployment Config
     // =========================================================================
 

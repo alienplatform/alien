@@ -497,7 +497,17 @@ async fn sync_with_manager(
 
     if has_update {
         if let Some(target_deployment) = durable_target {
-            accept_target(state, &target_deployment).await?;
+            // Platform claims maintenance on the operation whose apply this
+            // Operator completed last (its applied operation). Any other
+            // claim is new work: an update, a corrective target or a retry.
+            let maintenance = match sync_response.execution_claim.as_ref() {
+                Some(claim) => {
+                    state.db.get_applied_operation_id().await?.as_deref()
+                        == Some(claim.operation_id.as_str())
+                }
+                None => false,
+            };
+            accept_target(state, &target_deployment, maintenance).await?;
         }
     }
 
@@ -508,9 +518,14 @@ async fn sync_with_manager(
 /// Make `target_deployment` the Operator's target: record the release as the
 /// target release, store its configuration, and open an approval when
 /// updates need one. Sync and air-gapped bundles both deliver targets here.
+///
+/// A `maintenance` target observes the release this Operator already applied.
+/// It keeps the deployment's status, so the deployment loop runs the Running
+/// refresh (every Ready handler) instead of re-applying the release.
 pub(crate) async fn accept_target(
     state: &OperatorState,
     target_deployment: &alien_core::sync::TargetDeployment,
+    maintenance: bool,
 ) -> crate::error::Result<()> {
     let now = Utc::now().to_rfc3339();
 
@@ -544,11 +559,16 @@ pub(crate) async fn accept_target(
             .or(state.config.base_platform),
     );
 
-    // Update target_release in state
-    accept_target_release(
-        &mut deployment_state,
-        target_deployment.release_info.clone(),
-    );
+    let refresh = maintenance
+        && refreshes_installed_release(&deployment_state, &target_deployment.release_info);
+    if refresh {
+        deployment_state.target_release = Some(target_deployment.release_info.clone());
+    } else {
+        accept_target_release(
+            &mut deployment_state,
+            target_deployment.release_info.clone(),
+        );
+    }
 
     // Save state and config
     state.db.set_deployment_state(&deployment_state).await?;
@@ -557,8 +577,9 @@ pub(crate) async fn accept_target(
         .set_deployment_config(&target_deployment.config)
         .await?;
 
-    // Handle deployment approval if required
-    if state.config.requires_deployment_approval() {
+    // Handle deployment approval if required. A refresh changes nothing that
+    // was not already approved.
+    if !refresh && state.config.requires_deployment_approval() {
         let apr_id = format!("apr_{}", Uuid::new_v4().simple());
         let approval = Approval {
             id: apr_id.clone(),
@@ -578,6 +599,24 @@ pub(crate) async fn accept_target(
         );
     }
     Ok(())
+}
+
+/// Whether a maintenance target can be served by refreshing what is installed:
+/// the deployment is settled on exactly the target's release. Anything else
+/// (an Operator that restarted mid-update, a different release) applies it.
+fn refreshes_installed_release(
+    deployment_state: &alien_core::DeploymentState,
+    release: &alien_core::ReleaseInfo,
+) -> bool {
+    matches!(
+        deployment_state.status,
+        alien_core::DeploymentStatus::Running | alien_core::DeploymentStatus::RefreshFailed
+    ) && release.release_id.is_some()
+        && deployment_state
+            .current_release
+            .as_ref()
+            .and_then(|current| current.release_id.as_deref())
+            == release.release_id.as_deref()
 }
 
 fn accept_target_release(
@@ -1301,6 +1340,151 @@ mod tests {
         }
         server.abort();
         body
+    }
+
+    /// How many times the test Storage controller's Ready handler has run.
+    fn storage_ready_checks(state: &DeploymentState) -> u64 {
+        state
+            .stack_state
+            .as_ref()
+            .and_then(|stack| stack.resources.get("files"))
+            .and_then(|resource| resource.internal_state.as_ref())
+            .and_then(|internal| internal.get("readyChecks").or_else(|| internal.get("ready_checks")))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    }
+
+    /// Runs the Operator's deployment loop until it has nothing left to do.
+    async fn run_deployment_until_idle(state: &OperatorState) {
+        for _ in 0..20 {
+            let (steps, _) = super::super::deployment::run_deployment_continuously(state)
+                .await
+                .expect("deployment loop tick");
+            if steps == 0 {
+                return;
+            }
+        }
+        panic!("the deployment loop kept stepping");
+    }
+
+    /// A pull Operator never ran Ready on a settled deployment: every maintenance
+    /// claim was re-applied as an update, whose executor skips Running resources.
+    /// Ready-time repairs (linked-binding drift, Kubernetes endpoint and health
+    /// checks) therefore never ran on Operator deployments. This drives the real
+    /// sync and deployment loops against a stub manager on the test platform.
+    #[tokio::test]
+    async fn a_maintenance_claim_runs_ready_on_the_installed_release() {
+        type Response = Arc<Mutex<Value>>;
+        async fn serve(State(response): State<Response>) -> Json<Value> {
+            Json(response.lock().unwrap().clone())
+        }
+
+        let vault_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_VAULT_DATA_DIR", vault_dir.path());
+        let response: Response = Arc::new(Mutex::new(json!({})));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = OperatorDb::new(directory, TEST_ENCRYPTION_KEY).await.unwrap();
+        db.set_deployment_id("dep_maintenance").await.unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(directory)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client("ax_dep_test").unwrap();
+        let url = format!("http://{address}");
+        let release = ReleaseInfo {
+            release_id: Some("rel_installed".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: Stack::new("maintenance".to_string())
+                .add(
+                    alien_core::Storage::new("files".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .build(),
+        };
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        let target = json!({ "releaseInfo": release, "config": config });
+        let claim = |operation: &str, attempt: &str| {
+            json!({ "operationId": operation, "attemptId": attempt })
+        };
+
+        // The first apply installs the release and records its operation.
+        *response.lock().unwrap() =
+            json!({ "executionClaim": claim("duop_install", "att_1"), "target": target });
+        sync_with_manager(&state, &client, &url, false, None).await.unwrap();
+        run_deployment_until_idle(&state).await;
+        let installed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(installed.status, DeploymentStatus::Running);
+        assert_eq!(
+            state.db.get_applied_operation_id().await.unwrap().as_deref(),
+            Some("duop_install")
+        );
+        let ready_before = storage_ready_checks(&installed);
+
+        // Platform claims maintenance on the applied operation. The Operator keeps
+        // the deployment Running and runs every Ready handler once.
+        *response.lock().unwrap() =
+            json!({ "executionClaim": claim("duop_install", "att_2"), "target": target });
+        sync_with_manager(&state, &client, &url, false, None).await.unwrap();
+        let accepted = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(accepted.status, DeploymentStatus::Running);
+        run_deployment_until_idle(&state).await;
+        let refreshed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(refreshed.status, DeploymentStatus::Running);
+        assert!(
+            storage_ready_checks(&refreshed) > ready_before,
+            "maintenance must run Ready on the Running storage ({} -> {})",
+            ready_before,
+            storage_ready_checks(&refreshed)
+        );
+        assert!(refreshed.target_release.is_none());
+        assert!(state.db.get_deployment_config().await.unwrap().is_none());
+        assert_eq!(
+            state.db.get_applied_operation_id().await.unwrap().as_deref(),
+            Some("duop_install")
+        );
+
+        // New work under another operation, even for the same release (a config
+        // change), is still applied as an update.
+        *response.lock().unwrap() =
+            json!({ "executionClaim": claim("duop_config", "att_1"), "target": target });
+        sync_with_manager(&state, &client, &url, false, None).await.unwrap();
+        let update = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(update.status, DeploymentStatus::UpdatePending);
+        run_deployment_until_idle(&state).await;
+        assert_eq!(
+            state.db.get_applied_operation_id().await.unwrap().as_deref(),
+            Some("duop_config")
+        );
+
+        server.abort();
+        std::env::remove_var("TEST_VAULT_DATA_DIR");
     }
 
     /// Serves the Kubernetes list calls the observe pass makes for one
