@@ -731,14 +731,16 @@ pub async fn handle_updating(
             .prepared_stack
             .as_ref()
             .is_some_and(|installed| !same_permission_grants(installed, desired));
-        if !pending_accounts.is_empty() || profiles_changed {
+        // Automatic updates entered Updating to drain runtime resources before setup.
+        // Keep that handoff even when only a Frozen resource was removed.
+        if runtime_metadata.automatic_setup || !pending_accounts.is_empty() || profiles_changed {
             next.status = if runtime_metadata.automatic_setup {
                 DeploymentStatus::InitialSetup
             } else {
                 DeploymentStatus::UpdateFailed
             };
             next.error = Some(AlienError::new(alien_preflights::error::ErrorData::SetupRequired {
-                message: format!("Runtime cleanup completed; setup must reconcile permissions for {} before this update is complete. Rerun setup with the desired release", pending_accounts.join(", ")),
+                message: "Runtime cleanup completed; setup must reconcile removed resources and permissions before this update is complete. Rerun setup with the desired release".to_string(),
             }).into_generic());
             next.runtime_metadata = Some(runtime_metadata);
             return Ok(DeploymentStepResult {

@@ -4602,3 +4602,113 @@ async fn setup_cleanup_is_fenced_before_the_prepared_update_is_checkpointed() {
         );
     }
 }
+
+#[tokio::test]
+async fn mixed_live_and_frozen_removal_preserves_automatic_setup_obligation() {
+    let _vault = test_vault_env().await;
+    for automatic in [false, true] {
+        let mut config = create_test_config("mixed-removal", false);
+        config.setup_run = true;
+        if automatic {
+            config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        }
+        let installed = Stack::new("mixed-removal".into())
+            .add(
+                Storage::new("retained-archive".into()).build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Storage::new("live-archive".into()).build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Storage::new("frozen-archive".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut state = run_to_completion(create_initial_state(installed), config.clone()).await;
+        assert_eq!(state.status, DeploymentStatus::Running);
+        config.setup_run = false;
+        start_update(
+            &mut state,
+            release_of(
+                "removed",
+                Stack::new("mixed-removal".into())
+                    .add(
+                        Storage::new("retained-archive".into()).build(),
+                        ResourceLifecycle::Live,
+                    )
+                    .build(),
+            ),
+        );
+        state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        assert_eq!(state.status, DeploymentStatus::Updating);
+        let metadata = state.runtime_metadata.as_ref().unwrap();
+        assert_eq!(
+            metadata.prepared_stack.as_ref().unwrap().permissions,
+            metadata
+                .pending_prepared_stack
+                .as_ref()
+                .unwrap()
+                .permissions,
+            "this case must not depend on a grant change"
+        );
+        let mut resumed_setup = false;
+        for _ in 0..MAX_STEPS {
+            state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+            if state.status == DeploymentStatus::Running {
+                break;
+            }
+            if state.status == DeploymentStatus::InitialSetup && !resumed_setup {
+                let resources = &state.stack_state.as_ref().unwrap().resources;
+                assert!(
+                    resources
+                        .get("live-archive")
+                        .is_none_or(|r| r.status == alien_core::ResourceStatus::Deleted)
+                );
+                assert_eq!(
+                    resources["frozen-archive"].status,
+                    alien_core::ResourceStatus::Running
+                );
+                assert!(
+                    state
+                        .runtime_metadata
+                        .as_ref()
+                        .unwrap()
+                        .pending_prepared_stack
+                        .is_some()
+                );
+                resumed_setup = true;
+            }
+            state = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+                .await
+                .unwrap()
+                .state;
+        }
+        assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+        let resources = &state.stack_state.as_ref().unwrap().resources;
+        assert_eq!(
+            resources["retained-archive"].status,
+            alien_core::ResourceStatus::Running
+        );
+        assert!(
+            resources
+                .get("live-archive")
+                .is_none_or(|r| r.status == alien_core::ResourceStatus::Deleted)
+        );
+        let frozen = resources.get("frozen-archive");
+        if automatic {
+            assert!(
+                frozen.is_none_or(|r| r.status == alien_core::ResourceStatus::Deleted),
+                "automatic setup must finish the requested Frozen removal after Live cleanup"
+            );
+            assert!(resumed_setup);
+        } else {
+            assert_eq!(frozen.unwrap().status, alien_core::ResourceStatus::Running);
+            assert!(!resumed_setup);
+        }
+    }
+}
