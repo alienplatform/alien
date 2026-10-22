@@ -101,6 +101,17 @@ pub struct AgentState {
     pub agent_binary: PathBuf,
 }
 
+impl AgentAuthorization {
+    /// Native-file clients verify cloud policy before authorizing guest startup.
+    pub fn requires_activation(&self) -> bool {
+        #[cfg(unix)]
+        if matches!(self, Self::NativeFile(_)) {
+            return true;
+        }
+        false
+    }
+}
+
 impl AgentState {
     /// Azure's create-time environment includes user variables and gateway proxy settings.
     /// Preserve those defaults without letting agent configuration become a child contract.
@@ -282,6 +293,7 @@ pub fn router(state: Arc<AgentState>) -> Router {
 
     let router = Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/activate", post(activate_boot))
         .route(&hook_path("ready"), get(hook_ready).post(hook_ready))
         .route(
             &hook_path("validate"),
@@ -355,7 +367,11 @@ async fn health(
         }))
     })?;
 
-    let status = "ready";
+    let status = if state.image_process.waiting_for_activation()? {
+        "awaiting-network-verification"
+    } else {
+        "ready"
+    };
     #[cfg(target_os = "linux")]
     let status = match &state.gateway_egress {
         Some(egress) => egress.status()?,
@@ -367,6 +383,25 @@ async fn health(
         protocol_version: PROTOCOL_VERSION,
         boot_id,
     }))
+}
+
+/// The binding calls this only after verifying the native provider policy. Repeated calls never
+/// restart image code, including when the first response was lost or the image has exited.
+async fn activate_boot(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    if !state.authorization.requires_activation() {
+        return Err(AlienError::new(ErrorData::RequestInvalid {
+            reason: "this backend does not use native-file boot activation".into(),
+        })
+        .into());
+    }
+    state.image_process.activate()?;
+    state.start_image_once()?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The kernel boot id of the container this agent runs in.

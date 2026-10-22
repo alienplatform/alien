@@ -1203,7 +1203,22 @@ async fn native_file_credential_authorizes_only_its_own_boot() {
         let response = send.send().await.unwrap();
         assert_eq!(response.status(), 401);
         assert!(!agent.root.join("accepted").exists());
+        let mut activation = client.post(format!("{}/v1/activate", agent.base_url));
+        if let Some(value) = rejected {
+            activation = activation.bearer_auth(value);
+        }
+        assert_eq!(activation.send().await.unwrap().status(), 401);
     }
+    assert_eq!(
+        client
+            .post(format!("{}/v1/activate", agent.base_url))
+            .bearer_auth(&current)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        204
+    );
     let response = client
         .post(format!("{}/v1/exec", agent.base_url))
         .bearer_auth(current)

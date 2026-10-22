@@ -24,6 +24,12 @@ agent's published HTTPS port. It never runs a native shell command: Azure's
 native exec can grant capabilities beyond those available to the image process.
 The token grants access only to this sandbox's agent, never to cloud APIs.
 
+The agent initially reports `awaiting-network-verification` and refuses session
+operations. After the binding verifies the provider's policy, it sends an
+authenticated `POST /v1/activate`. Activation starts the saved command once;
+repeated activation never restarts it. A resumed process keeps that state, and a
+fresh boot needs activation again after the provider policy is checked.
+
 Exec, jobs and files use the shared agent protocol. Missing or invalid tokens
 are refused before session operations. A fresh boot replaces the token; a
 resume preserving the process keeps it. Create-time user environment and gateway

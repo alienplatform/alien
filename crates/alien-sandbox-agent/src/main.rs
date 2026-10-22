@@ -154,11 +154,13 @@ fn main() -> Result<()> {
             }
         }
         #[cfg(target_os = "linux")]
-        if state.gateway_egress.is_none() {
+        if state.gateway_egress.is_none() && !state.image_process.waiting_for_activation()? {
             state.start_image_once()?;
         }
         #[cfg(not(target_os = "linux"))]
-        state.start_image_once()?;
+        if !state.image_process.waiting_for_activation()? {
+            state.start_image_once()?;
+        }
         tracing::info!("sandbox agent listening on {address}");
 
         axum::serve(
@@ -337,6 +339,7 @@ fn load_state() -> Result<AgentState> {
         "the validate hook needs the path of this executable".to_string(),
     ))?;
 
+    let authorization = load_authorization()?;
     Ok(AgentState {
         image_process: if image_command_enabled()? {
             if agent_uid != 0 || isolation != Isolation::UidSplit {
@@ -345,14 +348,18 @@ fn load_state() -> Result<AgentState> {
                     "requires a root agent with uid-split isolation",
                 ));
             }
-            alien_sandbox_agent::image_command::ImageProcess::with_image_user()
+            if authorization.requires_activation() {
+                alien_sandbox_agent::image_command::ImageProcess::awaiting_activation()
+            } else {
+                alien_sandbox_agent::image_command::ImageProcess::with_image_user()
+            }
         } else if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
             Default::default()
         } else {
             alien_sandbox_agent::image_command::ImageProcess::not_configured()
         },
         session_root,
-        authorization: load_authorization()?,
+        authorization,
         exec_identity,
         output_cap,
         jobs: JobRegistry::new(),

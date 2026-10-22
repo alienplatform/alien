@@ -32,6 +32,8 @@ pub struct ImageProcess {
 pub enum ImageStatus {
     /// Released images without a saved startup command retain their old behavior.
     NotConfigured,
+    /// The native-file binding has not yet verified the provider's network policy.
+    AwaitingActivation,
     /// Waiting for network checks and, when required, gateway identity delivery.
     #[default]
     Pending,
@@ -56,6 +58,26 @@ impl ImageProcess {
             image_user: true,
             ..Default::default()
         }
+    }
+
+    /// Defer native-file boot until the authenticated binding verifies the provider policy.
+    pub fn awaiting_activation() -> Self {
+        Self {
+            status: Arc::new(Mutex::new(ImageStatus::AwaitingActivation)),
+            image_user: true,
+        }
+    }
+
+    pub fn activate(&self) -> Result<()> {
+        let mut status = self.status.lock().map_err(|_| monitor_failed())?;
+        if *status == ImageStatus::AwaitingActivation {
+            *status = ImageStatus::Pending;
+        }
+        Ok(())
+    }
+
+    pub fn waiting_for_activation(&self) -> Result<bool> {
+        Ok(self.status()? == ImageStatus::AwaitingActivation)
     }
 
     /// Compatibility for released images that never saved or started an OCI command.
@@ -85,6 +107,9 @@ impl ImageProcess {
     ) -> Result<()> {
         let mut status = self.status.lock().map_err(|_| monitor_failed())?;
         match *status {
+            ImageStatus::AwaitingActivation => {
+                return Err(AlienError::new(ErrorData::EgressPathUnexpected))
+            }
             ImageStatus::Pending => (),
             ImageStatus::Failed => return Err(monitor_failed()),
             _ => return Ok(()),
@@ -319,52 +344,72 @@ mod tests {
 
     #[tokio::test]
     async fn image_starts_once_without_waiting_for_readiness_and_retains_its_exit() {
-        let (temp, path, identity) = process_fixture(vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            "printf started >> starts; while ! test -e release; do sleep 0.02; done; exit 7".into(),
-        ]);
-        let process = ImageProcess::default();
-        process
-            .start_once_from(&path, identity, &Default::default())
-            .unwrap();
-        // The app is still waiting for its own readiness condition. Spawn must return.
-        assert_eq!(process.status().unwrap(), ImageStatus::Running);
-        process
-            .start_once_from(&path, identity, &Default::default())
-            .unwrap();
-        fs::write(temp.path().join("release"), b"ready").unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                if matches!(process.status().unwrap(), ImageStatus::Exited { .. }) {
-                    break;
+        for deferred in [false, true] {
+            let (temp, path, identity) = process_fixture(vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf started >> starts; while ! test -e release; do sleep 0.02; done; exit 7"
+                    .into(),
+            ]);
+            let process = if deferred {
+                ImageProcess {
+                    status: Arc::new(Mutex::new(ImageStatus::AwaitingActivation)),
+                    ..Default::default()
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            } else {
+                ImageProcess::default()
+            };
+            if deferred {
+                let refused = process
+                    .start_once_from(&path, identity, &Default::default())
+                    .unwrap_err();
+                assert_eq!(refused.code, "EGRESS_PATH_UNEXPECTED");
+                assert!(!temp.path().join("starts").exists());
+                assert!(process.waiting_for_activation().unwrap());
+                process.activate().unwrap();
             }
-        })
-        .await
-        .expect("image exit must be observed");
-        assert_eq!(
-            process.status().unwrap(),
-            ImageStatus::Exited {
-                code: Some(7),
-                signal: None
-            }
-        );
-        process
-            .start_once_from(&path, identity, &Default::default())
-            .unwrap();
-        assert_eq!(
-            fs::read_to_string(temp.path().join("starts")).unwrap(),
-            "started"
-        );
-        assert_eq!(
-            process.status().unwrap(),
-            ImageStatus::Exited {
-                code: Some(7),
-                signal: None
-            }
-        );
+            process
+                .start_once_from(&path, identity, &Default::default())
+                .unwrap();
+            // The app is still waiting for its own readiness condition. Spawn must return.
+            assert_eq!(process.status().unwrap(), ImageStatus::Running);
+            process
+                .start_once_from(&path, identity, &Default::default())
+                .unwrap();
+            fs::write(temp.path().join("release"), b"ready").unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if matches!(process.status().unwrap(), ImageStatus::Exited { .. }) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("image exit must be observed");
+            assert_eq!(
+                process.status().unwrap(),
+                ImageStatus::Exited {
+                    code: Some(7),
+                    signal: None
+                }
+            );
+            process.activate().unwrap();
+            process
+                .start_once_from(&path, identity, &Default::default())
+                .unwrap();
+            assert_eq!(
+                fs::read_to_string(temp.path().join("starts")).unwrap(),
+                "started"
+            );
+            assert_eq!(
+                process.status().unwrap(),
+                ImageStatus::Exited {
+                    code: Some(7),
+                    signal: None
+                }
+            );
+        }
     }
 
     #[tokio::test]

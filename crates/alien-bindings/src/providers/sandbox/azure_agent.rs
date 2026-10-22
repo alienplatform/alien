@@ -24,16 +24,18 @@ impl AzureSandbox {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
         loop {
             let ready = async {
-                let response = self
-                    .request(sandbox_id, reqwest::Method::GET, "/v1/health?version=1")
-                    .await?
-                    .send()
-                    .await
-                    .into_alien_error()
-                    .context(unreachable())?;
-                if !response.status().is_success() {
-                    return Err(AlienError::new(unreachable()));
-                }
+                super::super::agent_protocol::send(
+                    self.request(sandbox_id, reqwest::Method::POST, "/v1/activate")
+                        .await?,
+                    "sandbox.activate",
+                )
+                .await?;
+                let response = super::super::agent_protocol::send(
+                    self.request(sandbox_id, reqwest::Method::GET, "/v1/health?version=1")
+                        .await?,
+                    "sandbox.health",
+                )
+                .await?;
                 let body: serde_json::Value = response
                     .json()
                     .await
@@ -151,6 +153,65 @@ mod tests {
     use axum::{http::HeaderMap, routing::post, Json, Router};
     use futures::StreamExt;
     use std::{collections::BTreeMap, sync::Arc};
+
+    #[tokio::test]
+    async fn readiness_activates_boot_before_health_and_does_not_retry_authorization_refusal() {
+        for refused in [false, true] {
+            let token = STANDARD.encode([4u8; 32]);
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let activation_calls = calls.clone();
+            let health_calls = calls.clone();
+            let router = Router::new()
+                .route("/v1/activate", post(move || async move {
+                    activation_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if refused { axum::http::StatusCode::UNAUTHORIZED } else { axum::http::StatusCode::NO_CONTENT }
+                }))
+                .route("/v1/health", axum::routing::get(move || async move {
+                    assert_eq!(health_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+                    Json(serde_json::json!({ "protocolVersion": 1, "status": "ready", "imageCommand": { "status": "running" } }))
+                }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                axum::serve(listener, router).await.unwrap();
+            });
+            let count = if refused { 1 } else { 2 };
+            let mut native = MockSandboxDataPlaneApi::new();
+            native.expect_execute_shell_command().never();
+            native
+                .expect_agent_port_url()
+                .times(count)
+                .returning(move |_, _, _| Ok(url.clone()));
+            native
+                .expect_read_file()
+                .times(count)
+                .returning(move |_, _, path| {
+                    assert_eq!(path, NATIVE_TOKEN_PATH);
+                    Ok(token.as_bytes().to_vec())
+                });
+            let provider = AzureSandbox::new(
+                Arc::new(native),
+                "group".into(),
+                "image".into(),
+                SandboxEgress::None,
+                None,
+                "1000m".into(),
+                "2048Mi".into(),
+                None,
+            )
+            .with_agent(true);
+            let result = provider.wait_for_agent("session").await;
+            if refused {
+                let error = result.unwrap_err();
+                assert_eq!(error.code, "SANDBOX_COMMAND_FAILED");
+                assert!(!error.retryable);
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            server.abort();
+        }
+    }
 
     #[tokio::test]
     async fn commands_cross_the_agent_port_without_native_exec() {
