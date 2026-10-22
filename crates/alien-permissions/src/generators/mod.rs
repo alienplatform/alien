@@ -22,7 +22,7 @@ pub use azure_runtime::{
 pub use azure_setup_owned::{
     azure_role_assignment_allowlist_conditions, azure_role_key_segment, azure_runtime_role_definition_uuid,
     azure_runtime_roles, role_definition_guid, AzureRuntimeCustomRole, AzureRuntimeRoleHolder,
-    AzureRuntimeRoles, AZURE_CONDITION_SHARD_LIMIT, AZURE_REMOTE_BINDINGS_PROFILE,
+    AzureRuntimeRoles, AzureWorkloadPrincipals, AZURE_CONDITION_SHARD_LIMIT, AZURE_REMOTE_BINDINGS_PROFILE,
     AZURE_SERVICE_BUS_DATA_RECEIVER_ROLE_ID, AZURE_SERVICE_BUS_DATA_SENDER_ROLE_ID,
 };
 pub use gcp_runtime::{

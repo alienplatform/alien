@@ -30,7 +30,7 @@ use alien_permissions::{
         dedupe_azure_role_bindings, management_roles_by_scope,
         protected_management_assignable_scopes, AzureGrantPlan, AzureManagementRoles,
         AzureManagementScopeKind, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
-        AzureRuntimeRoleHolder, AzureRuntimeRoles, AzureScopedCustomRole,
+        AzureRuntimeRoleHolder, AzureRuntimeRoles, AzureScopedCustomRole, AzureWorkloadPrincipals,
         AZURE_REMOTE_BINDINGS_PROFILE,
     },
     BindingTarget,
@@ -366,13 +366,20 @@ fn runtime_role_conditions(
         format!("${{azurerm_user_assigned_identity.{label}.principal_id}}"),
     ));
     // The application's identities: every service account's and the remote-bindings identity,
-    // each an `azurerm_user_assigned_identity` under its resource's label.
+    // each an `azurerm_user_assigned_identity` under its resource's label when this module creates
+    // it. An automatic package leaves them to the runtime, which creates them after setup, so their
+    // ids cannot be named here.
     let mut workload_principals = BTreeSet::new();
+    let mut created_after_setup = false;
     for (resource_id, entry) in ctx.stack.resources() {
         let kind = entry.config.resource_type();
         if kind != alien_core::ServiceAccount::RESOURCE_TYPE
             && kind != alien_core::RemoteBindings::RESOURCE_TYPE
         {
+            continue;
+        }
+        if !alien_core::emits_package_scaffolding(entry, ctx.stack_settings.setup_management) {
+            created_after_setup = true;
             continue;
         }
         let Some(identity_label) = ctx.name_for(resource_id) else {
@@ -385,9 +392,14 @@ fn runtime_role_conditions(
         ));
         workload_principals.insert(stand_in);
     }
+    let workload_principals = if created_after_setup {
+        AzureWorkloadPrincipals::AnyButManagement
+    } else {
+        AzureWorkloadPrincipals::Listed(&workload_principals)
+    };
     azure_role_assignment_allowlist_conditions(
         &principal,
-        &workload_principals,
+        workload_principals,
         &management_ids,
         &workload_ids,
     )

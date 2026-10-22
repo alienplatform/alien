@@ -7,11 +7,14 @@
 
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
-    AzureContainerAppsEnvironment, AzureResourceGroup, Key, ManagementPermissions, Network,
-    NetworkSettings, PermissionProfile, RemoteStackManagement, ResourceLifecycle, ServiceAccount,
-    Stack, StackSettings, Worker, WorkerCode,
+    AzureContainerAppsEnvironment, AzureResourceGroup, AzureStorageAccount, Key,
+    ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
+    ResourceLifecycle, ServiceAccount, SetupConfigurationProfile, SetupManagement, Stack,
+    StackSettings, Storage, Worker, WorkerCode,
 };
-use alien_terraform::TerraformTarget;
+use alien_terraform::{
+    generate_product_terraform_module_with_profile, TerraformOptions, TerraformTarget, TfRegistry,
+};
 
 /// A minimal Live worker for the management-grant tests.
 fn dispatch_worker(id: &str) -> Worker {
@@ -611,4 +614,64 @@ fn azure_provider_tracks_partial_creates_and_protects_detached_keys() {
     );
     snapshot_module("azure_partial_create_with_retained_key", &module);
     assert_terraform_valid(&module, "azure_provider_partial_create_with_retained_key");
+}
+
+/// Setup is valid Terraform for both management modes and both configuration profiles when a Live
+/// worker runs as a service account. An automatic package leaves the service account to the
+/// runtime, so management's role-assignment condition must not reference an identity the module
+/// never declares.
+#[test]
+fn azure_setup_with_a_live_worker_validates_for_both_management_modes() {
+    let stack = Stack::new("profile-validation".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("archive", ["storage/data-read"]),
+        )
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureStorageAccount::new("default-storage-account".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(dispatch_worker("api"), ResourceLifecycle::Live)
+        .build();
+    let registry = TfRegistry::built_in();
+    for management in [SetupManagement::Manual, SetupManagement::Automatic] {
+        for profile in [
+            SetupConfigurationProfile::Standard,
+            SetupConfigurationProfile::Advanced,
+        ] {
+            let context = format!("{management:?} {profile:?}");
+            let module = generate_product_terraform_module_with_profile(
+                &stack,
+                TerraformTarget::Azure,
+                TerraformOptions {
+                    display_name: None,
+                    registry: &registry,
+                    stack_settings: StackSettings {
+                        setup_management: management,
+                        ..StackSettings::default()
+                    },
+                    registration: None,
+                    helm_install: None,
+                    supported_aws_regions: Vec::new(),
+                },
+                false,
+                profile,
+            )
+            .unwrap_or_else(|error| panic!("render {context}: {error}"));
+            assert_terraform_valid(&module, &context);
+        }
+    }
 }
