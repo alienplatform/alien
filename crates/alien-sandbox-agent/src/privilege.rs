@@ -256,6 +256,8 @@ fn restrict_capabilities(keep: u32) -> io::Result<()> {
 
 /// Kernel-enforced even if the guest later acquires a new IPv6 route. Blocking io_uring prevents
 /// IORING_OP_SOCKET from creating a socket without passing through the socket syscall filter.
+/// BPF is denied too: a new user/cgroup namespace can otherwise expose a writable
+/// cgroup mount and detach the socket marker despite the original capability drop.
 #[cfg(target_os = "linux")]
 unsafe fn deny_ipv6_sockets() -> io::Result<()> {
     #[cfg(target_arch = "x86_64")]
@@ -280,6 +282,7 @@ unsafe fn deny_ipv6_sockets() -> io::Result<()> {
         jump(ARCH, 1, 0),
         stmt(0x06, 0x80000000), // kill foreign ABI
         stmt(0x20, 0),
+        jump(libc::SYS_bpf as u32, 8, 0),
         jump(libc::SYS_io_uring_setup as u32, 7, 0),
         jump(libc::SYS_io_uring_enter as u32, 6, 0),
         jump(libc::SYS_io_uring_register as u32, 5, 0),

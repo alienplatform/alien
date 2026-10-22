@@ -76,11 +76,15 @@ defers firewall installation until the authenticated Run hook, allowing the
 platform to finish restoring its snapshot first. Until installation succeeds,
 health reports `awaiting-run-hook`, token installation and session operations
 are refused, and the image command remains stopped. The hook installs the same
-rules with native netlink, scoped to the command UID. All image commands, execs,
-and jobs irreversibly drop to that identity before running. Other system identities
-retain their DNS, metadata and ingress traffic across snapshot restore; there is no
-hardcoded platform UID exemption. A command UID that collides with a platform UID
-is still filtered, never silently exempted. The external network boundary remains
+rules with native netlink. A cgroup socket-creation program tags the agent and
+its descendants independently of UID. Trusted agent sockets override that tag;
+provider restore processes remain outside the cgroup. The guest cgroup mount is
+read-only before guest code runs, and guest capabilities cannot change socket
+marks or remount it writable. An inherited seccomp filter denies BPF, including
+program detach through a writable subtree mounted in a new user namespace.
+Provider mounts stay writable so suspend can freeze the workload. This preserves provider DNS,
+metadata and ingress across snapshot restore while filtering guest root and every
+UID it creates. Missing cgroup/BPF support prevents startup. The external network boundary remains
 required even if guest root is compromised. Internet mode then waits
 for its token and network self-check before starting guest code. Other backends
 install the firewall at process startup by default. Legacy object policies keep
@@ -135,3 +139,14 @@ Live qualification must additionally run this agent on a MicroVM, verify allowed
 IPv4 traffic and denied traffic to another address, attempt to change OUTPUT rules
 through exec, and verify the image command's uid and capabilities. Delete all probe
 resources afterward.
+
+The ignored agent unit test
+`gateway_egress::guest_network_tests::root_and_child_uids_keep_redirects_and_cannot_escape`
+runs the native cgroup and nftables code in a disposable root MicroVM. It proves
+TCP and DNS redirection for root, uid 2000 and uid 60000, and refusal of mark changes
+and cgroup escape. It changes the VM's firewall and cgroup mounts; never run it on
+a shared host. Set `ALIEN_ROUTING_RESUME_BARRIER=/tmp/routing-go` to run two rounds:
+after the first, the test writes `/tmp/routing-go.ready`; suspend and resume the
+MicroVM, then create `/tmp/routing-go` to release the second round. Both rounds
+must pass within three minutes. Delete the disposable VM afterward. This test
+qualifies routing, not the external gateway policy or full boot contract.

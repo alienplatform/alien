@@ -5,6 +5,9 @@
 )]
 
 mod dns;
+mod guest_network;
+#[cfg(test)]
+mod guest_network_tests;
 mod probe;
 mod recovery;
 pub use probe::command_path_is_closed;
@@ -128,12 +131,15 @@ impl GatewayEgress {
             return Err(invalid("Run-hook firewall installation requires root"));
         }
         if privileged {
+            guest_network::install()
+                .into_alien_error()
+                .context(failed("isolate guest sockets before starting image code"))?;
             // IPv6 sockets can exist on kernels without IPv6 netfilter support.
             // Every image command and exec child installs the irreversible socket
             // filter before executing; an installation failure prevents its launch.
             crate::privilege::block_command_ipv6();
             if !defer_routing {
-                redirect::install(command_identity.uid)
+                redirect::install()
                     .into_alien_error()
                     .context(failed("install transparent forwarding"))?;
             }
@@ -439,7 +445,7 @@ impl GatewayEgress {
     // Callers hold update_lock, so token installation cannot race this transaction.
     async fn install_routing_at_run(&self) -> Result<()> {
         if !self.routing_ready.load(Ordering::Acquire) {
-            redirect::install_at_run(self.command_identity.uid)
+            redirect::install_at_run()
                 .await
                 .into_alien_error()
                 .context(failed("install Run-hook transparent forwarding"))?;

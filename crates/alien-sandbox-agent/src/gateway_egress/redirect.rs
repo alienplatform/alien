@@ -13,6 +13,8 @@ use nlink::netlink::{
 };
 use tokio::net::{TcpSocket, TcpStream};
 
+use super::guest_network::GUEST_MARK;
+
 pub(super) const MARK: u32 = 0xa11e;
 
 pub(super) fn socket(marked: bool) -> io::Result<TcpSocket> {
@@ -45,18 +47,17 @@ pub(super) fn original_destination(stream: &TcpStream) -> io::Result<SocketAddrV
     ))
 }
 
-/// Every untrusted image command, exec and job runs as command_uid with an irreversible
-/// identity drop. Leave other identities untouched: platform restore uses its own DNS and
-/// metadata connections before it can reach the agent's Resume hook.
-pub(super) fn install(command_uid: u32) -> io::Result<()> {
-    crate::netfilter::install(install_rules(command_uid))
+/// Filter sockets tagged by the guest cgroup across every UID. Provider restore
+/// processes remain outside that cgroup and retain their DNS and metadata paths.
+pub(super) fn install() -> io::Result<()> {
+    crate::netfilter::install(install_rules())
 }
 
-pub(super) async fn install_at_run(command_uid: u32) -> io::Result<()> {
-    crate::netfilter::apply(install_rules(command_uid)).await
+pub(super) async fn install_at_run() -> io::Result<()> {
+    crate::netfilter::apply(install_rules()).await
 }
 
-async fn install_rules(command_uid: u32) -> nlink::netlink::Result<()> {
+async fn install_rules() -> nlink::netlink::Result<()> {
     let conn = Connection::<Nftables>::new()?;
     let tables = conn.list_tables().await?;
     let mut batch = conn.transaction();
@@ -75,12 +76,12 @@ async fn install_rules(command_uid: u32) -> nlink::netlink::Result<()> {
     let system = |rule: Rule| {
         rule.expr(Expr::Meta {
             dreg: Register::R0,
-            key: MetaKey::SkUid,
+            key: MetaKey::Mark,
         })
         .expr(Expr::Cmp {
             sreg: Register::R0,
             op: CmpOp::Neq,
-            data: command_uid.to_ne_bytes().to_vec(),
+            data: GUEST_MARK.to_ne_bytes().to_vec(),
         })
     };
     batch
@@ -93,7 +94,6 @@ async fn install_rules(command_uid: u32) -> nlink::netlink::Result<()> {
                 .policy(Policy::Accept),
         )
         .add_rule(system(nat()).expr(returning.clone()))
-        .add_rule(nat().match_mark(MARK).expr(returning.clone()))
         .add_rule(
             nat()
                 .match_ct_direction(CtDirection::Reply)
@@ -132,7 +132,6 @@ async fn install_rules(command_uid: u32) -> nlink::netlink::Result<()> {
                 .policy(Policy::Drop),
         )
         .add_rule(system(filter()).accept())
-        .add_rule(filter().match_mark(MARK).accept())
         // External inbound sockets must not become an uninspected outbound channel.
         // Preview traffic reaches command listeners through the agent's loopback proxy.
         .add_rule(filter().match_daddr_v4(Ipv4Addr::LOCALHOST, 32).accept())
