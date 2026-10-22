@@ -101,7 +101,9 @@ cargo run -p alien-sandbox-conformance --features gcp -- \
 ```
 
 The suite contains `backend`, `revision`, `binding`, `imageUid`, `execUid`, and
-optional `metadataBackend` (`aws`, `gcp`, or `azure`). Build the image from
+optional `metadataBackend` (`aws`, `gcp`, or `azure`). An optional
+`reconnectBinding` creates through `binding` and runs the first exec through the
+other binding, checking that an existing session survives a release change. Build the image from
 [`entrypoint/`](entrypoint/README.md), using the same metadata backend at build
 time, then pass it through the normal backend image assembler. The runner creates
 one session, persists its handle, and runs the fixture inspector as the first user

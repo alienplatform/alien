@@ -17,6 +17,8 @@ pub struct Suite {
     backend: String,
     revision: String,
     binding: String,
+    /// Reconnect the created session through a different release binding.
+    reconnect_binding: Option<String>,
     image_uid: u32,
     exec_uid: u32,
     /// Probe cloud metadata in all fixture identities when supplied.
@@ -28,6 +30,7 @@ pub struct Suite {
 pub struct Report {
     backend: String,
     revision: String,
+    reconnect_binding: Option<String>,
     pub passed: bool,
     exit_code: Option<i32>,
     evidence: serde_json::Value,
@@ -71,6 +74,13 @@ pub async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Resu
             &mut sessions,
         )
         .await?;
+        let command_provider = match &suite.reconnect_binding {
+            Some(binding) => bindings
+                .sandbox(binding)
+                .await
+                .context(operation("load reconnect binding"))?,
+            None => provider.clone(),
+        };
         // This is the first user exec. The binding's create/readiness path may only
         // use health/identity probes, never start or repair the fixture supervisor.
         let request = RunCommandRequest {
@@ -81,7 +91,7 @@ pub async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Resu
             timeout: Duration::from_secs(120),
         };
         let (stdout, exit) = tokio::time::timeout(Duration::from_secs(135), async {
-            let mut stream = provider
+            let mut stream = command_provider
                 .run_command(&sessions[session].sandbox_id, request)
                 .await
                 .context(operation("start image identity checker"))?;
@@ -117,6 +127,7 @@ pub async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Resu
         Ok(Report {
             backend: suite.backend,
             revision: suite.revision,
+            reconnect_binding: suite.reconnect_binding,
             passed: exit == Some((0, false)) && !evidence.is_null(),
             exit_code: exit.map(|value| value.0),
             evidence,
