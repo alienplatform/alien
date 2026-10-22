@@ -1197,22 +1197,17 @@ async fn delete_managed_acm_certificate(
         }
     }
     for certificate_arn in &certificate_arns {
-        // The delete and read are granted only on certificates carrying this resource's tags,
-        // so ACM answers both with AccessDenied for a certificate that is already gone.
-        let outcome = delete_imported_certificate(
-            acm_client.as_ref(),
-            ctx.service_provider.as_ref(),
-            &aws_config,
-            ctx.resource_prefix,
-            certificate_arn,
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to delete Kubernetes public endpoint ACM certificate '{certificate_arn}'"
-            ),
-            resource_id: Some(resource_id.to_string()),
-        })?;
+        // The delete is granted only on certificates carrying this resource's tags, so ACM may
+        // answer it with AccessDenied for a certificate that is already gone. The describe that
+        // follows tells the two apart.
+        let outcome = delete_imported_certificate(acm_client.as_ref(), certificate_arn)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to delete Kubernetes public endpoint ACM certificate '{certificate_arn}'"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?;
         info!(certificate_arn=%certificate_arn, outcome=?outcome, "Kubernetes public endpoint ACM certificate removed");
         // A retry after a later certificate fails must not delete this one again. Token lookups
         // list only certificates that still exist.
@@ -3578,6 +3573,7 @@ mod tests {
         use alien_core::{
             standard_resource_tags, AwsClientConfig, AwsCredentials, ClientConfig, DnsRecordStatus,
             DomainMetadata, KubernetesSettings, Resource, ResourceDomainInfo, Worker, WorkerCode,
+            ALIEN_STACK_TAG_KEY,
         };
         use alien_k8s_clients::kubernetes::services::MockServiceApi;
         use alien_k8s_clients::{RouteApi, ServiceApi};
@@ -3632,9 +3628,10 @@ mod tests {
 
         /// An ACM client over `world`, as the runtime role sees it (checked live): a
         /// certificate that does not exist is NotFound for every call, and one that exists
-        /// without this resource's tags is AccessDenied for the tag-conditioned delete,
-        /// describe and tag read. While `lose_responses` is above zero, an import ACM accepted
-        /// answers 503 instead.
+        /// without this resource's tags is AccessDenied for the tag-conditioned delete and tag
+        /// read. The describe is also granted on certificates without the stack's tag, so only
+        /// another stack's certificate is AccessDenied for it. While `lose_responses` is above
+        /// zero, an import ACM accepted answers 503 instead.
         fn world_acm(
             world: CertificateWorld,
             calls: AcmCalls,
@@ -3716,7 +3713,13 @@ mod tests {
             let described = world;
             acm.expect_describe_certificate()
                 .returning(move |certificate_arn| {
-                    find(&described, certificate_arn)?;
+                    let untagged = described.lock().unwrap().iter().any(|(stored, tags)| {
+                        stored == certificate_arn
+                            && !tags.iter().any(|tag| tag.key == ALIEN_STACK_TAG_KEY)
+                    });
+                    if !untagged {
+                        find(&described, certificate_arn)?;
+                    }
                     Ok(alien_aws_clients::acm::DescribeCertificateResponse { certificate: None })
                 });
             acm
@@ -3898,20 +3901,6 @@ mod tests {
                         .unwrap_or_else(|| panic!("no ACM call expected in {}", config.region))
                         .clone())
                 });
-            // A certificate in these tests is either ours (readable) or gone or someone
-            // else's, which the tagging lookup does not list with this stack's tags.
-            let mut tagging =
-                alien_aws_clients::resourcegroupstagging::MockResourceGroupsTaggingApi::new();
-            tagging.expect_get_resources().returning(|_| {
-                Ok(alien_aws_clients::resourcegroupstagging::GetResourcesResponse {
-                    pagination_token: None,
-                    resource_tag_mapping_list: Vec::new(),
-                })
-            });
-            let tagging: Arc<dyn alien_aws_clients::ResourceGroupsTaggingApi> = Arc::new(tagging);
-            provider
-                .expect_get_aws_resource_groups_tagging_client()
-                .returning(move |_| Ok(tagging.clone()));
             provider
                 .expect_get_kubernetes_service_client()
                 .returning(move |_| Ok(services.clone()));
@@ -4316,14 +4305,15 @@ mod tests {
             assert_eq!(state.managed_acm_import_token, None);
         }
 
-        /// The recorded certificate exists but no longer carries this resource's tags, so the
-        /// tag-conditioned delete and describe are both denied. It is not this resource's to
-        /// delete any more: the update goes on instead of failing with a permission error no
-        /// grant can fix, and the certificate is left alone.
+        /// The recorded certificate exists but now carries another stack's tags, so the
+        /// tag-conditioned delete and describe are both denied, as they are for every
+        /// certificate on a role set up before the describe was granted on untagged ones.
+        /// Nothing confirms it is gone, so the denial is returned and the ARN kept: the
+        /// certificate is never reported as deleted.
         #[tokio::test]
-        async fn update_away_from_managed_acm_leaves_a_certificate_that_is_no_longer_ours() {
+        async fn update_away_from_managed_acm_reports_a_certificate_it_cannot_delete() {
             let retagged = vec![Tag {
-                key: "deployment".to_string(),
+                key: ALIEN_STACK_TAG_KEY.to_string(),
                 value: "someone-else".to_string(),
             }];
             let world: CertificateWorld = Arc::new(Mutex::new(vec![(arn(1), retagged)]));
@@ -4334,17 +4324,27 @@ mod tests {
                 ..Default::default()
             };
 
-            clean_up_after_leaving_managed_acm(&harness, &mut state)
+            let error = clean_up_after_leaving_managed_acm(&harness, &mut state)
                 .await
-                .expect("a certificate that is not ours is not deleted");
+                .expect_err("a certificate that may still exist is not reported deleted");
 
+            let mut codes = vec![error.code.clone()];
+            let mut source = error.source.as_deref();
+            while let Some(inner) = source {
+                codes.push(inner.code.clone());
+                source = inner.source.as_deref();
+            }
+            assert!(
+                codes.contains(&"REMOTE_ACCESS_DENIED".to_string()),
+                "{codes:?}"
+            );
             assert_eq!(*calls.deletes.lock().unwrap(), [arn(1)]);
             assert_eq!(
                 world.lock().unwrap().len(),
                 1,
                 "the certificate is left alone"
             );
-            assert_eq!(state.managed_acm_certificate_arn, None);
+            assert_eq!(state.managed_acm_certificate_arn, Some(arn(1)));
         }
 
         /// When the certificate is still readable, its denied delete is a real denial: the

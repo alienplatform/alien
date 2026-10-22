@@ -48,17 +48,22 @@
         }
       },
       {
-        // A tag-scoped delete and read of a gone object are both denied. This lookup is not
-        // tag-scoped and tells a gone object from a real denial. AWS supports it only on `*`;
-        // it returns ARNs and tags, never resource contents.
-        "label": "look-up-tagged-resources",
-        "description": "Look up whether this application's tagged resources still exist.",
+        // The delete above is tag-scoped, and a gone certificate has no tags, so the tag-scoped
+        // describe is denied too. Granting it on certificates without the stack's tag lets a gone
+        // certificate answer NotFound. It returns certificate metadata, never the private key.
+        "label": "read-gone-tls-certificates",
+        "description": "Describe ACM certificates that carry no deployment tag, so a deleted certificate answers NotFound.",
         "grant": {
-          "actions": ["tag:GetResources"]
+          "actions": ["acm:DescribeCertificate"]
         },
         "binding": {
           "resource": {
-            "resources": ["*"]
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
+              }
+            }
           }
         }
       },

@@ -1,7 +1,6 @@
 use crate::error::Result;
 use alien_aws_clients::{
     acm::{AcmApi, AcmClient},
-    resourcegroupstagging::{ResourceGroupsTaggingApi, ResourceGroupsTaggingClient},
     apigateway::{ApiGatewayApi, ApiGatewayClient},
     apigatewayv2::{ApiGatewayV2Api, ApiGatewayV2Client},
     autoscaling::{AutoScalingApi, AutoScalingClient},
@@ -165,10 +164,6 @@ pub trait PlatformServiceProvider: Send + Sync {
     async fn get_aws_elbv2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Elbv2Api>>;
     async fn get_aws_eks_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EksApi>>;
     async fn get_aws_acm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn AcmApi>>;
-    async fn get_aws_resource_groups_tagging_client(
-        &self,
-        config: &AwsClientConfig,
-    ) -> Result<Arc<dyn ResourceGroupsTaggingApi>>;
     async fn get_aws_apigateway_client(
         &self,
         config: &AwsClientConfig,
@@ -877,22 +872,6 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(AcmClient::new(
-            reqwest::Client::new(),
-            credentials,
-        )))
-    }
-
-    async fn get_aws_resource_groups_tagging_client(
-        &self,
-        config: &AwsClientConfig,
-    ) -> Result<Arc<dyn ResourceGroupsTaggingApi>> {
-        let credentials = AwsCredentialProvider::from_config(config.clone())
-            .await
-            .context(crate::error::ErrorData::CloudPlatformError {
-                message: "Failed to create AWS credential provider".to_string(),
-                resource_id: None,
-            })?;
-        Ok(Arc::new(ResourceGroupsTaggingClient::new(
             reqwest::Client::new(),
             credentials,
         )))

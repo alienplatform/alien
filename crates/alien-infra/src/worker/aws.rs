@@ -9,8 +9,8 @@ use crate::core::EnvironmentVariableBuilder;
 
 use crate::core::aws_tag_scoped::{
     certificates_imported_with_token, delete_imported_certificate, delete_tag_scoped,
-    is_remote_access_denied, is_remote_not_found, owned_resource_exists, with_import_token,
-    TagScopedDelete, CREATE_ATTEMPT_TAG,
+    is_remote_access_denied, is_remote_not_found, with_import_token, TagScopedDelete,
+    CREATE_ATTEMPT_TAG,
 };
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
@@ -37,7 +37,6 @@ use alien_aws_clients::eventbridge::{
 };
 use alien_aws_clients::lambda::{
     AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode, FunctionConfiguration,
-    LambdaApi,
     ListEventSourceMappingsRequest, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest,
     VpcConfig,
 };
@@ -89,57 +88,6 @@ const LAMBDA_LOG_RETENTION_DAYS: i32 = 30;
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {
     aws_prefixed_resource_name(prefix, name)
-}
-
-fn lambda_function_arn(config: &alien_aws_clients::AwsClientConfig, name: &str) -> String {
-    format!(
-        "arn:aws:lambda:{}:{}:function:{name}",
-        config.region, config.account_id
-    )
-}
-
-/// The ARN of an API Gateway object from its path, such as `/apis/{id}`.
-fn api_gateway_arn(config: &alien_aws_clients::AwsClientConfig, path: &str) -> String {
-    format!("arn:aws:apigateway:{}::{path}", config.region)
-}
-
-/// Whether the function still has the event source mapping `uuid`, from its mapping list,
-/// which is not scoped by the mapping grant's condition. `None` when the list fails.
-async fn event_source_mapping_exists(
-    client: &dyn LambdaApi,
-    function_name: &str,
-    uuid: &str,
-) -> Option<bool> {
-    let mut marker = None;
-    loop {
-        let page = match client
-            .list_event_source_mappings(ListEventSourceMappingsRequest {
-                event_source_arn: None,
-                function_name: Some(function_name.to_string()),
-                marker: marker.take(),
-                max_items: None,
-            })
-            .await
-        {
-            Ok(page) => page,
-            Err(error) => {
-                warn!(function=%function_name, uuid=%uuid, error=%error, "Could not list event source mappings; keeping the denial");
-                return None;
-            }
-        };
-        if page
-            .event_source_mappings
-            .unwrap_or_default()
-            .iter()
-            .any(|mapping| mapping.uuid.as_deref() == Some(uuid))
-        {
-            return Some(true);
-        }
-        match page.next_marker {
-            Some(next) => marker = Some(next),
-            None => return Some(false),
-        }
-    }
 }
 
 // AWS emits both the exact function name and a name followed by a UUID.
@@ -4421,14 +4369,6 @@ impl AwsWorkerController {
                     .delete_base_path_mapping(&domain_name, &base_path)
                     .await,
                 || async { client.get_domain_name(&domain_name).await.map(|_| ()) },
-                || {
-                    owned_resource_exists(
-                        ctx.service_provider.as_ref(),
-                        aws_cfg,
-                        ctx.resource_prefix,
-                        api_gateway_arn(aws_cfg, &format!("/domainnames/{domain_name}")),
-                    )
-                },
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -4452,14 +4392,6 @@ impl AwsWorkerController {
                     .delete_api_mapping(&domain_name, &api_mapping_id)
                     .await,
                 || async { client.get_domain_name(&domain_name).await.map(|_| ()) },
-                || {
-                    owned_resource_exists(
-                        ctx.service_provider.as_ref(),
-                        aws_cfg,
-                        ctx.resource_prefix,
-                        api_gateway_arn(aws_cfg, &format!("/domainnames/{domain_name}")),
-                    )
-                },
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -4477,36 +4409,18 @@ impl AwsWorkerController {
                     .service_provider
                     .get_aws_apigateway_client(aws_cfg)
                     .await?;
-                delete_tag_scoped(
-                    client.delete_domain_name(&domain_name).await,
-                    || async { client.get_domain_name(&domain_name).await.map(|_| ()) },
-                    || {
-                        owned_resource_exists(
-                            ctx.service_provider.as_ref(),
-                            aws_cfg,
-                            ctx.resource_prefix,
-                            api_gateway_arn(aws_cfg, &format!("/domainnames/{domain_name}")),
-                        )
-                    },
-                )
+                delete_tag_scoped(client.delete_domain_name(&domain_name).await, || async {
+                    client.get_domain_name(&domain_name).await.map(|_| ())
+                })
                 .await
             } else {
                 let client = ctx
                     .service_provider
                     .get_aws_apigatewayv2_client(aws_cfg)
                     .await?;
-                delete_tag_scoped(
-                    client.delete_domain_name(&domain_name).await,
-                    || async { client.get_domain_name(&domain_name).await.map(|_| ()) },
-                    || {
-                        owned_resource_exists(
-                            ctx.service_provider.as_ref(),
-                            aws_cfg,
-                            ctx.resource_prefix,
-                            api_gateway_arn(aws_cfg, &format!("/domainnames/{domain_name}")),
-                        )
-                    },
-                )
+                delete_tag_scoped(client.delete_domain_name(&domain_name).await, || async {
+                    client.get_domain_name(&domain_name).await.map(|_| ())
+                })
                 .await
             }
             .context(ErrorData::CloudPlatformError {
@@ -4525,18 +4439,9 @@ impl AwsWorkerController {
                 .service_provider
                 .get_aws_apigatewayv2_client(aws_cfg)
                 .await?;
-            let outcome = delete_tag_scoped(
-                client.delete_api(&api_id).await,
-                || async { client.get_api(&api_id).await.map(|_| ()) },
-                || {
-                    owned_resource_exists(
-                        ctx.service_provider.as_ref(),
-                        aws_cfg,
-                        ctx.resource_prefix,
-                        api_gateway_arn(aws_cfg, &format!("/apis/{api_id}")),
-                    )
-                },
-            )
+            let outcome = delete_tag_scoped(client.delete_api(&api_id).await, || async {
+                client.get_api(&api_id).await.map(|_| ())
+            })
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to delete API Gateway".to_string(),
@@ -4554,18 +4459,9 @@ impl AwsWorkerController {
                 .service_provider
                 .get_aws_apigateway_client(aws_cfg)
                 .await?;
-            let outcome = delete_tag_scoped(
-                client.delete_rest_api(&rest_api_id).await,
-                || async { client.get_rest_api(&rest_api_id).await.map(|_| ()) },
-                || {
-                    owned_resource_exists(
-                        ctx.service_provider.as_ref(),
-                        aws_cfg,
-                        ctx.resource_prefix,
-                        api_gateway_arn(aws_cfg, &format!("/restapis/{rest_api_id}")),
-                    )
-                },
-            )
+            let outcome = delete_tag_scoped(client.delete_rest_api(&rest_api_id).await, || async {
+                client.get_rest_api(&rest_api_id).await.map(|_| ())
+            })
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to delete REST API".to_string(),
@@ -4603,20 +4499,17 @@ impl AwsWorkerController {
         if !self.event_source_mappings.is_empty() {
             info!(worker=%worker_config.id, mappings=?self.event_source_mappings, "Deleting event source mappings");
 
-            let function_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
             // Each mapping leaves the list once it is gone, so a retry resumes after it.
             while let Some(uuid) = self.event_source_mappings.first().cloned() {
-                // Mappings carry no tags; their function's mapping list is the lookup.
-                let outcome = delete_tag_scoped(
-                    client.delete_event_source_mapping(&uuid).await,
-                    || async { client.get_event_source_mapping(&uuid).await.map(|_| ()) },
-                    || event_source_mapping_exists(client.as_ref(), &function_name, &uuid),
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to delete event source mapping '{}'", uuid),
-                    resource_id: Some(worker_config.id.clone()),
-                })?;
+                let outcome =
+                    delete_tag_scoped(client.delete_event_source_mapping(&uuid).await, || async {
+                        client.get_event_source_mapping(&uuid).await.map(|_| ())
+                    })
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete event source mapping '{}'", uuid),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?;
                 info!(worker=%worker_config.id, uuid=%uuid, outcome=?outcome, "Event source mapping removed");
                 self.event_source_mappings.remove(0);
             }
@@ -4785,14 +4678,6 @@ impl AwsWorkerController {
                     .await
                     .map(|_| ())
             },
-            || {
-                owned_resource_exists(
-                    ctx.service_provider.as_ref(),
-                    aws_cfg,
-                    ctx.resource_prefix,
-                    lambda_function_arn(aws_cfg, &aws_worker_name),
-                )
-            },
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -4898,14 +4783,6 @@ impl AwsWorkerController {
                     .await
                     .map(|_| ())
             },
-            || {
-                owned_resource_exists(
-                    ctx.service_provider.as_ref(),
-                    aws_cfg,
-                    ctx.resource_prefix,
-                    lambda_function_arn(aws_cfg, &aws_worker_name),
-                )
-            },
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -4940,12 +4817,10 @@ impl AwsWorkerController {
             .get_function_configuration(lookup_identifier, None)
             .await
         {
-            // `lambda:GetFunction` is granted only for functions that carry the stack's tags.
-            // A deleted function has none, so AWS answers AccessDenied instead of
-            // ResourceNotFound. Both mean the function is gone. Returning the denial as an
-            // error would make the executor's best-effort delete rule mark the worker
-            // deleted here, before the network interface wait and the certificate delete
-            // have run.
+            // The delete above succeeded or confirmed the function gone, so this read only
+            // waits for it to disappear. A deleted function has no tags: a role set up before
+            // the read was granted on untagged functions gets AccessDenied, not NotFound, and
+            // both mean it is gone.
             Err(e)
                 if matches!(
                     e.error,
@@ -5147,18 +5022,12 @@ impl AwsWorkerController {
             }
         }
         for certificate_arn in &certificate_arns {
-            let outcome = delete_imported_certificate(
-                acm_client.as_ref(),
-                ctx.service_provider.as_ref(),
-                aws_cfg,
-                ctx.resource_prefix,
-                certificate_arn,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to delete ACM certificate '{certificate_arn}'"),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+            let outcome = delete_imported_certificate(acm_client.as_ref(), certificate_arn)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete ACM certificate '{certificate_arn}'"),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
             info!(worker=%worker_config.id, certificate_arn=%certificate_arn, outcome=?outcome, "ACM certificate removed");
             // A retry after a later certificate fails must not delete this one again. Token
             // lookups list only certificates that still exist.
@@ -5938,10 +5807,6 @@ mod tests {
     use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
     use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, Ec2Client, MockEc2Api};
     use alien_aws_clients::iam::MockIamApi;
-    use alien_aws_clients::resourcegroupstagging::{
-        GetResourcesResponse, MockResourceGroupsTaggingApi, ResourceTagMapping,
-        Tag as TaggingTag,
-    };
     use alien_aws_clients::lambda::{
         AddPermissionResponse, EventSourceMapping, FunctionConfiguration, GetFunctionResponse,
         ListEventSourceMappingsResponse, MockLambdaApi,
@@ -6792,10 +6657,6 @@ mod tests {
                 .expect_get_aws_acm_client()
                 .returning(move |_| Ok(acm.clone()));
         }
-        let tagging = tagging_listing(Vec::new());
-        mock_provider
-            .expect_get_aws_resource_groups_tagging_client()
-            .returning(move |_| Ok(tagging.clone()));
 
         if let Some(apigw) = mock_apigw {
             mock_provider
@@ -7641,31 +7502,6 @@ mod tests {
     const TEST_CERTIFICATE_ARN: &str =
         "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id";
 
-    /// A tagging lookup that lists `listed` as still existing with the test stack's tags
-    /// (prefix `test`), and nothing else.
-    fn tagging_listing(listed: Vec<String>) -> Arc<MockResourceGroupsTaggingApi> {
-        let mut tagging = MockResourceGroupsTaggingApi::new();
-        tagging.expect_get_resources().returning(move |request| {
-            Ok(GetResourcesResponse {
-                pagination_token: None,
-                resource_tag_mapping_list: request
-                    .resource_arn_list
-                    .iter()
-                    .filter(|arn| listed.contains(arn))
-                    .map(|arn| ResourceTagMapping {
-                        resource_arn: arn.clone(),
-                        tags: standard_resource_tags("test", "public-func")
-                            .into_iter()
-                            .map(|(key, value)| TaggingTag { key, value })
-                            .collect(),
-                        compliance_details: None,
-                    })
-                    .collect(),
-            })
-        });
-        Arc::new(tagging)
-    }
-
     fn access_denied() -> AlienError<CloudClientErrorData> {
         AlienError::new(CloudClientErrorData::RemoteAccessDenied {
             resource_type: "Worker".to_string(),
@@ -7673,11 +7509,21 @@ mod tests {
         })
     }
 
+    /// Lambda's answer to a read of a function that is gone, once the read is granted on
+    /// functions without the stack's tag.
+    fn function_gone() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+            resource_type: "Worker".to_string(),
+            resource_name: "test-public-func".to_string(),
+        })
+    }
+
     /// Deletes a running public worker with the stack executor that production uses, in a
-    /// stack that owns its VPC. Returns the worker's final status.
+    /// stack that owns its VPC. The VPC detach is always denied, as it is for a function
+    /// without the stack's tags. Returns the worker's final state.
     ///
-    /// The stack executor matters here: its best-effort delete rule decides what an
-    /// access-denied answer does to the rest of the delete flow.
+    /// The stack executor matters here: it decides what a denied call does to the rest of the
+    /// delete flow.
     #[bon::builder]
     async fn delete_public_worker_in_created_vpc(
         mut mock_lambda: MockLambdaApi,
@@ -7685,10 +7531,7 @@ mod tests {
         mock_acm: MockAcmApi,
         #[builder(default = MockCloudWatchLogsApi::new())] mock_logs: MockCloudWatchLogsApi,
         #[builder(default)] uses_custom_domain: bool,
-        /// ARNs the tagging lookup still lists; empty means everything is gone.
-        #[builder(default)]
-        listed_arns: Vec<String>,
-    ) -> ResourceStatus {
+    ) -> StackResourceState {
         let worker = function_public_ingress();
         let worker_id = worker.id.clone();
         let mut controller = AwsWorkerController::mock_ready(&format!("test-{worker_id}"));
@@ -7733,10 +7576,6 @@ mod tests {
         mock_provider
             .expect_get_aws_logs_client()
             .returning(move |_| Ok(mock_logs.clone()));
-        let tagging = tagging_listing(listed_arns);
-        mock_provider
-            .expect_get_aws_resource_groups_tagging_client()
-            .returning(move |_| Ok(tagging.clone()));
 
         let deployment_config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
@@ -7766,23 +7605,24 @@ mod tests {
         // regression from looping forever.
         for _ in 0..30 {
             state = executor.step(state).await.unwrap().next_state;
-            let status = state.resources[&worker_id].status;
-            if status != ResourceStatus::Running && status != ResourceStatus::Deleting {
-                return status;
+            let worker = &state.resources[&worker_id];
+            if worker.status != ResourceStatus::Running && worker.status != ResourceStatus::Deleting
+            {
+                return worker.clone();
             }
         }
         panic!("worker delete did not finish within 30 steps");
     }
 
-    /// `lambda:GetFunction` is granted only for functions that carry the stack's tags. A
-    /// deleted function has no tags, so AWS answers the read that confirms the delete with
-    /// AccessDenied instead of ResourceNotFound. The delete flow has to treat that as "gone"
-    /// and still wait for the Lambda network interfaces, deleting only imported certificates.
+    /// A function deleted out of band has no tags, so the tag-scoped detach and delete are
+    /// denied. The read granted on functions without the stack's tag answers NotFound, so the
+    /// function is gone, and the delete still waits for the Lambda network interfaces and
+    /// deletes only imported certificates.
     #[rstest]
     #[case::imported_certificate(false)]
     #[case::customer_certificate(true)]
     #[tokio::test]
-    async fn test_delete_finishes_cleanup_when_read_of_deleted_function_is_denied(
+    async fn test_delete_finishes_cleanup_when_the_function_was_deleted_out_of_band(
         #[case] uses_custom_domain: bool,
     ) {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -7791,14 +7631,14 @@ mod tests {
         let recorded = calls.clone();
         mock_lambda.expect_delete_function().returning(move |_, _| {
             recorded.lock().unwrap().push("DeleteFunction");
-            Ok(())
+            Err(access_denied())
         });
         let recorded = calls.clone();
         mock_lambda
             .expect_get_function_configuration()
             .returning(move |_, _| {
-                recorded.lock().unwrap().push("GetFunction");
-                Err(access_denied())
+                recorded.lock().unwrap().push("GetFunctionConfiguration");
+                Err(function_gone())
             });
 
         let mut mock_ec2 = MockEc2Api::new();
@@ -7843,7 +7683,7 @@ mod tests {
                 Ok(())
             });
 
-        let status = delete_public_worker_in_created_vpc()
+        let worker = delete_public_worker_in_created_vpc()
             .mock_lambda(mock_lambda)
             .mock_ec2(mock_ec2)
             .mock_acm(mock_acm)
@@ -7852,10 +7692,12 @@ mod tests {
             .call()
             .await;
 
+        // Detach probe, delete and its probe, then the wait for the function to be gone.
         let mut expected_calls = vec![
-            "GetFunction",
+            "GetFunctionConfiguration",
             "DeleteFunction",
-            "GetFunction",
+            "GetFunctionConfiguration",
+            "GetFunctionConfiguration",
             "DescribeNetworkInterfaces",
         ];
         if !uses_custom_domain {
@@ -7863,7 +7705,7 @@ mod tests {
         }
         expected_calls.push("DeleteLogGroup");
         assert_eq!(*calls.lock().unwrap(), expected_calls);
-        assert_eq!(status, ResourceStatus::Deleted);
+        assert_eq!(worker.status, ResourceStatus::Deleted);
     }
 
     /// A role that has lost its permissions cannot confirm the Lambda network interfaces are
@@ -7876,14 +7718,14 @@ mod tests {
         let recorded = calls.clone();
         mock_lambda.expect_delete_function().returning(move |_, _| {
             recorded.lock().unwrap().push("DeleteFunction");
-            Ok(())
+            Err(access_denied())
         });
         let recorded = calls.clone();
         mock_lambda
             .expect_get_function_configuration()
             .returning(move |_, _| {
-                recorded.lock().unwrap().push("GetFunction");
-                Err(access_denied())
+                recorded.lock().unwrap().push("GetFunctionConfiguration");
+                Err(function_gone())
             });
 
         let mut mock_ec2 = MockEc2Api::new();
@@ -7895,7 +7737,7 @@ mod tests {
                 Err(access_denied())
             });
 
-        let status = delete_public_worker_in_created_vpc()
+        let worker = delete_public_worker_in_created_vpc()
             .mock_lambda(mock_lambda)
             .mock_ec2(mock_ec2)
             .mock_acm(MockAcmApi::new())
@@ -7904,37 +7746,101 @@ mod tests {
 
         // The denial may be transient, so the describe is retried before the delete fails.
         let calls = calls.lock().unwrap();
-        assert_eq!(calls[..3], ["GetFunction", "DeleteFunction", "GetFunction"]);
-        assert!(calls.len() > 4, "{calls:?}");
+        assert_eq!(
+            calls[..4],
+            [
+                "GetFunctionConfiguration",
+                "DeleteFunction",
+                "GetFunctionConfiguration",
+                "GetFunctionConfiguration"
+            ]
+        );
+        assert!(calls.len() > 5, "{calls:?}");
         assert!(
-            calls[3..].iter().all(|call| *call == "DescribeNetworkInterfaces"),
+            calls[4..]
+                .iter()
+                .all(|call| *call == "DescribeNetworkInterfaces"),
             "{calls:?}"
         );
-        assert_eq!(status, ResourceStatus::DeleteFailed);
+        assert_eq!(worker.status, ResourceStatus::DeleteFailed);
     }
 
-    /// The function still exists: the tag-scoped detach and read are both denied, and the
-    /// tagging lookup still lists it. The denial is real, so the delete ends `DeleteFailed`
-    /// without deleting anything, and the worker keeps its ARN.
+    /// Whether the codes of `error` and its sources include `code`.
+    fn error_chain_has_code(error: &AlienError, code: &str) -> bool {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            if error.code == code {
+                return true;
+            }
+            current = error.source.as_deref();
+        }
+        false
+    }
+
+    /// The function still exists: the tag-scoped detach is denied but the read succeeds, so
+    /// the denial is real. The delete ends `DeleteFailed` with the denial, without deleting
+    /// anything, and the worker keeps its ARN.
     #[tokio::test]
     async fn test_delete_of_a_function_that_still_exists_behind_a_denial_fails() {
         let mut mock_lambda = MockLambdaApi::new();
         mock_lambda.expect_delete_function().times(0);
         mock_lambda
             .expect_get_function_configuration()
-            .returning(|_, _| Err(access_denied()));
+            .times(1)
+            .returning(|_, _| Ok(create_successful_function_response("test-public-func")));
 
-        let status = delete_public_worker_in_created_vpc()
+        let worker = delete_public_worker_in_created_vpc()
             .mock_lambda(mock_lambda)
             .mock_ec2(MockEc2Api::new())
             .mock_acm(MockAcmApi::new())
-            .listed_arns(vec![
-                "arn:aws:lambda:us-east-1:123456789012:function:test-public-func".to_string(),
-            ])
             .call()
             .await;
 
-        assert_eq!(status, ResourceStatus::DeleteFailed);
+        assert_eq!(worker.status, ResourceStatus::DeleteFailed);
+        let error = worker.error.as_ref().expect("the denial is recorded");
+        assert!(
+            error_chain_has_code(error, "REMOTE_ACCESS_DENIED"),
+            "{error:?}"
+        );
+        let kept = worker
+            .internal_state
+            .as_ref()
+            .expect("state is kept")
+            .to_string();
+        assert!(
+            kept.contains("arn:aws:lambda:us-east-1:123456789012:function:test-public-func"),
+            "the worker keeps its ARN: {kept}"
+        );
+    }
+
+    /// A role set up before the read was granted on functions without the stack's tag: the
+    /// read of a gone function is denied like the detach. Nothing confirms the function is
+    /// gone, so the delete ends `DeleteFailed` with the denial instead of `Deleted`.
+    #[tokio::test]
+    async fn test_delete_without_the_tag_absent_read_reports_the_denial() {
+        let mut mock_lambda = MockLambdaApi::new();
+        mock_lambda.expect_delete_function().times(0);
+        mock_lambda
+            .expect_get_function_configuration()
+            .returning(|_, _| Err(access_denied()));
+
+        let worker = delete_public_worker_in_created_vpc()
+            .mock_lambda(mock_lambda)
+            .mock_ec2(MockEc2Api::new())
+            .mock_acm(MockAcmApi::new())
+            .call()
+            .await;
+
+        assert_eq!(worker.status, ResourceStatus::DeleteFailed);
+        let error = worker.error.as_ref().expect("the denial is recorded");
+        assert!(
+            error_chain_has_code(error, "REMOTE_ACCESS_DENIED"),
+            "{error:?}"
+        );
+        assert!(
+            worker.internal_state.is_some(),
+            "the controller state is kept"
+        );
     }
 
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────
@@ -8793,10 +8699,6 @@ mod tests {
         provider
             .expect_get_aws_logs_client()
             .returning(move |_| Ok(logs.clone()));
-        let tagging = tagging_listing(Vec::new());
-        provider
-            .expect_get_aws_resource_groups_tagging_client()
-            .returning(move |_| Ok(tagging.clone()));
         Arc::new(provider)
     }
 
@@ -9154,8 +9056,8 @@ mod tests {
     }
 
     /// A confirmed object can be gone too (deleted out of band, or by an earlier attempt whose
-    /// response was lost). Its delete and its read are both denied, and the delete goes on to
-    /// the next object instead of ending there.
+    /// response was lost). Its tag-scoped delete is denied, the read granted on untagged APIs
+    /// answers NotFound, and the delete goes on to the next object instead of ending there.
     #[tokio::test]
     async fn denied_delete_of_an_api_that_is_gone_continues_to_the_function() {
         let calls = Calls::default();
@@ -9169,7 +9071,7 @@ mod tests {
         let recorded = calls.clone();
         apigw.expect_get_api().times(1).returning(move |_| {
             record(&recorded, "GetApi");
-            Err(access_denied())
+            Err(not_found("API"))
         });
 
         let mut controller = failed_at_creating_api_domain();
@@ -9189,6 +9091,58 @@ mod tests {
             *calls.lock().unwrap(),
             ["DeleteApi", "GetApi", "DeleteFunction", "DeleteCertificate"]
         );
+    }
+
+    /// On a role set up before the read was granted on untagged APIs, the read of a gone API is
+    /// denied like its delete. Nothing confirms it is gone, so the denial is returned and the API
+    /// id kept, and the function is not deleted.
+    #[tokio::test]
+    async fn denied_delete_of_an_api_whose_read_is_denied_too_is_an_error() {
+        let calls = Calls::default();
+        let mut lambda = MockLambdaApi::new();
+        lambda.expect_delete_function().times(0);
+        let mut acm = MockAcmApi::new();
+        acm.expect_delete_certificate().times(0);
+        let mut apigw = MockApiGatewayV2Api::new();
+        let recorded = calls.clone();
+        apigw.expect_delete_api().returning(move |_| {
+            record(&recorded, "DeleteApi");
+            Err(access_denied())
+        });
+        let recorded = calls.clone();
+        apigw.expect_get_api().returning(move |_| {
+            record(&recorded, "GetApi");
+            Err(access_denied())
+        });
+
+        let mut controller = failed_at_creating_api_domain();
+        controller.domain_name = None;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(lambda, acm, apigw))
+            .build()
+            .await
+            .unwrap();
+        executor.delete().unwrap();
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("the denial stands");
+
+        assert!(
+            error_chain_codes(&error).contains(&"REMOTE_ACCESS_DENIED".to_string()),
+            "{error:?}"
+        );
+        assert!(error.retryable, "the denial may still be transient");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(
+            state.api_id.as_deref(),
+            Some("api-1"),
+            "the API id is kept for a retry"
+        );
+        assert_eq!(*calls.lock().unwrap(), ["DeleteApi", "GetApi"]);
     }
 
     /// When the API is still readable, its denied delete is real and is returned.

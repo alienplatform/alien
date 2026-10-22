@@ -48,9 +48,8 @@ pub trait LambdaApi: Send + Sync + std::fmt::Debug {
     /// GetFunction: the function's configuration and its tags. Lambda returns the tags only to
     /// callers allowed `lambda:ListTags`; for others `tags` is `None`.
     async fn get_function(&self, function_name: &str) -> Result<GetFunctionResponse>;
-    /// The environment variables the function runs with, from the same GetFunction call (and
-    /// permission) as [`LambdaApi::get_function_configuration`]. Values can be secret: never log
-    /// them.
+    /// The environment variables the function runs with, from a GetFunction call (needs
+    /// `lambda:GetFunction`). Values can be secret: never log them.
     async fn get_function_environment(
         &self,
         function_name: &str,
@@ -535,27 +534,28 @@ impl LambdaApi for LambdaClient {
         .await
     }
 
+    // The `/configuration` path is GetFunctionConfiguration, authorized as
+    // `lambda:GetFunctionConfiguration`. The bare function path is GetFunction, which needs
+    // `lambda:GetFunction` and also returns a code download URL.
     async fn get_function_configuration(
         &self,
         function_name: &str,
         qualifier: Option<String>,
     ) -> Result<FunctionConfiguration> {
-        let path = format!("/2015-03-31/functions/{}", function_name);
+        let path = format!("/2015-03-31/functions/{}/configuration", function_name);
         let mut qp = Vec::new();
         if let Some(q) = qualifier {
             qp.push(("Qualifier", q));
         }
-        let resp: GetFunctionResponse = self
-            .send_json(
-                Method::GET,
-                &path,
-                Some(qp),
-                None,
-                "GetFunctionConfiguration",
-                function_name,
-            )
-            .await?;
-        Ok(resp.configuration)
+        self.send_json(
+            Method::GET,
+            &path,
+            Some(qp),
+            None,
+            "GetFunctionConfiguration",
+            function_name,
+        )
+        .await
     }
 
     async fn get_function(&self, function_name: &str) -> Result<GetFunctionResponse> {

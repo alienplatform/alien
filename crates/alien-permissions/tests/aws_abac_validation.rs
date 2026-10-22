@@ -211,13 +211,13 @@ fn kubernetes_public_endpoint_acm_permissions_are_resource_scoped() {
             .as_ref()
             .expect("resource binding required");
         let actions = permission.grant.actions.as_ref().expect("actions required");
-        // ListCertificates and GetResources support no resource scoping, so they are the only
-        // unscoped grants, and each may carry nothing else.
-        if let Some(unscoped) = actions
+        // ListCertificates supports no resource scoping, so it is the one unscoped grant, and
+        // it may carry nothing else.
+        if actions
             .iter()
-            .find(|action| *action == "acm:ListCertificates" || *action == "tag:GetResources")
+            .any(|action| action == "acm:ListCertificates")
         {
-            assert_eq!(actions, &[unscoped.clone()]);
+            assert_eq!(actions, &["acm:ListCertificates"]);
             assert_eq!(binding.resources, ["*"]);
             assert!(binding.condition.is_none());
             continue;
@@ -226,6 +226,12 @@ fn kubernetes_public_endpoint_acm_permissions_are_resource_scoped() {
             binding.resources,
             ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
         );
+        // The describe on untagged certificates tells a gone certificate from a real denial.
+        // `tag_absent_grants_are_reads_of_gone_objects` keeps it to that one read.
+        if is_tag_absent_binding(binding) {
+            assert_eq!(actions, &["acm:DescribeCertificate"]);
+            continue;
+        }
 
         if actions
             .iter()
@@ -630,12 +636,207 @@ fn lambda_resource_requires_abac(resource: &str) -> bool {
     resource.contains(":lambda:") && resource.contains(":function:")
 }
 
+/// Whether the binding is scoped by `expected_key`. A `Null` condition does not scope a grant
+/// to the key's value: it matches requests where the key is absent (or present), so it never
+/// counts as a tag or ARN guard.
 fn has_condition_key(binding: &AwsBindingSpec, expected_key: &str) -> bool {
     binding.condition.as_ref().is_some_and(|conditions| {
         conditions
-            .values()
-            .any(|condition_values| condition_values.keys().any(|key| key == expected_key))
+            .iter()
+            .filter(|(operator, _)| operator.as_str() != "Null")
+            .any(|(_, condition_values)| condition_values.keys().any(|key| key == expected_key))
     })
+}
+
+/// Whether the binding's only condition is `Null` on the stack tag or on `lambda:FunctionArn`
+/// being "true": it matches only objects without the stack's tag, or mappings without a
+/// function.
+fn is_tag_absent_binding(binding: &AwsBindingSpec) -> bool {
+    let Some(conditions) = binding.condition.as_ref() else {
+        return false;
+    };
+    let Some(null) = conditions.get("Null") else {
+        return false;
+    };
+    conditions.len() == 1
+        && null.len() == 1
+        && null.iter().all(|(key, value)| {
+            (key == "aws:ResourceTag/${stackTag}" || key == "lambda:FunctionArn") && value == "true"
+        })
+}
+
+/// The reads a gone tag-scoped object answers with NotFound once they are granted on objects
+/// without the stack's tag. Each returns metadata only: GetFunctionConfiguration, unlike
+/// GetFunction, returns no code download URL.
+const GONE_OBJECT_READS: &[&str] = &[
+    "lambda:GetFunctionConfiguration",
+    "lambda:GetEventSourceMapping",
+    "acm:DescribeCertificate",
+    "apigateway:GET",
+];
+
+/// A grant on objects without the stack's tag reaches objects of other applications in the
+/// account. It may only read, only through the reads that tell a gone object from a real
+/// denial, and only under the stack's Lambda name prefix for functions. Any other use of `Null`
+/// on an Allow is a widening this test has not reviewed.
+#[test]
+fn tag_absent_grants_are_reads_of_gone_objects() {
+    let mut failures = Vec::new();
+    let mut seen = Vec::new();
+
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = get_permission_set(permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        let Some(aws_permissions) = permission_set.platforms.aws.as_ref() else {
+            continue;
+        };
+
+        for (statement_index, permission) in aws_permissions.iter().enumerate() {
+            if permission.effect == AwsPermissionEffect::Deny {
+                continue;
+            }
+            let actions = permission.grant.actions.as_deref().unwrap_or_default();
+            for binding in [
+                permission.binding.stack.as_ref(),
+                permission.binding.resource.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let uses_null = binding
+                    .condition
+                    .as_ref()
+                    .is_some_and(|conditions| conditions.contains_key("Null"));
+                if !uses_null {
+                    continue;
+                }
+                let at = format!("{permission_set_id}[{statement_index}]");
+                if !is_tag_absent_binding(binding) {
+                    failures.push(format!(
+                        "{at} combines Null with other conditions or keys: {:?}",
+                        binding.condition
+                    ));
+                    continue;
+                }
+                for action in actions {
+                    seen.push(action.clone());
+                    if !GONE_OBJECT_READS.contains(&action.as_str()) {
+                        failures.push(format!(
+                            "{at} grants {action} on objects without the stack's tag"
+                        ));
+                    }
+                }
+                for resource in &binding.resources {
+                    let allowed = if resource.contains(":lambda:")
+                        && resource.contains(":function:")
+                    {
+                        resource.contains("${stackPrefix}") || resource.contains("${resourceName}")
+                    } else {
+                        // API Gateway reaches the API object only (10-character ids) and the
+                        // domain; the Deny next to it covers the paths under a domain.
+                        [
+                            "*",
+                            "arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*",
+                            "arn:aws:apigateway:${awsRegion}::/apis/??????????",
+                            "arn:aws:apigateway:${awsRegion}::/restapis/??????????",
+                            "arn:aws:apigateway:${awsRegion}::/domainnames/*",
+                        ]
+                        .contains(&resource.as_str())
+                    };
+                    if !allowed {
+                        failures.push(format!(
+                            "{at} grants a tag-absent read on unreviewed resource {resource}"
+                        ));
+                    }
+                    if resource == "*"
+                        && !(actions == ["lambda:GetEventSourceMapping"]
+                            && binding.condition.as_ref().is_some_and(|conditions| {
+                                conditions["Null"].contains_key("lambda:FunctionArn")
+                            }))
+                    {
+                        failures.push(format!(
+                            "{at} grants a tag-absent read on every resource; only mappings without a function may be"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "Tag-absent grant validation failed:\n{}",
+        failures.join("\n")
+    );
+    // The validation must have something to validate: the Worker sets carry these reads.
+    for action in GONE_OBJECT_READS {
+        assert!(
+            seen.iter().any(|seen| seen == action),
+            "no tag-absent grant of {action}"
+        );
+    }
+}
+
+/// `/domainnames/*` in a tag-absent read also matches every path under a domain. Each set with
+/// that read must deny the paths under untagged domains, so their API mappings stay readable
+/// only through the tag-scoped grant.
+#[test]
+fn tag_absent_domain_reads_come_with_the_deny_on_paths_under_the_domain() {
+    let domain = "arn:aws:apigateway:${awsRegion}::/domainnames/*";
+    let mut checked = 0;
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = get_permission_set(permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        let Some(aws_permissions) = permission_set.platforms.aws.as_ref() else {
+            continue;
+        };
+        for scope in ["stack", "resource"] {
+            let bindings = aws_permissions.iter().filter_map(|permission| {
+                let binding = match scope {
+                    "stack" => permission.binding.stack.as_ref(),
+                    _ => permission.binding.resource.as_ref(),
+                }?;
+                Some((permission, binding))
+            });
+            let mut reads_untagged_domains = false;
+            let mut denies_paths_under_them = false;
+            for (permission, binding) in bindings {
+                if !is_tag_absent_binding(binding) {
+                    continue;
+                }
+                let gets = permission
+                    .grant
+                    .actions
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|action| action == "apigateway:GET");
+                match permission.effect {
+                    AwsPermissionEffect::Allow if gets => {
+                        reads_untagged_domains |= binding.resources.iter().any(|r| r == domain)
+                    }
+                    AwsPermissionEffect::Deny if gets => {
+                        denies_paths_under_them |= binding
+                            .resources
+                            .iter()
+                            .any(|r| r == "arn:aws:apigateway:${awsRegion}::/domainnames/*/*")
+                    }
+                    _ => {}
+                }
+            }
+            if reads_untagged_domains {
+                checked += 1;
+                assert!(
+                    denies_paths_under_them,
+                    "{permission_set_id} ({scope}) reads untagged domains without denying the paths under them"
+                );
+            }
+        }
+    }
+    assert!(
+        checked > 0,
+        "no set reads untagged domains; this test checks nothing"
+    );
 }
 
 fn wildcard_action_allowed(
