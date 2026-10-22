@@ -1360,18 +1360,29 @@ fn apply_azure_resource_group_dependency(
 
     let dependency = expr::traversal(["azurerm_resource_group", resource_group_label]);
     for (resource_id, entry) in stack.resources() {
-        if resource_id == resource_group_id
-            || entry.config.resource_type().as_ref() == "service_activation"
-        {
+        if entry.config.resource_type().as_ref() == "service_activation" {
             continue;
         }
         let Some(fragment) = per_resource.get_mut(resource_id) else {
             continue;
         };
         for resource in &mut fragment.resource_blocks {
+            // The group's own fragment also holds the stack-wide setup role definitions
+            // (see `emit_azure_setup_resource_role_definitions`), which are scoped to it.
+            if resource_id == resource_group_id
+                && is_resource_block(resource, "azurerm_resource_group", resource_group_label)
+            {
+                continue;
+            }
             upsert_depends_on(resource, std::slice::from_ref(&dependency));
         }
     }
+}
+
+fn is_resource_block(resource: &Block, provider_type: &str, label: &str) -> bool {
+    resource.identifier.as_str() == "resource"
+        && resource.labels.first().map(|value| value.as_str()) == Some(provider_type)
+        && resource.labels.get(1).map(|value| value.as_str()) == Some(label)
 }
 
 fn resource_address(resource: &Block) -> Option<Expression> {
