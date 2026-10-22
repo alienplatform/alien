@@ -2976,6 +2976,11 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
         // A later package registration reports only setup scaffolding. It must
         // retain application controller state, even for Frozen resources and
         // resources that a subsequent release is still deleting.
+        let installed_digest = metadata
+            .prepared_stack
+            .as_ref()
+            .unwrap()
+            .setup_update_digest();
         let mut running_state = state;
         let archive_config = stack_with_storage("archive")
             .resources
@@ -3041,6 +3046,73 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
             )
             .await
             .unwrap();
+        let mut updated_source = source_stack.clone();
+        let mut update_config = alien_core::DeploymentConfig::builder()
+            .stack_settings(request.stack_settings.clone())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        update_config.management_config = request.management_config.clone();
+        let update_client = alien_core::ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+        if platform == Platform::Azure {
+            let mut updated_stack = source_stack.clone();
+            updated_stack
+                .resources
+                .get_mut("execution-sa")
+                .unwrap()
+                .config = alien_core::Resource::new(
+                ServiceAccount::new("execution-sa".into())
+                    .stack_permission_set(
+                        alien_permissions::get_permission_set("queue/data-write")
+                            .unwrap()
+                            .clone(),
+                    )
+                    .build(),
+            );
+            updated_source = updated_stack.clone();
+            let before_import = fixture
+                .deployment_store
+                .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
+                .await
+                .unwrap()
+                .unwrap();
+            let error = alien_deployment::prepare_direct_setup_update(
+                updated_stack.clone(),
+                before_import.stack_state.as_ref().unwrap(),
+                &update_config,
+                &update_client,
+                before_import.runtime_metadata.as_ref().unwrap(),
+            )
+            .await
+            .expect_err("automatic updates must stop before changing an installed identity");
+            assert!(
+                error.to_string().contains("Azure setup must apply"),
+                "{error}"
+            );
+            let release = fixture
+                .state
+                .release_store
+                .create_release(
+                    &alien_manager::auth::Subject::system(),
+                    CreateReleaseParams {
+                        project_id: "default".into(),
+                        stacks: HashMap::from([(platform, updated_stack)]),
+                        git_commit_sha: None,
+                        git_commit_ref: None,
+                        git_commit_message: None,
+                    },
+                )
+                .await
+                .unwrap();
+            request.release_id = Some(release.id);
+        }
         request.setup_fingerprint = "updated-test".into();
         let (status, body) = post_import(&fixture, Some(&fixture.dg_token), &request).await;
         assert_eq!(status, StatusCode::OK, "{body:#}");
@@ -3049,9 +3121,52 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
             .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
             .await
             .unwrap()
-            .unwrap()
-            .stack_state
             .unwrap();
+        let metadata = reimported.runtime_metadata.unwrap();
+        if platform == Platform::Azure {
+            let authorization = metadata
+                .setup_update_authorization
+                .as_ref()
+                .expect("Azure setup must authorize the imported identity changes");
+            assert_eq!(
+                authorization.baseline_frozen_digest,
+                alien_permissions::generators::azure_setup_owned::azure_setup_update_digest(
+                    metadata.prepared_stack.as_ref().unwrap()
+                )
+                .unwrap()
+            );
+            assert_ne!(
+                authorization.target_frozen_digest,
+                authorization.baseline_frozen_digest
+            );
+            assert_eq!(Some(&authorization.release_id), request.release_id.as_ref());
+            assert_eq!(authorization.setup_fingerprint, request.setup_fingerprint);
+            assert_eq!(
+                metadata
+                    .prepared_stack
+                    .as_ref()
+                    .unwrap()
+                    .setup_update_digest(),
+                installed_digest
+            );
+            let resumed = alien_deployment::prepare_direct_setup_update(
+                updated_source,
+                reimported.stack_state.as_ref().unwrap(),
+                &update_config,
+                &update_client,
+                &metadata,
+            )
+            .await
+            .expect("registration must unblock the same automatic update");
+            assert!(resumed.setup_update_authorization.is_none());
+            assert_eq!(
+                resumed.prepared_stack.unwrap().resources["execution-sa"].config,
+                reimported.stack_state.as_ref().unwrap().resources["execution-sa"].config
+            );
+        } else {
+            assert!(metadata.setup_update_authorization.is_none());
+        }
+        let reimported = reimported.stack_state.unwrap();
         assert_eq!(
             reimported.resources["archive"].status,
             ResourceStatus::Running

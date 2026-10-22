@@ -61,7 +61,7 @@ pub async fn prepare_direct_setup_update(
             &config,
             client_config,
             existing_metadata.prepared_stack.as_ref(),
-            None,
+            existing_metadata.setup_update_authorization.as_ref(),
             Some(alien_core::InitialSetupAuthority::DirectSetup),
         )
         .await

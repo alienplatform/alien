@@ -424,21 +424,48 @@ impl PreflightRunner {
         // Apply mutations BEFORE compatibility checks
         // This ensures compatibility checks compare mutated stacks (old mutated vs new mutated)
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
-        let direct_setup = setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
-        let hashed_target = match old_stack {
-            Some(_) if !direct_setup => Some(without_declined_live_resources(
-                &mutated_stack,
-                &config.input_values,
-                platform,
-            )?),
-            _ => None,
-        };
-        let setup_update_authorized = direct_setup
-            || hashed_target.as_ref().is_some_and(|target| {
-                setup_update_authorization.is_some_and(|authorization| {
+        // Drop the comparison projection before later awaits so it does not enlarge
+        // the deployment future and exhaust the runner's worker stack.
+        let setup_update_authorized = {
+            let direct_setup =
+                setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
+            let automatic_azure_runtime = !config.setup_run
+                && config.base_platform.unwrap_or(platform) == Platform::Azure
+                && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+            let hashed_target = match old_stack {
+                Some(_) if !direct_setup || automatic_azure_runtime => {
+                    Some(without_declined_live_resources(
+                        &mutated_stack,
+                        &config.input_values,
+                        platform,
+                    )?)
+                }
+                _ => None,
+            };
+            let imported_setup_authorized = match (
+                old_stack,
+                hashed_target.as_ref(),
+                setup_update_authorization,
+            ) {
+                (Some(installed), Some(target), Some(authorization)) if automatic_azure_runtime => {
+                    crate::compatibility::azure_setup::authorization_matches(
+                        installed,
+                        target,
+                        authorization,
+                    )?
+                }
+                (_, Some(target), Some(authorization)) => {
                     setup_update_authorization_matches(old_stack, target, authorization)
-                })
-            });
+                }
+                _ => false,
+            };
+            if automatic_azure_runtime && !imported_setup_authorized {
+                if let (Some(installed), Some(target)) = (old_stack, hashed_target.as_ref()) {
+                    crate::compatibility::azure_setup::require_unchanged_setup(installed, target)?;
+                }
+            }
+            direct_setup || imported_setup_authorized
+        };
 
         // Match the deployment values used by the IAM policy writers. Physical
         // resource names use shared create naming or saved outputs where available.
@@ -597,6 +624,252 @@ mod setup_update_authorization_tests {
         Worker, WorkerCode, WorkerTrigger,
     };
     use indexmap::IndexMap;
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn azure_automatic_updates_require_setup_for_identity_and_role_changes() {
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let mut config = deployment_config();
+        config.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        let state = StackState::new(Platform::Azure);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+        let installed = Stack::new("azure-update".into())
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+            )
+            .add(
+                alien_core::ServiceAccount::new("execution-sa".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Vault::new("secrets".into()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut identity_added = installed.clone();
+        identity_added.resources.extend(
+            Stack::new("extra".into())
+                .add(
+                    alien_core::ServiceAccount::new("second-sa".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+                .resources,
+        );
+        let mut identity_removed = installed.clone();
+        identity_removed.resources.shift_remove("execution-sa");
+        let mut identity_changed = installed.clone();
+        identity_changed
+            .resources
+            .get_mut("execution-sa")
+            .unwrap()
+            .config = alien_core::Resource::new(
+            alien_core::ServiceAccount::new("execution-sa".into())
+                .stack_permission_set(
+                    alien_permissions::get_permission_set("vault/data-write")
+                        .unwrap()
+                        .clone(),
+                )
+                .build(),
+        );
+        let mut role_changed = installed.clone();
+        role_changed.permissions.profiles.insert(
+            "execution".into(),
+            PermissionProfile::new().resource("secrets", ["vault/data-write"]),
+        );
+
+        let mut worker_added = installed.clone();
+        worker_added.resources.extend(
+            Stack::new("extra".into())
+                .add(
+                    Worker::new("api".into())
+                        .code(WorkerCode::Image {
+                            image: "app:v1".into(),
+                        })
+                        .permissions("execution".into())
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+                .resources,
+        );
+        assert_eq!(
+            installed.setup_update_digest(),
+            worker_added.setup_update_digest()
+        );
+        let mut declined_worker = worker_added.clone();
+        declined_worker
+            .inputs
+            .push(alien_core::StackInputDefinition::deployer_boolean(
+                "apiEnabled",
+                "API",
+                "Enable the API worker",
+                Some(false),
+            ));
+        declined_worker
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .enabled_when = Some("apiEnabled".into());
+        let installed_without_worker = without_declined_live_resources(
+            &declined_worker,
+            &config.input_values,
+            Platform::Azure,
+        )
+        .unwrap();
+        assert!(!installed_without_worker.resources.contains_key("api"));
+        runner
+            .run_deployment_time_preflights(
+                declined_worker.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&installed_without_worker),
+                None,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .expect("an unchanged declined worker must not require setup");
+        let mut enabled_config = config.clone();
+        enabled_config
+            .input_values
+            .insert("apiEnabled".into(), serde_json::json!(true));
+        assert_eq!(
+            runner
+                .run_deployment_time_preflights(
+                    declined_worker,
+                    &state,
+                    &enabled_config,
+                    &client,
+                    Some(&installed_without_worker),
+                    None,
+                    Some(alien_core::InitialSetupAuthority::DirectSetup),
+                )
+                .await
+                .expect_err("enabling the worker must still check its roles")
+                .code,
+            "DEPLOYMENT_SETUP_REQUIRED"
+        );
+        for target in [
+            identity_added,
+            identity_removed,
+            identity_changed,
+            role_changed,
+            worker_added,
+        ] {
+            let error = runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &state,
+                    &config,
+                    &client,
+                    Some(&installed),
+                    None,
+                    Some(alien_core::InitialSetupAuthority::DirectSetup),
+                )
+                .await
+                .expect_err(
+                    "automatic runtime cannot change setup-owned Azure identities or roles",
+                );
+            assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+
+            let mut approved = authorization(&installed);
+            approved.baseline_frozen_digest =
+                alien_permissions::generators::azure_setup_owned::azure_setup_update_digest(
+                    &installed,
+                )
+                .unwrap();
+            approved.target_frozen_digest =
+                alien_permissions::generators::azure_setup_owned::azure_setup_update_digest(
+                    &target,
+                )
+                .unwrap();
+            runner
+                .run_deployment_time_preflights(
+                    target.clone(),
+                    &state,
+                    &config,
+                    &client,
+                    Some(&installed),
+                    Some(&approved),
+                    Some(alien_core::InitialSetupAuthority::DirectSetup),
+                )
+                .await
+                .expect("the registered setup authorizes its exact target");
+            approved.target_frozen_digest = "another-target".into();
+            assert_eq!(
+                runner
+                    .run_deployment_time_preflights(
+                        target.clone(),
+                        &state,
+                        &config,
+                        &client,
+                        Some(&installed),
+                        Some(&approved),
+                        Some(alien_core::InitialSetupAuthority::DirectSetup),
+                    )
+                    .await
+                    .unwrap_err()
+                    .code,
+                "DEPLOYMENT_SETUP_REQUIRED"
+            );
+
+            let mut setup_config = config.clone();
+            setup_config.setup_run = true;
+            runner
+                .run_deployment_time_preflights(
+                    target,
+                    &state,
+                    &setup_config,
+                    &client,
+                    Some(&installed),
+                    None,
+                    Some(alien_core::InitialSetupAuthority::DirectSetup),
+                )
+                .await
+                .expect("privileged setup can apply the change");
+        }
+
+        let mut target = installed.clone();
+        target.resources.extend(
+            Stack::new("extra".into())
+                .add(
+                    alien_core::Storage::new("archive".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+                .resources,
+        );
+        runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&installed),
+                None,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .expect("automatic application infrastructure still runs without setup");
+        let mut reordered = installed.clone();
+        reordered.resources.reverse();
+        runner
+            .run_deployment_time_preflights(
+                reordered,
+                &state,
+                &config,
+                &client,
+                Some(&installed),
+                None,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .expect("resource order does not change installed roles");
+    }
 
     fn empty_stack() -> Stack {
         Stack {
