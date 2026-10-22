@@ -478,7 +478,7 @@ fn restricting_the_supervisor_empties_the_ambient_set_even_when_clearing_it_is_r
             if ambient_is_set(CAP_KILL) != 1 {
                 libc::_exit(16);
             }
-            if restrict_supervisor().is_err() {
+            if restrict_supervisor(true).is_err() {
                 libc::_exit(1);
             }
             if ambient_is_set(CAP_KILL) != 0 {

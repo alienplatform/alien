@@ -87,7 +87,7 @@ fn main() -> Result<()> {
                 "prepare declared command identity",
                 "cannot write the image's passwd/group entries".to_string(),
             ))?;
-            alien_sandbox_agent::privilege::restrict_supervisor()
+            alien_sandbox_agent::privilege::restrict_supervisor(true)
                 .into_alien_error()
                 .context(failed(
                     "reduce supervisor capabilities",

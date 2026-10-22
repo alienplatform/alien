@@ -37,10 +37,12 @@ as `NET_ADMIN` are rejected by the image API. Omitting the grant leaves out
 [AWS capability contract](https://docs.aws.amazon.com/lambda/latest/dg/microvms-images.html#microvms-images-os-capabilities).
 
 Before creating worker threads, the supervisor reduces its effective, permitted,
-and bounding sets to `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `KILL`, `SETGID`, `SETUID`,
-`SETPCAP`, and `NET_ADMIN`. It clears ambient and inheritable capabilities and sets
-`no_new_privs`. These allow file projection and transfer, command cancellation,
-irreversible identity drops, and firewall installation. Seccomp installation after
+and bounding sets to Docker's default capabilities without `NET_RAW`, plus
+`NET_ADMIN` when it installs guest network rules. The image spawn primitive
+always removes `NET_ADMIN`; it retains the common root set so a supervisor can
+start workers under other uids. Backends without guest network rules need only
+the common root set. It clears ambient and inheritable capabilities and sets
+`no_new_privs`. Missing required capabilities fail startup. Seccomp installation after
 `no_new_privs` needs no extra capability. The legacy `allowDomains` mode also uses
 `SYS_ADMIN` during bootstrap to replace AWS's read-only `/etc/hosts` mount; that
 capability is removed before worker threads or guest code start. Every image

@@ -188,14 +188,12 @@ fn clear_ambient_capabilities() -> io::Result<()> {
     }
 }
 
-/// Shrinks AWS's ALL capability grant before the supervisor starts image code or serves exec.
-/// Retains only network administration, identity dropping, and access to command-owned files.
+/// Retains the image's bounded root grant so children can inherit it after bootstrap.
+/// Only an agent installing guest network rules also retains NET_ADMIN; the image
+/// spawn path always drops it. A missing required capability fails startup.
 #[cfg(target_os = "linux")]
-pub fn restrict_supervisor() -> io::Result<()> {
-    // CHOWN, DAC_OVERRIDE, FOWNER (file projection), KILL (timeouts/cancellation),
-    // SETGID, SETUID, SETPCAP (irreversible child drop), NET_ADMIN.
-    let keep: u32 =
-        (1 << 0) | (1 << 1) | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 12);
+pub fn restrict_supervisor(network_admin: bool) -> io::Result<()> {
+    let keep = IMAGE_ROOT_CAPABILITIES | if network_admin { 1 << 12 } else { 0 };
     restrict_capabilities(keep)
 }
 
@@ -320,6 +318,16 @@ mod tests {
     #[test]
     #[ignore = "requires root with the Docker default capability set and setpriv"]
     fn root_image_capabilities_survive_exec_without_network_administration() {
+        supervisor_can_start_bounded_root(false);
+    }
+
+    #[test]
+    #[ignore = "requires root with the Docker default capability set, NET_ADMIN and setpriv"]
+    fn root_image_does_not_inherit_supervisor_network_administration() {
+        supervisor_can_start_bounded_root(true);
+    }
+
+    fn supervisor_can_start_bounded_root(network_admin: bool) {
         assert_eq!(unsafe { libc::geteuid() }, 0, "run this test as root");
         let mut command = Command::new("/bin/sh");
         command.args([
@@ -327,7 +335,8 @@ mod tests {
             "cat /proc/self/status; setpriv --reuid 2000 --regid 2000 --clear-groups id -u",
         ]);
         unsafe {
-            command.pre_exec(|| {
+            command.pre_exec(move || {
+                restrict_supervisor(network_admin)?;
                 drop_image_to(ExecIdentity { uid: 0, gid: 0 })?;
                 let socket = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
                 if socket < 0 {
