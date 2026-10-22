@@ -1634,15 +1634,31 @@ impl AzureNetworkController {
 
         let result = network_client
             .create_or_update_subnet(&resource_group, &vnet_name, &private_subnet_name, &subnet)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: format!(
-                    "Failed to dissociate NAT Gateway from subnet '{}'",
-                    private_subnet_name
-                ),
-                operation: Some("create_or_update_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
+        let result = match result {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                // A missing subnet cannot hold the NAT attachment. Other owned
+                // network children still need their normal delete steps.
+                return Ok(HandlerAction::Continue {
+                    state: DeletingNatGateway,
+                    suggested_delay: None,
+                });
+            }
+            result => result,
+        };
+        let result = result.context(ErrorData::InfrastructureError {
+            message: format!(
+                "Failed to dissociate NAT Gateway from subnet '{}'",
+                private_subnet_name
+            ),
+            operation: Some("create_or_update_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         match result {
             OperationResult::Completed(_) => Ok(HandlerAction::Continue {
@@ -1677,12 +1693,28 @@ impl AzureNetworkController {
 
         let subnet = network_client
             .get_subnet(&resource_group, &vnet_name, &private_subnet_name)
-            .await
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to check NAT dissociation status".to_string(),
-                operation: Some("get_subnet".to_string()),
-                resource_id: Some(config.id.clone()),
-            })?;
+            .await;
+        let subnet = match subnet {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                // A missing subnet cannot hold the NAT attachment. Other owned
+                // network children still need their normal delete steps.
+                return Ok(HandlerAction::Continue {
+                    state: DeletingNatGateway,
+                    suggested_delay: None,
+                });
+            }
+            result => result,
+        };
+        let subnet = subnet.context(ErrorData::InfrastructureError {
+            message: "Failed to check NAT dissociation status".to_string(),
+            operation: Some("get_subnet".to_string()),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         if let Some(props) = subnet.properties {
             if props.nat_gateway.is_none() {

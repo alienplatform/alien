@@ -9,6 +9,7 @@ use alien_core::{
 use alien_error::AlienError;
 use alien_infra::{
     deserialize_controller, MockPlatformServiceProvider, StackExecutor, StackResourceStateExt,
+    StackStateExt,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -480,4 +481,186 @@ async fn expired_cloud_run_delete_operation_reissues_delete_after_reload_and_ret
     assert_eq!(state.resources["worker"].status, ResourceStatus::Deleted);
     assert_eq!(deletes.load(Ordering::SeqCst), 2);
     assert!(!exists.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn azure_network_missing_subnet_continues_owned_cleanup_and_denial_can_retry() {
+    for checkpoint in ["dissociatingNatFromSubnet", "waitingForNatDissociation"] {
+        for initially_denied in [false, true] {
+            let denied = Arc::new(std::sync::atomic::AtomicBool::new(initially_denied));
+            let remaining = Arc::new(std::sync::Mutex::new(vec!["nat", "ip", "vnet"]));
+            let error = move |denied: bool| {
+                if denied {
+                    AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+                        resource_type: "subnet".into(),
+                        resource_name: "private".into(),
+                    })
+                } else {
+                    AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "subnet".into(),
+                        resource_name: "private".into(),
+                    })
+                }
+            };
+            let mut network = alien_azure_clients::azure::network::MockNetworkApi::new();
+            let flag = denied.clone();
+            let frontend_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let calls = frontend_calls.clone();
+            if checkpoint == "dissociatingNatFromSubnet" {
+                network
+                    .expect_create_or_update_subnet()
+                    .withf(|rg, vnet, subnet, _| {
+                        rg == "synthetic-rg" && vnet == "synthetic-vnet" && subnet == "private"
+                    })
+                    .times(1..)
+                    .returning(move |_, _, _, _| {
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Err(error(flag.load(std::sync::atomic::Ordering::SeqCst)))
+                    });
+            } else {
+                network
+                    .expect_get_subnet()
+                    .withf(|rg, vnet, subnet| {
+                        rg == "synthetic-rg" && vnet == "synthetic-vnet" && subnet == "private"
+                    })
+                    .times(1..)
+                    .returning(move |_, _, _| {
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Err(error(flag.load(std::sync::atomic::Ordering::SeqCst)))
+                    });
+            }
+            let inventory = remaining.clone();
+            network
+                .expect_delete_nat_gateway()
+                .times(1)
+                .returning(move |rg, name| {
+                    assert_eq!((rg, name), ("synthetic-rg", "synthetic-nat"));
+                    inventory.lock().unwrap().retain(|name| *name != "nat");
+                    Ok(alien_azure_clients::long_running_operation::OperationResult::Completed(()))
+                });
+            let inventory = remaining.clone();
+            network
+                .expect_delete_public_ip_address()
+                .times(1)
+                .returning(move |rg, name| {
+                    assert_eq!((rg, name), ("synthetic-rg", "synthetic-ip"));
+                    assert!(!inventory.lock().unwrap().contains(&"nat"));
+                    inventory.lock().unwrap().retain(|name| *name != "ip");
+                    Ok(alien_azure_clients::long_running_operation::OperationResult::Completed(()))
+                });
+            let inventory = remaining.clone();
+            network
+                .expect_delete_virtual_network()
+                .times(1)
+                .returning(move |rg, name| {
+                    assert_eq!((rg, name), ("synthetic-rg", "synthetic-vnet"));
+                    assert_eq!(*inventory.lock().unwrap(), ["vnet"]);
+                    inventory.lock().unwrap().clear();
+                    Ok(alien_azure_clients::long_running_operation::OperationResult::Completed(()))
+                });
+            let network = Arc::new(network);
+            let mut services = MockPlatformServiceProvider::new();
+            services
+                .expect_get_azure_network_client()
+                .returning(move |_| Ok(network.clone()));
+            let cfg = ClientConfig::Azure(Box::new(AzureClientConfig {
+                subscription_id: "synthetic-subscription".into(),
+                tenant_id: "synthetic-tenant".into(),
+                region: Some("westus2".into()),
+                credentials: AzureCredentials::ServicePrincipal {
+                    client_id: "synthetic".into(),
+                    client_secret: "synthetic".into(),
+                },
+                service_overrides: None,
+            }));
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build();
+            let mut state = StackState::new(Platform::Azure);
+            let mut resource = StackResourceState::new_pending(
+                "network".into(),
+                Resource::new(
+                    alien_core::Network::new("network".into())
+                        .settings(alien_core::NetworkSettings::UseDefault)
+                        .build(),
+                ),
+                Some(ResourceLifecycle::Frozen),
+                vec![],
+            );
+            resource.status = ResourceStatus::Deleting;
+            resource
+                .set_internal_controller(Some(
+                    deserialize_controller(json!({
+                        "type": "AzureNetworkController", "_controllerStateVersion": 1,
+                        "state": checkpoint, "vnetName": "synthetic-vnet",
+                        "privateSubnetName": "private", "resourceGroup": "synthetic-rg",
+                        "cidrBlock": "10.0.0.0/16", "natGatewayName": "synthetic-nat",
+                        "natGatewayId": "synthetic-nat-id", "publicIpName": "synthetic-ip",
+                        "publicIpId": "synthetic-ip-id", "isByoVnet": false
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap();
+            state.resources.insert("network".into(), resource);
+            let executor = StackExecutor::for_deletion_with_service_provider(
+                cfg,
+                &config,
+                Arc::new(services),
+                Some(vec![ResourceLifecycle::Frozen]),
+            )
+            .unwrap();
+            state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+            if initially_denied {
+                state = executor.step(state).await.unwrap().next_state;
+                let failed = &state.resources["network"];
+                assert_eq!(failed.status, ResourceStatus::DeleteFailed);
+                assert_eq!(
+                    failed.last_failed_state.as_ref().unwrap()["natGatewayId"],
+                    "synthetic-nat-id"
+                );
+                assert_eq!(*remaining.lock().unwrap(), ["nat", "ip", "vnet"]);
+                state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+                state = executor.step(state).await.unwrap().next_state;
+                assert_eq!(
+                    state.resources["network"].status,
+                    ResourceStatus::DeleteFailed
+                );
+                assert_eq!(frontend_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+                denied.store(false, std::sync::atomic::Ordering::SeqCst);
+                state
+                    .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+                    .unwrap();
+            }
+            for _ in 0..10 {
+                state = executor.step(state).await.unwrap().next_state;
+                state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+                if matches!(
+                    state.resources["network"].status,
+                    ResourceStatus::Deleted | ResourceStatus::DeleteFailed
+                ) {
+                    break;
+                }
+            }
+            assert_eq!(
+                state.resources["network"].status,
+                ResourceStatus::Deleted,
+                "checkpoint {checkpoint}"
+            );
+            assert_eq!(
+                frontend_calls.load(std::sync::atomic::Ordering::SeqCst),
+                if initially_denied { 2 } else { 1 }
+            );
+            assert!(
+                remaining.lock().unwrap().is_empty(),
+                "all owned children must be removed"
+            );
+        }
+    }
 }
