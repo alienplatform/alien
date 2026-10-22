@@ -242,6 +242,7 @@ async fn a_working_directory_the_command_cannot_enter_refuses_the_spawn() {
 /// The agent as the image configures it: root, dropping to the exec identity for every spawn.
 fn agent_state(root: &Path) -> AgentState {
     AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.to_path_buf(),

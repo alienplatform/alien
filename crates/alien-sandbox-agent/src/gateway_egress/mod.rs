@@ -68,7 +68,6 @@ pub struct GatewayEgress {
     ready: AtomicBool,
     listeners_live: AtomicBool,
     names: Names,
-    image_started: AtomicBool,
     ca_path: RwLock<Option<String>>,
     identity: RwLock<Option<(String, String)>>,
     update_lock: tokio::sync::Mutex<()>,
@@ -157,44 +156,11 @@ impl GatewayEgress {
             ready: AtomicBool::new(false),
             listeners_live: AtomicBool::new(false),
             names: Names::default(),
-            image_started: AtomicBool::new(false),
             ca_path: RwLock::new(None),
             identity: RwLock::new(identity),
             update_lock: tokio::sync::Mutex::new(()),
             unanswered_since: std::sync::Mutex::new(None),
         })))
-    }
-
-    /// Launch image code at most once, after a successful path check.
-    pub fn start_image_once(&self, identity: crate::exec::ExecIdentity) -> Result<()> {
-        self.ensure_ready()?;
-        if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_none()
-            || self.image_started.swap(true, Ordering::AcqRel)
-        {
-            return Ok(());
-        }
-        let start = || {
-            let mut env = BTreeMap::new();
-            self.command_environment(&mut env)?;
-            crate::image_command::start_with_env(identity, &env)
-        };
-        let child = match start() {
-            Ok(child) => child,
-            Err(error) => {
-                self.image_started.store(false, Ordering::Release);
-                self.ready.store(false, Ordering::Release);
-                return Err(error);
-            }
-        };
-        if let Some(mut child) = child {
-            tokio::spawn(async move {
-                match child.wait().await {
-                    Ok(status) => tracing::info!(%status, "image command exited"),
-                    Err(error) => tracing::error!(%error, "image command wait failed"),
-                }
-            });
-        }
-        Ok(())
     }
 
     /// Health remains available while create is waiting to deliver the policy.

@@ -261,7 +261,6 @@ mod tests {
             ready: AtomicBool::new(false),
             listeners_live: AtomicBool::new(true),
             names: Names::default(),
-            image_started: AtomicBool::new(false),
             ca_path: RwLock::new(None),
             identity: RwLock::new(Some(("p/r".into(), "box".into()))),
             update_lock: tokio::sync::Mutex::new(()),

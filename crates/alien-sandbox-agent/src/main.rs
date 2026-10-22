@@ -71,7 +71,6 @@ fn main() -> Result<()> {
 
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
-    let mut run_image_command = false;
     if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
         #[cfg(target_os = "linux")]
         if let Some(policy) = alien_sandbox_agent::egress::legacy_from_env()? {
@@ -115,7 +114,6 @@ fn main() -> Result<()> {
                     )));
             }
         }
-        run_image_command = true;
         #[cfg(not(target_os = "linux"))]
         return Err(invalid("ALIEN_SANDBOX_EGRESS", "requires Linux netfilter"));
     }
@@ -148,24 +146,16 @@ fn main() -> Result<()> {
         #[cfg(target_os = "linux")]
         if let Some(egress) = &state.gateway_egress {
             match egress.start().await {
-                Ok(()) => { if egress.ensure_ready().is_ok() { egress.start_image_once(state.exec_identity)?; } }
+                Ok(()) => { if egress.ensure_ready().is_ok() { state.start_image_once()?; } }
                 Err(error) => tracing::error!(code = %error.code, "egress startup failed; session routes remain unavailable"),
             }
-            run_image_command = false;
         }
-        let image_child = if run_image_command {
-            alien_sandbox_agent::image_command::start(state.exec_identity)?
-        } else {
-            None
-        };
-        if let Some(mut child) = image_child {
-            tokio::spawn(async move {
-                match child.wait().await {
-                    Ok(status) => tracing::info!(%status, "image command exited"),
-                    Err(error) => tracing::error!(%error, "could not reap image command"),
-                }
-            });
+        #[cfg(target_os = "linux")]
+        if state.gateway_egress.is_none() {
+            state.start_image_once()?;
         }
+        #[cfg(not(target_os = "linux"))]
+        state.start_image_once()?;
         tracing::info!("sandbox agent listening on {address}");
 
         axum::serve(
@@ -337,6 +327,11 @@ fn load_state() -> Result<AgentState> {
     ))?;
 
     Ok(AgentState {
+        image_process: if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
+            Default::default()
+        } else {
+            alien_sandbox_agent::image_command::ImageProcess::not_configured()
+        },
         session_root,
         authorization: load_authorization()?,
         exec_identity,

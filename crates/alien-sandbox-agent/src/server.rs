@@ -77,6 +77,8 @@ pub enum AgentAuthorization {
 
 /// Everything the agent knows about itself, fixed at session start.
 pub struct AgentState {
+    /// Once-per-boot image process and its observed exit.
+    pub image_process: crate::image_command::ImageProcess,
     /// Directory every path is resolved against. Canonical.
     pub session_root: PathBuf,
     /// What a request must present to reach this session
@@ -94,10 +96,25 @@ pub struct AgentState {
     pub agent_binary: PathBuf,
 }
 
+impl AgentState {
+    /// Called only after network checks, before accepting any session operation.
+    pub fn start_image_once(&self) -> crate::error::Result<()> {
+        let mut env = std::collections::BTreeMap::new();
+        #[cfg(target_os = "linux")]
+        if let Some(egress) = &self.gateway_egress {
+            egress.ensure_ready()?;
+            egress.command_environment(&mut env)?;
+        }
+        self.image_process.start_once(self.exec_identity, &env)
+    }
+}
+
 /// Liveness, the version the agent speaks, and the container it runs in.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
+    /// Image startup/exit, reported independently of session readiness.
+    pub image_command: crate::image_command::ImageStatus,
     /// The protocol version this agent implements
     pub protocol_version: u32,
     /// The kernel boot id of the container this agent runs in. Stable across calls and processes
@@ -324,6 +341,7 @@ async fn health(
         None => status,
     };
     Ok(Json(HealthResponse {
+        image_command: state.image_process.status()?,
         status: status.into(),
         protocol_version: PROTOCOL_VERSION,
         boot_id,
@@ -715,6 +733,7 @@ async fn authorize(
     if let Some(egress) = &state.gateway_egress {
         egress.wait_ready().await?;
     }
+    state.start_image_once()?;
     Ok(())
 }
 
@@ -826,7 +845,7 @@ async fn update_egress(
     let full_delivery = update.token.is_some();
     egress.update(update.token, update.policy).await?;
     if full_delivery {
-        egress.start_image_once(state.exec_identity)?;
+        state.start_image_once()?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -844,7 +863,7 @@ async fn run_egress_hook(
     authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
     if !egress.requires_token() {
         egress.activate_declared_none().await?;
-        egress.start_image_once(state.exec_identity)?;
+        state.start_image_once()?;
         return Ok(StatusCode::OK);
     }
     #[derive(Deserialize)]

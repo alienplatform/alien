@@ -58,6 +58,7 @@ impl Agent {
         let keys = KeyPair::from_seed(Seed::new([3u8; 32]));
 
         let state = Arc::new(AgentState {
+            image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
             #[cfg(target_os = "linux")]
             gateway_egress: None,
             session_root: root.clone(),
@@ -442,6 +443,7 @@ async fn transport_authorization_needs_no_capability() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -494,6 +496,7 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -587,6 +590,7 @@ async fn the_validate_hook_passes_and_leaves_the_session_root_empty() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     validate::run(&AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -615,6 +619,7 @@ async fn the_validate_hook_refuses_a_caller_running_as_the_exec_identity() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let base_url = serve(Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         gateway_egress: None,
         session_root: root.clone(),
         authorization: AgentAuthorization::Transport,
@@ -654,6 +659,7 @@ async fn the_validate_hook_refuses_a_caller_without_a_capability() {
     let keys = KeyPair::from_seed(Seed::new([3u8; 32]));
 
     let base_url = serve(Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -705,6 +711,7 @@ async fn the_validate_hook_names_the_file_check_when_the_session_root_is_not_wri
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o500)).expect("chmod");
 
     let outcome = validate::run(&AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -741,6 +748,7 @@ async fn the_validate_hook_names_the_identity_check_when_the_probe_cannot_run_as
     let root = dir.path().canonicalize().expect("canonical root");
 
     let base_url = serve(Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -986,6 +994,7 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),

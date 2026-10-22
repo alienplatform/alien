@@ -150,3 +150,10 @@ after the first, the test writes `/tmp/routing-go.ready`; suspend and resume the
 MicroVM, then create `/tmp/routing-go` to release the second round. Both rounds
 must pass within three minutes. Delete the disposable VM afterward. This test
 qualifies routing, not the external gateway policy or full boot contract.
+
+Health includes an `imageCommand` object with `status` (`notConfigured`, `pending`,
+`empty`, `running`, `exited`, or `failed`). An exit records `code` or `signal` and
+is logged without restarting the image process. Once network checks pass, spawn
+must complete before a session operation proceeds, but the agent does not wait
+for application readiness. Released images that never configured command startup
+retain `notConfigured` until rebuilt with startup support.
