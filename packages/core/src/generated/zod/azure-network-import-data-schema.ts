@@ -12,6 +12,7 @@ import { AzureSandboxNetworkSchema } from "./azure-sandbox-network-schema.js";
 export const AzureNetworkImportDataSchema = z.object({
     "applicationGatewaySubnetId": z.string().describe("Dedicated subnet for classic Azure Application Gateway ingress.").nullish(),
 "applicationGatewaySubnetName": z.string().describe("Dedicated subnet name for classic Azure Application Gateway ingress.").nullish(),
+"containerAppsSubnetName": z.string().describe("Subnet delegated to `Microsoft.App/environments` for the Container Apps environment.\nAbsent for a BYO-VNet, whose private subnet serves the environment.").nullish(),
 "egressPublicIps": z.optional(z.array(z.string()).describe("NAT public addresses owned by setup; empty for an unknown external egress path.")),
 "isByoVnet": z.boolean().describe("True when the VNet is owned outside this stack."),
 "natGatewayId": z.string().describe("NAT gateway resource id when one was created.").nullish(),

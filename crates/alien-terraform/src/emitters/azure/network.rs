@@ -124,6 +124,14 @@ impl TfEmitter for AzureNetworkEmitter {
                         expr::traversal(["azurerm_subnet", &format!("{label}_pe"), "name"]),
                     ),
                     (
+                        "containerAppsSubnetName",
+                        expr::traversal([
+                            "azurerm_subnet",
+                            &format!("{label}_container_apps"),
+                            "name",
+                        ]),
+                    ),
+                    (
                         "natGatewayId",
                         expr::traversal(["azurerm_nat_gateway", &nat_label, "id"]),
                     ),
