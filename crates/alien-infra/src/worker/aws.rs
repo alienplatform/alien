@@ -2553,6 +2553,11 @@ impl AwsWorkerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
+                // Recorded before its target exists, so a delete after a failed PutTargets
+                // still removes the rule.
+                if !self.eventbridge_rule_names.contains(&rule_name) {
+                    self.eventbridge_rule_names.push(rule_name.clone());
+                }
                 let rule_arn = rule_response.rule_arn.unwrap_or_default();
 
                 // Add Lambda permission for EventBridge
@@ -2606,9 +2611,6 @@ impl AwsWorkerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                if !self.eventbridge_rule_names.contains(&rule_name) {
-                    self.eventbridge_rule_names.push(rule_name.clone());
-                }
                 if !self
                     .eventbridge_permission_statement_ids
                     .contains(&statement_id)
@@ -4221,6 +4223,11 @@ impl AwsWorkerController {
                             resource_id: Some(current_config.id.clone()),
                         })?;
 
+                    // Recorded before its target exists, so a delete after a failed
+                    // PutTargets still removes the rule.
+                    if !self.eventbridge_rule_names.contains(&rule_name) {
+                        self.eventbridge_rule_names.push(rule_name.clone());
+                    }
                     let rule_arn = rule_response.rule_arn.unwrap_or_default();
                     let statement_id = format!("{}-eb-{}", worker_name, index);
                     let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
@@ -4271,9 +4278,6 @@ impl AwsWorkerController {
                             resource_id: Some(current_config.id.clone()),
                         })?;
 
-                    if !self.eventbridge_rule_names.contains(&rule_name) {
-                        self.eventbridge_rule_names.push(rule_name);
-                    }
                     if !self
                         .eventbridge_permission_statement_ids
                         .contains(&statement_id)
