@@ -1,6 +1,6 @@
 use crate::{
     ownership_policy_for_resource_type, ErrorData, Key, ManagementPermissions, Platform,
-    ResourceEntry, Result, Sandbox, SetupManagement, Stack, Storage,
+    ResourceEntry, ResourceLifecycle, Result, Sandbox, SetupManagement, Stack, Storage,
 };
 use alien_error::AlienError;
 
@@ -125,4 +125,25 @@ pub fn is_automatic_setup_package_resource_type(resource_type: &str, platform: P
         "remote-stack-management" | "vault" | "azure_resource_group" | "service_activation"
     ) || (platform == Platform::Azure
         && matches!(resource_type, "service-account" | "resource-access"))
+}
+
+/// Whether deleting an installation through runtime cleanup removes this resource before the
+/// setup package's own teardown runs.
+///
+/// An automatic package creates only its scaffolding types (see
+/// [`is_automatic_setup_package_resource_type`]). The runtime created everything else, Frozen
+/// resources included, and the package's teardown cannot see those, so runtime cleanup removes
+/// them. It leaves the package's resources, Live vaults included, to that teardown. Any other
+/// package owns its Frozen resources, apart from types that need runtime cleanup first.
+pub fn removed_by_runtime_cleanup(
+    resource_type: &str,
+    lifecycle: ResourceLifecycle,
+    management: SetupManagement,
+    platform: Platform,
+) -> bool {
+    if management == SetupManagement::Automatic {
+        return !is_automatic_setup_package_resource_type(resource_type, platform);
+    }
+    lifecycle == ResourceLifecycle::Live
+        || ownership_policy_for_resource_type(resource_type).has_runtime_cleanup_before_teardown()
 }

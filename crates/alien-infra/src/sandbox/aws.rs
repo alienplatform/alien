@@ -5021,7 +5021,7 @@ mod tests {
             );
 
             state
-                .prepare_for_runtime_cleanup_destroy()
+                .prepare_for_runtime_cleanup_destroy(alien_core::SetupManagement::Manual)
                 .expect("the delete request prepares the stack");
             let config = alien_core::DeploymentConfig::builder()
                 .stack_settings(alien_core::StackSettings::default())

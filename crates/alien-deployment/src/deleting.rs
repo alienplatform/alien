@@ -3,7 +3,7 @@ use crate::{
 };
 use alien_core::{
     ownership_policy_for_resource_type, InitialSetupAuthority, Platform, ResourceLifecycle,
-    ResourceStatus, StackState, StackStatus,
+    ResourceStatus, SetupManagement, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{state_utils::StackStateExt, PlatformServiceProvider, StackExecutor};
@@ -59,11 +59,15 @@ pub async fn handle_delete_pending(
         }
     }
 
-    let prepared =
-        prepare_resources_for_destroy(&mut stack_state, next.platform, service_provider.as_ref())
-            .context(ErrorData::StackExecutionFailed {
-            message: "Failed to prepare runtime resources for destroy".to_string(),
-        })?;
+    let prepared = prepare_resources_for_destroy(
+        &mut stack_state,
+        next.platform,
+        config.stack_settings.setup_management,
+        service_provider.as_ref(),
+    )
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to prepare runtime resources for destroy".to_string(),
+    })?;
 
     info!(
         "Prepared {} runtime resources for destroy: {:?}",
@@ -104,6 +108,7 @@ pub async fn handle_deleting(
     })?;
 
     let owns_setup = owns_runtime_setup(current_cloned.platform, service_provider.as_ref());
+    let management = config.stack_settings.setup_management;
     let executor = if owns_setup {
         StackExecutor::for_deletion_with_service_provider(
             client_config,
@@ -138,14 +143,14 @@ pub async fn handle_deleting(
                 message: "Failed to compute local teardown status".to_string(),
             })
     } else {
-        compute_runtime_cleanup_status(&step_result.next_state)
+        compute_runtime_cleanup_status(&step_result.next_state, management)
     }
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to compute runtime cleanup status".to_string(),
     })?;
 
     let result = if stack_status == StackStatus::Deleted {
-        let next_status = if has_remaining_setup_resources(&step_result.next_state)
+        let next_status = if has_remaining_setup_resources(&step_result.next_state, management)
             || crate::setup_teardown::has_setup_scaffolding(
                 current_cloned.runtime_metadata.as_ref(),
                 current_cloned.platform,
@@ -278,7 +283,8 @@ pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentSt
         }
     }
     Some(
-        if has_remaining_setup_resources(stack_state)
+        // A direct setup's own teardown removes every resource that is not Live.
+        if has_remaining_setup_resources(stack_state, SetupManagement::Manual)
             || crate::setup_teardown::has_setup_scaffolding(metadata, current.platform)
         {
             DeploymentStatus::TeardownRequired
@@ -305,7 +311,7 @@ pub async fn handle_teardown_required(current: DeploymentState) -> Result<Deploy
 /// Handle DeleteFailed status: retry runtime cleanup when requested.
 pub async fn handle_delete_failed(
     current: DeploymentState,
-    _config: DeploymentConfig,
+    config: DeploymentConfig,
     _client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
@@ -332,11 +338,15 @@ pub async fn handle_delete_failed(
         })
     })?;
 
-    let prepared =
-        prepare_resources_for_destroy(&mut stack_state, next.platform, service_provider.as_ref())
-            .context(ErrorData::StackExecutionFailed {
-            message: "Failed to prepare runtime resources for delete retry".to_string(),
-        })?;
+    let prepared = prepare_resources_for_destroy(
+        &mut stack_state,
+        next.platform,
+        config.stack_settings.setup_management,
+        service_provider.as_ref(),
+    )
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to prepare runtime resources for delete retry".to_string(),
+    })?;
 
     info!(
         "Prepared {} runtime resources for delete retry: {:?}",
@@ -365,20 +375,26 @@ fn owns_runtime_setup(platform: Platform, service_provider: &dyn PlatformService
 fn prepare_resources_for_destroy(
     stack_state: &mut StackState,
     platform: Platform,
+    management: SetupManagement,
     service_provider: &dyn PlatformServiceProvider,
 ) -> alien_infra::Result<Vec<String>> {
     if owns_runtime_setup(platform, service_provider) {
         stack_state.prepare_for_destroy()
     } else {
-        stack_state.prepare_for_runtime_cleanup_destroy()
+        stack_state.prepare_for_runtime_cleanup_destroy(management)
     }
 }
 
-fn compute_runtime_cleanup_status(stack_state: &StackState) -> Result<StackStatus> {
+fn compute_runtime_cleanup_status(
+    stack_state: &StackState,
+    management: SetupManagement,
+) -> Result<StackStatus> {
     let mut statuses = Vec::new();
 
-    for resource in stack_state.resources.values() {
-        if !is_runtime_cleanup_resource(resource)? {
+    for (resource_id, resource) in &stack_state.resources {
+        if !is_runtime_cleanup_resource(resource, management, stack_state.platform)?
+            || held_for_setup_teardown(stack_state, resource_id, resource, management)?
+        {
             continue;
         }
 
@@ -404,6 +420,42 @@ fn compute_runtime_cleanup_status(stack_state: &StackState) -> Result<StackStatu
     )
 }
 
+/// Whether runtime cleanup of an automatic package keeps this resource because a package
+/// resource still depends on it. The executor never deletes it while that dependent exists,
+/// whether it is Running or a failed resource destroy preparation moved to Deleting, so
+/// waiting for it would hold the deployment in Deleting. A failed delete still surfaces.
+fn held_for_setup_teardown(
+    stack_state: &StackState,
+    resource_id: &str,
+    resource: &alien_core::StackResourceState,
+    management: SetupManagement,
+) -> Result<bool> {
+    if management != SetupManagement::Automatic
+        || matches!(
+            resource.status,
+            ResourceStatus::Deleted | ResourceStatus::DeleteFailed
+        )
+    {
+        return Ok(false);
+    }
+    for dependent in stack_state.resources.values() {
+        if matches!(
+            dependent.status,
+            ResourceStatus::Deleting | ResourceStatus::Deleted | ResourceStatus::TeardownRequired
+        ) || !dependent
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.id() == resource_id)
+        {
+            continue;
+        }
+        if !is_runtime_cleanup_resource(dependent, management, stack_state.platform)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn resource_lifecycle(resource: &alien_core::StackResourceState) -> Result<ResourceLifecycle> {
     resource.lifecycle.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
@@ -415,21 +467,32 @@ fn resource_lifecycle(resource: &alien_core::StackResourceState) -> Result<Resou
     })
 }
 
-fn is_runtime_cleanup_resource(resource: &alien_core::StackResourceState) -> Result<bool> {
-    if resource_lifecycle(resource)? == ResourceLifecycle::Live {
-        return Ok(true);
-    }
-
-    Ok(
-        ownership_policy_for_resource_type(resource.config.resource_type().as_ref())
-            .has_runtime_cleanup_before_teardown(),
-    )
+fn is_runtime_cleanup_resource(
+    resource: &alien_core::StackResourceState,
+    management: SetupManagement,
+    platform: Platform,
+) -> Result<bool> {
+    Ok(alien_core::removed_by_runtime_cleanup(
+        resource.config.resource_type().as_ref(),
+        resource_lifecycle(resource)?,
+        management,
+        platform,
+    ))
 }
 
-fn has_remaining_setup_resources(stack_state: &StackState) -> bool {
+/// Whether setup teardown still has work: a resource runtime cleanup leaves to it, or one it
+/// only half removed (TeardownRequired).
+fn has_remaining_setup_resources(stack_state: &StackState, management: SetupManagement) -> bool {
     stack_state.resources.values().any(|resource| {
-        resource.lifecycle != Some(ResourceLifecycle::Live)
-            && resource.status != ResourceStatus::Deleted
+        if resource.status == ResourceStatus::Deleted {
+            return false;
+        }
+        if management != SetupManagement::Automatic {
+            return resource.lifecycle != Some(ResourceLifecycle::Live);
+        }
+        resource.status == ResourceStatus::TeardownRequired
+            || !is_runtime_cleanup_resource(resource, management, stack_state.platform)
+                .unwrap_or(true)
     })
 }
 
@@ -440,8 +503,8 @@ mod tests {
     use alien_core::{
         ClientConfig, ComputeCluster, Daemon, DaemonCode, DeploymentConfig, DeploymentState,
         DeploymentStatus, EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority,
-        Platform, Resource, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack,
-        StackResourceState, StackSettings, StackState, StackStatus, Storage,
+        Platform, Resource, ResourceLifecycle, ResourceStatus, RuntimeMetadata, SetupManagement,
+        Stack, StackResourceState, StackSettings, StackState, StackStatus, Storage,
     };
     use alien_infra::{state_utils::StackStateExt, DefaultPlatformServiceProvider, StackExecutor};
 
@@ -769,10 +832,13 @@ mod tests {
         );
 
         assert_eq!(
-            compute_runtime_cleanup_status(&stack_state).unwrap(),
+            compute_runtime_cleanup_status(&stack_state, SetupManagement::Manual).unwrap(),
             StackStatus::Deleted
         );
-        assert!(has_remaining_setup_resources(&stack_state));
+        assert!(has_remaining_setup_resources(
+            &stack_state,
+            SetupManagement::Manual
+        ));
     }
 
     async fn runtime_cleanup_of_an_empty_stack(
