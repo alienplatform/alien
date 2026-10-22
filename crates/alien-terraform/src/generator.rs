@@ -1890,7 +1890,11 @@ fn variables_body(
     )));
     blocks.push(nested(variable_block(
         "token",
-        "Install token from the application setup page. This is the same token used by the deploy CLI --token flag.",
+        if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+            AUTOMATIC_TOKEN_DESCRIPTION
+        } else {
+            "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+        },
         None,
         true,
     )));
@@ -4509,6 +4513,7 @@ fn readme_md(
         registration
             .is_some()
             .then_some(deployment_name_default.as_str()),
+        stack_settings.setup_management == alien_core::SetupManagement::Automatic,
     )];
     let registered = registration.is_some();
     let setup_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
@@ -4628,12 +4633,21 @@ Use your organization's normal backend and approval workflow. A typical local re
     )
 }
 
-fn readme_required_inputs(deployment_name_default: Option<&str>) -> String {
+/// An automatic module grants ongoing infrastructure management. Registration accepts it only
+/// with the token of an own-environment installation; a customer setup link token is refused.
+const AUTOMATIC_TOKEN_DESCRIPTION: &str = "Install token of your own environment's installation. This module grants ongoing infrastructure management, so a customer setup link token cannot register it.";
+
+fn readme_required_inputs(deployment_name_default: Option<&str>, automatic: bool) -> String {
+    let token = if automatic {
+        "install token from your own environment's setup instructions. This module grants ongoing infrastructure management, so only that installation's token can register it: a customer setup link token is refused. Install a customer's environment with the customer setup module instead."
+    } else {
+        "install token from the setup page."
+    };
     match deployment_name_default {
         Some(default) => format!(
-            "Required:\n\n- `token`: install token from the setup page.\n- `management_url`: management endpoint this deployment registers with. The generated installation snippet supplies it.\n- `name`: optional deployment name: lowercase letters, numbers, and single hyphens. Defaults to `{default}`."
+            "Required:\n\n- `token`: {token}\n- `management_url`: management endpoint this deployment registers with. The generated installation snippet supplies it.\n- `name`: optional deployment name: lowercase letters, numbers, and single hyphens. Defaults to `{default}`."
         ),
-        None => "Required:\n\n- `token`: install token from the setup page.\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.".to_string(),
+        None => format!("Required:\n\n- `token`: {token}\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens."),
     }
 }
 
