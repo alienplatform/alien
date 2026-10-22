@@ -14,17 +14,13 @@ invalid configuration fails startup. Released packages without the marker retain
 their previous startup and identity semantics. AWS packaging has not yet enabled
 this marker; its released modes are described below.
 
-# Privileged supervisor mode
+# Released supervisor declarations
 
-An AWS sandbox may opt into agent-owned egress enforcement:
-
-```typescript
-new Sandbox("analysis")
-  .code({ type: "image", image: "s3://example-bundles/analysis/bundle.zip" })
-  .privilegedSupervisor({ commandUid: 60001 })
-  .egress({ mode: "allowDomains", domains: ["example.com"] })
-  .lifecycle({})
-```
+Released stacks may contain `privilegedSupervisor` with a `commandUid`. The
+serialized field remains supported so those stacks can deploy, upgrade and delete
+without changing identity or egress behavior. New Rust and TypeScript builders
+no longer expose it. New image startup uses the saved OCI USER automatically.
+The legacy enforcement behavior below applies only to those saved declarations.
 
 Alien's agent is the privileged entrypoint. Before it serves requests or starts
 image code, it installs a default-deny IPv4 nftables policy for the declared command uid,

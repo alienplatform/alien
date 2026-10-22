@@ -616,6 +616,8 @@ pub struct Sandbox {
     pub default_policy: Option<EgressPolicy>,
     /// Have Alien's agent install the declared egress policy before running any image code.
     /// Unsupported backends refuse this at plan time.
+    // Keep released declarations readable without offering a new authoring knob.
+    #[builder(skip)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub privileged_supervisor: Option<SandboxPrivilegedSupervisor>,
     /// Sandbox lifetime ceiling and idle behaviour.

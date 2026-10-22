@@ -6,7 +6,6 @@ import {
   type SandboxEgress,
   type SandboxLifecyclePolicy,
   type SandboxLimits,
-  type SandboxPrivilegedSupervisor,
   SandboxSchema,
 } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
@@ -81,15 +80,6 @@ export class Sandbox extends ResourceBuilder {
    */
   public egress(egress: SandboxEgress): this {
     this._config.egress = egress
-    return this
-  }
-
-  /**
-   * @deprecated Existing supervisor enforcement is preserved. The new
-   * egress("internet") enables gateway enforcement and the supervisor automatically.
-   */
-  public privilegedSupervisor(settings: SandboxPrivilegedSupervisor): this {
-    this._config.privilegedSupervisor = settings
     return this
   }
 
