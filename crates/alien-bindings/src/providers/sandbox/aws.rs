@@ -178,46 +178,89 @@ impl AwsSandbox {
             .await?
             .json(&body)
             .timeout(SANDBOX_READY_TIMEOUT);
-        loop {
-            let mut response = request
-                .try_clone()
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::SandboxUnreachable {
+        Self::poll_egress(request, deadline, token, policy).await
+    }
+
+    async fn poll_egress(
+        request: reqwest::RequestBuilder,
+        deadline: std::time::Instant,
+        token: Option<&str>,
+        policy: &str,
+    ) -> Result<()> {
+        let mut delay = SANDBOX_READY_POLL;
+        let delivery = async {
+            loop {
+                let mut response = request
+                    .try_clone()
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::SandboxUnreachable {
+                            operation: "sandbox.egress".to_string(),
+                            reason: "could not repeat identity delivery".to_string(),
+                        })
+                    })?
+                    .send()
+                    .await
+                    .map_err(|_| {
+                        AlienError::new(ErrorData::SandboxUnreachable {
+                            operation: "sandbox.egress".to_string(),
+                            reason: "identity delivery failed".to_string(),
+                        })
+                    })?;
+                if response.status().is_success() {
+                    break;
+                }
+                Self::check_egress_refusal(&mut response).await?;
+                Self::check_endpoint_throttle(&mut response, "sandbox.egress", token, policy)
+                    .await?;
+                // Only endpoint throttles and restore failures can repeat identity delivery.
+                if !matches!(response.status().as_u16(), 429 | 502 | 503)
+                    || std::time::Instant::now() >= deadline
+                {
+                    let status = response.status();
+                    let reason =
+                        Self::identity_refusal_reason(&mut response, token, policy).await?;
+                    return Err(AlienError::new(ErrorData::SandboxUnreachable {
                         operation: "sandbox.egress".to_string(),
-                        reason: "could not repeat identity delivery".to_string(),
-                    })
-                })?
-                .send()
-                .await
-                .map_err(|_| {
-                    AlienError::new(ErrorData::SandboxUnreachable {
-                        operation: "sandbox.egress".to_string(),
-                        reason: "identity delivery failed".to_string(),
-                    })
-                })?;
-            if response.status().is_success() {
-                break;
+                        reason: format!("agent refused egress identity: HTTP {status}: {reason}"),
+                    }));
+                }
+                endpoint_backoff(&mut delay, deadline).await;
             }
-            Self::check_egress_refusal(&mut response).await?;
-            // AWS restores asynchronously. Retry only the proxy's documented startup responses.
-            if !matches!(response.status().as_u16(), 502 | 503)
-                || std::time::Instant::now() >= deadline
-            {
-                let status = response.status();
-                let reason = Self::identity_refusal_reason(response, token, policy).await?;
-                return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                    operation: "sandbox.egress".to_string(),
-                    reason: format!("agent refused egress identity: HTTP {status}: {reason}"),
-                }));
-            }
-            tokio::time::sleep(SANDBOX_READY_POLL).await;
+            Ok(())
+        };
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), delivery)
+            .await
+            .into_alien_error()
+            .context(ErrorData::SandboxUnreachable {
+                operation: "sandbox.egress".into(),
+                reason: "identity delivery exceeded the readiness deadline".into(),
+            })?
+    }
+
+    /// AWS's empty or plain-text quota response is safe to repeat. Any other body is
+    /// an application answer, including typed agent errors, and must reach the caller.
+    async fn check_endpoint_throttle(
+        response: &mut reqwest::Response,
+        operation: &str,
+        token: Option<&str>,
+        policy: &str,
+    ) -> Result<()> {
+        if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Ok(());
         }
-        Ok(())
+        let reason = Self::identity_refusal_reason(response, token, policy).await?;
+        if reason.is_empty() || reason.trim() == "Rate limit exceeded" {
+            return Ok(());
+        }
+        Err(AlienError::new(ErrorData::SandboxCommandFailed {
+            failure: "agentRefused".into(),
+            reason: format!("{operation} returned HTTP 429 Too Many Requests: {reason}"),
+        }))
     }
 
     /// Keep the agent's diagnosis without accepting an unbounded error body or echoing identity.
     async fn identity_refusal_reason(
-        mut response: reqwest::Response,
+        response: &mut reqwest::Response,
         token: Option<&str>,
         policy: &str,
     ) -> Result<String> {
@@ -237,16 +280,15 @@ impl AwsSandbox {
                 }
                 body.extend_from_slice(&chunk);
             }
-            let mut body = String::from_utf8_lossy(&body).replace(policy, "[redacted]");
+            let mut body = String::from_utf8_lossy(&body).into_owned();
+            if !policy.is_empty() {
+                body = body.replace(policy, "[redacted]");
+            }
             if let Some(token) = token {
                 body = body.replace(token, "[redacted]");
             }
             let body: String = body.chars().filter(|c| !c.is_control()).collect();
-            Ok(if body.trim().is_empty() {
-                "empty agent refusal body".to_string()
-            } else {
-                body
-            })
+            Ok(body)
         })
         .await
         .into_alien_error()
@@ -461,6 +503,14 @@ impl AwsSandbox {
     }
 }
 
+/// Exponential backoff within the caller's existing readiness budget. The cap avoids
+/// spending the whole budget on one delay once the endpoint recovers.
+async fn endpoint_backoff(delay: &mut std::time::Duration, deadline: std::time::Instant) {
+    tokio::time::sleep((*delay).min(deadline.saturating_duration_since(std::time::Instant::now())))
+        .await;
+    *delay = delay.saturating_mul(2).min(SANDBOX_READY_POLL * 8);
+}
+
 /// Whether `error` is an operation refusing a sandbox because it has terminated.
 fn is_sandbox_terminated(error: &AlienError<ErrorData>) -> bool {
     matches!(
@@ -605,6 +655,7 @@ impl AwsSandbox {
         sandbox_id: &str,
     ) -> Result<()> {
         let mut last_seen = String::new();
+        let mut delay = SANDBOX_READY_POLL;
         loop {
             // Cloned rather than rebuilt: the token outlives this wait, so the health poll costs
             // no further describes or mints.
@@ -623,8 +674,17 @@ impl AwsSandbox {
             match sent {
                 Ok(Ok(response)) if response.status().is_success() => return Ok(()),
                 Ok(Ok(mut response)) => {
-                    Self::check_egress_refusal(&mut response).await?;
                     last_seen = format!("the endpoint answered {}", response.status());
+                    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+                        Self::check_egress_refusal(&mut response).await?;
+                        Self::check_endpoint_throttle(&mut response, operation, None, "").await
+                    })
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::SandboxUnreachable {
+                        operation: operation.into(),
+                        reason: format!("MicroVM '{sandbox_id}' response exceeded the readiness deadline: {last_seen}"),
+                    })??;
                 }
                 Ok(Err(error)) => last_seen = error.without_url().to_string(),
                 // Keeps an earlier answer, which says more about the sandbox than the deadline.
@@ -642,7 +702,7 @@ impl AwsSandbox {
                     ),
                 }));
             }
-            tokio::time::sleep(SANDBOX_READY_POLL).await;
+            endpoint_backoff(&mut delay, deadline).await;
         }
     }
 }
@@ -1176,6 +1236,154 @@ mod tests {
     };
     use alien_error::Context;
     use std::time::Duration;
+
+    /// Exercise both retrying endpoint operations over actual HTTP, including request replay.
+    #[rstest::rstest]
+    #[case::identity(false)]
+    #[case::health(true)]
+    #[tokio::test]
+    async fn endpoint_429_retries_with_exponential_backoff(#[case] health: bool) {
+        let attempts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let handler = {
+            let attempts = attempts.clone();
+            move |method: axum::http::Method, body: String| {
+                let attempts = attempts.clone();
+                async move {
+                    if !health {
+                        assert_eq!(method, axum::http::Method::PUT);
+                        assert_eq!(
+                            body,
+                            r#"{"policy":"signed-policy","token":"identity-token"}"#
+                        );
+                    }
+                    let mut attempts = attempts.lock().expect("attempts");
+                    attempts.push(std::time::Instant::now());
+                    match attempts.len() {
+                        1 | 3 => (axum::http::StatusCode::TOO_MANY_REQUESTS, ""),
+                        2 | 4 | 5 => (
+                            axum::http::StatusCode::TOO_MANY_REQUESTS,
+                            "Rate limit exceeded",
+                        ),
+                        _ => (axum::http::StatusCode::OK, ""),
+                    }
+                }
+            }
+        };
+        let (url, server) =
+            endpoint_server(axum::Router::new().route("/", axum::routing::any(handler))).await;
+        poll_endpoint(&url, health, Duration::from_secs(2))
+            .await
+            .expect("endpoint recovered");
+        server.abort();
+        let attempts = attempts.lock().expect("attempts");
+        assert_eq!(attempts.len(), 6);
+        for (index, pair) in attempts.windows(2).enumerate() {
+            let expected = SANDBOX_READY_POLL * (1 << index.min(3));
+            assert!(
+                pair[1].duration_since(pair[0]) >= expected,
+                "attempt {index} must back off by {expected:?}"
+            );
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::identity(false)]
+    #[case::health(true)]
+    #[tokio::test]
+    async fn endpoint_429_exhausts_budget_with_retryable_error(#[case] health: bool) {
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handler = {
+            let attempts = attempts.clone();
+            move || {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async {
+                    (
+                        axum::http::StatusCode::TOO_MANY_REQUESTS,
+                        "Rate limit exceeded",
+                    )
+                }
+            }
+        };
+        let (url, server) =
+            endpoint_server(axum::Router::new().route("/", axum::routing::any(handler))).await;
+        let started = std::time::Instant::now();
+        let error = tokio::time::timeout(
+            Duration::from_millis(500),
+            poll_endpoint(&url, health, Duration::from_millis(80)),
+        )
+        .await
+        .expect("must respect the readiness budget")
+        .expect_err("permanent throttle");
+        server.abort();
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+        assert!(error.retryable, "quota can recover: {error}");
+        assert!(started.elapsed() >= Duration::from_millis(80));
+        assert!(attempts.load(std::sync::atomic::Ordering::SeqCst) > 1);
+    }
+
+    #[rstest::rstest]
+    #[case::identity(false)]
+    #[case::health(true)]
+    #[tokio::test]
+    async fn endpoint_429_preserves_agent_refusal_without_retry(#[case] health: bool) {
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handler = {
+            let attempts = attempts.clone();
+            move || {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async {
+                    (
+                        axum::http::StatusCode::TOO_MANY_REQUESTS,
+                        r#"{"code":"JOB_LIMIT_REACHED","message":"No job slots available"}"#,
+                    )
+                }
+            }
+        };
+        let (url, server) =
+            endpoint_server(axum::Router::new().route("/", axum::routing::any(handler))).await;
+        let error = poll_endpoint(&url, health, Duration::from_secs(2))
+            .await
+            .expect_err("agent refused");
+        server.abort();
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED");
+        assert!(error.message.contains("JOB_LIMIT_REACHED"));
+        assert!(error.message.contains("No job slots available"));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    async fn endpoint_server(router: axum::Router) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server =
+            tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
+        (format!("http://{address}/"), server)
+    }
+
+    async fn poll_endpoint(url: &str, health: bool, budget: Duration) -> Result<()> {
+        let client = reqwest::Client::new();
+        let deadline = std::time::Instant::now() + budget;
+        if health {
+            AwsSandbox::poll_until_healthy(
+                client.get(url),
+                deadline,
+                "sandbox.create",
+                "mvm-throttled",
+            )
+            .await
+        } else {
+            AwsSandbox::poll_egress(
+                client
+                    .put(url)
+                    .json(&serde_json::json!({"policy":"signed-policy", "token":"identity-token"})),
+                deadline,
+                Some("identity-token"),
+                "signed-policy",
+            )
+            .await
+        }
+    }
 
     fn image_version(version: &str) -> alien_aws_clients::aws::lambda_microvms::MicrovmImage {
         alien_aws_clients::aws::lambda_microvms::MicrovmImage {
