@@ -424,42 +424,48 @@ impl PreflightRunner {
         // Apply mutations BEFORE compatibility checks
         // This ensures compatibility checks compare mutated stacks (old mutated vs new mutated)
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
-        let direct_setup = setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
-        let automatic_azure_runtime = !config.setup_run
-            && config.base_platform.unwrap_or(platform) == Platform::Azure
-            && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
-        let hashed_target = match old_stack {
-            Some(_) if !direct_setup || automatic_azure_runtime => Some(
-                without_declined_live_resources(&mutated_stack, &config.input_values, platform)?,
-            ),
-            _ => None,
+        // Drop the comparison projection before later awaits so it does not enlarge
+        // the deployment future and exhaust the runner's worker stack.
+        let setup_update_authorized = {
+            let direct_setup =
+                setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
+            let automatic_azure_runtime = !config.setup_run
+                && config.base_platform.unwrap_or(platform) == Platform::Azure
+                && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic;
+            let hashed_target = match old_stack {
+                Some(_) if !direct_setup || automatic_azure_runtime => {
+                    Some(without_declined_live_resources(
+                        &mutated_stack,
+                        &config.input_values,
+                        platform,
+                    )?)
+                }
+                _ => None,
+            };
+            let imported_setup_authorized = match (
+                old_stack,
+                hashed_target.as_ref(),
+                setup_update_authorization,
+            ) {
+                (Some(installed), Some(target), Some(authorization)) if automatic_azure_runtime => {
+                    crate::compatibility::azure_setup::authorization_matches(
+                        installed,
+                        target,
+                        authorization,
+                    )?
+                }
+                (_, Some(target), Some(authorization)) => {
+                    setup_update_authorization_matches(old_stack, target, authorization)
+                }
+                _ => false,
+            };
+            if automatic_azure_runtime && !imported_setup_authorized {
+                if let (Some(installed), Some(target)) = (old_stack, hashed_target.as_ref()) {
+                    crate::compatibility::azure_setup::require_unchanged_setup(installed, target)?;
+                }
+            }
+            direct_setup || imported_setup_authorized
         };
-        let imported_setup_authorized = match (
-            old_stack,
-            hashed_target.as_ref(),
-            setup_update_authorization,
-        ) {
-            (Some(installed), Some(target), Some(authorization)) if automatic_azure_runtime => {
-                crate::compatibility::azure_setup::authorization_matches(
-                    installed,
-                    target,
-                    authorization,
-                )?
-            }
-            (_, Some(target), Some(authorization)) => {
-                setup_update_authorization_matches(old_stack, target, authorization)
-            }
-            _ => false,
-        };
-        let setup_update_authorized = direct_setup || imported_setup_authorized;
-        if automatic_azure_runtime && !imported_setup_authorized {
-            if let Some(installed) = old_stack {
-                crate::compatibility::azure_setup::require_unchanged_setup(
-                    installed,
-                    &mutated_stack,
-                )?;
-            }
-        }
 
         // Match the deployment values used by the IAM policy writers. Physical
         // resource names use shared create naming or saved outputs where available.
@@ -693,6 +699,59 @@ mod setup_update_authorization_tests {
         assert_eq!(
             installed.setup_update_digest(),
             worker_added.setup_update_digest()
+        );
+        let mut declined_worker = worker_added.clone();
+        declined_worker
+            .inputs
+            .push(alien_core::StackInputDefinition::deployer_boolean(
+                "apiEnabled",
+                "API",
+                "Enable the API worker",
+                Some(false),
+            ));
+        declined_worker
+            .resources
+            .get_mut("api")
+            .unwrap()
+            .enabled_when = Some("apiEnabled".into());
+        let installed_without_worker = without_declined_live_resources(
+            &declined_worker,
+            &config.input_values,
+            Platform::Azure,
+        )
+        .unwrap();
+        assert!(!installed_without_worker.resources.contains_key("api"));
+        runner
+            .run_deployment_time_preflights(
+                declined_worker.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&installed_without_worker),
+                None,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .expect("an unchanged declined worker must not require setup");
+        let mut enabled_config = config.clone();
+        enabled_config
+            .input_values
+            .insert("apiEnabled".into(), serde_json::json!(true));
+        assert_eq!(
+            runner
+                .run_deployment_time_preflights(
+                    declined_worker,
+                    &state,
+                    &enabled_config,
+                    &client,
+                    Some(&installed_without_worker),
+                    None,
+                    Some(alien_core::InitialSetupAuthority::DirectSetup),
+                )
+                .await
+                .expect_err("enabling the worker must still check its roles")
+                .code,
+            "DEPLOYMENT_SETUP_REQUIRED"
         );
         for target in [
             identity_added,
