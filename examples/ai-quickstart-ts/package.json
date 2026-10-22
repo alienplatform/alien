@@ -10,7 +10,7 @@
   "dependencies": {
     "@alienplatform/sdk": "^1.8.0",
     "@alienplatform/core": "^1.8.0",
-    "hono": "^4.12.25"
+    "hono": "^4.13.11"
   },
   "devDependencies": {
     "@types/node": "^24.0.15",

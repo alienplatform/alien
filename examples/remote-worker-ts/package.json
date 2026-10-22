@@ -11,7 +11,7 @@
   "dependencies": {
     "@alienplatform/core": "^3.3.11",
     "@alienplatform/sdk": "^3.3.11",
-    "hono": "^4.12.25",
+    "hono": "^4.13.11",
     "zod": "4.3.2"
   },
   "devDependencies": {
