@@ -16,6 +16,7 @@ mod generator {
     pub mod aws_data_layer_tests;
     pub mod aws_full_stack_tests;
     pub mod aws_identity_tests;
+    pub mod aws_workload_grant_parity_tests;
     pub mod azure_compute_tests;
     pub mod azure_data_layer_tests;
     pub mod azure_full_stack_tests;
