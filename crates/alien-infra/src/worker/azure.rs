@@ -3250,11 +3250,24 @@ impl AzureWorkerController {
             // An accepted delete is not a finished one. Keep the name and issue the idempotent
             // delete again until Azure reports the component gone; a delete that keeps failing
             // ends the resource DeleteFailed.
-            if let Ok(OperationResult::LongRunning(operation)) = &result {
+            let in_progress = match &result {
+                Ok(OperationResult::LongRunning(operation)) => Some(operation.retry_after),
+                // A delete issued while the previous one still runs.
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceConflict { .. })
+                    ) =>
+                {
+                    Some(None)
+                }
+                _ => None,
+            };
+            if let Some(retry_after) = in_progress {
                 info!(component=%component_name, "Commands Dapr component delete is in progress");
                 return Ok(HandlerAction::Stay {
                     max_times: Some(60),
-                    suggested_delay: Some(operation.retry_after.unwrap_or(Duration::from_secs(15))),
+                    suggested_delay: Some(retry_after.unwrap_or(Duration::from_secs(15))),
                 });
             }
             gone_unless_failed(result, ctx, || {
