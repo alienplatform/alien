@@ -4639,7 +4639,7 @@ const AUTOMATIC_TOKEN_DESCRIPTION: &str = "Install token of your own environment
 
 fn readme_required_inputs(deployment_name_default: Option<&str>, automatic: bool) -> String {
     let token = if automatic {
-        "install token from your own environment's setup instructions. This module grants ongoing infrastructure management, so only that installation's token can register it: a customer setup link token is refused with `INVALID_AUTOMATIC_SETUP`. Install a customer's environment with the customer setup module instead."
+        "install token from your own environment's setup instructions. This module grants ongoing infrastructure management, so only that installation's token can register it: a customer setup link token is refused. Install a customer's environment with the customer setup module instead."
     } else {
         "install token from the setup page."
     };
