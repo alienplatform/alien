@@ -6471,6 +6471,54 @@ mod tests {
         Arc::new(mock_container_apps)
     }
 
+    /// An accepted but unfinished Dapr component delete is not success: the worker keeps the
+    /// component name and checks again, and clears it only once Azure reports it gone.
+    #[tokio::test]
+    async fn commands_dapr_component_is_kept_until_its_delete_finishes() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut apps = MockContainerAppsApi::new();
+        let seen = calls.clone();
+        apps.expect_delete_dapr_component().returning(move |_, _, name| {
+            if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                Ok(OperationResult::LongRunning(LongRunningOperation {
+                    url: "https://management.azure.com/operations/dapr-delete".to_string(),
+                    retry_after: None,
+                    location_url: None,
+                }))
+            } else {
+                Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "Dapr component".to_string(),
+                    resource_name: name.to_string(),
+                }))
+            }
+        });
+        let provider = setup_mock_service_provider(Arc::new(apps), None);
+        let controller = AzureWorkerController {
+            state: AzureWorkerState::DeletingCommandsInfrastructure,
+            commands_dapr_component: Some("commands-dapr".to_string()),
+            ..AzureWorkerController::mock_ready("test-func")
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Azure)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.expect("an unfinished delete waits");
+        let state = executor.internal_state::<AzureWorkerController>().unwrap();
+        assert_eq!(state.state, AzureWorkerState::DeletingCommandsInfrastructure);
+        assert_eq!(state.commands_dapr_component.as_deref(), Some("commands-dapr"));
+
+        executor.step().await.expect("a gone component finishes the step");
+        let state = executor.internal_state::<AzureWorkerController>().unwrap();
+        assert_eq!(state.commands_dapr_component, None);
+        assert_ne!(state.state, AzureWorkerState::DeletingCommandsInfrastructure);
+    }
+
     fn setup_mock_service_provider(
         mock_container_apps: Arc<MockContainerAppsApi>,
         mock_lro: Option<Arc<MockLongRunningOperationApi>>,
