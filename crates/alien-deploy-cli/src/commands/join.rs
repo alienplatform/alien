@@ -176,7 +176,7 @@ struct JoinPreview<'a> {
 #[derive(Debug, Clone)]
 struct JoinRequest {
     token: String,
-    admitted_capacity_group: Option<String>,
+    capacity_group_admission: Option<CapacityGroupAdmission>,
     plan: JoinPlan,
     install_root: PathBuf,
 }
@@ -344,6 +344,13 @@ struct MachineBundleRegistration {
     timeout_seconds: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CapacityGroupAdmission {
+    group: String,
+    checked_data_disk_bytes: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MachineInstallState {
@@ -362,7 +369,7 @@ struct MachineInstallState {
     cluster_id: Option<String>,
     machine_id: Option<String>,
     #[serde(default)]
-    capacity_group: Option<String>,
+    capacity_group_admission: Option<CapacityGroupAdmission>,
     #[serde(default)]
     network_interface: Option<String>,
     #[serde(default)]
@@ -567,20 +574,30 @@ fn build_join_request(
     let arch = preflight_host(&host)?;
     let capacity_group = normalize_non_empty("capacity-group", &args.capacity_group)?;
     let requirements = capacity_group_requirements(wrapped_token.as_ref(), &capacity_group)?;
-    if let Some(requirements) = requirements {
-        // A workload may have formatted its admitted data disk. Recheck the
-        // host totals on every join, but require an empty disk again when the
-        // requested group differs or the previous admission is unknown.
-        let mut requirements = requirements.clone();
-        if previous_state
-            .as_ref()
-            .and_then(|state| state.capacity_group.as_deref())
-            == Some(capacity_group.as_str())
-        {
-            requirements.data_disk = None;
+    let previous_admission = previous_state
+        .as_ref()
+        .and_then(|state| state.capacity_group_admission.as_ref())
+        .filter(|admission| admission.group == capacity_group);
+    let capacity_group_admission = if let Some(requirements) = requirements {
+        let checked_data_disk_bytes =
+            previous_admission.and_then(|admission| admission.checked_data_disk_bytes);
+        let required_data_disk_bytes = requirements.data_disk.as_ref().map(|disk| disk.size_bytes);
+        let mut unchecked_requirements = requirements.clone();
+        // A workload may have formatted its admitted disk. Reuse that check
+        // only for the same group and a requirement the admission covers.
+        if checked_data_disk_bytes >= required_data_disk_bytes {
+            unchecked_requirements.data_disk = None;
         }
-        check_capacity_group_requirements(&capacity_group, &requirements, &host, arch)?;
-    }
+        check_capacity_group_requirements(&capacity_group, &unchecked_requirements, &host, arch)?;
+        Some(CapacityGroupAdmission {
+            group: capacity_group.clone(),
+            checked_data_disk_bytes: checked_data_disk_bytes.max(required_data_disk_bytes),
+        })
+    } else {
+        // Older tokens carry no requirements. Preserve an existing admission
+        // to this group, but never transfer it to a different group.
+        previous_admission.cloned()
+    };
     let network_interface = resolve_persisted_override(
         args.network_interface.as_deref(),
         previous_state
@@ -608,7 +625,7 @@ fn build_join_request(
         || wireguard_endpoint.is_some();
 
     Ok(JoinRequest {
-        admitted_capacity_group: requirements.map(|_| capacity_group.clone()),
+        capacity_group_admission,
         token: wrapped_token
             .map(|wrapped| wrapped.join_token)
             .unwrap_or(token),
@@ -1261,7 +1278,7 @@ fn join_configuration_changed(
     request: &JoinRequest,
     manifest: &MachineBundleManifest,
 ) -> Result<bool> {
-    if state.capacity_group != request.admitted_capacity_group
+    if state.capacity_group_admission != request.capacity_group_admission
         || state.network_interface != request.plan.network_interface
         || state.wireguard_endpoint != request.plan.wireguard_endpoint
         || state.public_ip != request.plan.public_ip
@@ -1444,7 +1461,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
         control_plane_url: Some(request.plan.control_plane_url.clone()),
         cluster_id: Some(request.plan.cluster_id.clone()),
         machine_id: None,
-        capacity_group: request.admitted_capacity_group.clone(),
+        capacity_group_admission: request.capacity_group_admission.clone(),
         network_interface: request.plan.network_interface.clone(),
         wireguard_endpoint: request.plan.wireguard_endpoint.clone(),
         public_ip: request.plan.public_ip.clone(),
@@ -1502,7 +1519,7 @@ async fn reconcile_existing_join(
     state.config_path = config_path.clone();
     state.control_plane_url = Some(request.plan.control_plane_url.clone());
     state.cluster_id = Some(request.plan.cluster_id.clone());
-    state.capacity_group = request.admitted_capacity_group.clone();
+    state.capacity_group_admission = request.capacity_group_admission.clone();
     state.network_interface = request.plan.network_interface.clone();
     state.wireguard_endpoint = request.plan.wireguard_endpoint.clone();
     state.public_ip = request.plan.public_ip.clone();
@@ -3406,7 +3423,7 @@ mod tests {
             control_plane_url: Some(format!("http://{address}/control")),
             cluster_id: Some("cluster-test".to_string()),
             machine_id: Some("machine-test".to_string()),
-            capacity_group: None,
+            capacity_group_admission: None,
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
@@ -4028,7 +4045,10 @@ mod tests {
             control_plane_url: None,
             cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-123".to_string()),
-            capacity_group: Some("general".to_string()),
+            capacity_group_admission: Some(CapacityGroupAdmission {
+                group: "general".to_string(),
+                checked_data_disk_bytes: Some(50 * TEST_GIB),
+            }),
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
@@ -4065,6 +4085,80 @@ mod tests {
         .expect_err("existing hosts must still meet CPU requirements");
         assert!(error.message.contains("CPU: needs 4 cores, found 1"));
 
+        let mut stronger_args = JoinArgs {
+            token: Some(wrapped_join_token_with_groups(serde_json::json!({
+                "general": pool_requirements(Some(100)),
+            }))),
+            install_root: root.path().to_path_buf(),
+            ..test_join_args()
+        };
+        let error = build_join_request(
+            &stronger_args,
+            None,
+            host_with_capacity(root.path(), 8, 16, 100, vec![root_disk()]),
+        )
+        .expect_err("the previous 50 GiB admission does not cover a 100 GiB disk");
+        assert!(error.message.contains("additional empty disk"));
+
+        let mut without_disk_admission = state.clone();
+        without_disk_admission
+            .capacity_group_admission
+            .as_mut()
+            .unwrap()
+            .checked_data_disk_bytes = None;
+        write_install_state(&install_paths(root.path()), &without_disk_admission)
+            .expect("save admission without a disk");
+        stronger_args.token = args.token.clone();
+        let error = build_join_request(
+            &stronger_args,
+            None,
+            host_with_capacity(root.path(), 8, 16, 100, vec![root_disk()]),
+        )
+        .expect_err("adding a disk requirement to the same group must check it");
+        assert!(error.message.contains("additional empty disk"));
+
+        write_install_state(&install_paths(root.path()), &state)
+            .expect("restore checked disk admission");
+        let mut legacy_args = stronger_args;
+        legacy_args.token = Some(wrapped_join_token(
+            "hj_legacy",
+            "https://horizon.example.com",
+            "cluster-123",
+        ));
+        let legacy_request = build_join_request(
+            &legacy_args,
+            None,
+            host_with_capacity(root.path(), 8, 16, 100, vec![root_disk()]),
+        )
+        .expect("legacy tokens can rejoin their admitted group");
+        let mut after_legacy = state.clone();
+        after_legacy.capacity_group_admission = legacy_request.capacity_group_admission;
+        write_install_state(&install_paths(root.path()), &after_legacy)
+            .expect("save admission after legacy rejoin");
+        let mounted = BlockDevice {
+            filesystem: Some("xfs".to_string()),
+            mountpoint: Some("/data".to_string()),
+            ..empty_disk("/dev/vdb", 64)
+        };
+        build_join_request(
+            &args,
+            None,
+            host_with_capacity(root.path(), 8, 16, 100, vec![root_disk(), mounted]),
+        )
+        .expect("returning to profiles must retain the checked formatted disk");
+
+        legacy_args.capacity_group = "other".to_string();
+        let changed_legacy = build_join_request(
+            &legacy_args,
+            None,
+            host_with_capacity(root.path(), 8, 16, 100, vec![root_disk()]),
+        )
+        .expect("legacy group changes remain supported");
+        assert!(
+            changed_legacy.capacity_group_admission.is_none(),
+            "admission cannot transfer to another group"
+        );
+
         let mut changed_group = args;
         changed_group.capacity_group = "larger".to_string();
         changed_group.token = Some(wrapped_join_token_with_groups(serde_json::json!({
@@ -4077,6 +4171,44 @@ mod tests {
         )
         .expect_err("changing groups must check the new data disk requirement");
         assert!(error.message.contains("additional empty disk"));
+    }
+
+    #[test]
+    fn join_checks_requirements_from_a_serialized_token() {
+        let root = tempfile::tempdir().expect("install root");
+        let args = JoinArgs {
+            token: Some(
+                include_str!("../../tests/fixtures/machines-join-token.txt")
+                    .trim()
+                    .to_string(),
+            ),
+            control_plane_url: None,
+            cluster_id: None,
+            install_root: root.path().to_path_buf(),
+            ..test_join_args()
+        };
+        let error = build_join_request(
+            &args,
+            None,
+            host_with_capacity(root.path(), 1, 8, 19, vec![root_disk()]),
+        )
+        .expect_err("the serialized disk requirement must reach host admission");
+        assert!(error
+            .message
+            .contains("additional empty disk: needs a disk of at least 50 GiB"));
+        let request = build_join_request(
+            &args,
+            None,
+            host_with_capacity(
+                root.path(),
+                1,
+                8,
+                19,
+                vec![root_disk(), empty_disk("/dev/vdb", 64)],
+            ),
+        )
+        .expect("the serialized millicore profile should accept a conforming host");
+        assert_eq!(request.token, "hj_wire_probe");
     }
 
     #[test]
@@ -4529,7 +4661,7 @@ mod tests {
             control_plane_url: Some("https://old-control.example.com".to_string()),
             cluster_id: Some("old-cluster".to_string()),
             machine_id: None,
-            capacity_group: None,
+            capacity_group_admission: None,
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
@@ -4546,7 +4678,7 @@ mod tests {
             control_plane_url: Some("https://control.example.com".to_string()),
             cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-new".to_string()),
-            capacity_group: None,
+            capacity_group_admission: None,
             network_interface: Some("ens3f0np0".to_string()),
             wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
             public_ip: Some("10.0.1.12".to_string()),
@@ -4599,7 +4731,7 @@ mod tests {
             control_plane_url: None,
             cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-123".to_string()),
-            capacity_group: None,
+            capacity_group_admission: None,
             network_interface: Some("ens3f0np0".to_string()),
             wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
             public_ip: Some("10.0.1.12".to_string()),
@@ -4640,7 +4772,7 @@ mod tests {
             control_plane_url: None,
             cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-123".to_string()),
-            capacity_group: None,
+            capacity_group_admission: None,
             network_interface: Some("ens3f0np0".to_string()),
             wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
             public_ip: Some("10.0.1.12".to_string()),
@@ -4699,7 +4831,7 @@ mod tests {
                 control_plane_url: Some(request.plan.control_plane_url.clone()),
                 cluster_id: Some(request.plan.cluster_id.clone()),
                 machine_id: Some("machine-123".to_string()),
-                capacity_group: None,
+                capacity_group_admission: None,
                 network_interface: None,
                 wireguard_endpoint: None,
                 public_ip: None,
@@ -4740,7 +4872,7 @@ mod tests {
             control_plane_url: Some(request.plan.control_plane_url.clone()),
             cluster_id: Some(request.plan.cluster_id.clone()),
             machine_id: Some("machine-123".to_string()),
-            capacity_group: None,
+            capacity_group_admission: None,
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
@@ -4794,7 +4926,7 @@ mod tests {
             control_plane_url: None,
             cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-123".to_string()),
-            capacity_group: None,
+            capacity_group_admission: None,
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
@@ -4841,7 +4973,7 @@ mod tests {
             control_plane_url: Some(request.plan.control_plane_url.clone()),
             cluster_id: Some(request.plan.cluster_id.clone()),
             machine_id: Some("machine-123".to_string()),
-            capacity_group: None,
+            capacity_group_admission: None,
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
