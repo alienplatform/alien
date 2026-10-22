@@ -11,8 +11,8 @@ use crate::{
 };
 use alien_core::presigned::redact_url_for_error;
 use alien_core::sandbox_image::{
-    AGENT_MODE, AGENT_PATH, GCP_AGENT_LOG_FILTER, GCP_AGENT_PLATFORM, IMAGE_COMMAND_PATH,
-    SESSION_ROOT_MODE,
+    SandboxImage, AGENT_MODE, AGENT_PATH, AZURE_SANDBOX, GCP_AGENT_LOG_FILTER, GCP_AGENT_PLATFORM,
+    IMAGE_COMMAND_PATH, SESSION_ROOT_MODE,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use dockdash::{
@@ -34,9 +34,9 @@ pub fn sandbox_agent_image() -> String {
     )
 }
 
-/// A layered GCP sandbox image and the agent it was layered from.
+/// A layered sandbox image and the agent it was layered from.
 #[derive(Debug)]
-pub struct GcpSandboxImage {
+pub struct SandboxAgentImage {
     pub image: Image,
     /// Manifest digest the agent reference resolved to for linux/amd64.
     pub agent_digest: String,
@@ -65,7 +65,54 @@ pub async fn build_gcp_sandbox_image(
     protocol: ClientProtocol,
     base_auth: RegistryAuth,
     cache: BlobCache,
-) -> Result<GcpSandboxImage> {
+) -> Result<SandboxAgentImage> {
+    build_sandbox_agent_image(
+        resource_name,
+        base,
+        base_image,
+        agent_image,
+        protocol,
+        base_auth,
+        cache,
+        GCP_AGENT_PLATFORM,
+    )
+    .await
+}
+
+/// Assemble an Azure image with bounded root startup and native-file HTTP authorization.
+/// This function does not use native exec; the runtime must publish and authenticate the agent port.
+pub async fn build_azure_sandbox_image(
+    resource_name: &str,
+    base: Image,
+    base_image: &str,
+    agent_image: &str,
+    protocol: ClientProtocol,
+    base_auth: RegistryAuth,
+    cache: BlobCache,
+) -> Result<SandboxAgentImage> {
+    build_sandbox_agent_image(
+        resource_name,
+        base,
+        base_image,
+        agent_image,
+        protocol,
+        base_auth,
+        cache,
+        AZURE_SANDBOX,
+    )
+    .await
+}
+
+async fn build_sandbox_agent_image(
+    resource_name: &str,
+    base: Image,
+    base_image: &str,
+    agent_image: &str,
+    protocol: ClientProtocol,
+    base_auth: RegistryAuth,
+    cache: BlobCache,
+    default_contract: SandboxImage,
+) -> Result<SandboxAgentImage> {
     let failed = |reason: String| ErrorData::ImageBuildFailed {
         resource_name: resource_name.to_string(),
         reason,
@@ -76,7 +123,7 @@ pub async fn build_gcp_sandbox_image(
         reason,
     };
     let identity = BaseIdentity::read(&base, resource_name).await?;
-    let contract = identity.contract(GCP_AGENT_PLATFORM, None)?;
+    let contract = identity.contract(default_contract, None)?;
     let command = serde_json::to_vec(&image_command(&base)?)
         .into_alien_error()
         .context(failed("Cannot preserve the image command".into()))?;
@@ -143,7 +190,11 @@ pub async fn build_gcp_sandbox_image(
         || async {
             // A layer is consumed by the image builder, so each attempt builds its own.
             let layer = Layer::builder()
-                .map(|layer| layer.blob_cache(cache.clone()))
+                .map(|layer| {
+                    layer
+                        .blob_cache(cache.clone())
+                        .compression(dockdash::LayerCompression::Gzip)
+                })
                 .and_then(|layer| layer.data_with_owner(IMAGE_COMMAND_PATH, &command, 0o600, 0, 0))
                 .and_then(|layer| {
                     layer.data_with_owner("/etc/passwd", passwd.as_bytes(), 0o644, 0, 0)
@@ -189,7 +240,7 @@ pub async fn build_gcp_sandbox_image(
         },
     )
     .await?;
-    Ok(GcpSandboxImage {
+    Ok(SandboxAgentImage {
         image,
         agent_digest: agent_build.resolved_manifest_digest,
     })

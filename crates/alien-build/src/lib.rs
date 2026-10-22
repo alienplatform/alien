@@ -6831,7 +6831,7 @@ mod sandbox_push_tests {
             assert_eq!(config["architecture"], "amd64", "{platform}");
             let user = &config["config"]["User"];
             if layered {
-                assert_eq!(user, "1000:1000", "{platform}");
+                assert_eq!(user, "0:0", "{platform}");
                 assert_eq!(
                     config["config"]["Entrypoint"],
                     serde_json::json!([alien_core::sandbox_image::AGENT_PATH]),

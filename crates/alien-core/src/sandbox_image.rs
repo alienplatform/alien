@@ -69,6 +69,8 @@ pub enum Authorization {
     Transport,
     /// The caller presents a signed token, which is what a network anything can reach requires.
     Capability,
+    /// A per-boot credential is read through the cloud's authenticated native file API.
+    NativeFile,
 }
 
 impl Authorization {
@@ -77,6 +79,7 @@ impl Authorization {
         match self {
             Self::Transport => "transport",
             Self::Capability => "capability",
+            Self::NativeFile => "native-file",
         }
     }
 }
@@ -185,6 +188,17 @@ pub fn gcp_agent_platform_env() -> Vec<(&'static str, String)> {
     env.push(("ALIEN_SANDBOX_IMAGE_COMMAND", "true".into()));
     env
 }
+
+/// Azure serves the agent through a published port and an authenticated native file read.
+/// Its native exec path is never used for packaged images because it grants excess capabilities.
+pub const AZURE_SANDBOX: SandboxImage = SandboxImage {
+    exec_uid: 1000,
+    exec_gid: 1000,
+    session_root: "/sandbox",
+    port: AGENT_PORT,
+    authorization: Authorization::NativeFile,
+    isolation: Isolation::UidSplit,
+};
 
 /// The image every default sandbox builds on, by index digest so both architectures are pinned.
 ///
