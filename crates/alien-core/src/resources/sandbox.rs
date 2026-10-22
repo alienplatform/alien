@@ -597,6 +597,12 @@ pub struct Sandbox {
     pub links: Vec<ResourceRef>,
     /// Where the sandbox's root filesystem comes from
     pub code: SandboxCode,
+    /// Original image uid resolved from the built OCI archives. Absent on released artifacts
+    /// that retain the legacy boot contract. This is build output, not an authoring option.
+    #[builder(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub image_user: Option<u32>,
     /// Private ECR base image an AWS build pulls; `code.image` names only the S3 bundle, so this is
     /// what the cross-account grant opens. Live only: the grant needs the customer account,
     /// which registration reports. Absent means the base image is pulled anonymously.
@@ -725,6 +731,12 @@ impl Sandbox {
                 }));
             }
             policy.validate()?;
+        }
+        if self.image_user == Some(0) && matches!(platform, Platform::Local | Platform::Kubernetes) {
+            return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                capability: "root image USER: this backend does not yet separate bounded root boot from non-root exec; use a non-root image USER".into(),
+                platform: platform.to_string(),
+            }));
         }
         let mut capabilities = SandboxCapabilities::for_platform(platform)?;
         if let Some(supervisor) = &self.privileged_supervisor {

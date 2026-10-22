@@ -31,6 +31,14 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             .filter_map(|sandbox| {
                 // AWS and Kubernetes deployments install and configure the gateway. Other
                 // deployment backends cannot yet create and publish one.
+                if platform == Platform::Aws && sandbox.image_user == Some(0)
+                    && !alien_core::sandbox_egress::sandbox_needs_connector(stack, sandbox)
+                {
+                    return Some(format!(
+                        "Sandbox '{}': root image USER requires an AWS egress connector; this egress mode has no external boundary",
+                        sandbox.id()
+                    ));
+                }
                 if sandbox.egress == SandboxEgress::Internet
                     && !matches!(platform, Platform::Aws | Platform::Kubernetes)
                 {
@@ -152,6 +160,122 @@ mod tests {
                 "{platform} enforces ceilings: {:?}",
                 result.errors
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn root_boot_requires_an_aws_connector_including_legacy_direct_modes() {
+        for policy in [
+            SandboxEgress::Allow,
+            SandboxEgress::None,
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".into()],
+            },
+            SandboxEgress::Internet,
+        ] {
+            for legacy in [false, true] {
+                let mut value = sandbox("root-boot", None, policy.clone());
+                value.image_user = Some(0);
+                if legacy {
+                    value.privileged_supervisor =
+                        Some(alien_core::SandboxPrivilegedSupervisor { command_uid: 60000 });
+                }
+                let stack = stack_with(value.clone());
+                let result = SandboxPlatformSupportCheck
+                    .check(&stack, Platform::Aws)
+                    .await
+                    .unwrap();
+                let requires_refusal =
+                    policy == SandboxEgress::Allow || policy == SandboxEgress::Internet || legacy;
+                if requires_refusal {
+                    assert!(!result.success);
+                    assert!(result
+                        .errors
+                        .join(" ")
+                        .contains("root image USER requires an AWS egress connector"));
+                } else if policy == SandboxEgress::None {
+                    assert!(result.success, "{:?}", result.errors);
+                } else {
+                    assert!(!result.success);
+                    assert!(
+                        result.errors.join(" ").contains("domainEgressRules"),
+                        "{:?}",
+                        result.errors
+                    );
+                }
+            }
+        }
+        let gateway_id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+        let gateway = alien_core::Container::new(gateway_id.into())
+            .code(alien_core::ContainerCode::Image {
+                image: "example/gateway:1".into(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.25".into(),
+                desired: "0.25".into(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".into(),
+                desired: "512Mi".into(),
+            })
+            .replicas(1)
+            .permissions(gateway_id.into())
+            .port(3128)
+            .build();
+        let mut value = sandbox("with-gateway", None, SandboxEgress::Internet);
+        value.image_user = Some(0);
+        let mut stack = stack_with(value);
+        stack.resources.insert(
+            gateway_id.into(),
+            ResourceEntry {
+                config: alien_core::Resource::new(gateway),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: vec![],
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        assert!(
+            SandboxPlatformSupportCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .unwrap()
+                .success
+        );
+        // Released artifacts retain their old boot contract; non-root new images need no root boundary.
+        for user in [None, Some(2001)] {
+            let mut value = sandbox("old-or-nonroot", None, SandboxEgress::Allow);
+            value.image_user = user;
+            assert!(
+                SandboxPlatformSupportCheck
+                    .check(&stack_with(value), Platform::Aws)
+                    .await
+                    .unwrap()
+                    .success
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn local_and_kubernetes_refuse_root_boot_until_exec_is_separated() {
+        for platform in [Platform::Local, Platform::Kubernetes] {
+            for user in [None, Some(0), Some(2001)] {
+                let mut value = sandbox("boot", None, SandboxEgress::Allow);
+                value.image_user = user;
+                let result = SandboxPlatformSupportCheck
+                    .check(&stack_with(value), platform)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    result.success,
+                    user != Some(0),
+                    "{platform}: {:?}",
+                    result.errors
+                );
+                if user == Some(0) {
+                    assert!(result.errors.join(" ").contains("root image USER"));
+                }
+            }
         }
     }
 

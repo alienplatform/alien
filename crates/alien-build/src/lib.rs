@@ -710,7 +710,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 
         let build_tasks: Vec<_> = sandboxes_to_build
             .into_iter()
-            .map(|(resource_id, sandbox, src, toolchain)| {
+            .map(|(resource_id, mut sandbox, src, toolchain)| {
                 let sandbox_id = sandbox.id.clone();
                 let stack_id = stack_id.clone();
                 let settings = sandbox_settings.clone();
@@ -754,12 +754,20 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                         };
 
                         let result = match result {
-                            Ok(image_uri) => sandbox_identity::validate_declared_uid(
-                                &sandbox,
-                                Path::new(&image_uri),
-                            )
-                            .await
-                            .map(|()| image_uri),
+                            Ok(image_uri) => async {
+                                sandbox_identity::validate_declared_uid(
+                                    &sandbox,
+                                    Path::new(&image_uri),
+                                ).await?;
+                                sandbox.image_user = Some(
+                                    sandbox_identity::built_image_user(
+                                        &sandbox,
+                                        Path::new(&image_uri),
+                                        &settings.get_targets(),
+                                    ).await?,
+                                );
+                                Ok(image_uri)
+                            }.await,
                             Err(error) => Err(error),
                         };
 

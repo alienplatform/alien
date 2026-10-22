@@ -40,6 +40,52 @@ pub(crate) async fn validate_declared_uid(
     Ok(())
 }
 
+/// Resolve the boot uid from every built architecture, before the declaration reaches planning.
+/// Different users across architectures would make the plan depend on which host runs it.
+pub(crate) async fn built_image_user(
+    sandbox: &alien_core::Sandbox,
+    directory: &std::path::Path,
+    targets: &[alien_core::BinaryTarget],
+) -> Result<u32> {
+    let failed = |message: String| ErrorData::BuildConfigInvalid { message };
+    let mut uid = None;
+    for target in targets {
+        let path = directory.join(format!("{}.oci.tar", target.runtime_platform_id()));
+        let image = Image::from_tarball(&path)
+            .into_alien_error()
+            .context(failed(format!(
+                "Cannot inspect sandbox '{}' image {}",
+                sandbox.id,
+                path.display()
+            )))?;
+        let base = BaseIdentity::read(&image, &sandbox.id).await?;
+        let current = ImageUser {
+            user: &base.user,
+            passwd: base.passwd.as_deref().unwrap_or_default(),
+            group: base.group.as_deref().unwrap_or_default(),
+        }
+        .image_identity()
+        .context(failed(format!(
+            "Cannot resolve sandbox '{}' image USER",
+            sandbox.id
+        )))?
+        .uid;
+        if uid.is_some_and(|previous| previous != current) {
+            return Err(AlienError::new(failed(format!(
+                "Sandbox '{}' image USER differs across architectures",
+                sandbox.id
+            ))));
+        }
+        uid = Some(current);
+    }
+    uid.ok_or_else(|| {
+        AlienError::new(failed(format!(
+            "Sandbox '{}' has no built image targets",
+            sandbox.id
+        )))
+    })
+}
+
 /// The image's USER and account databases, read from the same immutable archive.
 pub struct BaseIdentity {
     pub user: String,
@@ -240,6 +286,67 @@ mod tests {
             .await
             .unwrap()
             .0
+    }
+
+    #[tokio::test]
+    async fn built_archives_resolve_boot_user_and_refuse_architecture_mismatch() {
+        let sandbox = alien_core::Sandbox::new("boot".into())
+            .code(alien_core::SandboxCode::Image {
+                image: "unused".into(),
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let directory = tempfile::tempdir().unwrap();
+        let targets = [
+            alien_core::BinaryTarget::LinuxX64,
+            alien_core::BinaryTarget::LinuxArm64,
+        ];
+        for (user, expected) in [("", 0), ("root", 0), ("app", 1001), ("2000:2000", 2000)] {
+            let image = base(user).await;
+            for target in &targets {
+                std::fs::copy(
+                    image.path(),
+                    directory
+                        .path()
+                        .join(format!("{}.oci.tar", target.runtime_platform_id())),
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                built_image_user(&sandbox, directory.path(), &targets)
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+        let root = base("0").await;
+        std::fs::copy(
+            root.path(),
+            directory
+                .path()
+                .join(format!("{}.oci.tar", targets[0].runtime_platform_id())),
+        )
+        .unwrap();
+        let error = built_image_user(&sandbox, directory.path(), &targets)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("differs across architectures"));
+        std::fs::remove_file(
+            directory
+                .path()
+                .join(format!("{}.oci.tar", targets[1].runtime_platform_id())),
+        )
+        .unwrap();
+        assert!(built_image_user(&sandbox, directory.path(), &targets)
+            .await
+            .is_err());
+        assert!(built_image_user(&sandbox, directory.path(), &[])
+            .await
+            .is_err());
     }
 
     #[tokio::test]
