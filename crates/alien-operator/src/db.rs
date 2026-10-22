@@ -24,6 +24,15 @@ use crate::error::{ErrorData, Result};
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;
 const MAX_QUEUED_POD_LOG_BYTES: i64 = 64 * 1024 * 1024;
+const DB_FILE_NAME: &str = "operator.db";
+
+/// The deployment an Operator registered and the deployment-scoped credential
+/// the manager returned for it, as stored in its state directory.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoredIdentity {
+    pub deployment_id: Option<String>,
+    pub sync_token: Option<String>,
+}
 
 /// Last Pod-log line durably queued for forwarding. The ordinal distinguishes
 /// lines that share a Kubernetes log timestamp.
@@ -109,6 +118,72 @@ pub struct OperatorDb {
 impl OperatorDb {
     /// Create or open the operator database with encryption
     pub async fn new(data_dir: &str, encryption_key: &str) -> Result<Self> {
+        std::fs::create_dir_all(data_dir)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to create data directory".to_string(),
+            })?;
+
+        let conn = Self::connect(&Path::new(data_dir).join(DB_FILE_NAME), encryption_key).await?;
+
+        Self::run_migrations(&conn).await?;
+        Self::ensure_schema_version(&conn).await?;
+
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            sync_requested: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// Read the deployment identity a stopped Operator left in `data_dir`,
+    /// without creating, migrating or version-checking the database. An Operator
+    /// that updated itself can have written a newer schema than this binary
+    /// knows; the identity keys in `state` are the same in every version.
+    pub async fn read_stored_identity(
+        data_dir: &str,
+        encryption_key: &str,
+    ) -> Result<StoredIdentity> {
+        let db_path = Path::new(data_dir).join(DB_FILE_NAME);
+        if !db_path.exists() {
+            return Ok(StoredIdentity::default());
+        }
+        let conn = Self::connect(&db_path, encryption_key).await?;
+        let mut rows = conn
+            .query(
+                "SELECT key, value FROM state WHERE key IN ('deployment_id', 'sync_token')",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query the stored deployment identity".to_string(),
+            })?;
+
+        let mut identity = StoredIdentity::default();
+        while let Some(row) =
+            rows.next()
+                .await
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to fetch a stored deployment identity row".to_string(),
+                })?
+        {
+            let read = |index| {
+                row.get::<String>(index)
+                    .into_alien_error()
+                    .context(ErrorData::DatabaseError {
+                        message: "Failed to read a stored deployment identity value".to_string(),
+                    })
+            };
+            match read(0)?.as_str() {
+                "deployment_id" => identity.deployment_id = Some(read(1)?),
+                _ => identity.sync_token = Some(read(1)?),
+            }
+        }
+        Ok(identity)
+    }
+
+    async fn connect(db_path: &Path, encryption_key: &str) -> Result<Connection> {
         if encryption_key.len() != 64 || !encryption_key.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(alien_error::AlienError::new(
                 crate::error::ErrorData::ConfigurationError {
@@ -119,21 +194,12 @@ impl OperatorDb {
             ));
         }
 
-        std::fs::create_dir_all(data_dir)
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to create data directory".to_string(),
-            })?;
-
-        let db_path = Path::new(data_dir).join("operator.db");
-        let db_path_str = db_path.to_string_lossy();
-
         let encryption_opts = EncryptionOpts {
             cipher: "aegis256".to_string(),
             hexkey: encryption_key.to_string(),
         };
 
-        let db: Database = Builder::new_local(&db_path_str)
+        let db: Database = Builder::new_local(&db_path.to_string_lossy())
             .experimental_encryption(true)
             .with_encryption(encryption_opts)
             .build()
@@ -143,20 +209,11 @@ impl OperatorDb {
                 message: "Failed to open encrypted database".to_string(),
             })?;
 
-        let conn = db
-            .connect()
+        db.connect()
             .into_alien_error()
             .context(ErrorData::DatabaseError {
                 message: "Failed to connect to database".to_string(),
-            })?;
-
-        Self::run_migrations(&conn).await?;
-        Self::ensure_schema_version(&conn).await?;
-
-        Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
-            sync_requested: tokio::sync::Notify::new(),
-        })
+            })
     }
 
     async fn run_migrations(conn: &Connection) -> Result<()> {
@@ -2176,7 +2233,7 @@ impl OperatorDb {
 
 #[cfg(test)]
 mod tests {
-    use super::{OperatorDb, PodLogOffset};
+    use super::{OperatorDb, PodLogOffset, StoredIdentity, CURRENT_OPERATOR_SCHEMA_VERSION};
     use alien_core::sync::{SyncExecutionClaim, TargetDeployment};
 
     const TEST_ENCRYPTION_KEY: &str =
@@ -2376,6 +2433,51 @@ mod tests {
                 .await
                 .expect("read cursor"),
             Some(offset)
+        );
+    }
+
+    #[tokio::test]
+    async fn stored_identity_is_readable_from_a_newer_operator_state() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let data_dir = data_dir.path().to_str().expect("data dir path is utf-8");
+        let db = OperatorDb::new(data_dir, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open encrypted operator db");
+        db.persist_initialized_identity("dep_a", None, Some("ax_deploy_a"))
+            .await
+            .expect("persist initialized identity");
+        {
+            // What an Operator that updated itself to a newer schema leaves behind.
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "UPDATE state SET value = ? WHERE key = 'schema_version'",
+                ((CURRENT_OPERATOR_SCHEMA_VERSION + 1).to_string(),),
+            )
+            .await
+            .expect("record a newer schema version");
+        }
+        drop(db);
+
+        let error = OperatorDb::new(data_dir, TEST_ENCRYPTION_KEY)
+            .await
+            .err()
+            .expect("this binary cannot run on a newer schema");
+        assert_eq!(error.code, "INCOMPATIBLE_OPERATOR_STATE");
+        assert_eq!(
+            OperatorDb::read_stored_identity(data_dir, TEST_ENCRYPTION_KEY)
+                .await
+                .expect("read the stored identity"),
+            StoredIdentity {
+                deployment_id: Some("dep_a".to_string()),
+                sync_token: Some("ax_deploy_a".to_string()),
+            }
+        );
+        let wrong_key = "f".repeat(64);
+        assert!(
+            OperatorDb::read_stored_identity(data_dir, &wrong_key)
+                .await
+                .is_err(),
+            "another key must not read the encrypted state"
         );
     }
 

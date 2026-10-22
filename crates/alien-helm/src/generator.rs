@@ -322,6 +322,10 @@ fn generate_helm_chart_internal(
     );
     files.insert("templates/cleanup-job.yaml".to_string(), cleanup_job_tpl());
     files.insert(
+        "templates/report-uninstall-job.yaml".to_string(),
+        report_uninstall_job_tpl(),
+    );
+    files.insert(
         "templates/cluster-bootstrap.yaml".to_string(),
         cluster_bootstrap_tpl(),
     );
@@ -4075,6 +4079,7 @@ runtime:
       enabled: true
   cleanup:
     onUninstall:
+      # Also reports the uninstall to the management endpoint (see README).
       enabled: true
       deletePersistentVolumeClaims: false
       helmHistoryBackend: secret
@@ -6410,6 +6415,118 @@ spec:
     .to_string()
 }
 
+/// Asks the manager to forget the deployment when the release is uninstalled. It
+/// runs after the cleanup Job has stopped the Operator, because the deployment
+/// credential returned at registration lives only in the Operator's state volume.
+/// A configured `management.deploymentId` was registered by another tool
+/// (Terraform, CloudFormation), which removes the record itself.
+fn report_uninstall_job_tpl() -> String {
+    r#"{{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
+{{- if and (dig "enabled" true $cleanup) .Values.runtime.data.persistence.enabled (not .Values.management.deploymentId) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "deployment.releaseScopedName" (dict "root" . "suffix" "-report-uninstall") }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.hookLabels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+      {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
+      imagePullSecrets:
+        {{- with .Values.runtime.imagePullSecrets }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $pullWithToken }}
+        - name: {{ include "deployment.fullname" . }}-registry
+        {{- end }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: report-uninstall
+          image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}"
+          imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
+          args: ["report-uninstall"]
+          securityContext:
+            {{- toYaml .Values.runtime.security.containerSecurityContext | nindent 12 }}
+          env:
+            - name: PLATFORM
+              value: kubernetes
+            - name: SYNC_URL
+              value: {{ include "deployment.managementUrl" . | quote }}
+            - name: SYNC_TOKEN_FILE
+              value: /etc/deployment/secrets/sync-token
+            - name: OPERATOR_ENCRYPTION_KEY_FILE
+              value: /etc/deployment/secrets/encryption-key
+            - name: DATA_DIR
+              value: {{ .Values.runtime.data.mountPath | quote }}
+          volumeMounts:
+            - name: management-token
+              mountPath: /etc/deployment/secrets/sync-token
+              subPath: sync-token
+              readOnly: true
+            - name: encryption-key
+              mountPath: /etc/deployment/secrets/encryption-key
+              subPath: {{ include "deployment.encryptionSecretKey" . }}
+              readOnly: true
+            {{- if .Values.runtime.tmp.enabled }}
+            - name: tmp
+              mountPath: /tmp
+            {{- end }}
+            - name: runtime-data
+              mountPath: {{ .Values.runtime.data.mountPath | quote }}
+          resources:
+            {{- toYaml .Values.runtime.resources | nindent 12 }}
+      volumes:
+        - name: management-token
+          secret:
+            secretName: {{ include "deployment.managementSecretName" . }}
+            items:
+              - key: {{ include "deployment.managementSecretTokenKey" . }}
+                path: sync-token
+            defaultMode: 384
+        - name: encryption-key
+          secret:
+            secretName: {{ include "deployment.encryptionSecretName" . }}
+            defaultMode: 384
+        {{- if .Values.runtime.tmp.enabled }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.runtime.tmp.sizeLimit | quote }}
+        {{- end }}
+        - name: runtime-data
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-runtime-data" (include "deployment.fullname" .)) .Values.runtime.data.persistence.existingClaim }}
+{{- end }}
+"#
+    .to_string()
+}
+
 /// The operator Deployment. With a sandbox in the stack the operator also learns the address of
 /// its own Service, which is where application pods reach the session broker it serves.
 fn deployment_tpl(sandbox_broker: bool) -> String {
@@ -7623,6 +7740,27 @@ log buffer and reads the selected log files from the beginning. When switching
 from nodeAgent to podApi, the Operator checks both collector names and waits for
 their Pods to stop, including when the chart is rendered without cluster access.
 Use an Operator image built with this chart version for that transition.
+
+## Uninstall
+
+```bash
+helm uninstall {chart_name} --namespace={namespace}
+```
+
+Two pre-delete hooks run first. The cleanup Job stops the Operator and deletes
+the workloads it created. Then, when the Operator registered the deployment from
+a bootstrap token, a Job runs the Operator image with `report-uninstall`. It
+reads the deployment credential from the runtime volume and asks the management
+endpoint to forget the deployment. It gives up after 15 seconds and never fails
+the uninstall; if the endpoint can't be reached, the deployment page can remove
+the deployment once its heartbeats stop. An installation connected with
+`management.deploymentId` skips the report: the tool that registered the
+deployment removes it.
+
+`helm uninstall --no-hooks` skips both hooks, so the workloads stay and the
+deployment is not reported. `runtime.cleanup.onUninstall.enabled: false` also
+skips the report, because the Operator holds the runtime volume until the
+cleanup Job stops it.
 "#
     )
 }
