@@ -378,11 +378,8 @@ impl DeploymentLoop {
             if filter.deployment_ids.is_none() {
                 filter.deployment_ids = Some(
                     self.deployment_store
-                        .list_deployments(caller, filter)
-                        .await?
-                        .into_iter()
-                        .map(|record| record.id)
-                        .collect(),
+                        .list_deployment_ids(caller, filter)
+                        .await?,
                 );
             }
             let ids = filter
@@ -2886,9 +2883,9 @@ mod tests {
                     });
                 let listed = records.clone();
                 store
-                    .expect_list_deployments()
+                    .expect_list_deployment_ids()
                     .times(1)
-                    .returning(move |_, _| Ok(listed.lock().unwrap().values().cloned().collect()));
+                    .returning(move |_, _| Ok(listed.lock().unwrap().keys().cloned().collect()));
                 let saved = records.clone();
                 store.expect_reconcile().times(8).returning(move |_, data| {
                     let mut records = saved.lock().unwrap();
@@ -2924,6 +2921,95 @@ mod tests {
                     retry_requested: false,
                     recheck_after: Utc::now() + chrono::Duration::minutes(5),
                 },
+            );
+        }
+
+        /// A store that decodes whole records fails its list when one record holds stack
+        /// state the current types reject. The candidate snapshot needs only IDs, so the
+        /// other candidates must still be acquired and processed.
+        #[tokio::test]
+        async fn undecodable_candidate_does_not_stop_other_deployments() {
+            let fixture = Fixture::new(DeploymentStatus::UpdatePending, transient_error()).await;
+            let good = fixture.record().await;
+            let good_id = good.id.clone();
+            let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+            store
+                .expect_supports_acquire_exclusions()
+                .return_const(false);
+            store.expect_list_deployments().returning(|_, _| {
+                Err(AlienError::new(alien_error::GenericError {
+                    message: "JSON deserialize failed: unknown field `ingress`".to_string(),
+                }))
+            });
+            let listed = vec![
+                "deferred-pending".to_string(),
+                "undecodable".to_string(),
+                good_id.clone(),
+            ];
+            store
+                .expect_list_deployment_ids()
+                .times(1)
+                .returning(move |_, _| Ok(listed.clone()));
+            let acquirable = Mutex::new(Some(good.clone()));
+            store.expect_acquire().returning(move |_, _, filter, _| {
+                let ids = filter
+                    .deployment_ids
+                    .as_ref()
+                    .expect("acquisition is narrowed to the candidate snapshot");
+                assert!(!ids.contains(&"deferred-pending".to_string()));
+                // A store releases a record it cannot decode instead of returning it, so only
+                // the decodable candidate comes back, once.
+                Ok(acquirable
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .filter(|record| ids.contains(&record.id))
+                    .map(
+                        |record| crate::traits::deployment_store::AcquiredDeployment {
+                            deployment: record,
+                            execution_claim: None,
+                        },
+                    )
+                    .into_iter()
+                    .collect())
+            });
+            let saved = Arc::new(Mutex::new(good));
+            let reconciled = saved.clone();
+            store.expect_reconcile().times(1).returning(move |_, data| {
+                let mut record = reconciled.lock().unwrap();
+                assert_eq!(data.deployment_id, record.id);
+                record.runtime_metadata = data.state.runtime_metadata;
+                Ok(crate::traits::deployment_store::ReconcileOutcome {
+                    record: record.clone(),
+                    target_operations_bundle_set: None,
+                    target_dynamic_containers: None,
+                })
+            });
+            // The deferred deployment is unchanged, so it stays in backoff.
+            store.expect_get_deployment().returning(move |_, id| {
+                let mut record = saved.lock().unwrap().clone();
+                if id == "deferred-pending" {
+                    record.id = id.to_string();
+                    record.status = "pending".to_string();
+                    record.updated_at = None;
+                    record.retry_requested = false;
+                }
+                Ok(Some(record).filter(|record| record.id == id))
+            });
+            store
+                .expect_release()
+                .times(1)
+                .returning(|_, _, _, _| Ok(()));
+            let mut runner = fixture.runner();
+            runner.deployment_store = Arc::new(store);
+            defer_pending(&runner);
+
+            runner.tick().await;
+
+            assert_eq!(
+                fixture.credentials.visits.load(Ordering::SeqCst),
+                1,
+                "the decodable candidate is processed"
             );
         }
 
