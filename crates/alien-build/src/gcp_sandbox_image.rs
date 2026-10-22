@@ -103,7 +103,7 @@ pub async fn build_azure_sandbox_image(
     .await
 }
 
-async fn build_sandbox_agent_image(
+pub(crate) async fn build_sandbox_agent_image(
     resource_name: &str,
     base: Image,
     base_image: &str,

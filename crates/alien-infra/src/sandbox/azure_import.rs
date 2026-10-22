@@ -69,6 +69,7 @@ impl ResourceImporter for AzureSandboxImporter {
         };
         let controller = AzureSandboxController {
             state,
+            agent: false,
             sandbox_group: Some(data.sandbox_group),
             region: Some(data.region),
             resource_group: Some(data.resource_group),

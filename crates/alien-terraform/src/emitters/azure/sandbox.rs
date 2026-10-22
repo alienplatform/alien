@@ -202,6 +202,10 @@ impl TfEmitter for AzureSandboxEmitter {
             ),
         ];
 
+        if sandbox.image_user.is_some() {
+            fields.push(("agent", Expression::Bool(true)));
+        }
+
         if let Some(seconds) = sandbox.lifecycle.idle_pause_seconds {
             fields.push((
                 "idlePauseSeconds",

@@ -29,7 +29,10 @@ are refused before session operations. A fresh boot replaces the token; a
 resume preserving the process keeps it. Create-time user environment and gateway
 proxy settings remain defaults for boot and session commands; agent settings
 are reserved. Released bindings without `agent: true` retain native operations.
-Build/controller integration for new Azure releases is still in progress.
+Source-built Azure releases select this transport automatically. The controller switches
+the image and transport together after Azure reports the replacement disk Ready.
+Prebuilt-image inspection and migration of already-running native sessions remain
+in progress.
 
 # Released supervisor declarations
 
