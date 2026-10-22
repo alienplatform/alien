@@ -42,6 +42,8 @@ const ENV_EXEC_GID: &str = "ALIEN_SANDBOX_EXEC_GID";
 /// Which isolation model is in force: `uid-split` or `platform`. Declared, never defaulted — it
 /// selects a security model, so an unset value must fail to start rather than silently pick one.
 const ENV_ISOLATION: &str = "ALIEN_SANDBOX_ISOLATION";
+/// New package boot contract; absent in released packages.
+const ENV_IMAGE_COMMAND: &str = "ALIEN_SANDBOX_IMAGE_COMMAND";
 
 /// Bytes of each stream kept when the environment does not say.
 const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
@@ -71,7 +73,8 @@ fn main() -> Result<()> {
 
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
-    if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
+    let network_admin = std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some();
+    if network_admin || image_command_enabled()? {
         #[cfg(target_os = "linux")]
         if let Some(policy) = alien_sandbox_agent::egress::legacy_from_env()? {
             alien_sandbox_agent::egress::install(&policy, state.exec_identity.uid)?;
@@ -87,7 +90,7 @@ fn main() -> Result<()> {
                 "prepare declared command identity",
                 "cannot write the image's passwd/group entries".to_string(),
             ))?;
-            alien_sandbox_agent::privilege::restrict_supervisor(true)
+            alien_sandbox_agent::privilege::restrict_supervisor(network_admin)
                 .into_alien_error()
                 .context(failed(
                     "reduce supervisor capabilities",
@@ -280,6 +283,14 @@ fn enforce_exec_identity(
     Ok(())
 }
 
+fn image_command_enabled() -> Result<bool> {
+    match std::env::var(ENV_IMAGE_COMMAND) {
+        Ok(value) if value == "true" => Ok(true),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        _ => Err(invalid(ENV_IMAGE_COMMAND, "must be true when set")),
+    }
+}
+
 fn load_state() -> Result<AgentState> {
     let root = PathBuf::from(required(ENV_ROOT)?);
 
@@ -327,7 +338,15 @@ fn load_state() -> Result<AgentState> {
     ))?;
 
     Ok(AgentState {
-        image_process: if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
+        image_process: if image_command_enabled()? {
+            if agent_uid != 0 || isolation != Isolation::UidSplit {
+                return Err(invalid(
+                    ENV_IMAGE_COMMAND,
+                    "requires a root agent with uid-split isolation",
+                ));
+            }
+            alien_sandbox_agent::image_command::ImageProcess::with_image_user()
+        } else if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
             Default::default()
         } else {
             alien_sandbox_agent::image_command::ImageProcess::not_configured()

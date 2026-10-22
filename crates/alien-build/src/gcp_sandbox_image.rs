@@ -4,14 +4,15 @@
 
 use crate::error::{ErrorData, Result};
 use crate::registry::{registry_failure, RegistryFailure};
-use crate::sandbox_identity::{unreadable_file, BaseIdentity};
+use crate::sandbox_identity::{image_command, unreadable_file, BaseIdentity};
 use crate::{
     base_image_build_retry_delay, is_retryable_dockdash_image_pull_error,
     BASE_IMAGE_BUILD_MAX_ATTEMPTS,
 };
 use alien_core::presigned::redact_url_for_error;
 use alien_core::sandbox_image::{
-    AGENT_MODE, AGENT_PATH, GCP_AGENT_LOG_FILTER, GCP_AGENT_PLATFORM, SESSION_ROOT_MODE,
+    AGENT_MODE, AGENT_PATH, GCP_AGENT_LOG_FILTER, GCP_AGENT_PLATFORM, IMAGE_COMMAND_PATH,
+    SESSION_ROOT_MODE,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use dockdash::{
@@ -76,7 +77,10 @@ pub async fn build_gcp_sandbox_image(
     };
     let identity = BaseIdentity::read(&base, resource_name).await?;
     let contract = identity.contract(GCP_AGENT_PLATFORM, None)?;
-    // Only the identity files were needed, and a pulled base is a full archive on disk.
+    let command = serde_json::to_vec(&image_command(&base)?)
+        .into_alien_error()
+        .context(failed("Cannot preserve the image command".into()))?;
+    // Only the identity files and command were needed, and a pulled base is a full archive on disk.
     drop(base);
 
     // The agent image is public, so no registry credential is sent to its registry.
@@ -117,11 +121,6 @@ pub async fn build_gcp_sandbox_image(
     // Each pulled image holds a full archive on disk; only the agent binary was needed.
     drop(agent);
 
-    let user = contract.user().ok_or_else(|| {
-        AlienError::new(rejected(
-            "The GCP image contract declares no user".to_string(),
-        ))
-    })?;
     let passwd = merge_identity(
         identity.passwd.as_deref(),
         "root:x:0:0:root:/root:/sbin/nologin",
@@ -145,6 +144,7 @@ pub async fn build_gcp_sandbox_image(
             // A layer is consumed by the image builder, so each attempt builds its own.
             let layer = Layer::builder()
                 .map(|layer| layer.blob_cache(cache.clone()))
+                .and_then(|layer| layer.data_with_owner(IMAGE_COMMAND_PATH, &command, 0o600, 0, 0))
                 .and_then(|layer| {
                     layer.data_with_owner("/etc/passwd", passwd.as_bytes(), 0o644, 0, 0)
                 })
@@ -175,10 +175,13 @@ pub async fn build_gcp_sandbox_image(
                 .auth(base_auth.clone())
                 .blob_cache(cache.clone())
                 .layer(layer)
-                .user(&user)
+                .user("0:0")
                 .expose_port(&contract.exposed_port())
-                .entrypoint(vec![AGENT_PATH.to_string()]);
-            builder = builder.env("RUST_LOG", GCP_AGENT_LOG_FILTER);
+                .entrypoint(vec![AGENT_PATH.to_string()])
+                .cmd(Vec::new());
+            builder = builder
+                .env("RUST_LOG", GCP_AGENT_LOG_FILTER)
+                .env("ALIEN_SANDBOX_IMAGE_COMMAND", "true");
             for (name, value) in contract.contract_env_vars() {
                 builder = builder.env(name, &value);
             }
@@ -577,7 +580,7 @@ mod tests {
         assert_eq!(config["architecture"], "amd64");
         assert_eq!(config["os"], "linux");
         let runtime = &config["config"];
-        assert_eq!(runtime["User"], "1000:1000");
+        assert_eq!(runtime["User"], "0:0");
         assert_eq!(
             runtime["ExposedPorts"],
             serde_json::json!({ "8080/tcp": {} })
@@ -657,7 +660,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(pushed_config(&target).await["config"]["User"], "1000:1000");
+        assert_eq!(pushed_config(&target).await["config"]["User"], "0:0");
         assert_eq!(
             pushed_file(&target, protocol.clone(), "/etc/passwd").await,
             Some(format!(

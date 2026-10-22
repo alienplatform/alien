@@ -1,3 +1,19 @@
+# Image startup
+
+New GCP images assembled by Alien save the original OCI ENTRYPOINT, CMD, USER,
+environment and working directory in root-owned metadata. The agent runs as
+root with uid-split isolation and starts that command before serving session
+operations. Root and absent USER get Docker's default capabilities without
+NET_RAW; non-root image processes get none. Exec and jobs retain their non-root
+identity, zero capabilities and no_new_privs. Image exits appear in health and
+never trigger a restart.
+
+The internal ALIEN_SANDBOX_IMAGE_COMMAND=true package marker enables this
+contract. A package carrying it must have saved USER metadata and a root agent;
+invalid configuration fails startup. Released packages without the marker retain
+their previous startup and identity semantics. AWS packaging has not yet enabled
+this marker; its released modes are described below.
+
 # Privileged supervisor mode
 
 An AWS sandbox may opt into agent-owned egress enforcement:

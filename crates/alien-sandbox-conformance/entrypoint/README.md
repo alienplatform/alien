@@ -65,3 +65,9 @@ ran as uid 2000, and both mount and RTM_NEWLINK were refused with EPERM. Root,
 uid 2000, and capless uid 60000 obtained no metadata credentials: IPv4 requests
 timed out, IPv6 had no route, and `metadata.google.internal` did not resolve.
 This baseline used a probe exec adapter; it does not qualify Alien packaging.
+
+An Azure native-image baseline on 2026-10-22 with Allow egress obtained no metadata
+credentials as root ENTRYPOINT, its uid-2000 child, native root exec, or a capless
+uid-60000 exec. IPv4 returned ECONNREFUSED and IPv6 EAFNOSUPPORT. Native root still
+had all 41 capabilities and could mount/change MTU, so this only qualifies metadata
+exclusion; Alien agent packaging must supply the image and exec privilege bounds.

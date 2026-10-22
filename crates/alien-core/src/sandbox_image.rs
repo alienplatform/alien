@@ -165,23 +165,17 @@ pub const AWS_MICROVM: SandboxImage = SandboxImage {
     isolation: Isolation::UidSplit,
 };
 
-/// The GCP Agent Platform image, built once in CI and run with nothing layered on top.
-///
-/// 1000 is the conventional first non-root uid, chosen over the 60000 [`AWS_MICROVM`] uses because
-/// that value was never tried against Agent Platform. One uid covers the agent and the commands it
-/// supervises: Agent Platform refuses an image that requires root, so there is no second uid to
-/// drop to.
-///
-/// Agent Platform is only known to serve 8080, on the image and on the declared template port
-/// alike, and whether it honours a declared port or assumes 8080 has never been established.
-/// 8080 is right under either answer; any other number is right under only one.
+/// GCP keeps a root supervisor separate from the non-root command identity.
+/// Live conformance must verify root execution and capability bounds because the
+/// provider's published custom-image requirements do not promise root support.
+/// Agent Platform serves the declared container port 8080.
 pub const GCP_AGENT_PLATFORM: SandboxImage = SandboxImage {
     exec_uid: 1000,
     exec_gid: 1000,
     session_root: "/sandbox",
     port: 8080,
     authorization: Authorization::Transport,
-    isolation: Isolation::Platform,
+    isolation: Isolation::UidSplit,
 };
 
 /// Every variable a GCP Agent Platform image sets: the contract, then `RUST_LOG`.
@@ -600,8 +594,8 @@ mod tests {
     fn the_ending_an_image_declares_follows_its_isolation() {
         assert!(!entrypoint(&AWS_MICROVM).contains("USER "));
         assert!(contract_env(&AWS_MICROVM).contains("ALIEN_SANDBOX_ISOLATION=uid-split"));
-        assert!(entrypoint(&GCP_AGENT_PLATFORM).contains("\nUSER 1000:1000\n"));
-        assert!(contract_env(&GCP_AGENT_PLATFORM).contains("ALIEN_SANDBOX_ISOLATION=platform"));
+        assert_eq!(GCP_AGENT_PLATFORM.isolation, Isolation::UidSplit);
+        assert!(contract_env(&GCP_AGENT_PLATFORM).contains("ALIEN_SANDBOX_ISOLATION=uid-split"));
     }
 }
 

@@ -1,10 +1,13 @@
-//! Runs the image's saved OCI command under the same identity boundary as every exec request.
+//! Runs the saved OCI command once under its image identity; exec identity stays separate.
 
 use crate::{
     error::{ErrorData, Result},
     exec::ExecIdentity,
 };
-use alien_core::sandbox_image::{SandboxImageCommand, IMAGE_COMMAND_PATH};
+use alien_core::{
+    sandbox_identity::ImageUser,
+    sandbox_image::{SandboxImageCommand, IMAGE_COMMAND_PATH},
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::{
     collections::BTreeMap,
@@ -20,6 +23,7 @@ use std::{
 #[derive(Default)]
 pub struct ImageProcess {
     status: Arc<Mutex<ImageStatus>>,
+    image_user: bool,
 }
 
 /// Image process lifecycle, independent of session/network readiness.
@@ -45,10 +49,20 @@ pub enum ImageStatus {
 }
 
 impl ImageProcess {
+    /// New packages explicitly opt into OCI USER semantics. Released packages keep
+    /// their exec identity even if their metadata happened to preserve USER.
+    pub fn with_image_user() -> Self {
+        Self {
+            image_user: true,
+            ..Default::default()
+        }
+    }
+
     /// Compatibility for released images that never saved or started an OCI command.
     pub fn not_configured() -> Self {
         Self {
             status: Arc::new(Mutex::new(ImageStatus::NotConfigured)),
+            image_user: false,
         }
     }
 
@@ -77,7 +91,7 @@ impl ImageProcess {
         }
         // Hold the lock until spawn has completed its pre-exec work. A simultaneous
         // session operation cannot observe "started" before the actual exec succeeds.
-        let child = match start_from_with_env(path, identity, env) {
+        let child = match start_from_with_env(path, identity, env, self.image_user) {
             Ok(child) => child,
             Err(error) => {
                 *status = ImageStatus::Failed;
@@ -122,13 +136,14 @@ fn monitor_failed() -> AlienError<ErrorData> {
 
 #[cfg(test)]
 fn start_from(path: &Path, identity: ExecIdentity) -> Result<Option<tokio::process::Child>> {
-    start_from_with_env(path, identity, &Default::default())
+    start_from_with_env(path, identity, &Default::default(), false)
 }
 
 fn start_from_with_env(
     path: &Path,
     identity: ExecIdentity,
     env: &BTreeMap<String, String>,
+    image_user: bool,
 ) -> Result<Option<tokio::process::Child>> {
     let failed = || ErrorData::OperationFailed {
         operation: "start image command".to_string(),
@@ -141,6 +156,31 @@ fn start_from_with_env(
         .context(failed())?;
     let Some(program) = image.command.first() else {
         return Ok(None);
+    };
+    let image_identity = if image_user {
+        let user = image
+            .user
+            .as_deref()
+            .ok_or_else(|| AlienError::new(failed()))?;
+        let passwd = fs::read_to_string("/etc/passwd")
+            .into_alien_error()
+            .context(failed())?;
+        let group = fs::read_to_string("/etc/group")
+            .into_alien_error()
+            .context(failed())?;
+        let resolved = ImageUser {
+            user,
+            passwd: &passwd,
+            group: &group,
+        }
+        .image_identity()
+        .context(failed())?;
+        ExecIdentity {
+            uid: resolved.uid,
+            gid: resolved.gid,
+        }
+    } else {
+        identity
     };
     // Allocate before fork; enter the directory only after dropping privileges.
     let directory = CString::new(image.working_directory)
@@ -163,7 +203,14 @@ fn start_from_with_env(
     }
     unsafe {
         command.pre_exec(move || {
-            crate::privilege::drop_to(identity)?;
+            if image_user {
+                #[cfg(target_os = "linux")]
+                crate::privilege::drop_image_to(image_identity)?;
+                #[cfg(not(target_os = "linux"))]
+                return Err(std::io::Error::from_raw_os_error(libc::ENOTSUP));
+            } else {
+                crate::privilege::drop_to(image_identity)?;
+            }
             if libc::chdir(directory.as_ptr()) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
@@ -214,6 +261,60 @@ mod tests {
             },
         };
         (temp, path, identity)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires root with Docker default capabilities and setpriv"]
+    async fn saved_image_user_controls_boot_without_changing_exec_identity() {
+        for (user, uid, gid) in [("root", 0, 0), ("", 0, 0), ("2001:2002", 2001, 2002)] {
+            let script = if uid == 0 {
+                "cat /proc/self/status > observed; setpriv --reuid 2000 --regid 2000 --clear-groups id -u > worker"
+            } else {
+                "cat /proc/self/status > observed"
+            };
+            let (temp, path, exec) =
+                process_fixture(vec!["/bin/sh".into(), "-c".into(), script.into()]);
+            let mut metadata: SandboxImageCommand =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            metadata.user = Some(user.into());
+            fs::write(&path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+            let mut child = start_from_with_env(&path, exec, &Default::default(), true)
+                .unwrap()
+                .unwrap();
+            assert!(child.wait().await.unwrap().success());
+            let status = fs::read_to_string(temp.path().join("observed")).unwrap();
+            assert!(
+                status.contains(&format!("Uid:\t{uid}\t{uid}\t{uid}\t{uid}")),
+                "{status}"
+            );
+            assert!(
+                status.contains(&format!("Gid:\t{gid}\t{gid}\t{gid}\t{gid}")),
+                "{status}"
+            );
+            let caps = if uid == 0 {
+                crate::privilege::IMAGE_ROOT_CAPABILITIES
+            } else {
+                0
+            };
+            for set in ["CapEff", "CapPrm", "CapBnd"] {
+                assert!(status.contains(&format!("{set}:\t{caps:016x}")), "{status}");
+            }
+            if uid == 0 {
+                assert_eq!(
+                    fs::read_to_string(temp.path().join("worker")).unwrap(),
+                    "2000\n"
+                );
+            }
+            assert_ne!(exec.uid, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn new_startup_refuses_metadata_without_an_image_user() {
+        let (_temp, path, identity) = process_fixture(vec!["/bin/true".into()]);
+        assert!(start_from_with_env(&path, identity, &Default::default(), true).is_err());
+        let mut legacy = start_from(&path, identity).unwrap().unwrap();
+        assert!(legacy.wait().await.unwrap().success());
     }
 
     #[tokio::test]
