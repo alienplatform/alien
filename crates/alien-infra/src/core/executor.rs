@@ -812,14 +812,12 @@ impl StackExecutor {
         resource_id: &str,
         resource_state: &StackResourceState,
     ) -> Result<bool> {
-        if self.resource_lifecycle(resource_id, resource_state)? == ResourceLifecycle::Live {
-            return Ok(true);
-        }
-
-        Ok(
-            ownership_policy_for_resource_type(resource_state.config.resource_type().as_ref())
-                .has_runtime_cleanup_before_teardown(),
-        )
+        Ok(alien_core::removed_by_runtime_cleanup(
+            resource_state.config.resource_type().as_ref(),
+            self.resource_lifecycle(resource_id, resource_state)?,
+            self.deployment_config.stack_settings.setup_management,
+            self.client_config.platform(),
+        ))
     }
 
     fn resource_matches_deletion_scope(

@@ -9,8 +9,8 @@ use super::helpers::{assert_terraform_valid, gate_input, normalized, render, sna
 use alien_core::{
     AzureContainerAppsEnvironment, AzureResourceGroup, AzureStorageAccount, Key,
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteBindings,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, SetupConfigurationProfile, SetupManagement, Stack,
-    StackSettings, Storage, Worker, WorkerCode,
+    RemoteStackManagement, ResourceLifecycle, ServiceAccount, SetupConfigurationProfile,
+    SetupManagement, Stack, StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use alien_terraform::{
     generate_product_terraform_module_with_profile, TerraformOptions, TerraformTarget, TfRegistry,
@@ -847,10 +847,187 @@ fn azure_automatic_setup_owns_stack_wide_roles_and_names_the_identity() {
                 blocks.iter().any(|block| {
                     block.starts_with("azurerm_role_assignment\"")
                         && block.contains("condition =")
-                        && block.contains("${azurerm_user_assigned_identity.execution_sa.principal_id}")
+                        && block
+                            .contains("${azurerm_user_assigned_identity.execution_sa.principal_id}")
                 }),
                 "{context}: management's role-assignment condition must name the service account"
             );
         }
     }
+}
+
+/// Setup-owned role definitions are scoped to the resource group the module creates, so
+/// Terraform must create the group first. A fresh apply failed with `ResourceGroupNotFound`
+/// while these roles had no dependency on the group (it only passed on a second apply).
+/// Checked on Terraform's own dependency graph rather than the rendered text.
+#[test]
+fn azure_setup_role_definitions_wait_for_the_resource_group() {
+    let stack = Stack::new("role-ordering".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new()
+                .resource("archive", ["storage/data-read"])
+                .resource("app-secrets", ["vault/data-read"]),
+        )
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().resource("app-secrets", ["vault/data-write"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            AzureStorageAccount::new("default-storage-account".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("app-secrets".to_string()).build(),
+            ResourceLifecycle::Live,
+        )
+        .add(dispatch_worker("api"), ResourceLifecycle::Live)
+        .build();
+    let registry = TfRegistry::built_in();
+    for management in [SetupManagement::Manual, SetupManagement::Automatic] {
+        let context = format!("{management:?} Standard");
+        let module = generate_product_terraform_module_with_profile(
+            &stack,
+            TerraformTarget::Azure,
+            TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings: StackSettings {
+                    setup_management: management,
+                    ..StackSettings::default()
+                },
+                registration: None,
+                helm_install: None,
+                supported_aws_regions: Vec::new(),
+            },
+            false,
+            SetupConfigurationProfile::Standard,
+        )
+        .unwrap_or_else(|error| panic!("render {context}: {error}"));
+        let graph =
+            super::helpers::test_utils::terraform_graph(&super::helpers::linter_files(&module));
+        graph.assert_ok(format!("{context} terraform graph"));
+
+        let node = |raw: &str| {
+            raw.trim()
+                .trim_end_matches(';')
+                .trim_matches('"')
+                .trim_start_matches("[root] ")
+                .trim_end_matches(" (expand)")
+                .to_string()
+        };
+        let mut edges: std::collections::HashMap<String, Vec<String>> = Default::default();
+        for line in graph.stdout.lines() {
+            if let Some((from, to)) = line.split_once("->") {
+                let to = to.split('[').next().unwrap_or(to);
+                edges.entry(node(from)).or_default().push(node(to));
+            }
+        }
+        let resource_group = "azurerm_resource_group.default_resource_group";
+        let reaches_group = |start: &str| {
+            let mut stack = vec![start.to_string()];
+            let mut seen = std::collections::HashSet::new();
+            while let Some(current) = stack.pop() {
+                if current == resource_group {
+                    return true;
+                }
+                if seen.insert(current.clone()) {
+                    stack.extend(edges.get(&current).cloned().unwrap_or_default());
+                }
+            }
+            false
+        };
+        let roles: Vec<&String> = edges
+            .keys()
+            .filter(|name| name.starts_with("azurerm_role_definition."))
+            .collect();
+        assert!(
+            roles
+                .iter()
+                .any(|name| name.starts_with("azurerm_role_definition.setup_")),
+            "{context}: expected setup-owned role definitions in the graph, got {roles:?}"
+        );
+        let unordered: Vec<&&String> = roles.iter().filter(|name| !reaches_group(name)).collect();
+        assert!(
+            unordered.is_empty(),
+            "{context}: role definitions with no dependency on {resource_group}: {unordered:?}"
+        );
+    }
+}
+
+/// An automatic package creates the vault and the identity, so it also assigns the identity's
+/// role on that vault. Left to the runtime, the assignment of the setup-owned role outlives the
+/// vault on destroy, and Azure then refuses to delete the role (`RoleDefinitionHasAssignments`).
+#[test]
+fn azure_automatic_setup_assigns_application_roles_on_its_vaults() {
+    let vault_write = alien_permissions::get_permission_set("vault/data-write")
+        .expect("vault/data-write permission set")
+        .clone();
+    let stack = Stack::new("automatic-vault-roles".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().global(["vault/data-write"]),
+        )
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            ServiceAccount::new("execution-sa".to_string())
+                .stack_permission_set(vault_write)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(dispatch_worker("api"), ResourceLifecycle::Live)
+        .build();
+    let registry = TfRegistry::built_in();
+    let module = generate_product_terraform_module_with_profile(
+        &stack,
+        TerraformTarget::Azure,
+        TerraformOptions {
+            display_name: None,
+            registry: &registry,
+            stack_settings: StackSettings {
+                setup_management: SetupManagement::Automatic,
+                ..StackSettings::default()
+            },
+            registration: None,
+            helm_install: None,
+            supported_aws_regions: Vec::new(),
+        },
+        false,
+        SetupConfigurationProfile::Standard,
+    )
+    .expect("render automatic module");
+    assert_terraform_valid(&module, "automatic vault roles");
+
+    let rendered = normalized(&module);
+    assert!(
+        rendered.split("resource \"").skip(1).any(|block| {
+            block.starts_with("azurerm_role_assignment\"")
+                && block.contains("scope = azurerm_key_vault.secrets.id")
+                && block.contains("role_definition_id = azurerm_role_definition.setup_execution_")
+                && block.contains(
+                    "principal_id = azurerm_user_assigned_identity.execution_sa.principal_id",
+                )
+        }),
+        "setup must assign the execution role on its secrets vault"
+    );
 }

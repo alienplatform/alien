@@ -21,6 +21,8 @@ use std::fs::{File, OpenOptions};
 use std::future::Future;
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -34,16 +36,21 @@ const DRAIN_POLL_INTERVAL_MS: u64 = 1_000;
 #[cfg(test)]
 const DRAIN_POLL_INTERVAL_MS: u64 = 10;
 const WRAPPED_JOIN_TOKEN_PREFIX: &str = "aj1_";
-/// The machine runtime keeps container images and writable layers under this
-/// directory, so pool ephemeral storage is checked against its total capacity.
-const EPHEMERAL_STORAGE_DIR: &str = "var/lib";
+/// The machine runtime runs containers through the host's containerd, which
+/// keeps images and writable layers under its default root. Pool ephemeral
+/// storage is checked against the filesystem that holds this directory, so a
+/// separate disk mounted here is what gets measured.
+const EPHEMERAL_STORAGE_DIR: &str = "var/lib/containerd";
 /// `MemTotal` excludes memory the firmware and kernel reserve (including a
 /// crash kernel on some distributions), so a host sold as 8 GiB reports less.
 /// Accept hosts reporting at least this share of the pool's memory.
 const MEMORY_TOLERANCE_PERCENT: u64 = 90;
-/// Filesystem metadata and boot partitions reduce the reported usable total
-/// below the advertised disk size. Allow five percent for that overhead.
-const STORAGE_TOLERANCE_PERCENT: u64 = 95;
+/// Boot partitions and filesystem metadata make a disk report less than its
+/// provisioned size. Ubuntu 24.04 cloud images (AWS and GCP) keep about 1 GiB
+/// for /boot and EFI and lose about 3.5% to ext4, reporting 86.5% of a 10 GiB
+/// disk and 91.7% of a 20 GiB one. Debian 12 reports 97% and Amazon Linux 2023
+/// (xfs) 99%. Accept a filesystem of at least this share of the pool's size.
+const STORAGE_TOLERANCE_PERCENT: u64 = 85;
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
 #[derive(Args, Debug)]
@@ -400,7 +407,11 @@ struct HostFacts<'a> {
 struct HostCapacity {
     cpu_count: u32,
     memory_bytes: u64,
+    /// Where containerd keeps container storage (it may not exist yet).
     ephemeral_storage_path: PathBuf,
+    /// Mount point of the filesystem that holds `ephemeral_storage_path`.
+    ephemeral_storage_mount: PathBuf,
+    /// Total size of that filesystem.
     ephemeral_storage_total_bytes: u64,
     /// Whole disks, or why they could not be listed. Only needed when the
     /// capacity group requires an additional empty disk.
@@ -888,28 +899,75 @@ fn current_host_capacity(install_root: &Path) -> Result<HostCapacity> {
             reason: "Failed to read host memory".to_string(),
         })?;
     let ephemeral_storage_path = install_root.join(EPHEMERAL_STORAGE_DIR);
-    let measured_path = nearest_existing_ancestor(&ephemeral_storage_path);
-    let ephemeral_storage_total_bytes = fs2::total_space(&measured_path)
-        .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "statvfs".to_string(),
-            file_path: measured_path.display().to_string(),
-            reason: "Failed to measure total disk space".to_string(),
-        })?;
+    let (ephemeral_storage_mount, ephemeral_storage_total_bytes) =
+        measure_filesystem(&ephemeral_storage_path)?;
     Ok(HostCapacity {
         cpu_count,
         memory_bytes: parse_meminfo_total(&meminfo)?,
         ephemeral_storage_path,
+        ephemeral_storage_mount,
         ephemeral_storage_total_bytes,
         disks: list_disks().map_err(|error| error.message),
     })
 }
 
-fn nearest_existing_ancestor(path: &Path) -> PathBuf {
-    path.ancestors()
+/// The mount point and total size of the filesystem that holds `path`. A
+/// directory that does not exist yet will be created on the filesystem of its
+/// nearest existing ancestor, so that filesystem is measured.
+fn measure_filesystem(path: &Path) -> Result<(PathBuf, u64)> {
+    let failed = |operation: &str, measured: &Path, reason: &str| ErrorData::FileOperationFailed {
+        operation: operation.to_string(),
+        file_path: measured.display().to_string(),
+        reason: reason.to_string(),
+    };
+    let existing = path
+        .ancestors()
         .find(|candidate| candidate.exists())
         .unwrap_or(Path::new("/"))
-        .to_path_buf()
+        .canonicalize()
+        .into_alien_error()
+        .context(failed(
+            "canonicalize",
+            path,
+            "Failed to resolve container storage path",
+        ))?;
+    let device = |candidate: &Path| {
+        filesystem_device(candidate)
+            .into_alien_error()
+            .context(failed(
+                "stat",
+                candidate,
+                "Failed to read filesystem device",
+            ))
+    };
+    // The mount point is the highest ancestor still on the same device.
+    let filesystem = device(&existing)?;
+    let mut mount = existing.as_path();
+    for ancestor in existing.ancestors().skip(1) {
+        if device(ancestor)? != filesystem {
+            break;
+        }
+        mount = ancestor;
+    }
+    let total_bytes = fs2::total_space(&existing)
+        .into_alien_error()
+        .context(failed(
+            "statvfs",
+            &existing,
+            "Failed to measure total disk space",
+        ))?;
+    Ok((mount.to_path_buf(), total_bytes))
+}
+
+#[cfg(unix)]
+fn filesystem_device(path: &Path) -> std::io::Result<u64> {
+    std::fs::metadata(path).map(|metadata| metadata.dev())
+}
+
+/// Host capacity is read on Linux only.
+#[cfg(not(unix))]
+fn filesystem_device(_path: &Path) -> std::io::Result<u64> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
 
 fn parse_meminfo_total(meminfo: &str) -> Result<u64> {
@@ -1126,8 +1184,9 @@ fn check_capacity_group_requirements(
     let minimum_storage = requirements.ephemeral_storage_bytes / 100 * STORAGE_TOLERANCE_PERCENT;
     if capacity.ephemeral_storage_total_bytes < minimum_storage {
         shortfalls.push(format!(
-            "total space for container storage under {}: needs {} (at least {} after filesystem overhead), found {}",
+            "container storage at {} (filesystem mounted at {}): needs {} (at least {} after partition and filesystem overhead), found {}",
             capacity.ephemeral_storage_path.display(),
+            capacity.ephemeral_storage_mount.display(),
             format_gib(requirements.ephemeral_storage_bytes),
             format_gib(minimum_storage),
             format_gib(capacity.ephemeral_storage_total_bytes)
@@ -3835,7 +3894,8 @@ mod tests {
             capacity: Some(HostCapacity {
                 cpu_count,
                 memory_bytes: memory_gib * TEST_GIB,
-                ephemeral_storage_path: PathBuf::from("/var/lib"),
+                ephemeral_storage_path: PathBuf::from("/var/lib/containerd"),
+                ephemeral_storage_mount: PathBuf::from("/"),
                 ephemeral_storage_total_bytes: total_gib * TEST_GIB,
                 disks: Ok(disks),
             }),
@@ -3903,6 +3963,89 @@ mod tests {
             );
     }
 
+    /// Total bytes of the root filesystem on a fresh Ubuntu 24.04 AWS image
+    /// with a 20 GiB volume: /boot, EFI and ext4 metadata take 1.7 GiB.
+    const UBUNTU_2404_20_GIB_ROOT_BYTES: u64 = 19_682_557_952;
+
+    #[test]
+    fn capacity_check_accepts_a_root_disk_provisioned_at_the_group_size() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut host = host_with_capacity(dir.path(), 4, 16, 0, vec![root_disk()]);
+        host.capacity
+            .as_mut()
+            .unwrap()
+            .ephemeral_storage_total_bytes = UBUNTU_2404_20_GIB_ROOT_BYTES;
+
+        check_capacity_group_requirements(
+            "general",
+            &pool_requirements(None),
+            &host,
+            MachineArch::X64,
+        )
+        .expect("a 20 GiB disk should meet a 20 GiB group after boot and filesystem overhead");
+    }
+
+    #[test]
+    fn capacity_check_refuses_container_storage_below_the_overhead_allowance() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut host = host_with_capacity(dir.path(), 4, 16, 17, vec![root_disk()]);
+        check_capacity_group_requirements(
+            "general",
+            &pool_requirements(None),
+            &host,
+            MachineArch::X64,
+        )
+        .expect("85% of the group's storage is accepted");
+
+        // An 8 GiB root disk on Ubuntu 24.04 reports 6.7 GiB.
+        host.capacity
+            .as_mut()
+            .unwrap()
+            .ephemeral_storage_total_bytes = 7_194_337_280;
+        let error = check_capacity_group_requirements(
+            "general",
+            &pool_requirements(None),
+            &host,
+            MachineArch::X64,
+        )
+        .expect_err("an 8 GiB root disk should be refused for a 20 GiB group");
+        assert_eq!(
+            error.message,
+            "Validation failed for host: this host does not meet the requirements of capacity group 'general':\n  \
+             - container storage at /var/lib/containerd (filesystem mounted at /): needs 20 GiB \
+             (at least 17 GiB after partition and filesystem overhead), found 6.7 GiB"
+        );
+
+        host.capacity
+            .as_mut()
+            .unwrap()
+            .ephemeral_storage_total_bytes = 17 * TEST_GIB - TEST_GIB / 10;
+        check_capacity_group_requirements(
+            "general",
+            &pool_requirements(None),
+            &host,
+            MachineArch::X64,
+        )
+        .expect_err("16.9 GiB is below the allowance");
+    }
+
+    /// A separate filesystem mounted at or above the container storage path is
+    /// the one measured, even before the directory exists.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn container_storage_is_measured_on_the_filesystem_mounted_above_it() {
+        // /dev/shm is its own tmpfs mount on Linux hosts and containers.
+        let (mount, total_bytes) =
+            measure_filesystem(Path::new("/dev/shm/not-created-yet/containerd"))
+                .expect("measure /dev/shm");
+
+        assert_eq!(mount, PathBuf::from("/dev/shm"));
+        assert_eq!(
+            total_bytes,
+            fs2::total_space("/dev/shm").expect("statvfs /dev/shm")
+        );
+    }
+
     #[test]
     fn capacity_check_names_every_shortfall_and_what_was_found() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -3934,7 +4077,8 @@ mod tests {
              - CPU architecture: needs x86_64, found arm64\n  \
              - CPU: needs 4 cores, found 2\n  \
              - memory: needs 8 GiB (at least 7.2 GiB reported by the kernel), found 4 GiB\n  \
-             - total space for container storage under /var/lib: needs 20 GiB (at least 19 GiB after filesystem overhead), found 12 GiB\n  \
+             - container storage at /var/lib/containerd (filesystem mounted at /): needs 20 GiB \
+             (at least 17 GiB after partition and filesystem overhead), found 12 GiB\n  \
              - additional empty disk: needs a disk of at least 50 GiB with no partitions, no filesystem and no mounts; \
              found /dev/nvme0n1 (100 GiB, has partitions), /dev/nvme1n1 (100 GiB, has a filesystem signature (xfs)), \
              /dev/nvme2n1 (10 GiB, empty but too small)"

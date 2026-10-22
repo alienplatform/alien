@@ -285,6 +285,26 @@ pub fn aws_resource_policy_name(resource_id: &str, permission_set_id: &str) -> S
     )
 }
 
+/// Whether `name` is the inline policy of a resource grant of one of `permission_set_ids`, under
+/// the current or the previous prefix, on any resource.
+pub fn names_aws_resource_grant<'a>(
+    name: &str,
+    permission_set_ids: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    let Some(rest) = name
+        .strip_prefix(POLICY_NAME_PREFIX)
+        .or_else(|| name.strip_prefix(LEGACY_POLICY_NAME_PREFIX))
+        .and_then(|rest| rest.strip_prefix('-'))
+    else {
+        return false;
+    };
+    permission_set_ids.into_iter().any(|set_id| {
+        rest.strip_suffix(set_id.replace('/', "-").as_str())
+            .and_then(|resource| resource.strip_suffix('-'))
+            .is_some_and(|resource| !resource.is_empty())
+    })
+}
+
 /// Inline policy a resource attaches to the management role.
 pub fn aws_management_resource_policy_name(resource_id: &str, permission_set_id: &str) -> String {
     format!(

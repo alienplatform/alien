@@ -1309,18 +1309,21 @@ fn reimport_runtime_metadata(
         metadata
             .persisted_gate_answers
             .extend(imported_gate_answers);
-        metadata.setup_update_authorization = None;
-        return Ok(metadata);
-    }
-    metadata.initial_setup_authority = alien_core::InitialSetupAuthority::ImportedHandoff;
-    // The route refused conflicting answers before calling this, so what
-    // remains is bookkeeping: answers for inputs a new release introduces are
-    // recorded, and recorded answers are never overwritten.
-    for (input_id, imported_answer) in &imported_gate_answers {
-        metadata
-            .persisted_gate_answers
-            .entry(input_id.clone())
-            .or_insert(*imported_answer);
+        if req.base_platform.unwrap_or(req.platform) != Platform::Azure {
+            metadata.setup_update_authorization = None;
+            return Ok(metadata);
+        }
+    } else {
+        metadata.initial_setup_authority = alien_core::InitialSetupAuthority::ImportedHandoff;
+        // The route refused conflicting answers before calling this, so what
+        // remains is bookkeeping: answers for inputs a new release introduces are
+        // recorded, and recorded answers are never overwritten.
+        for (input_id, imported_answer) in &imported_gate_answers {
+            metadata
+                .persisted_gate_answers
+                .entry(input_id.clone())
+                .or_insert(*imported_answer);
+        }
     }
     let baseline_stack = metadata.prepared_stack.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::ImportedDeploymentConflict {
@@ -1330,8 +1333,19 @@ fn reimport_runtime_metadata(
             ),
         })
     })?;
-    let baseline_frozen_digest = baseline_stack.setup_update_digest();
-    let target_frozen_digest = prepared_stack.setup_update_digest();
+    let setup_digest = |stack: &Stack| {
+        if metadata.automatic_setup && req.base_platform.unwrap_or(req.platform) == Platform::Azure
+        {
+            alien_permissions::generators::azure_setup_owned::azure_setup_update_digest(stack)
+                .context(ErrorData::InternalError {
+                    message: "Could not compare the registered Azure setup".into(),
+                })
+        } else {
+            Ok(stack.setup_update_digest())
+        }
+    };
+    let baseline_frozen_digest = setup_digest(baseline_stack)?;
+    let target_frozen_digest = setup_digest(prepared_stack)?;
 
     metadata.setup_update_authorization =
         (baseline_frozen_digest != target_frozen_digest).then(|| SetupUpdateAuthorization {

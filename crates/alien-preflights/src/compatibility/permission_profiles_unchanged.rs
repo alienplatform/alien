@@ -1,4 +1,4 @@
-use crate::compatibility::narrowing::{management_narrowed, profile_narrowed};
+use crate::compatibility::narrowing::management_narrowed;
 use crate::error::Result;
 use crate::mutations::management_permission_profile::{
     GATE_DERIVED_GLOBAL_SUFFIXES, KEY_AVAILABILITY_PERMISSION_SET_ID,
@@ -12,8 +12,10 @@ use std::collections::HashSet;
 
 /// Validates that permission profiles in the stack haven't been modified.
 ///
-/// Removing grants is allowed: the installed identities stay broader than the
-/// new stack until the next setup (see [`crate::compatibility::narrowing`]).
+/// A workload profile change, including one that only removes grants or the whole profile,
+/// requires setup: setup owns the identities and rewrites their grants. Management permissions
+/// may still narrow without setup: the update needs the broader installed grants to delete what
+/// the removed ones covered (see [`crate::compatibility::narrowing`]).
 ///
 /// Permission profiles define the security model of the stack and changing them
 /// during updates could lead to security vulnerabilities or privilege escalation.
@@ -360,22 +362,14 @@ fn check_permission_profiles(
     let old_profiles = &old_stack.permissions.profiles;
     let new_profiles = &new_stack.permissions.profiles;
 
-    // A removed profile only narrows: its identity is setup-owned and stays
-    // installed until the next setup, so the update can still delete what it
-    // covered.
+    // A removed profile's identity is setup-owned: setup removes it.
     for (profile_name, _) in old_profiles {
         if !new_profiles.contains_key(profile_name) {
-            if allow_narrowing {
-                warnings.push(format!(
-                    "Permission profile '{}' was removed; the next setup removes its identity",
-                    profile_name
-                ));
-            } else {
-                errors.push(format!(
-                    "Permission profile '{}' was removed from the stack",
-                    profile_name
-                ));
-            }
+            errors.push(format!(
+                "Permission profile '{}' was removed from the stack. Rerun setup with the \
+                 updated stack to remove its identity",
+                profile_name
+            ));
         }
     }
 
@@ -383,9 +377,7 @@ fn check_permission_profiles(
     for (profile_name, new_profile) in new_profiles {
         if let Some(old_profile) = old_profiles.get(profile_name) {
             // Profile exists in both - check if it was modified
-            if profiles_differ_outside_gates(old_profile, new_profile, &gated)
-                && !(allow_narrowing && profile_narrowed(old_profile, new_profile))
-            {
+            if profiles_differ_outside_gates(old_profile, new_profile, &gated) {
                 errors.push(format!(
                     "Permission profile '{}' was modified",
                     profile_name
@@ -1096,10 +1088,10 @@ mod tests {
         assert!(result.errors[0].contains("Management permissions"));
     }
 
-    /// Removing grants defers to the next setup: the installed identities stay
-    /// broader, and the update still needs them to delete what they covered.
+    /// Management grants may narrow before setup: the update still needs the installed ones to
+    /// delete what they covered. A workload profile that is removed or loses grants needs setup.
     #[tokio::test]
-    async fn removing_grants_does_not_require_setup() {
+    async fn only_management_narrows_without_setup() {
         let kv_stack = |grants: &[&str]| {
             Stack::new("s".to_string())
                 .management(ManagementPermissions::Extend(
@@ -1132,8 +1124,19 @@ mod tests {
             .check(&with_profile, &without_profile)
             .await
             .expect("check should run");
-        assert!(removed.success, "{:?}", removed.errors);
-        assert!(removed.warnings[0].contains("was removed"));
+        assert!(!removed.success);
+        assert!(removed.errors[0].contains("'worker' was removed"), "{:?}", removed.errors);
+
+        let mut narrowed_profiles = IndexMap::new();
+        narrowed_profiles.insert("worker".to_string(), PermissionProfile::new());
+        let mut narrowed_profile = Stack::new("s".to_string()).build();
+        narrowed_profile.permissions.profiles = narrowed_profiles;
+        let narrowed = PermissionProfilesUnchangedCheck
+            .check(&with_profile, &narrowed_profile)
+            .await
+            .expect("check should run");
+        assert!(!narrowed.success);
+        assert!(narrowed.errors[0].contains("'worker' was modified"), "{:?}", narrowed.errors);
     }
 
     #[tokio::test]

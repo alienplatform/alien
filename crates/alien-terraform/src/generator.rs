@@ -1360,18 +1360,29 @@ fn apply_azure_resource_group_dependency(
 
     let dependency = expr::traversal(["azurerm_resource_group", resource_group_label]);
     for (resource_id, entry) in stack.resources() {
-        if resource_id == resource_group_id
-            || entry.config.resource_type().as_ref() == "service_activation"
-        {
+        if entry.config.resource_type().as_ref() == "service_activation" {
             continue;
         }
         let Some(fragment) = per_resource.get_mut(resource_id) else {
             continue;
         };
         for resource in &mut fragment.resource_blocks {
+            // The group's own fragment also holds the stack-wide setup role definitions
+            // (see `emit_azure_setup_resource_role_definitions`), which are scoped to it.
+            if resource_id == resource_group_id
+                && is_resource_block(resource, "azurerm_resource_group", resource_group_label)
+            {
+                continue;
+            }
             upsert_depends_on(resource, std::slice::from_ref(&dependency));
         }
     }
+}
+
+fn is_resource_block(resource: &Block, provider_type: &str, label: &str) -> bool {
+    resource.identifier.as_str() == "resource"
+        && resource.labels.first().map(|value| value.as_str()) == Some(provider_type)
+        && resource.labels.get(1).map(|value| value.as_str()) == Some(label)
 }
 
 fn resource_address(resource: &Block) -> Option<Expression> {
@@ -1890,7 +1901,11 @@ fn variables_body(
     )));
     blocks.push(nested(variable_block(
         "token",
-        "Install token from the application setup page. This is the same token used by the deploy CLI --token flag.",
+        if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
+            AUTOMATIC_TOKEN_DESCRIPTION
+        } else {
+            "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+        },
         None,
         true,
     )));
@@ -4509,6 +4524,7 @@ fn readme_md(
         registration
             .is_some()
             .then_some(deployment_name_default.as_str()),
+        stack_settings.setup_management == alien_core::SetupManagement::Automatic,
     )];
     let registered = registration.is_some();
     let setup_only = stack_settings.setup_management != alien_core::SetupManagement::Automatic
@@ -4628,12 +4644,21 @@ Use your organization's normal backend and approval workflow. A typical local re
     )
 }
 
-fn readme_required_inputs(deployment_name_default: Option<&str>) -> String {
+/// An automatic module grants ongoing infrastructure management. Registration accepts it only
+/// with the token of an own-environment installation; a customer setup link token is refused.
+const AUTOMATIC_TOKEN_DESCRIPTION: &str = "Install token of your own environment's installation. This module grants ongoing infrastructure management, so a customer setup link token cannot register it.";
+
+fn readme_required_inputs(deployment_name_default: Option<&str>, automatic: bool) -> String {
+    let token = if automatic {
+        "install token from your own environment's setup instructions. This module grants ongoing infrastructure management, so only that installation's token can register it: a customer setup link token is refused. Install a customer's environment with the customer setup module instead."
+    } else {
+        "install token from the setup page."
+    };
     match deployment_name_default {
         Some(default) => format!(
-            "Required:\n\n- `token`: install token from the setup page.\n- `management_url`: management endpoint this deployment registers with. The generated installation snippet supplies it.\n- `name`: optional deployment name: lowercase letters, numbers, and single hyphens. Defaults to `{default}`."
+            "Required:\n\n- `token`: {token}\n- `management_url`: management endpoint this deployment registers with. The generated installation snippet supplies it.\n- `name`: optional deployment name: lowercase letters, numbers, and single hyphens. Defaults to `{default}`."
         ),
-        None => "Required:\n\n- `token`: install token from the setup page.\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.".to_string(),
+        None => format!("Required:\n\n- `token`: {token}\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens."),
     }
 }
 

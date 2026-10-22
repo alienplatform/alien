@@ -1,6 +1,8 @@
 //! Stack compatibility checks that validate compatibility between old and new stack configurations.
 //! These checks run during stack updates to prevent breaking changes.
 
+#[cfg(feature = "runtime-checks")]
+pub(crate) mod azure_setup;
 pub mod frozen_resources_unchanged;
 pub mod narrowing;
 pub mod permission_profiles_unchanged;

@@ -141,6 +141,23 @@ pub fn terraform_test(files: &LinterFiles) -> LinterRun {
     })
 }
 
+/// Run `terraform init -backend=false` and `terraform graph`. On success, stdout holds
+/// Terraform's resource dependency graph in DOT form.
+pub fn terraform_graph(files: &LinterFiles) -> LinterRun {
+    run_when_enabled("terraform graph", || {
+        let dir = write_files_to_temp_dir(files)?;
+        let init = run_command(
+            "terraform",
+            [OsStr::new("init"), OsStr::new("-backend=false")],
+            Some(dir.path()),
+        )?;
+        if !matches!(init.status, LinterStatus::Passed) {
+            return Ok(init);
+        }
+        run_command("terraform", [OsStr::new("graph")], Some(dir.path()))
+    })
+}
+
 /// Run `terraform init -backend=false` and `terraform plan` with explicit
 /// variables. This is useful for input validation rules that `validate` parses
 /// but does not evaluate.

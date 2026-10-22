@@ -339,9 +339,9 @@ fn sanitize_role_label(input: &str) -> String {
 fn vault_permission_owners<'a>(
     ctx: &'a EmitContext<'_>,
 ) -> Vec<(String, Vec<&'a PermissionSetReference>)> {
-    if ctx.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
-        return Vec::new();
-    }
+    // Automatic packages create the application identities too, so setup assigns their roles
+    // on its own vaults. A runtime-made assignment of a setup role would outlive the vault and
+    // block the role's deletion when the package is destroyed.
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let refs = resource_permission_refs(profile, ctx.resource_id);

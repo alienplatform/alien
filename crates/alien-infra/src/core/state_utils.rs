@@ -1,6 +1,5 @@
 use alien_core::{
-    ownership_policy_for_resource_type, ResourceLifecycle, ResourceStatus, StackResourceState,
-    StackState,
+    Platform, ResourceLifecycle, ResourceStatus, SetupManagement, StackResourceState, StackState,
 };
 
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -320,9 +319,11 @@ pub trait StackStateExt {
     ) -> Result<Vec<String>>;
 
     /// Same as [`StackStateExt::prepare_for_destroy`], limited to resources
-    /// owned by runtime cleanup: Live resources and Frozen resources with
-    /// explicit runtime cleanup before teardown.
-    fn prepare_for_runtime_cleanup_destroy(&mut self) -> Result<Vec<String>>;
+    /// runtime cleanup removes (see [`alien_core::removed_by_runtime_cleanup`]).
+    fn prepare_for_runtime_cleanup_destroy(
+        &mut self,
+        management: SetupManagement,
+    ) -> Result<Vec<String>>;
 }
 
 impl StackStateExt for StackState {
@@ -410,10 +411,14 @@ impl StackStateExt for StackState {
         )
     }
 
-    fn prepare_for_runtime_cleanup_destroy(&mut self) -> Result<Vec<String>> {
+    fn prepare_for_runtime_cleanup_destroy(
+        &mut self,
+        management: SetupManagement,
+    ) -> Result<Vec<String>> {
+        let platform = self.platform;
         prepare_for_destroy_matching(
             self,
-            is_runtime_cleanup_resource,
+            |resource_state| is_runtime_cleanup_resource(resource_state, management, platform),
             DestroyPreparationMode::Delete,
         )
     }
@@ -440,17 +445,17 @@ fn resource_lifecycle(
     })
 }
 
-fn is_runtime_cleanup_resource(resource_state: &StackResourceState) -> Result<bool> {
-    if resource_lifecycle(resource_id_from_state(resource_state), resource_state)?
-        == ResourceLifecycle::Live
-    {
-        return Ok(true);
-    }
-
-    Ok(
-        ownership_policy_for_resource_type(resource_state.config.resource_type().as_ref())
-            .has_runtime_cleanup_before_teardown(),
-    )
+fn is_runtime_cleanup_resource(
+    resource_state: &StackResourceState,
+    management: SetupManagement,
+    platform: Platform,
+) -> Result<bool> {
+    Ok(alien_core::removed_by_runtime_cleanup(
+        resource_state.config.resource_type().as_ref(),
+        resource_lifecycle(resource_id_from_state(resource_state), resource_state)?,
+        management,
+        platform,
+    ))
 }
 
 fn prepare_for_destroy_matching(
@@ -797,7 +802,9 @@ mod tests {
         assert!(deleted.error.is_none());
         assert!(deleted.outputs.is_none());
 
-        let prepared = stack_state.prepare_for_runtime_cleanup_destroy().unwrap();
+        let prepared = stack_state
+            .prepare_for_runtime_cleanup_destroy(SetupManagement::Manual)
+            .unwrap();
 
         assert_eq!(prepared, vec!["test-function"]);
         let deleted_resource = stack_state.resources.get("test-function").unwrap();

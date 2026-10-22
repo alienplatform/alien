@@ -1,9 +1,9 @@
-//! Setup-owned permission changes an ordinary update may defer.
+//! Whether a permission change only removes grants.
 //!
-//! A change that only removes grants leaves the installed identities broader
-//! than the new stack needs, never narrower. The update can run with them, and
-//! must: it still has to delete the resources and values the removed grants
-//! covered. The next setup trims the identities to the new stack.
+//! Management permissions may narrow without setup: the installed management
+//! identity stays broader than the new stack needs, and the update must run with
+//! it to delete the resources the removed grants covered. The next setup trims it.
+//! Workload profiles and service accounts never narrow without setup.
 
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{Resource, ServiceAccount, Stack};

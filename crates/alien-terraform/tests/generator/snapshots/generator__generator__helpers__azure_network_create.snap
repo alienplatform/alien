@@ -190,6 +190,7 @@ locals {
         applicationGatewaySubnetId   = azurerm_subnet.default_network_appgw.id
         applicationGatewaySubnetName = azurerm_subnet.default_network_appgw.name
         privateEndpointSubnetName    = azurerm_subnet.default_network_pe.name
+        containerAppsSubnetName      = azurerm_subnet.default_network_container_apps.name
         natGatewayId                 = azurerm_nat_gateway.default_network_nat.id
         networkSecurityGroupId       = azurerm_network_security_group.default_network_workload.id
         egressPublicIps = [

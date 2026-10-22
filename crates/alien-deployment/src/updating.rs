@@ -379,23 +379,30 @@ pub async fn handle_updating(
     // in the execution target while allowing explicitly runtime-managed frozen
     // resources (ComputeCluster capacity and, on AWS, a same-architecture machine
     // type) to reconcile changed configuration through their management
-    // controller.
-    // A frozen service account that only lost permissions keeps its installed
-    // definition too: setup trims it, and until then the update needs the
-    // broader grants to delete what the removed ones covered.
+    // controller. A frozen service account that only lost permissions keeps its
+    // installed definition too.
+    // Only what is still installed is kept. Once setup has deleted an omitted
+    // resource or rewritten a narrowed account (an imported setup re-imports the
+    // result), keeping the old definition would make the update recreate the
+    // resource or rewrite the account without setup authority.
     if let Some(installed_stack) = runtime_metadata.prepared_stack.as_ref() {
         for (resource_id, entry) in installed_stack.resources() {
             if entry.lifecycle != ResourceLifecycle::Frozen {
                 continue;
             }
+            let installed_state = stack_state
+                .resources
+                .get(resource_id)
+                .filter(|state| state.status != ResourceStatus::Deleted);
             let keep_installed = match target_stack.resources.get(resource_id) {
-                None => true,
+                None => installed_state.is_some(),
                 Some(target) => {
-                    alien_preflights::compatibility::narrowing::service_account_narrowed(
-                        &target_stack,
-                        &entry.config,
-                        &target.config,
-                    )
+                    installed_state.is_some_and(|state| state.config == entry.config)
+                        && alien_preflights::compatibility::narrowing::service_account_narrowed(
+                            &target_stack,
+                            &entry.config,
+                            &target.config,
+                        )
                 }
             };
             if keep_installed {

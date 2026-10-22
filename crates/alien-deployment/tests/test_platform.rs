@@ -7,8 +7,8 @@ use alien_bindings::Vault as _;
 use alien_core::{
     ClientConfig, ComputeCluster, ComputeClusterOutputs, DeploymentConfig, DeploymentState,
     DeploymentStatus, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
-    Platform, ReleaseInfo, ResourceEntry, ResourceLifecycle, RuntimeMetadata,
-    SetupUpdateAuthorization, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
+    Platform, ReleaseInfo, ResourceEntry, ResourceLifecycle, RuntimeMetadata, SetupManagement,
+    SetupUpdateAuthorization, Stack, StackSettings, StackState, Storage, Vault, Worker, WorkerCode,
 };
 use alien_infra::{register_registry_extension, LocalComputeClusterController};
 use chrono::Utc;
@@ -1221,7 +1221,10 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
 }
 
 #[tokio::test]
-async fn consecutive_updates_cannot_delete_an_omitted_frozen_resource() {
+/// A release that omits a setup-owned resource needs setup, exactly like one that adds one: the
+/// update stops for setup before changing anything, instead of completing with the resource and
+/// its grants left behind.
+async fn an_update_omitting_a_frozen_resource_waits_for_setup() {
     let config = create_test_config("hash_v1", false);
     let mut state = run_to_completion(
         create_initial_state(create_test_stack("test-stack", "test-function")),
@@ -1269,45 +1272,114 @@ async fn consecutive_updates_cannot_delete_an_omitted_frozen_resource() {
         .resources
         .insert("setup-storage".to_string(), frozen_state);
 
-    for release_number in [2, 3] {
-        let mut target = create_test_stack("test-stack", "test-function");
-        target.permissions = state
-            .current_release
-            .as_ref()
-            .expect("running deployment has current release")
-            .stack
-            .permissions
-            .clone();
-        start_update(
-            &mut state,
-            ReleaseInfo {
-                release_id: Some(format!("rel_v{release_number}")),
-                version: Some(format!("{release_number}.0.0")),
-                description: None,
-                // Both later releases omit the setup-owned frozen resource.
-                stack: target,
+    let mut target = create_test_stack("test-stack", "test-function");
+    target.permissions = state
+        .current_release
+        .as_ref()
+        .expect("running deployment has current release")
+        .stack
+        .permissions
+        .clone();
+    start_update(
+        &mut state,
+        ReleaseInfo {
+            release_id: Some("rel_v2".to_string()),
+            version: Some("2.0.0".to_string()),
+            description: None,
+            // The release omits the setup-owned frozen resource.
+            stack: target,
+        },
+    );
+    // The update step refuses before changing anything; the runner records this as
+    // UpdateFailed and the control plane shows the update as blocked for setup.
+    let error = alien_deployment::step(state.clone(), config, ClientConfig::Test, None)
+        .await
+        .expect_err("the update needs setup");
+    let mut codes = vec![error.code.clone()];
+    let mut source = error.source.as_deref();
+    while let Some(inner) = source {
+        codes.push(inner.code.clone());
+        source = inner.source.as_deref();
+    }
+    assert!(
+        codes.iter().any(|code| code == "DEPLOYMENT_SETUP_REQUIRED"),
+        "{codes:?}"
+    );
+    assert!(
+        format!("{error:?}").contains("'setup-storage' was removed"),
+        "{error:?}"
+    );
+}
+
+/// Once setup has deleted an omitted setup-owned resource (an imported setup re-imports state
+/// without it), the update that follows must not bring it back from the installed baseline.
+#[tokio::test]
+async fn an_update_after_setup_removed_a_frozen_resource_does_not_recreate_it() {
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "test-function")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    let metadata = state
+        .runtime_metadata
+        .as_mut()
+        .expect("running deployment has runtime metadata");
+    let desired = metadata
+        .prepared_stack
+        .clone()
+        .expect("running deployment has prepared stack");
+    // The installed baseline still lists the resource; setup already deleted it, so the
+    // re-imported state no longer holds it.
+    metadata
+        .prepared_stack
+        .as_mut()
+        .expect("prepared stack")
+        .resources
+        .insert(
+            "setup-storage".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(Storage::new("setup-storage".to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
             },
         );
-        state = run_to_completion(state, config.clone()).await;
-        assert_eq!(state.status, DeploymentStatus::Running);
-        assert_eq!(
-            state
-                .stack_state
-                .as_ref()
-                .and_then(|stack| stack.resources.get("setup-storage"))
-                .map(|resource| resource.status),
-            Some(alien_core::ResourceStatus::Running),
-            "release {release_number} must retain the installed frozen resource"
-        );
-        assert!(
-            state
-                .runtime_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.prepared_stack.as_ref())
-                .is_some_and(|stack| stack.resources.contains_key("setup-storage")),
-            "release {release_number} must retain frozen ownership in the promoted baseline"
-        );
-    }
+    metadata.pending_prepared_stack = Some(desired.clone());
+    metadata.pending_prepared_release_id = Some("rel_v2".to_string());
+    state.target_release = Some(ReleaseInfo {
+        release_id: Some("rel_v2".to_string()),
+        version: Some("2.0.0".to_string()),
+        description: None,
+        stack: create_test_stack("test-stack", "test-function"),
+    });
+    state.status = DeploymentStatus::Updating;
+
+    let state = run_to_completion(state, config).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(
+        !state
+            .stack_state
+            .as_ref()
+            .expect("stack state")
+            .resources
+            .contains_key("setup-storage"),
+        "the update recreated a resource setup deleted"
+    );
+    assert!(
+        !state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.prepared_stack.as_ref())
+            .expect("prepared stack")
+            .resources
+            .contains_key("setup-storage"),
+        "the new baseline still lists a resource setup deleted"
+    );
 }
 
 #[tokio::test]
@@ -1766,6 +1838,114 @@ async fn test_delete_runtime_cleanup_reaches_teardown_required() {
     // Runtime delete should succeed and stop at setup-owned teardown handoff.
     state = run_until_status(state, config, &[DeploymentStatus::TeardownRequired]).await;
     assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+}
+
+/// A running automatic-setup deployment with Frozen storage the runtime created and a Live
+/// vault the package owns.
+async fn running_automatic_setup_with_package_vault() -> (DeploymentState, DeploymentConfig) {
+    let mut stack = create_test_stack_with_storage("automatic", "data", "api");
+    stack.resources.insert(
+        "app-secrets".to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(Vault::new("app-secrets".to_string()).build()),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
+    let mut config = create_test_config("hash_v1", false);
+    config.stack_settings.setup_management = SetupManagement::Automatic;
+    let mut state = create_initial_state(stack);
+
+    state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+    (state, config)
+}
+
+async fn delete_until_setup_teardown(
+    mut state: DeploymentState,
+    config: DeploymentConfig,
+) -> DeploymentState {
+    start_delete(&mut state);
+    let state = run_until_status(
+        state,
+        config,
+        &[
+            DeploymentStatus::TeardownRequired,
+            DeploymentStatus::Deleted,
+        ],
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+    state
+}
+
+/// An automatic setup package creates only its scaffolding types, vaults among them. The
+/// runtime created the Frozen storage, and the package's teardown cannot see it, so runtime
+/// cleanup must delete it before handing off. A vault belongs to the package even when Live, so
+/// it stays for that teardown: deleting it here makes the package's destroy fail on a missing
+/// resource.
+#[tokio::test]
+async fn automatic_setup_runtime_cleanup_removes_only_what_the_runtime_created() {
+    let _vault = test_vault_env().await;
+    let (state, config) = running_automatic_setup_with_package_vault().await;
+    let state = delete_until_setup_teardown(state, config).await;
+
+    let resources = &state.stack_state.expect("stack state").resources;
+    for runtime_created in ["data", "api"] {
+        assert_eq!(
+            resources[runtime_created].status,
+            alien_core::ResourceStatus::Deleted,
+            "runtime cleanup must delete '{runtime_created}'"
+        );
+    }
+    assert_eq!(
+        resources["app-secrets"].status,
+        alien_core::ResourceStatus::Running,
+        "the package's vault stays for setup teardown"
+    );
+    // Outside Azure the package does not create service accounts. The package's secrets vault
+    // still depends on this one, so runtime cleanup keeps it rather than wait forever.
+    assert_eq!(
+        resources["default-sa"].status,
+        alien_core::ResourceStatus::Running
+    );
+}
+
+/// Destroy preparation moves a failed runtime-created account to Deleting, but the executor
+/// cannot delete it while the package's vault still depends on it. Runtime cleanup must hand
+/// off to setup teardown instead of waiting for that delete forever.
+#[tokio::test]
+async fn automatic_setup_runtime_cleanup_hands_off_a_failed_account_the_package_needs() {
+    let _vault = test_vault_env().await;
+    let (mut state, config) = running_automatic_setup_with_package_vault().await;
+    let account = state
+        .stack_state
+        .as_mut()
+        .expect("stack state")
+        .resources
+        .get_mut("default-sa")
+        .expect("default service account");
+    let mut checkpoint = account.internal_state.clone().expect("account controller");
+    checkpoint["state"] = serde_json::json!("updateConfig");
+    account.status = alien_core::ResourceStatus::UpdateFailed;
+    account.internal_state = Some(checkpoint.clone());
+    account.last_failed_state = Some(checkpoint);
+    state.status = DeploymentStatus::UpdateFailed;
+
+    let state = delete_until_setup_teardown(state, config).await;
+
+    let resources = &state.stack_state.expect("stack state").resources;
+    assert_eq!(
+        resources["app-secrets"].status,
+        alien_core::ResourceStatus::Running
+    );
+    assert_eq!(
+        resources["default-sa"].status,
+        alien_core::ResourceStatus::Deleting,
+        "the account waits for the vault, which setup teardown removes"
+    );
 }
 
 /// A denied delete must not finish the deployment's teardown. The resource stays recorded as
