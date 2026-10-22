@@ -149,8 +149,11 @@ powers that can change IAM or deploy code using a workload identity:
   management role to the management identity, and a declared application role
   to one of the deployment's own workload identities. The built-in Key Vault and
   Service Bus roles the controllers assign are listed the same way. It cannot give itself any other
-  role, assign a built-in such as Owner, or grant a role to an identity it
-  created. A condition cannot constrain scope, so a declared role can be
+  role or assign a built-in such as Owner. When setup creates the workload
+  identities (direct setup and manual packages), it also cannot grant a role to
+  an identity it created. An automatic package leaves the workload identities to
+  the runtime, so there a declared application role can go to any identity
+  except management. A condition cannot constrain scope, so a declared role can be
   assigned at the resource group rather than on one resource. Azure treats a
   conditioned role-assignment write as restricted, so management also cannot
   switch a Key Vault from RBAC to access policies. It keeps vault configuration

@@ -32,7 +32,7 @@ use alien_permissions::{
         dedupe_azure_role_bindings, management_roles_by_scope,
         protected_management_assignable_scopes, AzureGrantPlan, AzureManagementScopeKind,
         AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator, AzureRuntimeRoles,
-        AzureScopedCustomRole,
+        AzureScopedCustomRole, AzureWorkloadPrincipals,
     },
     get_permission_set, BindingTarget, PermissionContext,
 };
@@ -2475,9 +2475,11 @@ fn role_assignment_conditions(
     management_principal_id: &str,
     workload_principal_ids: &BTreeSet<String>,
 ) -> Vec<String> {
+    // A direct setup creates every Frozen resource, the application's identities included, in
+    // either management mode, so their principal ids are known here.
     azure_role_assignment_allowlist_conditions(
         management_principal_id,
-        workload_principal_ids,
+        AzureWorkloadPrincipals::Listed(workload_principal_ids),
         &runtime_roles.management_role_ids(ctx.resource_prefix),
         &runtime_roles.workload_role_ids(ctx.resource_prefix),
     )
