@@ -114,3 +114,13 @@ For before/after qualification, keep the base fixture and checker identical whil
 assembling once with the parent builder/agent and once with the changed
 builder/agent. A before run must reach the checker and fail its assertions; a
 failed deployment or readiness probe does not establish the intended regression.
+
+Azure boot qualification uses the Azure assembler and a binding with `agent: true`.
+The provider publishes the agent port and reads its boot credential through the
+native file API; the fixture's first user command goes through the agent protocol.
+Use the identical unassembled fixture with a legacy binding as the native control.
+That control must reach the inspector and fail the capability/exec checks, rather
+than fail session creation. Root, absent-USER and non-root variants are all required.
+The metadata-enabled fixture checks boot, child and exec identities without
+printing response bodies. Preserve each report and session journal, then verify
+absence through the provider inventory before removing the disk images and group.
