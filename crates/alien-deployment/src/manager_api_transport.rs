@@ -589,8 +589,8 @@ pub async fn acquire_setup_delete_deployment(
 
         reject_non_retryable_acquire_reason(deployment_id, &response.not_acquired, true)?;
 
-        let status = match client.get_deployment().id(deployment_id).send().await {
-            Ok(resp) => resp.into_inner().status,
+        let deployment = match client.get_deployment().id(deployment_id).send().await {
+            Ok(resp) => resp.into_inner(),
             Err(err) => {
                 let message = err.to_string();
                 if message.contains("404") || message.contains("not found") {
@@ -604,15 +604,25 @@ pub async fn acquire_setup_delete_deployment(
             }
         };
 
-        match status.as_str() {
+        match deployment.status.as_str() {
             "teardown-required" | "teardown-failed" => {}
             "deleted" => return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted),
             "delete-failed" => {
-                return Err(AlienError::new(alien_error::GenericError {
+                let failed = alien_error::GenericError {
                     message:
                         "Runtime deletion failed before setup teardown became available. Retry destroy after resolving the runtime cleanup failure."
                             .to_string(),
-                }));
+                };
+                // Name what is left: each resource whose delete failed, with its error.
+                let left = deployment
+                    .stack_state
+                    .and_then(|state| serde_json::from_value::<alien_core::StackState>(state).ok())
+                    .as_ref()
+                    .and_then(crate::helpers::create_aggregated_error_from_stack_state);
+                return Err(match left {
+                    Some(left) => left.context(failed),
+                    None => AlienError::new(failed),
+                });
             }
             _ => {}
         }
