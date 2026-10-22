@@ -8,8 +8,8 @@
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
     AzureContainerAppsEnvironment, AzureResourceGroup, AzureStorageAccount, Key,
-    ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
-    ResourceLifecycle, ServiceAccount, SetupConfigurationProfile, SetupManagement, Stack,
+    ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteBindings,
+    RemoteStackManagement, ResourceLifecycle, ServiceAccount, SetupConfigurationProfile, SetupManagement, Stack,
     StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
@@ -287,8 +287,9 @@ fn azure_management_grant_at_another_resource_group_gets_its_own_role() {
             .as_array_mut()
             .expect("network/heartbeat has Azure grants")
         {
-            entry["binding"]["stack"]["scope"] =
-                serde_json::json!(format!("/subscriptions/${{subscriptionId}}/resourceGroups/{group}"));
+            entry["binding"]["stack"]["scope"] = serde_json::json!(format!(
+                "/subscriptions/${{subscriptionId}}/resourceGroups/{group}"
+            ));
         }
         serde_json::from_value::<alien_core::permissions::PermissionSet>(value)
             .expect("permission set deserializes")
@@ -672,6 +673,94 @@ fn azure_setup_with_a_live_worker_validates_for_both_management_modes() {
             )
             .unwrap_or_else(|error| panic!("render {context}: {error}"));
             assert_terraform_valid(&module, &context);
+        }
+    }
+}
+
+#[test]
+fn azure_automatic_setup_registers_declared_identities() {
+    let stack = Stack::new("automatic-identities".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global(["worker/provision", "service-account/provision"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string())
+                .stack_permission_set(
+                    alien_permissions::get_permission_set("queue/data-write")
+                        .unwrap()
+                        .clone(),
+                )
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(dispatch_worker("api"), ResourceLifecycle::Live)
+        .build();
+    let registry = alien_terraform::TfRegistry::built_in();
+    for management in [
+        alien_core::SetupManagement::Manual,
+        alien_core::SetupManagement::Automatic,
+    ] {
+        for profile in [
+            alien_core::SetupConfigurationProfile::Standard,
+            alien_core::SetupConfigurationProfile::Advanced,
+        ] {
+            let module = alien_terraform::generate_product_terraform_module_with_profile(
+                &stack,
+                TerraformTarget::Azure,
+                alien_terraform::TerraformOptions {
+                    registry: &registry,
+                    display_name: None,
+                    stack_settings: StackSettings {
+                        setup_management: management,
+                        ..Default::default()
+                    },
+                    registration: None,
+                    helm_install: None,
+                    supported_aws_regions: Vec::new(),
+                },
+                false,
+                profile,
+            )
+            .unwrap();
+            assert_terraform_valid(
+                &module,
+                &format!("Azure identities {management:?} {profile:?}"),
+            );
+            if management == alien_core::SetupManagement::Automatic
+                && profile == alien_core::SetupConfigurationProfile::Standard
+            {
+                let mut files = super::helpers::linter_files(&module);
+                files.insert("tests/identities.tftest.hcl".to_string(), r#"
+mock_provider "azurerm" {}
+variables {
+  name = "test-identities"
+  token = "test-token"
+  azure_subscription_id = "00000000-0000-0000-0000-000000000000"
+  azure_resource_group_name = "example-rg"
+  azure_managing_tenant_id = "00000000-0000-0000-0000-000000000001"
+  azure_oidc_issuer = "https://issuer.example.test"
+  azure_oidc_subject = "management"
+}
+run "register_setup_identities" {
+  command = plan
+  assert {
+    condition = toset([for resource in local.deployment_resources : resource.id]) == toset(["default-resource-group", "management", "execution-sa", "access"])
+    error_message = "Automatic registration must include both setup identities and omit the Live worker."
+  }
+}
+"#.to_string());
+                super::helpers::test_utils::terraform_test(&files)
+                    .assert_ok("Azure automatic identity registration");
+            }
         }
     }
 }

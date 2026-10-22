@@ -59,9 +59,8 @@ pub fn validate_automatic_setup_resources(
     Ok(())
 }
 
-/// Automatic packages emit only access and secret storage, so every other resource is
-/// created by its runtime controller. Return the resources that controller cannot create
-/// as declared.
+/// Return resources whose declarations cannot be created by their runtime
+/// controllers when omitted from automatic setup.
 fn automatic_setup_unsupported_resource(
     entry: &ResourceEntry,
     platform: Platform,
@@ -101,10 +100,16 @@ pub enum SetupConfigurationProfile {
 /// Automatic packages install access and secret storage, then let the runtime
 /// create application infrastructure. Cloud API activation and Azure's containing
 /// resource group must exist before their management identity can be installed.
-pub fn emits_package_scaffolding(entry: &ResourceEntry, management: SetupManagement) -> bool {
+/// Azure also installs application identities so management can name their
+/// principals in the role-assignment conditions.
+pub fn emits_package_scaffolding(
+    entry: &ResourceEntry,
+    management: SetupManagement,
+    platform: Platform,
+) -> bool {
     let resource_type = entry.config.resource_type();
     if management == SetupManagement::Automatic {
-        is_automatic_setup_package_resource_type(resource_type.as_ref())
+        is_automatic_setup_package_resource_type(resource_type.as_ref(), platform)
     } else {
         ownership_policy_for_resource_type(resource_type.as_ref())
             .emits_setup_scaffolding(entry.lifecycle)
@@ -114,9 +119,10 @@ pub fn emits_package_scaffolding(entry: &ResourceEntry, management: SetupManagem
 /// Resources whose state is replaced by an automatic setup package import.
 /// Application resources are managed through the installed identity and must
 /// retain their controller state when that package is reimported.
-pub fn is_automatic_setup_package_resource_type(resource_type: &str) -> bool {
+pub fn is_automatic_setup_package_resource_type(resource_type: &str, platform: Platform) -> bool {
     matches!(
         resource_type,
         "remote-stack-management" | "vault" | "azure_resource_group" | "service_activation"
-    )
+    ) || (platform == Platform::Azure
+        && matches!(resource_type, "service-account" | "resource-access"))
 }
