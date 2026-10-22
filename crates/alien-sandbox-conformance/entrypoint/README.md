@@ -6,7 +6,9 @@ that image through the backend's normal Alien build and deployment path. The
 
 The image supervisor records its identity and all five capability sets, tries a
 real tmpfs mount and a loopback MTU change, and starts a uid-2000 child when root.
-Each successful mutation is undone. The MTU operation uses an existing interface:
+Each successful mutation is undone. MTU updates use RTM_NEWLINK because gVisor
+does not implement SIOCSIFMTU. The no_new_privs check uses prctl because gVisor
+omits the corresponding procfs field. The MTU operation uses an existing interface:
 a kernel without the dummy-link driver can reject `ip link add ... type dummy`
 even when NET_ADMIN is available, which is not evidence of a capability denial.
 
@@ -56,3 +58,10 @@ the external-boundary and provider-configuration evidence.
 Run the local HTTP response controls with `python3 -m unittest test_metadata` in
 this directory. These controls verify that credential responses fail without
 leaking their contents; they do not replace live cloud qualification.
+
+A GCP Agent Platform native-image baseline on 2026-10-22, with internet access
+enabled, passed this checker: root USER retained exactly `0xa80405fb`, the child
+ran as uid 2000, and both mount and RTM_NEWLINK were refused with EPERM. Root,
+uid 2000, and capless uid 60000 obtained no metadata credentials: IPv4 requests
+timed out, IPv6 had no route, and `metadata.google.internal` did not resolve.
+This baseline used a probe exec adapter; it does not qualify Alien packaging.

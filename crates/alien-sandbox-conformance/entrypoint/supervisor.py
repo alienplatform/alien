@@ -17,13 +17,18 @@ ROOT = Path("/tmp/alien-entrypoint")
 
 def identity():
     fields = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines())
+    # gVisor omits NoNewPrivs from procfs, but implements the authoritative prctl.
+    libc = ctypes.CDLL(None, use_errno=True)
+    no_new_privs = libc.prctl(39, 0, 0, 0, 0)  # PR_GET_NO_NEW_PRIVS
+    if no_new_privs < 0:
+        raise OSError(ctypes.get_errno(), "cannot read no_new_privs")
     return {
         "uid": os.getuid(),
         "gid": os.getgid(),
         "pid": os.getpid(),
         "capabilities": {key: int(fields[key].strip(), 16) for key in
                          ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")},
-        "noNewPrivs": int(fields["NoNewPrivs"]),
+        "noNewPrivs": no_new_privs,
     }
 
 
@@ -38,19 +43,35 @@ def mount_probe():
     return {"allowed": result == 0, "errno": error}
 
 
+def set_loopback_mtu(mtu):
+    # RTM_NEWLINK is capability-checked on gVisor too; SIOCSIFMTU is unsupported there.
+    with socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE) as sock:
+        sock.settimeout(2)
+        info = struct.pack("BxHiII", socket.AF_UNSPEC, 0, socket.if_nametoindex("lo"), 0, 0)
+        attribute = struct.pack("HHI", 8, 4, mtu)  # IFLA_MTU
+        header = struct.pack("IHHII", 16 + len(info) + len(attribute), 16, 5, 1, 0)
+        sock.send(header + info + attribute)  # NLM_F_REQUEST | NLM_F_ACK
+        reply = sock.recv(4096)
+        assert len(reply) >= 20, "truncated netlink acknowledgement"
+        length, kind, flags, sequence, pid = struct.unpack_from("IHHII", reply)
+        assert kind == 2 and sequence == 1, "unexpected netlink acknowledgement"
+        error = struct.unpack_from("i", reply, 16)[0]
+        if error:
+            raise OSError(-error, "loopback MTU change refused")
+
+
 def net_admin_probe():
     # An existing interface avoids confusing an unsupported device type with EPERM.
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         interface = struct.pack("16sI20x", b"lo", 0)
         previous = fcntl.ioctl(sock, 0x8921, interface)  # SIOCGIFMTU
         old_mtu = struct.unpack("16sI20x", previous)[1]
-        change = struct.pack("16sI20x", b"lo", old_mtu - 1)
-        try:
-            fcntl.ioctl(sock, 0x8922, change)  # SIOCSIFMTU
-        except OSError as error:
-            return {"allowed": False, "errno": error.errno}
-        fcntl.ioctl(sock, 0x8922, previous)
-        return {"allowed": True, "errno": 0}
+    try:
+        set_loopback_mtu(old_mtu - 1)
+    except OSError as error:
+        return {"allowed": False, "errno": error.errno}
+    set_loopback_mtu(old_mtu)
+    return {"allowed": True, "errno": 0}
 
 
 def main():
