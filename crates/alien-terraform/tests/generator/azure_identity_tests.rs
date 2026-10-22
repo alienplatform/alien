@@ -5,7 +5,7 @@
 //! `AzureRuntimePermissionsGenerator` integration path; RSM covers the
 //! cross-tenant federated-identity-credential shape.
 
-use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
+use super::helpers::{assert_terraform_valid, gate_input, normalized, render, snapshot_module};
 use alien_core::{
     AzureContainerAppsEnvironment, AzureResourceGroup, AzureStorageAccount, Key,
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteBindings,
@@ -761,6 +761,96 @@ run "register_setup_identities" {
                 super::helpers::test_utils::terraform_test(&files)
                     .assert_ok("Azure automatic identity registration");
             }
+        }
+    }
+}
+
+/// An automatic package creates the service account a stack-wide (`"*"`) grant belongs to, with
+/// the custom role that grant needs and its assignment, and management's role-assignment
+/// condition names that identity's principal. Management cannot write role definitions, so the
+/// runtime could not create the role itself. Also on AKS, where the same identity backs the
+/// workload's Kubernetes service account.
+#[test]
+fn azure_automatic_setup_owns_stack_wide_roles_and_names_the_identity() {
+    let vault_write = alien_permissions::get_permission_set("vault/data-write")
+        .expect("vault/data-write permission set")
+        .clone();
+    let stack = Stack::new("automatic-stack-roles".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().global(["vault/data-write"]),
+        )
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            ServiceAccount::new("execution-sa".to_string())
+                .stack_permission_set(vault_write)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(dispatch_worker("api"), ResourceLifecycle::Live)
+        .build();
+    let registry = TfRegistry::built_in();
+    for target in [TerraformTarget::Azure, TerraformTarget::Aks] {
+        for profile in [
+            SetupConfigurationProfile::Standard,
+            SetupConfigurationProfile::Advanced,
+        ] {
+            let context = format!("{target:?} Automatic {profile:?}");
+            let module = generate_product_terraform_module_with_profile(
+                &stack,
+                target,
+                TerraformOptions {
+                    display_name: None,
+                    registry: &registry,
+                    stack_settings: StackSettings {
+                        setup_management: SetupManagement::Automatic,
+                        ..StackSettings::default()
+                    },
+                    registration: None,
+                    helm_install: None,
+                    supported_aws_regions: Vec::new(),
+                },
+                false,
+                profile,
+            )
+            .unwrap_or_else(|error| panic!("render {context}: {error}"));
+            assert_terraform_valid(&module, &context);
+
+            let rendered = normalized(&module);
+            let blocks: Vec<&str> = rendered.split("resource \"").skip(1).collect();
+            let label_of = |block: &str| block.split('"').nth(2).unwrap_or_default().to_string();
+            let role = blocks
+                .iter()
+                .find(|block| {
+                    block.starts_with("azurerm_role_definition\"")
+                        && block.contains("Microsoft.KeyVault/vaults/secrets/setSecret/action")
+                })
+                .map(|block| label_of(block))
+                .unwrap_or_else(|| panic!("{context}: no role grants the stack-wide secret write"));
+            assert!(
+                blocks.iter().any(|block| {
+                    block.starts_with("azurerm_role_assignment\"")
+                        && block.contains(&format!(
+                            "role_definition_id = azurerm_role_definition.{role}.role_definition_resource_id"
+                        ))
+                        && block.contains(
+                            "principal_id = azurerm_user_assigned_identity.execution_sa.principal_id",
+                        )
+                }),
+                "{context}: setup must assign role {role} to the service account"
+            );
+            assert!(
+                blocks.iter().any(|block| {
+                    block.starts_with("azurerm_role_assignment\"")
+                        && block.contains("condition =")
+                        && block.contains("${azurerm_user_assigned_identity.execution_sa.principal_id}")
+                }),
+                "{context}: management's role-assignment condition must name the service account"
+            );
         }
     }
 }
