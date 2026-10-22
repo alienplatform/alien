@@ -1,0 +1,1 @@
+{"type":"object","description":"An additional block device a machine must provide with no partitions,\nno filesystem signature, and no mounts, so the workload can format it.","required":["sizeBytes"],"properties":{"sizeBytes":{"type":"integer","format":"int64","description":"Minimum device size in bytes.","minimum":0}},"x-readme-ref-name":"DataDiskRequirement"}

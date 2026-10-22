@@ -46,6 +46,29 @@ describe("Stack builder validation", () => {
     expect(compute.config.failureDomainSpread).toEqual({ nested: 2 })
   })
 
+  it("carries a pool's additional empty disk into the built profile", () => {
+    const compute = new alien.ComputeCluster("runtime")
+      .pool("general", {
+        requirements: { cpu: 2, memory: "4Gi", dataDisk: { size: "50Gi" } },
+        scale: { type: "fixed", machines: 1 },
+      })
+      .build()
+
+    expect(compute.config.capacityGroups[0]?.profile?.dataDisk).toEqual({
+      sizeBytes: 50 * 1024 ** 3,
+    })
+  })
+
+  it("rejects an additional disk without a positive size", () => {
+    const pool = (size: string) => () =>
+      new alien.ComputeCluster("runtime").pool("general", {
+        requirements: { cpu: 2, memory: "4Gi", dataDisk: { size } },
+        scale: { type: "fixed", machines: 1 },
+      })
+    expect(pool("0Gi")).toThrow(/dataDisk.size must be greater than zero: 0Gi/)
+    expect(pool("fifty")).toThrow(/Invalid memory\/storage quantity: fifty/)
+  })
+
   it("rejects invalid compute-pool failure-domain spreads", () => {
     expect(() =>
       new alien.ComputeCluster("runtime").pool("servers", {

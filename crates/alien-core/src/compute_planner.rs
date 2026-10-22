@@ -971,6 +971,7 @@ fn requirements_to_profile(requirements: &WorkloadRequirements) -> MachineProfil
         ephemeral_storage_bytes: requirements.max_ephemeral_storage_bytes,
         architecture: requirements.architecture,
         gpu: requirements.gpu.clone(),
+        data_disk: None,
     }
 }
 
@@ -2027,6 +2028,7 @@ mod tests {
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
                     architecture: Some(Architecture::X86_64),
                     gpu: None,
+                    data_disk: None,
                 }),
                 min_size: 2,
                 max_size: 5,
@@ -2126,6 +2128,7 @@ mod tests {
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
                     architecture: Some(Architecture::X86_64),
                     gpu: None,
+                    data_disk: None,
                 }),
                 min_size: 2,
                 max_size: 2,

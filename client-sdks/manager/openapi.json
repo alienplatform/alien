@@ -10992,6 +10992,13 @@
               }
             ]
           },
+          "publicSubdomain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subdomain to request under the generated domain, used by stores that assign one."
+          },
           "resourcePrefix": {
             "type": [
               "string",
