@@ -95,6 +95,15 @@ pub enum ErrorData {
     )]
     JsonError { operation: String, reason: String },
 
+    /// This binary carries an embedded configuration that can't be read.
+    #[error(
+        code = "EMBEDDED_CONFIG_UNREADABLE",
+        message = "Cannot read the configuration embedded in '{file_path}': {reason}. Without it this CLI would run unbranded against the default API. Make the file readable by this user (for example `chmod 0755 '{file_path}'`) or reinstall it.",
+        retryable = "false",
+        internal = "false"
+    )]
+    EmbeddedConfigUnreadable { file_path: String, reason: String },
+
     #[error(
         code = "GENERIC_ERROR",
         message = "{message}",
