@@ -620,6 +620,25 @@ pub trait DeploymentStore: Send + Sync {
         filter: &DeploymentFilter,
     ) -> Result<Vec<DeploymentRecord>, AlienError>;
 
+    /// IDs of the deployments matching `filter`.
+    ///
+    /// The deployment loop narrows acquisition to these when the store cannot exclude IDs itself.
+    /// A store that can read IDs without decoding the rest of every record should, so that one
+    /// record with stack or runtime state the current types reject does not stop the loop for
+    /// every other deployment. Acquisition decodes each record it hands out on its own.
+    async fn list_deployment_ids(
+        &self,
+        caller: &crate::auth::Subject,
+        filter: &DeploymentFilter,
+    ) -> Result<Vec<String>, AlienError> {
+        Ok(self
+            .list_deployments(caller, filter)
+            .await?
+            .into_iter()
+            .map(|record| record.id)
+            .collect())
+    }
+
     /// Whether a deployment other than `excluding_deployment_id`, not deleted, runs in the GCP
     /// project numbered `project_number` using the same Alien `project_id`, or any Alien project
     /// when `project_id` is `None` (a repository every project shared).
