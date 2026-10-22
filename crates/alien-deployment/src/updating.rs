@@ -49,6 +49,21 @@ fn same_permission_grants(left: &Stack, right: &Stack) -> bool {
     profiles_equal && management_equal
 }
 
+fn requires_cleanup_setup(installed: &Stack, desired: &Stack) -> bool {
+    !same_permission_grants(installed, desired)
+        || installed.resources.iter().any(|(id, entry)| {
+            entry.lifecycle == ResourceLifecycle::Frozen
+                && desired.resources.get(id).is_none_or(|target| {
+                    entry.config != target.config
+                        && alien_preflights::compatibility::narrowing::service_account_narrowed(
+                            desired,
+                            &entry.config,
+                            &target.config,
+                        )
+                })
+        })
+}
+
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
     platform == Platform::Machines
         && stack_state.resources.values().any(|resource| {
@@ -350,6 +365,14 @@ pub async fn handle_update_pending(
     // Store the mutated stack in runtime_metadata for future compatibility checks
     let pending_prepared_release_id = target_release_id.map(str::to_string);
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
+    // Fence older readers before saving the installed/desired cleanup representation.
+    if runtime_metadata
+        .prepared_stack
+        .as_ref()
+        .is_some_and(|installed| requires_cleanup_setup(installed, &mutated_stack))
+    {
+        next.protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;
+    }
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
     runtime_metadata.pending_prepared_release_id = pending_prepared_release_id;
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
@@ -458,10 +481,10 @@ pub async fn handle_updating(
     // A frozen service account that only lost permissions keeps its installed
     // definition too: setup trims it, and until then the update needs the
     // broader grants to delete what the removed ones covered.
-    let mut requires_cleanup_setup = runtime_metadata
+    let cleanup_setup_required = runtime_metadata
         .prepared_stack
         .as_ref()
-        .is_some_and(|installed| !same_permission_grants(installed, &target_stack));
+        .is_some_and(|installed| requires_cleanup_setup(installed, &target_stack));
     if let Some(installed_stack) = runtime_metadata.prepared_stack.as_ref() {
         for (resource_id, entry) in installed_stack.resources() {
             if entry.lifecycle != ResourceLifecycle::Frozen {
@@ -478,17 +501,13 @@ pub async fn handle_updating(
                 }
             };
             if keep_installed {
-                requires_cleanup_setup |= target_stack
-                    .resources
-                    .get(resource_id)
-                    .is_none_or(|desired| desired.config != entry.config);
                 target_stack
                     .resources
                     .insert(resource_id.clone(), entry.clone());
             }
         }
     }
-    if requires_cleanup_setup {
+    if cleanup_setup_required {
         // Only deferred setup changes need the installed/desired representation.
         // Ordinary code updates keep their existing reader compatibility.
         next.protocol_version = alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION;

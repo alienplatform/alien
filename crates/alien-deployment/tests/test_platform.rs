@@ -4560,3 +4560,45 @@ async fn image_only_update_preserves_reader_compatibility() {
     assert_eq!(state.status, DeploymentStatus::Running);
     assert_eq!(state.protocol_version, 1);
 }
+
+#[tokio::test]
+async fn setup_cleanup_is_fenced_before_the_prepared_update_is_checkpointed() {
+    let _vault = test_vault_env().await;
+    for remove_resource in [true, false] {
+        let mut installed =
+            create_test_stack_with_storage("test-stack", "old-storage", "test-function");
+        if !remove_resource {
+            installed.permissions.profiles.insert(
+                "default".into(),
+                alien_core::PermissionProfile::new().global(["storage/data-read"]),
+            );
+        }
+        let config = create_test_config("hash_v1", false);
+        let mut state = run_to_completion(create_initial_state(installed), config.clone()).await;
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert_eq!(state.protocol_version, 1);
+        let desired = if remove_resource {
+            create_test_stack("test-stack", "test-function")
+        } else {
+            create_test_stack_with_storage("test-stack", "old-storage", "test-function")
+        };
+        start_update(&mut state, release_of("rel-v2", desired));
+        let prepared = alien_deployment::step(state, config, ClientConfig::Test, None)
+            .await
+            .unwrap()
+            .state;
+        assert_eq!(prepared.status, DeploymentStatus::Updating);
+        let saved: DeploymentState =
+            serde_json::from_slice(&serde_json::to_vec(&prepared).unwrap()).unwrap();
+        assert_eq!(
+            saved.protocol_version,
+            alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION,
+            "an older actor must be excluded at the first saved update checkpoint"
+        );
+        assert_eq!(
+            saved.stack_state.as_ref().unwrap().resources["old-storage"].status,
+            alien_core::ResourceStatus::Running,
+            "preparation has not deleted the installed resource"
+        );
+    }
+}
