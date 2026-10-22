@@ -637,7 +637,7 @@ pub async fn acquire_setup_delete_deployment(
         info!(
             attempt = attempt,
             max = MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS,
-            status = %status,
+            status = %deployment.status,
             "Waiting for runtime cleanup handoff before setup teardown"
         );
         tokio::time::sleep(std::time::Duration::from_secs(ACQUIRE_RETRY_DELAY_SECS)).await;
