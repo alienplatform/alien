@@ -92,6 +92,7 @@ fs2 = "0.4"
 
 [dev-dependencies]
 alien-bindings = { workspace = true }
+httpmock = { workspace = true }
 alien-infra = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }
 temp-env = { workspace = true }

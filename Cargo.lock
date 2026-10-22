@@ -1203,6 +1203,7 @@ dependencies = [
  "futures",
  "hostname 0.4.2",
  "http 1.5.0",
+ "httpmock",
  "k8s-openapi",
  "libc",
  "lognorm",

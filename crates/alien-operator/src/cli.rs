@@ -20,12 +20,17 @@ use alien_core::{
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::{types::HelmRelease, SdkResultExt as _};
+use alien_manager_api::{
+    types::{DeleteDeploymentAction, DeleteDeploymentRequest, HelmRelease},
+    SdkResultExt as _,
+};
 use clap::{Parser, ValueEnum};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser, Debug)]
@@ -44,10 +49,24 @@ The Operator:
                   argv is visible in `ps` / `/proc/<pid>/cmdline`."
 )]
 struct OperatorCliArgs {
+    #[command(subcommand)]
+    command: Option<OperatorCommand>,
     #[command(flatten)]
     args: Args,
     #[command(flatten)]
     operator_image: OperatorImageArgs,
+}
+
+/// Without a subcommand the Operator runs.
+#[derive(clap::Subcommand, Debug, PartialEq, Eq)]
+enum OperatorCommand {
+    /// Ask the manager to forget this installation's deployment, because it is
+    /// being uninstalled. The Helm chart runs this from a pre-delete hook after
+    /// the Operator has stopped. It reads the Operator's own settings and state.
+    /// It always exits 0: a manager that cannot be reached must not block the
+    /// uninstall. The deployment page lets the customer remove the record once
+    /// heartbeats stop.
+    ReportUninstall,
 }
 
 #[derive(Parser, Debug)]
@@ -290,6 +309,8 @@ pub type OperationsSyncHandlerHook = fn(
     operations: Option<&alien_core::OperationsConfig>,
 ) -> Option<std::sync::Arc<dyn OperationsSyncHandler>>;
 
+const DEFAULT_DATA_DIR: &str = "/var/lib/operator";
+
 const NOOP_INIT: InitHook = || {};
 const NOOP_DEBUG_LOOP_HOOK: DebugLoopHook = || None;
 const NOOP_ACCESS_REQUEST_LOOP_HOOK: AccessRequestSyncLoopHook = || None;
@@ -345,9 +366,15 @@ pub fn cli_main_with_all_loops(
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let OperatorCliArgs {
+        command,
         args,
         operator_image,
     } = OperatorCliArgs::parse();
+
+    if command == Some(OperatorCommand::ReportUninstall) {
+        report_uninstall_main(args);
+        return;
+    }
 
     #[cfg(windows)]
     if args.service {
@@ -452,7 +479,7 @@ async fn run_operator_cli(
 
     let data_dir = args
         .data_dir
-        .unwrap_or_else(|| "/var/lib/operator".to_string());
+        .unwrap_or_else(|| DEFAULT_DATA_DIR.to_string());
     let data_dir_path = PathBuf::from(&data_dir);
 
     let _lock = InstanceLock::acquire(&data_dir_path)
@@ -795,6 +822,154 @@ async fn run_operator_cli(
     Ok(())
 }
 
+/// What the manager did with an uninstall report.
+#[derive(Debug, PartialEq, Eq)]
+enum UninstallReport {
+    Forgotten {
+        deployment_id: String,
+    },
+    /// The manager no longer has the deployment.
+    AlreadyGone {
+        deployment_id: String,
+    },
+    /// The Operator never registered a deployment.
+    NotRegistered,
+}
+
+fn report_uninstall_main(args: Args) {
+    setup_tracing(args.verbose);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+
+    match rt.block_on(report_uninstall(args)) {
+        Ok(UninstallReport::Forgotten { deployment_id }) => {
+            info!("The manager forgot deployment {deployment_id}");
+        }
+        Ok(UninstallReport::AlreadyGone { deployment_id }) => {
+            info!("The manager no longer has deployment {deployment_id}");
+        }
+        Ok(UninstallReport::NotRegistered) => {
+            info!("This installation never registered a deployment; nothing to report");
+        }
+        // Still exit 0: Helm stops the uninstall when a pre-delete hook fails.
+        Err(error) => error!(
+            "Could not tell the manager about the uninstall: {error}. The deployment page \
+             can remove the deployment once its heartbeats stop."
+        ),
+    }
+}
+
+async fn report_uninstall(args: Args) -> Result<UninstallReport> {
+    let packaged_config = load_operator_package_config()?;
+    let data_dir = args
+        .data_dir
+        .unwrap_or_else(|| DEFAULT_DATA_DIR.to_string());
+
+    // A running Operator could register again or replace its credential.
+    let _lock = InstanceLock::acquire(&PathBuf::from(&data_dir))
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "The Operator must stop before the uninstall is reported (lock in '{data_dir}')"
+            ),
+        })?;
+
+    let encryption_key = load_encryption_key(
+        args.encryption_key_file
+            .or_else(|| env_path("OPERATOR_ENCRYPTION_KEY_FILE"))
+            .as_deref(),
+    )
+    .await?;
+    let stored = crate::db::OperatorDb::read_stored_identity(&data_dir, &encryption_key).await?;
+    let configured_deployment_id = args.deployment_id.or_else(|| {
+        packaged_config
+            .as_ref()
+            .and_then(|c| c.deployment_id.clone())
+    });
+    let deployment_id = match select_startup_deployment_id(
+        stored.deployment_id,
+        configured_deployment_id,
+        &data_dir,
+    )? {
+        StartupDeploymentId::Stored(id) | StartupDeploymentId::Configured(id) => id,
+        StartupDeploymentId::Initialize => return Ok(UninstallReport::NotRegistered),
+    };
+
+    // Same precedence as startup: the credential the manager returned on
+    // registration replaces the configured setup credential.
+    let token = match stored.sync_token {
+        Some(token) => token,
+        None => load_sync_token(args.sync_token_file.as_deref())
+            .await?
+            .or_else(|| packaged_config.as_ref().and_then(|c| c.token.clone()))
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!("No credential for deployment {deployment_id}"),
+                })
+            })?,
+    };
+    let sync_url = args
+        .sync_url
+        .or_else(|| packaged_config.as_ref().and_then(|c| c.manager_url.clone()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "No manager URL to report the uninstall to".to_string(),
+            })
+        })?
+        .parse::<url::Url>()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Invalid sync URL".to_string(),
+        })?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {token}"))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Invalid token format".to_string(),
+            })?,
+    );
+    headers.insert(USER_AGENT, HeaderValue::from_static("operator"));
+    // Bounded so an unreachable manager doesn't hold up the uninstall.
+    let http_client = reqwest::Client::builder()
+        .default_headers(headers)
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create HTTP client".to_string(),
+        })?;
+    let client = alien_manager_api::Client::new_with_client(
+        sync_url.as_str().trim_end_matches('/'),
+        http_client,
+    );
+
+    let response = client
+        .delete_deployment()
+        .id(&deployment_id)
+        .body(DeleteDeploymentRequest {
+            action: DeleteDeploymentAction::Forget,
+        })
+        .send()
+        .await
+        .into_sdk_error()
+        .await;
+    match response {
+        Ok(_) => Ok(UninstallReport::Forgotten { deployment_id }),
+        Err(error) if error.code == "DEPLOYMENT_NOT_FOUND" => {
+            Ok(UninstallReport::AlreadyGone { deployment_id })
+        }
+        Err(error) => Err(error).context(ErrorData::SyncFailed {
+            message: format!("forgetting deployment {deployment_id} failed"),
+        }),
+    }
+}
+
 // This only excludes setup/admin credentials before initialize can create an identity.
 // Both manager token formats still require authenticated exact-deployment verification.
 fn has_deployment_token_prefix(token: &str) -> bool {
@@ -1023,6 +1198,7 @@ mod windows_entry {
         let OperatorCliArgs {
             args,
             operator_image,
+            ..
         } = OperatorCliArgs::parse();
         let cancel = CancellationToken::new();
         let cancel_for_stop = cancel.clone();
@@ -1493,14 +1669,19 @@ mod tests {
     use super::{
         has_deployment_token_prefix, is_secret_file_mode_allowed, load_operator_package_config,
         observe_only_initial_state, parse_operator_image_report, parse_operator_operations,
-        persist_initialized_manager_identity, run_operator_cli, select_startup_deployment_id, Args,
-        InitialDesiredReleaseArg, OperatorCliArgs, StartupDeploymentId,
-        NOOP_ACCESS_REQUEST_LOOP_HOOK, NOOP_DEBUG_LOOP_HOOK, NOOP_INIT,
-        NOOP_OPERATIONS_EXEC_LOOP_HOOK, NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
+        persist_initialized_manager_identity, report_uninstall, run_operator_cli,
+        select_startup_deployment_id, Args, InitialDesiredReleaseArg, OperatorCliArgs,
+        OperatorCommand, StartupDeploymentId, UninstallReport, NOOP_ACCESS_REQUEST_LOOP_HOOK,
+        NOOP_DEBUG_LOOP_HOOK, NOOP_INIT, NOOP_OPERATIONS_EXEC_LOOP_HOOK,
+        NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
     };
+    use crate::InstanceLock;
     use alien_core::{sync::OperatorImageSource, DeploymentStatus, Platform};
     use clap::Parser;
+    use httpmock::{Method::POST, MockServer};
+    use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
 
     #[test]
     fn rotation_accepts_both_deployment_token_formats_but_excludes_setup_and_admin_tokens() {
@@ -1765,6 +1946,7 @@ mod tests {
         let OperatorCliArgs {
             args,
             operator_image,
+            ..
         } = OperatorCliArgs::try_parse_from([
             "operator",
             "--platform",
@@ -1885,6 +2067,192 @@ mod tests {
         assert!(parse_operator_image_report(&args.operator_image)
             .unwrap()
             .is_none());
+    }
+
+    const TEST_ENCRYPTION_KEY: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// Parses `report-uninstall` the way the Helm hook runs it: the Operator's
+    /// own settings, with the chart's setup credential in the token file.
+    fn report_uninstall_args(dir: &Path, manager_url: &str) -> Args {
+        let secret = |name: &str, value: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, value).expect("write test secret");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("restrict test secret");
+            path.to_str().expect("UTF-8 secret path").to_string()
+        };
+        let encryption_key_file = secret("encryption-key", TEST_ENCRYPTION_KEY);
+        let sync_token_file = secret("sync-token", "ax_dg_setup");
+        let data_dir = dir.join("data");
+        let parsed = OperatorCliArgs::try_parse_from([
+            "operator",
+            "--platform",
+            "kubernetes",
+            "--sync-url",
+            manager_url,
+            "--sync-token-file",
+            &sync_token_file,
+            "--data-dir",
+            data_dir.to_str().expect("UTF-8 data directory"),
+            "--encryption-key-file",
+            &encryption_key_file,
+            "report-uninstall",
+        ])
+        .expect("parse report-uninstall arguments");
+        assert_eq!(parsed.command, Some(OperatorCommand::ReportUninstall));
+        parsed.args
+    }
+
+    async fn register(dir: &Path, deployment_id: &str, token: &str) {
+        let data_dir = dir.join("data");
+        let db = crate::db::OperatorDb::new(
+            data_dir.to_str().expect("UTF-8 data directory"),
+            TEST_ENCRYPTION_KEY,
+        )
+        .await
+        .expect("open operator database");
+        db.set_deployment_id(deployment_id)
+            .await
+            .expect("store deployment ID");
+        db.set_sync_token(token)
+            .await
+            .expect("store deployment credential");
+    }
+
+    #[tokio::test]
+    async fn uninstall_report_forgets_the_deployment_with_its_stored_credential() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        register(temp.path(), "dep_a", "ax_deploy_a").await;
+        let manager = MockServer::start_async().await;
+        let forget = manager
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_a/delete")
+                    .header("authorization", "Bearer ax_deploy_a")
+                    .json_body(json!({ "action": "forget" }));
+                then.status(202).json_body(json!({
+                    "action": "forget",
+                    "cleanupRequired": false,
+                    "message": "Deployment deletion accepted",
+                }));
+            })
+            .await;
+
+        let report = report_uninstall(report_uninstall_args(temp.path(), &manager.base_url()))
+            .await
+            .expect("report the uninstall");
+
+        assert_eq!(
+            report,
+            UninstallReport::Forgotten {
+                deployment_id: "dep_a".to_string()
+            }
+        );
+        forget.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn uninstall_report_accepts_a_deployment_the_manager_already_removed() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        register(temp.path(), "dep_a", "ax_deploy_a").await;
+        let manager = MockServer::start_async().await;
+        let forget = manager
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/deployments/dep_a/delete");
+                then.status(404).json_body(json!({
+                    "code": "DEPLOYMENT_NOT_FOUND",
+                    "message": "Deployment 'dep_a' not found",
+                    "retryable": false,
+                    "internal": false,
+                    "httpStatusCode": 404,
+                }));
+            })
+            .await;
+
+        let report = report_uninstall(report_uninstall_args(temp.path(), &manager.base_url()))
+            .await
+            .expect("a removed deployment is not a failure");
+
+        assert_eq!(
+            report,
+            UninstallReport::AlreadyGone {
+                deployment_id: "dep_a".to_string()
+            }
+        );
+        forget.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn uninstall_report_fails_when_the_manager_refuses() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        register(temp.path(), "dep_a", "ax_deploy_a").await;
+        let manager = MockServer::start_async().await;
+        let forget = manager
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/deployments/dep_a/delete");
+                then.status(403).json_body(json!({
+                    "code": "FORBIDDEN",
+                    "message": "Cannot delete deployment",
+                    "retryable": false,
+                    "internal": false,
+                    "httpStatusCode": 403,
+                }));
+            })
+            .await;
+
+        let error = report_uninstall(report_uninstall_args(temp.path(), &manager.base_url()))
+            .await
+            .expect_err("a refused report must surface");
+
+        assert_eq!(error.code, "SYNC_FAILED");
+        assert!(error.to_string().contains("dep_a"), "{error}");
+        forget.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn uninstall_report_sends_nothing_for_an_installation_that_never_registered() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let manager = MockServer::start_async().await;
+        let any_request = manager
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(500);
+            })
+            .await;
+
+        let report = report_uninstall(report_uninstall_args(temp.path(), &manager.base_url()))
+            .await
+            .expect("nothing to report is not a failure");
+
+        assert_eq!(report, UninstallReport::NotRegistered);
+        any_request.assert_hits_async(0).await;
+        assert!(
+            !temp.path().join("data").join("operator.db").exists(),
+            "reading the identity must not create a database"
+        );
+    }
+
+    #[tokio::test]
+    async fn uninstall_report_refuses_while_the_operator_runs() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        register(temp.path(), "dep_a", "ax_deploy_a").await;
+        let _running =
+            InstanceLock::acquire(&temp.path().join("data")).expect("hold the Operator's lock");
+        let manager = MockServer::start_async().await;
+        let any_request = manager
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(202);
+            })
+            .await;
+
+        let error = report_uninstall(report_uninstall_args(temp.path(), &manager.base_url()))
+            .await
+            .expect_err("a running Operator must block the report");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        any_request.assert_hits_async(0).await;
     }
 }
 
