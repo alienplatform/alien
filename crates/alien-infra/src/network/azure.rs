@@ -25,8 +25,8 @@ use alien_azure_clients::azure::models::{
         PublicIpAddressSkuName,
     },
     virtual_network::{
-        AddressSpace, SubResource as VnetSubResource, Subnet, SubnetPropertiesFormat,
-        VirtualNetwork, VirtualNetworkPropertiesFormat,
+        AddressSpace, Delegation, ServiceDelegationPropertiesFormat, SubResource as VnetSubResource,
+        Subnet, SubnetPropertiesFormat, VirtualNetwork, VirtualNetworkPropertiesFormat,
     },
 };
 use alien_azure_clients::long_running_operation::OperationResult;
@@ -135,6 +135,12 @@ pub struct AzureNetworkController {
     /// shared with a Private Endpoint.
     #[serde(default)]
     pub private_endpoint_subnet_name: Option<String>,
+    /// Subnet delegated to `Microsoft.App/environments` for the Container Apps environment.
+    /// Azure refuses an undelegated environment subnet, and a delegated subnet cannot hold the
+    /// VM NICs that use the private subnet, so the environment gets its own. `None` for a
+    /// BYO-VNet, whose private subnet is the environment's, and for networks created before it.
+    #[serde(default)]
+    pub container_apps_subnet_name: Option<String>,
     pub(crate) nat_gateway_name: Option<String>,
     pub nat_gateway_id: Option<String>,
     /// Static addresses used by this network's NAT gateway.
@@ -189,6 +195,10 @@ impl AzureNetworkController {
         format!("{}-{}-pe-subnet", resource_prefix, network_id)
     }
 
+    fn get_container_apps_subnet_name(&self, resource_prefix: &str, network_id: &str) -> String {
+        format!("{}-{}-container-apps-subnet", resource_prefix, network_id)
+    }
+
     fn get_nat_gateway_name(&self, resource_prefix: &str, network_id: &str) -> String {
         format!("{}-{}-nat", resource_prefix, network_id)
     }
@@ -215,6 +225,11 @@ impl AzureNetworkController {
 
     fn calculate_private_endpoint_subnet_cidr(cidr: &str) -> String {
         Self::calculate_subnet_cidr(cidr, 3)
+    }
+
+    /// The same /24 the Terraform setup gives this subnet (`cidrsubnet(..., 8, 5)`).
+    fn calculate_container_apps_subnet_cidr(cidr: &str) -> String {
+        Self::calculate_subnet_cidr(cidr, 5)
     }
 
     fn calculate_subnet_cidr(cidr: &str, subnet_index: u32) -> String {
@@ -276,6 +291,10 @@ impl AzureNetworkController {
             private_subnet_name: Some(format!("test-{}-private-subnet", network_id)),
             application_gateway_subnet_name: Some(format!("test-{}-appgw-subnet", network_id)),
             private_endpoint_subnet_name: Some(format!("test-{}-pe-subnet", network_id)),
+            container_apps_subnet_name: Some(format!(
+                "test-{}-container-apps-subnet",
+                network_id
+            )),
             nat_gateway_name: Some(format!("test-{}-nat", network_id)),
             nat_gateway_id: Some(format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/test-{}-nat",
@@ -892,7 +911,7 @@ impl AzureNetworkController {
 
         match result {
             OperationResult::Completed(_) => Ok(HandlerAction::Continue {
-                state: CreatingPublicIp,
+                state: CreatingContainerAppsSubnet,
                 suggested_delay: None,
             }),
             OperationResult::LongRunning(_) => Ok(HandlerAction::Continue {
@@ -931,6 +950,104 @@ impl AzureNetworkController {
             })?;
 
         info!(subnet_name = %subnet_name, "Private Endpoint subnet created");
+
+        Ok(HandlerAction::Continue {
+            state: CreatingContainerAppsSubnet,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = CreatingContainerAppsSubnet,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_container_apps_subnet(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Network>()?;
+        let vnet_name = self.vnet_name.clone().unwrap();
+        let resource_group = self.resource_group.clone().unwrap();
+        let subnet_name = self.get_container_apps_subnet_name(ctx.resource_prefix, &config.id);
+        let cidr_block = self.cidr_block.clone().unwrap();
+        let subnet_cidr = Self::calculate_container_apps_subnet_cidr(&cidr_block);
+
+        info!(subnet_name = %subnet_name, cidr = %subnet_cidr, "Creating Container Apps subnet");
+
+        let azure_config = ctx.get_azure_config()?;
+        let network_client = ctx
+            .service_provider
+            .get_azure_network_client(azure_config)?;
+
+        let subnet = Subnet {
+            properties: Some(SubnetPropertiesFormat {
+                address_prefix: Some(subnet_cidr),
+                delegations: vec![Delegation {
+                    name: Some("container-apps-environment".to_string()),
+                    properties: Some(ServiceDelegationPropertiesFormat {
+                        service_name: Some("Microsoft.App/environments".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = network_client
+            .create_or_update_subnet(&resource_group, &vnet_name, &subnet_name, &subnet)
+            .await
+            .context(ErrorData::InfrastructureError {
+                message: format!("Failed to create Container Apps subnet '{}'", subnet_name),
+                operation: Some("create_or_update_subnet".to_string()),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        self.container_apps_subnet_name = Some(subnet_name);
+
+        match result {
+            OperationResult::Completed(_) => Ok(HandlerAction::Continue {
+                state: CreatingPublicIp,
+                suggested_delay: None,
+            }),
+            OperationResult::LongRunning(_) => Ok(HandlerAction::Continue {
+                state: WaitingForContainerAppsSubnet,
+                suggested_delay: Some(std::time::Duration::from_secs(3)),
+            }),
+        }
+    }
+
+    #[handler(
+        state = WaitingForContainerAppsSubnet,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_container_apps_subnet(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Network>()?;
+        let vnet_name = self.vnet_name.clone().unwrap();
+        let resource_group = self.resource_group.clone().unwrap();
+        let subnet_name = self.container_apps_subnet_name.clone().unwrap();
+
+        let azure_config = ctx.get_azure_config()?;
+        let network_client = ctx
+            .service_provider
+            .get_azure_network_client(azure_config)?;
+
+        let _ = network_client
+            .get_subnet(&resource_group, &vnet_name, &subnet_name)
+            .await
+            .context(ErrorData::InfrastructureError {
+                message: "Failed to check Container Apps subnet creation status".to_string(),
+                operation: Some("get_subnet".to_string()),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        info!(subnet_name = %subnet_name, "Container Apps subnet created");
 
         Ok(HandlerAction::Continue {
             state: CreatingPublicIp,
@@ -2007,6 +2124,10 @@ mod tests {
         assert_ne!(pe, public);
         assert_ne!(pe, private);
         assert_ne!(pe, appgw);
+        assert_eq!(
+            AzureNetworkController::calculate_container_apps_subnet_cidr("10.46.0.0/16"),
+            "10.46.5.0/24"
+        );
     }
 
     /// The dedicated PE subnet gets a stable, distinct name in the Alien-managed path.
@@ -2136,12 +2257,28 @@ mod tests {
         mock_network
             .expect_create_or_update_virtual_network()
             .returning(|_, _, _| Ok(OperationResult::Completed(VirtualNetwork::default())));
-        // public, private, Application Gateway, Private Endpoint, and the NAT association
-        // all PUT a subnet on the managed create path.
+        // public, private, Application Gateway, Private Endpoint, Container Apps, and the NAT
+        // association all PUT a subnet on the managed create path.
+        let delegated_subnets = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = delegated_subnets.clone();
         mock_network
             .expect_create_or_update_subnet()
-            .times(5)
-            .returning(|_, _, _, _| Ok(OperationResult::Completed(Subnet::default())));
+            .times(6)
+            .returning(move |_, _, name, subnet| {
+                let delegated_to: Vec<String> = subnet
+                    .properties
+                    .iter()
+                    .flat_map(|properties| &properties.delegations)
+                    .filter_map(|delegation| delegation.properties.as_ref()?.service_name.clone())
+                    .collect();
+                if !delegated_to.is_empty() {
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push((name.to_string(), delegated_to));
+                }
+                Ok(OperationResult::Completed(Subnet::default()))
+            });
         // The NAT gateway handler reads the public IP's id, and the NAT-association handler
         // reads the NAT gateway's id, so both responses must carry one.
         mock_network
@@ -2208,6 +2345,20 @@ mod tests {
             controller.private_endpoint_subnet_name.as_deref(),
             Some("test-default-network-pe-subnet"),
             "the managed create path must provision the dedicated PE subnet"
+        );
+        // Azure refuses a Container Apps environment on an undelegated subnet, and the private
+        // subnet must stay undelegated for VM NICs.
+        assert_eq!(
+            controller.container_apps_subnet_name.as_deref(),
+            Some("test-default-network-container-apps-subnet")
+        );
+        assert_eq!(
+            *delegated_subnets.lock().unwrap(),
+            vec![(
+                "test-default-network-container-apps-subnet".to_string(),
+                vec!["Microsoft.App/environments".to_string()]
+            )],
+            "only the Container Apps subnet is delegated"
         );
     }
 }

@@ -883,14 +883,19 @@ impl AzureContainerAppsEnvironmentController {
             None => return None,
         };
 
-        let private_subnet_name = match &network_state.private_subnet_name {
+        // The delegated Container Apps subnet. A BYO-VNet has none: its private subnet serves
+        // the environment, delegated by the customer.
+        let subnet_name = match network_state
+            .container_apps_subnet_name
+            .as_ref()
+            .or(network_state.private_subnet_name.as_ref())
+        {
             Some(name) => name,
             None => return None,
         };
 
         // Construct the full subnet resource ID
-        let infrastructure_subnet_id =
-            format!("{}/subnets/{}", vnet_resource_id, private_subnet_name);
+        let infrastructure_subnet_id = format!("{}/subnets/{}", vnet_resource_id, subnet_name);
 
         Some(VnetConfiguration {
             infrastructure_subnet_id: Some(infrastructure_subnet_id),
@@ -974,5 +979,75 @@ fn generate_container_apps_environment_name(resource_prefix: &str, id: &str) -> 
         combined[..60].to_string()
     } else {
         combined
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AzureContainerAppsEnvironmentController;
+    use crate::core::controller_test::{test_azure_resource_group, SingleControllerExecutor};
+    use crate::core::MockPlatformServiceProvider;
+    use crate::infra_requirements::AzureResourceGroupController;
+    use crate::network::AzureNetworkController;
+    use alien_azure_clients::azure::container_apps::MockContainerAppsApi;
+    use alien_azure_clients::long_running_operation::OperationResult;
+    use alien_core::{
+        AzureContainerAppsEnvironment, Network, NetworkSettings, Platform, StackSettings,
+    };
+    use std::sync::{Arc, Mutex};
+
+    /// The environment goes on the network's delegated Container Apps subnet. Azure refuses an
+    /// undelegated environment subnet, and the private subnet stays undelegated for VM NICs.
+    #[tokio::test]
+    async fn environment_uses_the_delegated_container_apps_subnet() {
+        let requested_subnet = Arc::new(Mutex::new(None));
+        let recorded = requested_subnet.clone();
+        let mut container_apps = MockContainerAppsApi::new();
+        container_apps
+            .expect_create_or_update_managed_environment()
+            .returning(move |_, _, environment| {
+                *recorded.lock().unwrap() = environment
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.vnet_configuration.as_ref())
+                    .and_then(|vnet| vnet.infrastructure_subnet_id.clone());
+                Ok(OperationResult::Completed(environment.clone()))
+            });
+        let container_apps = Arc::new(container_apps);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_container_apps_client()
+            .returning(move |_| Ok(container_apps.clone()));
+
+        let network = Network::new("default-network".to_string())
+            .settings(NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            })
+            .build();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(AzureContainerAppsEnvironment::new("default-container-env".to_string()).build())
+            .controller(AzureContainerAppsEnvironmentController::default())
+            .platform(Platform::Azure)
+            .stack_settings(StackSettings::default())
+            .service_provider(Arc::new(provider))
+            .with_dependency(
+                test_azure_resource_group(),
+                AzureResourceGroupController::mock_ready("default-resource-group"),
+            )
+            .with_dependency(network, AzureNetworkController::mock_ready("default-network"))
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor.step().await.expect("create starts");
+
+        let subnet = requested_subnet.lock().unwrap().clone();
+        assert!(
+            subnet
+                .as_deref()
+                .is_some_and(|id| id.ends_with("/subnets/test-default-network-container-apps-subnet")),
+            "environment subnet: {subnet:?}"
+        );
     }
 }

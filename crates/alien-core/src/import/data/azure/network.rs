@@ -28,6 +28,10 @@ pub struct AzureNetworkImportData {
     /// the Container Apps infrastructure ("private") subnet, which a Private Endpoint cannot share.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_endpoint_subnet_name: Option<String>,
+    /// Subnet delegated to `Microsoft.App/environments` for the Container Apps environment.
+    /// Absent for a BYO-VNet, whose private subnet serves the environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_apps_subnet_name: Option<String>,
     /// Setup-owned sandbox and internal gateway subnet coordinates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_network: Option<AzureSandboxNetwork>,

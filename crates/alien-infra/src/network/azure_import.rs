@@ -50,6 +50,7 @@ impl ResourceImporter for AzureNetworkImporter {
             // Create-mode networks emit a dedicated PE subnet and carry its name here. A BYO-VNet
             // that omits it reports None; the Postgres controller then fails fast rather than mis-provision.
             private_endpoint_subnet_name: data.private_endpoint_subnet_name,
+            container_apps_subnet_name: data.container_apps_subnet_name,
             nat_gateway_name: None,
             nat_gateway_id: data.nat_gateway_id,
             egress_public_ips: data.egress_public_ips,
