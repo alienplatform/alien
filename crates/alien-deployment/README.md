@@ -69,7 +69,7 @@ before changing IAM instead of waiting indefinitely or deleting a live dependenc
 
 Setup checkpoints written by older executors are normalized on load using a
 deployment protocol version. Their prepared desired stack must not be
-overwritten by a stale pending stack from a failed runtime update. Version 3 setup checkpoints are rejected by version 1 and 2 executors before provider work. Version 2 remains reserved for GCP federation; unchanged checkpoints retain their existing version. Upgrade all
+overwritten by a stale pending stack from a failed runtime update. Version 3 setup checkpoints are rejected by version 1 and 2 executors before provider work. Version 2 remains reserved for GCP federation. Manual code-only updates retain their existing protocol. Updates that defer setup-owned definitions or permission cleanup, and direct setup updates, use version 3. Upgrade all
 executors that can read a deployment before allowing them to write the new
 installed/pending setup representation. Once a checkpoint is upgraded to version 3, every executor that reads it must
 support version 3, including after setup finishes and the deployment is Running.

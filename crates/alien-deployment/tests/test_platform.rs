@@ -4536,3 +4536,27 @@ async fn automatic_azure_setup_rejects_missing_management_before_cloud_access() 
     assert_eq!(error.code, "MISSING_CONFIGURATION");
     assert!(error.to_string().contains("install its runtime identity"));
 }
+
+#[tokio::test]
+async fn image_only_update_preserves_reader_compatibility() {
+    let _vault = test_vault_env().await;
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "test-function")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(state.protocol_version, 1);
+    start_update(&mut state, worker_image_release("test:v2", "rel_v2"));
+    state = alien_deployment::step(state, config, ClientConfig::Test, None)
+        .await
+        .unwrap()
+        .state;
+    assert_eq!(state.status, DeploymentStatus::Updating);
+    assert_eq!(state.protocol_version, 1);
+    state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    state = run_to_completion(state, create_test_config("hash_v1", false)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(state.protocol_version, 1);
+}

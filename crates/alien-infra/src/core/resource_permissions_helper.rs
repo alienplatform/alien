@@ -1857,6 +1857,7 @@ impl ResourcePermissionsHelper {
                 .permissions
                 .profiles
                 .get(profile_name)
+                .filter(|_| ctx.desired_stack.resources.contains_key(resource_id))
                 .map(|profile| Self::aws_resource_scoped_refs(profile, resource_id, &type_prefix))
                 .unwrap_or_default()
                 .iter()
@@ -1875,6 +1876,7 @@ impl ResourcePermissionsHelper {
                 .desired_stack
                 .management()
                 .profile()
+                .filter(|_| ctx.desired_stack.resources.contains_key(resource_id))
                 .map(|profile| Self::aws_management_resource_permission_refs(profile, resource_id))
                 .unwrap_or_default()
                 .iter()

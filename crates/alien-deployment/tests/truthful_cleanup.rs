@@ -215,6 +215,9 @@ async fn update_removal_observation(denied: bool, setup: bool) {
     });
     let services = provider(Arc::new(sqs));
     let mut state = deployment(stack_state);
+    if !setup {
+        state.protocol_version = 1;
+    }
     state.status = if setup {
         DeploymentStatus::InitialSetup
     } else {
@@ -252,6 +255,12 @@ async fn update_removal_observation(denied: bool, setup: bool) {
         }
     }
     assert_eq!(*exists.lock().unwrap(), denied);
+    if !setup {
+        assert_eq!(
+            state.protocol_version,
+            alien_core::CLEANUP_SETUP_DEPLOYMENT_PROTOCOL_VERSION
+        );
+    }
     let metadata = state.runtime_metadata.as_ref().unwrap();
     assert_eq!(
         state.status,
@@ -1437,4 +1446,109 @@ async fn live_frozen_removal_requires_setup_and_preserves_owned_grants() {
     )
     .unwrap();
     println!("privileged setup deleted both Frozen queues and role; owned historical grants removed; unrelated policy preserved");
+}
+
+#[tokio::test]
+async fn setup_prunes_removed_queue_policy_but_preserves_retained_wildcard_grant() {
+    for retained in [false, true] {
+        let installed = Stack::new("synthetic".into())
+            .permissions(PermissionsConfig::new().with_profile(
+                "sender",
+                PermissionProfile::new().resource("jobs", ["queue/data-write"]),
+            ))
+            .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen)
+            .add(
+                ServiceAccount::new("sender-sa".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut desired = Stack::new("synthetic".into())
+            .permissions(PermissionsConfig::new().with_profile(
+                "sender",
+                PermissionProfile::new().resource("*", ["queue/data-write"]),
+            ))
+            .add(
+                ServiceAccount::new("sender-sa".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Queue::new("other".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        if retained {
+            desired
+                .resources
+                .insert("jobs".into(), installed.resources["jobs"].clone());
+        }
+        let mut state = saved_queue("synthetic-url", "synthetic-jobs");
+        state.resources.get_mut("jobs").unwrap().status = ResourceStatus::Deleted;
+        let mut account = StackResourceState::new_pending(
+            "service-account".into(),
+            installed.resources["sender-sa"].config.clone(),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        account.status = ResourceStatus::Running;
+        account.set_internal_controller(Some(deserialize_controller(json!({"type":"AwsServiceAccountController","_controllerStateVersion":1,"state":"ready","stackPermissionsApplied":true,"roleName":"synthetic-sender","roleArn":"arn:aws:iam::123456789012:role/synthetic-sender"})).unwrap())).unwrap();
+        state.resources.insert("sender-sa".into(), account);
+        let policies = Arc::new(Mutex::new(vec![
+            "deployment-jobs-queue-data-write".to_string(),
+            "unrelated-control".to_string(),
+        ]));
+        let mut iam = MockIamApi::new();
+        let inventory = policies.clone();
+        iam.expect_list_role_policies().returning(move |_| {
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: Some(PolicyNames {
+                        member: inventory.lock().unwrap().clone(),
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        let inventory = policies.clone();
+        iam.expect_delete_role_policy().returning(move |_, policy| {
+            inventory.lock().unwrap().retain(|name| name != policy);
+            Ok(())
+        });
+        let iam = Arc::new(iam);
+        let mut services = MockPlatformServiceProvider::new();
+        services
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let services: Arc<dyn alien_infra::PlatformServiceProvider> = Arc::new(services);
+        let registry = Arc::new(alien_infra::ResourceRegistry::with_built_ins());
+        let config = config();
+        let context = alien_infra::ResourceControllerContext {
+            desired_config: &installed.resources["jobs"].config,
+            platform: Platform::Aws,
+            client_config: fake_config(),
+            state: &state,
+            resource_prefix: &state.resource_prefix,
+            registry: &registry,
+            desired_stack: &desired,
+            service_provider: &services,
+            deployment_config: &config,
+            initial_setup_authority: InitialSetupAuthority::DirectSetup,
+            heartbeat_collector: Default::default(),
+        };
+        alien_infra::ResourcePermissionsHelper::reconcile_removed_setup_permissions(
+            &context, "jobs", "queue", &installed,
+        )
+        .await
+        .unwrap();
+        let expected = if retained {
+            vec!["deployment-jobs-queue-data-write", "unrelated-control"]
+        } else {
+            vec!["unrelated-control"]
+        };
+        assert_eq!(
+            *policies.lock().unwrap(),
+            expected,
+            "retained queue: {retained}"
+        );
+    }
 }
