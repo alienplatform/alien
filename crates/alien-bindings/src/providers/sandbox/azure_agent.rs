@@ -13,11 +13,44 @@ use crate::{
     providers::sandbox::agent_protocol::AgentTransport,
 };
 
+pub(super) const TRANSPORT_LABEL: &str = "alienAgentTransport";
+pub(super) const TRANSPORT_VERSION: &str = "native-file-v1";
+
+/// Select from authenticated provider metadata, never from an HTTP failure or current release.
+/// Missing means a session created by a released native binding; unknown versions fail closed.
+pub(super) fn uses_agent(
+    record: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
+) -> Result<bool> {
+    match record.labels.get(TRANSPORT_LABEL).map(String::as_str) {
+        None => Ok(false),
+        Some(TRANSPORT_VERSION) => Ok(true),
+        Some(_) => Err(invalid_route()),
+    }
+}
+
 impl AzureSandbox {
     /// Select the agent transport only for images packaged with the new boot contract.
     pub fn with_agent(mut self, enabled: bool) -> Self {
         self.agent = enabled;
         self
+    }
+
+    pub(super) async fn session_uses_agent(
+        &self,
+        operation: &str,
+        sandbox_id: &str,
+    ) -> Result<bool> {
+        Self::checked_sandbox_id(operation, sandbox_id)?;
+        let record = self
+            .read_sandbox(operation, sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxGone".into(),
+                    reason: format!("{operation}: sandbox '{sandbox_id}' does not exist"),
+                })
+            })?;
+        uses_agent(&record)
     }
 
     pub(super) async fn wait_for_agent(&self, sandbox_id: &str) -> Result<()> {
@@ -90,9 +123,6 @@ impl AgentTransport for AzureSandbox {
         path: &str,
     ) -> Result<reqwest::RequestBuilder> {
         Self::checked_sandbox_id("sandbox.agent", sandbox_id)?;
-        if !self.agent {
-            return Err(invalid_route());
-        }
         let endpoint = self
             .client
             .agent_port_url(&self.sandbox_group, sandbox_id, AGENT_PORT)
@@ -236,7 +266,7 @@ mod tests {
         native.expect_get_sandbox().times(1).returning(|_, id| {
             Ok(AzureRecord {
                 id: id.into(),
-                labels: Default::default(),
+                labels: BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]),
                 vnet_connection_name: None,
                 egress_policy: super::super::egress_policy(&SandboxEgress::None),
                 state: Some("Running".into()),
@@ -266,7 +296,8 @@ mod tests {
             "2048Mi".into(),
             None,
         )
-        .with_agent(true);
+        .with_agent(false);
+        // A rollback binding still uses the session's agent; it must never native-exec it.
         let mut output = provider
             .run_command(
                 "session",

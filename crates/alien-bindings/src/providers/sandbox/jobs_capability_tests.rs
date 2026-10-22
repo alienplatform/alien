@@ -35,7 +35,7 @@ fn command() -> RunCommandRequest {
     }
 }
 
-/// Every job method refuses with the code a caller branches on, and nothing was sent anywhere.
+/// Every job method refuses with the code a caller branches on; no job operation is sent.
 async fn refuses_every_job_method(sandbox: &dyn Sandbox) {
     assert!(
         !sandbox.capabilities().jobs,
@@ -225,15 +225,28 @@ async fn gcp_declares_jobs_and_starts_one_through_its_proxy() {
     assert_eq!(started.job_id, "j1");
 }
 
-/// Azure declares no jobs, and the client double proves it: a call on it would panic, so a
-/// refusal that leaked through to the data plane fails this test rather than passing quietly.
+/// Azure reads the session transport across releases. Legacy sessions still have no job host,
+/// and no native exec is used to approximate one.
 #[tokio::test]
-async fn azure_declares_no_jobs_and_sends_nothing() {
+async fn azure_legacy_sessions_have_no_job_host_after_transport_lookup() {
+    let mut client = alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new();
+    client.expect_execute_shell_command().never();
+    client.expect_get_sandbox().times(3).returning(|_, id| {
+        Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+            id: id.into(),
+            labels: Default::default(),
+            state: Some("Running".into()),
+            vnet_connection_name: None,
+            egress_policy: Some(
+                serde_json::from_value(json!({ "defaultAction": "Allow", "trafficInspection": "Full" })).unwrap(),
+            ),
+        })
+    });
     let sandbox = AzureSandbox::new(
-        Arc::new(alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new()),
+        Arc::new(client),
         "group".to_string(),
         "ubuntu".to_string(),
-        SandboxEgress::Internet,
+        SandboxEgress::Allow,
         None,
         "1".to_string(),
         "2Gi".to_string(),

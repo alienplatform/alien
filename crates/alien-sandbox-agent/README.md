@@ -34,11 +34,14 @@ Exec, jobs and files use the shared agent protocol. Missing or invalid tokens
 are refused before session operations. A fresh boot replaces the token; a
 resume preserving the process keeps it. Create-time user environment and gateway
 proxy settings remain defaults for boot and session commands; agent settings
-are reserved. Released bindings without `agent: true` retain native operations.
-Source-built Azure releases select this transport automatically. The controller switches
-the image and transport together after Azure reports the replacement disk Ready.
-Prebuilt-image inspection and migration of already-running native sessions remain
-in progress.
+are reserved. Source-built Azure releases select this transport automatically.
+The controller switches the image and transport together after Azure reports the
+replacement disk Ready. Each new agent session persists
+`alienAgentTransport=native-file-v1` in authenticated provider metadata. Operations
+select the session transport from that marker, so an upgraded binding can reconnect
+to legacy native sessions and a rollback binding continues using the agent for
+packaged sessions. An unknown marker is refused; an agent failure never triggers
+native exec. Prebuilt-image inspection remains in progress.
 
 # Released supervisor declarations
 
