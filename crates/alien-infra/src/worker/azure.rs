@@ -3436,11 +3436,29 @@ impl AzureWorkerController {
 
         let op_status = operation_client
             .check_status(&lro, "DeleteContainerApp", container_app_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for container app deletion".to_string(),
-                resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
-            })?;
+            .await;
+        let op_status = match op_status {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                // An expired operation does not prove the resource is gone.
+                // Retry its idempotent delete and preserve remaining children.
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                return Ok(HandlerAction::Continue {
+                    state: DeletingApp,
+                    suggested_delay: None,
+                });
+            }
+            result => result,
+        };
+        let op_status = op_status.context(ErrorData::CloudPlatformError {
+            message: "Azure ARM operation failed for container app deletion".to_string(),
+            resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
+        })?;
 
         if op_status.is_some() {
             self.pending_operation_url = None;
@@ -3622,12 +3640,30 @@ impl AzureWorkerController {
                 "DeleteManagedEnvironmentCertificate",
                 &certificate_name,
             )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for managed environment certificate deletion"
-                    .to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+            .await;
+        let status = match status {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                // An expired operation does not prove the resource is gone.
+                // Retry its idempotent delete and preserve remaining children.
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                return Ok(HandlerAction::Continue {
+                    state: DeletingCertificate,
+                    suggested_delay: None,
+                });
+            }
+            result => result,
+        };
+        let status = status.context(ErrorData::CloudPlatformError {
+            message: "Azure ARM operation failed for managed environment certificate deletion"
+                .to_string(),
+            resource_id: Some(worker_config.id.clone()),
+        })?;
 
         if status.is_some() {
             self.pending_operation_url = None;
@@ -7691,7 +7727,9 @@ mod tests {
         use super::*;
         use crate::core::{serialize_controller, ResourceController};
         use crate::sandbox::{AzureSandboxController, AzureSandboxState};
-        use alien_core::{ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+        use alien_core::{
+            ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        };
         use std::sync::Mutex;
 
         const OLD_IMAGE: &str = "registry.example.com/agent:1";
@@ -7747,7 +7785,14 @@ mod tests {
             sandbox_controller: AzureSandboxController,
             previous: Option<Worker>,
         ) -> SingleControllerExecutor {
-            executor_for(linked_worker(), apps, controller, sandbox_controller, previous).await
+            executor_for(
+                linked_worker(),
+                apps,
+                controller,
+                sandbox_controller,
+                previous,
+            )
+            .await
         }
 
         async fn executor_for(
@@ -8093,6 +8138,103 @@ mod tests {
                 executor.internal_state::<AzureWorkerController>().unwrap().state,
                 AzureWorkerState::UpdateRunningReadinessProbe
             );
+        }
+    }
+    #[tokio::test]
+    async fn expired_delete_operations_resume_cleanup_without_discarding_children() {
+        for checkpoint in [
+            AzureWorkerState::WaitingForDeleteOperation,
+            AzureWorkerState::WaitingForCertificateDeleteOperation,
+        ] {
+            for denied in [false, true] {
+                let deleting_app = checkpoint == AzureWorkerState::WaitingForDeleteOperation;
+                let remaining = Arc::new(std::sync::Mutex::new(if deleting_app {
+                    vec!["app", "certificate"]
+                } else {
+                    vec!["certificate"]
+                }));
+                let mut lro = MockLongRunningOperationApi::new();
+                lro.expect_check_status()
+                    .times(1)
+                    .returning(move |_, _, _| {
+                        Err(AlienError::new(if denied {
+                            CloudClientErrorData::RemoteAccessDenied {
+                                resource_type: "operation".into(),
+                                resource_name: "saved-operation".into(),
+                            }
+                        } else {
+                            CloudClientErrorData::RemoteResourceNotFound {
+                                resource_type: "operation".into(),
+                                resource_name: "saved-operation".into(),
+                            }
+                        }))
+                    });
+                let mut apps = MockContainerAppsApi::new();
+                let inventory = remaining.clone();
+                apps.expect_delete_container_app()
+                    .times(usize::from(deleting_app && !denied))
+                    .returning(move |_, _| {
+                        inventory.lock().unwrap().retain(|child| *child != "app");
+                        Ok(OperationResult::Completed(()))
+                    });
+                let inventory = remaining.clone();
+                apps.expect_delete_managed_environment_certificate()
+                    .times(usize::from(!denied))
+                    .returning(move |_, _, _| {
+                        assert!(!inventory.lock().unwrap().contains(&"app"));
+                        inventory
+                            .lock()
+                            .unwrap()
+                            .retain(|child| *child != "certificate");
+                        Ok(OperationResult::Completed(()))
+                    });
+                let mut controller = AzureWorkerController::mock_ready("test-basic-worker");
+                controller.state = checkpoint.clone();
+                controller.pending_operation_url =
+                    Some("https://management.azure.com/saved-operation".into());
+                controller.container_apps_certificate_id = Some("saved-certificate".into());
+                let controller: AzureWorkerController =
+                    serde_json::from_slice(&serde_json::to_vec(&controller).unwrap()).unwrap();
+                let mut executor = SingleControllerExecutor::builder()
+                    .resource(basic_function())
+                    .controller(controller)
+                    .platform(Platform::Azure)
+                    .service_provider(setup_mock_service_provider(
+                        Arc::new(apps),
+                        Some(Arc::new(lro)),
+                    ))
+                    .with_test_dependencies()
+                    .build()
+                    .await
+                    .unwrap();
+                if denied {
+                    executor
+                        .step()
+                        .await
+                        .expect_err("a denied operation read must preserve the checkpoint");
+                    let saved = executor.internal_state::<AzureWorkerController>().unwrap();
+                    assert_eq!(
+                        saved.pending_operation_url.as_deref(),
+                        Some("https://management.azure.com/saved-operation")
+                    );
+                    assert_eq!(
+                        saved.container_apps_certificate_id.as_deref(),
+                        Some("saved-certificate")
+                    );
+                    continue;
+                }
+                for _ in 0..4 {
+                    executor
+                        .step()
+                        .await
+                        .expect("an expired operation must resume owned cleanup");
+                    if executor.status() == ResourceStatus::Deleted {
+                        break;
+                    }
+                }
+                assert_eq!(executor.status(), ResourceStatus::Deleted);
+                assert!(remaining.lock().unwrap().is_empty());
+            }
         }
     }
 }

@@ -558,11 +558,27 @@ impl AzureContainerAppsEnvironmentController {
                 "DeleteManagedEnvironment",
                 environment_name,
             )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure deletion long-running operation failed".to_string(),
-                resource_id: Some(desired_config.id.clone()),
-            })?;
+            .await;
+        let status_result = match status_result {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                // Only the operation expired; the environment may still exist.
+                self.long_running_operation = None;
+                return Ok(HandlerAction::Continue {
+                    state: DeleteStart,
+                    suggested_delay: None,
+                });
+            }
+            result => result,
+        };
+        let status_result = status_result.context(ErrorData::CloudPlatformError {
+            message: "Azure deletion long-running operation failed".to_string(),
+            resource_id: Some(desired_config.id.clone()),
+        })?;
 
         if status_result.is_some() {
             info!(environment_name=%environment_name, "Azure deletion long-running operation completed successfully, now checking resource status");
@@ -974,5 +990,173 @@ fn generate_container_apps_environment_name(resource_prefix: &str, id: &str) -> 
         combined[..60].to_string()
     } else {
         combined
+    }
+}
+
+#[cfg(test)]
+mod delete_operation_tests {
+    use super::*;
+    use crate::core::{
+        MockPlatformServiceProvider, ResourceController, ResourceControllerContext,
+        ResourceRegistry,
+    };
+    use alien_azure_clients::container_apps::MockContainerAppsApi;
+    use alien_azure_clients::long_running_operation::MockLongRunningOperationApi;
+    use alien_core::{
+        AzureCredentials, AzureResourceGroup, AzureResourceGroupOutputs, ClientConfig,
+        DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority,
+        Resource, ResourceLifecycle, Stack, StackResourceState, StackSettings, StackState,
+    };
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    };
+
+    #[tokio::test]
+    async fn expired_environment_delete_operation_retries_the_resource_delete() {
+        for denied in [false, true] {
+            let exists = Arc::new(AtomicBool::new(true));
+            let polls = Arc::new(AtomicUsize::new(0));
+            let mut lro = MockLongRunningOperationApi::new();
+            let calls = polls.clone();
+            lro.expect_check_status()
+                .times(0..=1)
+                .returning(move |_, _, _| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(AlienError::new(if denied {
+                        CloudClientErrorData::RemoteAccessDenied {
+                            resource_type: "operation".into(),
+                            resource_name: "saved-operation".into(),
+                        }
+                    } else {
+                        CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "operation".into(),
+                            resource_name: "saved-operation".into(),
+                        }
+                    }))
+                });
+            let mut apps = MockContainerAppsApi::new();
+            apps.expect_list_container_apps_by_resource_group()
+                .times(0..=usize::from(!denied))
+                .returning(
+                    |_| Ok(serde_json::from_value(serde_json::json!({"value":[]})).unwrap()),
+                );
+            let remote = exists.clone();
+            apps.expect_delete_managed_environment()
+                .times(0..=usize::from(!denied))
+                .withf(|group, name| group == "saved-group" && name == "saved-environment")
+                .returning(move |_, _| {
+                    remote.store(false, Ordering::SeqCst);
+                    Ok(OperationResult::Completed(()))
+                });
+            let apps = Arc::new(apps);
+            let lro = Arc::new(lro);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_azure_container_apps_client()
+                .returning(move |_| Ok(apps.clone()));
+            provider
+                .expect_get_azure_long_running_operation_client()
+                .returning(move |_| Ok(lro.clone()));
+            let provider: Arc<dyn crate::PlatformServiceProvider> = Arc::new(provider);
+            let mut controller = AzureContainerAppsEnvironmentController {
+                state: AzureContainerAppsEnvironmentState::DeletingEnvironmentOperation,
+                environment_name: Some("saved-environment".into()),
+                resource_group_name: Some("saved-group".into()),
+                long_running_operation: Some(LongRunningOperation {
+                    url: "https://management.azure.com/saved-operation".into(),
+                    retry_after: None,
+                    location_url: None,
+                }),
+                ..Default::default()
+            };
+            controller = serde_json::from_slice(&serde_json::to_vec(&controller).unwrap()).unwrap();
+            let resource =
+                Resource::new(AzureContainerAppsEnvironment::new("environment".into()).build());
+            let desired = Stack::new("synthetic".into())
+                .add(
+                    AzureContainerAppsEnvironment::new("environment".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let mut state = StackState::new(Platform::Azure);
+            let mut group = StackResourceState::new_pending(
+                "azure-resource-group".into(),
+                Resource::new(AzureResourceGroup::new("default-resource-group".into()).build()),
+                Some(ResourceLifecycle::Frozen),
+                vec![],
+            );
+            group.status = ResourceStatus::Running;
+            group.outputs = Some(ResourceOutputs::new(AzureResourceGroupOutputs {
+                name: "saved-group".into(),
+                resource_id: "saved-group-id".into(),
+                location: "westus2".into(),
+            }));
+            state
+                .resources
+                .insert("default-resource-group".into(), group);
+            let cfg = ClientConfig::Azure(Box::new(AzureClientConfig {
+                subscription_id: "synthetic-subscription".into(),
+                tenant_id: "synthetic-tenant".into(),
+                region: Some("westus2".into()),
+                credentials: AzureCredentials::ServicePrincipal {
+                    client_id: "synthetic".into(),
+                    client_secret: "synthetic".into(),
+                },
+                service_overrides: None,
+            }));
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build();
+            let registry = Arc::new(ResourceRegistry::with_built_ins());
+            let context = ResourceControllerContext {
+                desired_config: &resource,
+                platform: Platform::Azure,
+                client_config: cfg,
+                state: &state,
+                resource_prefix: "synthetic",
+                registry: &registry,
+                desired_stack: &desired,
+                service_provider: &provider,
+                deployment_config: &config,
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                heartbeat_collector: Default::default(),
+            };
+            if denied {
+                controller
+                    .step(&context)
+                    .await
+                    .expect_err("denied status reads keep the deletion checkpoint");
+                assert_eq!(
+                    controller.environment_name.as_deref(),
+                    Some("saved-environment")
+                );
+                assert!(controller.long_running_operation.is_some());
+                assert!(exists.load(Ordering::SeqCst));
+                assert_eq!(polls.load(Ordering::SeqCst), 1);
+                continue;
+            }
+            for _ in 0..3 {
+                controller
+                    .step(&context)
+                    .await
+                    .expect("a missing operation must retry the idempotent resource delete");
+                controller =
+                    serde_json::from_slice(&serde_json::to_vec(&controller).unwrap()).unwrap();
+                if controller.get_status() == ResourceStatus::Deleted {
+                    break;
+                }
+            }
+            assert_eq!(controller.get_status(), ResourceStatus::Deleted);
+            assert!(!exists.load(Ordering::SeqCst));
+            assert_eq!(polls.load(Ordering::SeqCst), 1);
+        }
     }
 }
