@@ -25,8 +25,9 @@ use alien_azure_clients::azure::models::{
         PublicIpAddressSkuName,
     },
     virtual_network::{
-        AddressSpace, Delegation, ServiceDelegationPropertiesFormat, SubResource as VnetSubResource,
-        Subnet, SubnetPropertiesFormat, VirtualNetwork, VirtualNetworkPropertiesFormat,
+        AddressSpace, Delegation, ProvisioningState as SubnetProvisioningState,
+        ServiceDelegationPropertiesFormat, SubResource as VnetSubResource, Subnet,
+        SubnetPropertiesFormat, VirtualNetwork, VirtualNetworkPropertiesFormat,
     },
 };
 use alien_azure_clients::long_running_operation::OperationResult;
@@ -44,6 +45,7 @@ use tracing::{debug, info, warn};
 
 const AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS: u32 = 60;
 const AZURE_BYO_VNET_RBAC_WAIT_SECS: u64 = 10;
+const CONTAINER_APPS_SUBNET_WAIT_MAX_ATTEMPTS: u32 = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1038,7 +1040,7 @@ impl AzureNetworkController {
             .service_provider
             .get_azure_network_client(azure_config)?;
 
-        let _ = network_client
+        let subnet = network_client
             .get_subnet(&resource_group, &vnet_name, &subnet_name)
             .await
             .context(ErrorData::InfrastructureError {
@@ -1046,6 +1048,28 @@ impl AzureNetworkController {
                 operation: Some("get_subnet".to_string()),
                 resource_id: Some(config.id.clone()),
             })?;
+
+        // The environment is created on this subnet next, so it must have finished provisioning.
+        match subnet
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.provisioning_state.as_ref())
+        {
+            Some(SubnetProvisioningState::Succeeded) => {}
+            Some(SubnetProvisioningState::Failed) => {
+                return Err(AlienError::new(ErrorData::InfrastructureError {
+                    message: format!("Azure failed to provision Container Apps subnet '{subnet_name}'"),
+                    operation: Some("get_subnet".to_string()),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+            _ => {
+                return Ok(HandlerAction::Stay {
+                    max_times: Some(CONTAINER_APPS_SUBNET_WAIT_MAX_ATTEMPTS),
+                    suggested_delay: Some(std::time::Duration::from_secs(3)),
+                });
+            }
+        }
 
         info!(subnet_name = %subnet_name, "Container Apps subnet created");
 
@@ -2243,6 +2267,108 @@ mod tests {
             controller.private_endpoint_subnet_name.as_deref(),
             Some("customer-pe-subnet"),
             "the PE subnet must resolve to the customer-named subnet"
+        );
+    }
+
+    /// A Container Apps subnet that is still provisioning holds the network until Azure reports it
+    /// Succeeded: the environment is created on it next.
+    #[tokio::test]
+    async fn container_apps_subnet_waits_until_provisioned() {
+        use alien_azure_clients::azure::models::virtual_network::{
+            ProvisioningState, SubnetPropertiesFormat,
+        };
+        use alien_azure_clients::long_running_operation::LongRunningOperation;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut mock_network = MockNetworkApi::new();
+        mock_network
+            .expect_create_or_update_virtual_network()
+            .returning(|_, _, _| Ok(OperationResult::Completed(VirtualNetwork::default())));
+        mock_network
+            .expect_create_or_update_subnet()
+            .returning(|_, _, name, _| {
+                if name.ends_with("-container-apps-subnet") {
+                    Ok(OperationResult::LongRunning(LongRunningOperation {
+                        url: "https://management.azure.com/operations/subnet".to_string(),
+                        retry_after: None,
+                        location_url: None,
+                    }))
+                } else {
+                    Ok(OperationResult::Completed(Subnet::default()))
+                }
+            });
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        mock_network.expect_get_subnet().returning(move |_, _, _| {
+            let state = if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                ProvisioningState::Updating
+            } else {
+                ProvisioningState::Succeeded
+            };
+            Ok(Subnet {
+                properties: Some(SubnetPropertiesFormat {
+                    provisioning_state: Some(state),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        });
+        mock_network
+            .expect_create_or_update_public_ip_address()
+            .returning(|_, _, _| {
+                Ok(OperationResult::Completed(PublicIpAddress {
+                    id: Some("/public-ip/test".to_string()),
+                    ..Default::default()
+                }))
+            });
+        mock_network
+            .expect_create_or_update_nat_gateway()
+            .returning(|_, _, _| {
+                Ok(OperationResult::Completed(NatGateway {
+                    id: Some("/nat-gateway/test".to_string()),
+                    ..Default::default()
+                }))
+            });
+        mock_network
+            .expect_create_or_update_network_security_group()
+            .returning(|_, _, _| Ok(OperationResult::Completed(NetworkSecurityGroup::default())));
+        let mock_network = Arc::new(mock_network);
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_azure_network_client()
+            .returning(move |_| Ok(mock_network.clone()));
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::Create {
+                        cidr: Some("10.46.0.0/16".to_string()),
+                        availability_zones: 2,
+                    })
+                    .build(),
+            )
+            .controller(AzureNetworkController::default())
+            .platform(Platform::Azure)
+            .stack_settings(StackSettings::default())
+            .service_provider(Arc::new(mock_provider))
+            .with_dependency(
+                test_azure_resource_group(),
+                AzureResourceGroupController::mock_ready("default-resource-group"),
+            )
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("network should reconcile once the subnet is provisioned");
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            2,
+            "the network must read the subnet again after it reported Updating"
         );
     }
 
