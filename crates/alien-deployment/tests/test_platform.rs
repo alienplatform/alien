@@ -1768,6 +1768,56 @@ async fn test_delete_runtime_cleanup_reaches_teardown_required() {
     assert_eq!(state.status, DeploymentStatus::TeardownRequired);
 }
 
+/// A denied delete must not finish the deployment's teardown. The resource stays recorded as
+/// DeleteFailed with its controller state, the deployment ends DeleteFailed, and the headline
+/// error names the resource that is left.
+#[tokio::test]
+async fn denied_delete_leaves_the_deployment_delete_failed_with_the_resource_named() {
+    let _vault = test_vault_env().await;
+
+    let mut stack = create_test_stack("test-stack", "denied-fn");
+    let mut worker = stack.resources["denied-fn"]
+        .config
+        .downcast_ref::<Worker>()
+        .expect("a worker")
+        .clone();
+    worker.environment.insert(
+        "SIMULATE_DELETE_ACCESS_DENIED".to_string(),
+        "true".to_string(),
+    );
+    stack.resources.get_mut("denied-fn").expect("the worker entry").config =
+        alien_core::Resource::new(worker);
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(create_initial_state(stack), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    start_delete(&mut state);
+    let state = run_until_status(
+        state,
+        config,
+        &[
+            DeploymentStatus::TeardownRequired,
+            DeploymentStatus::DeleteFailed,
+            DeploymentStatus::Deleted,
+        ],
+    )
+    .await;
+
+    assert_eq!(state.status, DeploymentStatus::DeleteFailed);
+    let resource = &state.stack_state.as_ref().expect("stack state is kept").resources["denied-fn"];
+    assert_eq!(resource.status, alien_core::ResourceStatus::DeleteFailed);
+    assert!(
+        resource.internal_state.is_some(),
+        "the controller state naming the remote worker is kept"
+    );
+    let headline = alien_deployment::deployment_headline_error_from_state(&state)
+        .expect("a DeleteFailed deployment has a headline error");
+    assert!(
+        format!("{headline:?}").contains("denied-fn"),
+        "the headline error names the resource left behind: {headline:?}"
+    );
+}
+
 /// F) Interrupt-on-failure behavior
 
 /// Build a two-resource stack where `failing-fn` will exhaust its retries and fail while

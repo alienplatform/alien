@@ -9,8 +9,8 @@ use crate::core::EnvironmentVariableBuilder;
 
 use crate::core::aws_tag_scoped::{
     certificates_imported_with_token, delete_imported_certificate, delete_tag_scoped,
-    is_remote_access_denied, is_remote_not_found, with_import_token, TagScopedDelete,
-    CREATE_ATTEMPT_TAG,
+    is_remote_access_denied, is_remote_not_found, owned_resource_exists, with_import_token,
+    TagScopedDelete, CREATE_ATTEMPT_TAG,
 };
 use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
@@ -37,6 +37,7 @@ use alien_aws_clients::eventbridge::{
 };
 use alien_aws_clients::lambda::{
     AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode, FunctionConfiguration,
+    LambdaApi,
     ListEventSourceMappingsRequest, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest,
     VpcConfig,
 };
@@ -88,6 +89,57 @@ const LAMBDA_LOG_RETENTION_DAYS: i32 = 30;
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {
     aws_prefixed_resource_name(prefix, name)
+}
+
+fn lambda_function_arn(config: &alien_aws_clients::AwsClientConfig, name: &str) -> String {
+    format!(
+        "arn:aws:lambda:{}:{}:function:{name}",
+        config.region, config.account_id
+    )
+}
+
+/// The ARN of an API Gateway object from its path, such as `/apis/{id}`.
+fn api_gateway_arn(config: &alien_aws_clients::AwsClientConfig, path: &str) -> String {
+    format!("arn:aws:apigateway:{}::{path}", config.region)
+}
+
+/// Whether the function still has the event source mapping `uuid`, from its mapping list,
+/// which is not scoped by the mapping grant's condition. `None` when the list fails.
+async fn event_source_mapping_exists(
+    client: &dyn LambdaApi,
+    function_name: &str,
+    uuid: &str,
+) -> Option<bool> {
+    let mut marker = None;
+    loop {
+        let page = match client
+            .list_event_source_mappings(ListEventSourceMappingsRequest {
+                event_source_arn: None,
+                function_name: Some(function_name.to_string()),
+                marker: marker.take(),
+                max_items: None,
+            })
+            .await
+        {
+            Ok(page) => page,
+            Err(error) => {
+                warn!(function=%function_name, uuid=%uuid, error=%error, "Could not list event source mappings; keeping the denial");
+                return None;
+            }
+        };
+        if page
+            .event_source_mappings
+            .unwrap_or_default()
+            .iter()
+            .any(|mapping| mapping.uuid.as_deref() == Some(uuid))
+        {
+            return Some(true);
+        }
+        match page.next_marker {
+            Some(next) => marker = Some(next),
+            None => return Some(false),
+        }
+    }
 }
 
 // AWS emits both the exact function name and a name followed by a UUID.
@@ -4369,6 +4421,14 @@ impl AwsWorkerController {
                     .delete_base_path_mapping(&domain_name, &base_path)
                     .await,
                 || async { client.get_domain_name(&domain_name).await.map(|_| ()) },
+                || {
+                    owned_resource_exists(
+                        ctx.service_provider.as_ref(),
+                        aws_cfg,
+                        ctx.resource_prefix,
+                        api_gateway_arn(aws_cfg, &format!("/domainnames/{domain_name}")),
+                    )
+                },
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -4392,6 +4452,14 @@ impl AwsWorkerController {
                     .delete_api_mapping(&domain_name, &api_mapping_id)
                     .await,
                 || async { client.get_domain_name(&domain_name).await.map(|_| ()) },
+                || {
+                    owned_resource_exists(
+                        ctx.service_provider.as_ref(),
+                        aws_cfg,
+                        ctx.resource_prefix,
+                        api_gateway_arn(aws_cfg, &format!("/domainnames/{domain_name}")),
+                    )
+                },
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -4409,18 +4477,36 @@ impl AwsWorkerController {
                     .service_provider
                     .get_aws_apigateway_client(aws_cfg)
                     .await?;
-                delete_tag_scoped(client.delete_domain_name(&domain_name).await, || async {
-                    client.get_domain_name(&domain_name).await.map(|_| ())
-                })
+                delete_tag_scoped(
+                    client.delete_domain_name(&domain_name).await,
+                    || async { client.get_domain_name(&domain_name).await.map(|_| ()) },
+                    || {
+                        owned_resource_exists(
+                            ctx.service_provider.as_ref(),
+                            aws_cfg,
+                            ctx.resource_prefix,
+                            api_gateway_arn(aws_cfg, &format!("/domainnames/{domain_name}")),
+                        )
+                    },
+                )
                 .await
             } else {
                 let client = ctx
                     .service_provider
                     .get_aws_apigatewayv2_client(aws_cfg)
                     .await?;
-                delete_tag_scoped(client.delete_domain_name(&domain_name).await, || async {
-                    client.get_domain_name(&domain_name).await.map(|_| ())
-                })
+                delete_tag_scoped(
+                    client.delete_domain_name(&domain_name).await,
+                    || async { client.get_domain_name(&domain_name).await.map(|_| ()) },
+                    || {
+                        owned_resource_exists(
+                            ctx.service_provider.as_ref(),
+                            aws_cfg,
+                            ctx.resource_prefix,
+                            api_gateway_arn(aws_cfg, &format!("/domainnames/{domain_name}")),
+                        )
+                    },
+                )
                 .await
             }
             .context(ErrorData::CloudPlatformError {
@@ -4439,9 +4525,18 @@ impl AwsWorkerController {
                 .service_provider
                 .get_aws_apigatewayv2_client(aws_cfg)
                 .await?;
-            let outcome = delete_tag_scoped(client.delete_api(&api_id).await, || async {
-                client.get_api(&api_id).await.map(|_| ())
-            })
+            let outcome = delete_tag_scoped(
+                client.delete_api(&api_id).await,
+                || async { client.get_api(&api_id).await.map(|_| ()) },
+                || {
+                    owned_resource_exists(
+                        ctx.service_provider.as_ref(),
+                        aws_cfg,
+                        ctx.resource_prefix,
+                        api_gateway_arn(aws_cfg, &format!("/apis/{api_id}")),
+                    )
+                },
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to delete API Gateway".to_string(),
@@ -4459,9 +4554,18 @@ impl AwsWorkerController {
                 .service_provider
                 .get_aws_apigateway_client(aws_cfg)
                 .await?;
-            let outcome = delete_tag_scoped(client.delete_rest_api(&rest_api_id).await, || async {
-                client.get_rest_api(&rest_api_id).await.map(|_| ())
-            })
+            let outcome = delete_tag_scoped(
+                client.delete_rest_api(&rest_api_id).await,
+                || async { client.get_rest_api(&rest_api_id).await.map(|_| ()) },
+                || {
+                    owned_resource_exists(
+                        ctx.service_provider.as_ref(),
+                        aws_cfg,
+                        ctx.resource_prefix,
+                        api_gateway_arn(aws_cfg, &format!("/restapis/{rest_api_id}")),
+                    )
+                },
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to delete REST API".to_string(),
@@ -4499,22 +4603,23 @@ impl AwsWorkerController {
         if !self.event_source_mappings.is_empty() {
             info!(worker=%worker_config.id, mappings=?self.event_source_mappings, "Deleting event source mappings");
 
-            // Delete all event source mappings using best-effort approach (ignore NotFound)
-            for uuid in &self.event_source_mappings.clone() {
-                let outcome =
-                    delete_tag_scoped(client.delete_event_source_mapping(uuid).await, || async {
-                        client.get_event_source_mapping(uuid).await.map(|_| ())
-                    })
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete event source mapping '{}'", uuid),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?;
+            let function_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+            // Each mapping leaves the list once it is gone, so a retry resumes after it.
+            while let Some(uuid) = self.event_source_mappings.first().cloned() {
+                // Mappings carry no tags; their function's mapping list is the lookup.
+                let outcome = delete_tag_scoped(
+                    client.delete_event_source_mapping(&uuid).await,
+                    || async { client.get_event_source_mapping(&uuid).await.map(|_| ()) },
+                    || event_source_mapping_exists(client.as_ref(), &function_name, &uuid),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete event source mapping '{}'", uuid),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
                 info!(worker=%worker_config.id, uuid=%uuid, outcome=?outcome, "Event source mapping removed");
+                self.event_source_mappings.remove(0);
             }
-
-            // Clear the mapping list after successful deletion
-            self.event_source_mappings.clear();
         } else {
             info!(worker=%worker_config.id, "No event source mappings to delete");
         }
@@ -4680,6 +4785,14 @@ impl AwsWorkerController {
                     .await
                     .map(|_| ())
             },
+            || {
+                owned_resource_exists(
+                    ctx.service_provider.as_ref(),
+                    aws_cfg,
+                    ctx.resource_prefix,
+                    lambda_function_arn(aws_cfg, &aws_worker_name),
+                )
+            },
         )
         .await
         .context(ErrorData::CloudPlatformError {
@@ -4784,6 +4897,14 @@ impl AwsWorkerController {
                     .get_function_configuration(&aws_worker_name, None)
                     .await
                     .map(|_| ())
+            },
+            || {
+                owned_resource_exists(
+                    ctx.service_provider.as_ref(),
+                    aws_cfg,
+                    ctx.resource_prefix,
+                    lambda_function_arn(aws_cfg, &aws_worker_name),
+                )
             },
         )
         .await
@@ -5026,13 +5147,24 @@ impl AwsWorkerController {
             }
         }
         for certificate_arn in &certificate_arns {
-            let outcome = delete_imported_certificate(acm_client.as_ref(), certificate_arn)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to delete ACM certificate '{certificate_arn}'"),
-                    resource_id: Some(worker_config.id.clone()),
-                })?;
+            let outcome = delete_imported_certificate(
+                acm_client.as_ref(),
+                ctx.service_provider.as_ref(),
+                aws_cfg,
+                ctx.resource_prefix,
+                certificate_arn,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete ACM certificate '{certificate_arn}'"),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
             info!(worker=%worker_config.id, certificate_arn=%certificate_arn, outcome=?outcome, "ACM certificate removed");
+            // A retry after a later certificate fails must not delete this one again. Token
+            // lookups list only certificates that still exist.
+            if self.certificate_arn.as_ref() == Some(certificate_arn) {
+                self.certificate_arn = None;
+            }
         }
         self.certificate_arn = None;
         self.certificate_import_token = None;
@@ -5806,6 +5938,10 @@ mod tests {
     use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
     use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, Ec2Client, MockEc2Api};
     use alien_aws_clients::iam::MockIamApi;
+    use alien_aws_clients::resourcegroupstagging::{
+        GetResourcesResponse, MockResourceGroupsTaggingApi, ResourceTagMapping,
+        Tag as TaggingTag,
+    };
     use alien_aws_clients::lambda::{
         AddPermissionResponse, EventSourceMapping, FunctionConfiguration, GetFunctionResponse,
         ListEventSourceMappingsResponse, MockLambdaApi,
@@ -6656,6 +6792,10 @@ mod tests {
                 .expect_get_aws_acm_client()
                 .returning(move |_| Ok(acm.clone()));
         }
+        let tagging = tagging_listing(Vec::new());
+        mock_provider
+            .expect_get_aws_resource_groups_tagging_client()
+            .returning(move |_| Ok(tagging.clone()));
 
         if let Some(apigw) = mock_apigw {
             mock_provider
@@ -7501,6 +7641,31 @@ mod tests {
     const TEST_CERTIFICATE_ARN: &str =
         "arn:aws:acm:us-east-1:123456789012:certificate/test-cert-id";
 
+    /// A tagging lookup that lists `listed` as still existing with the test stack's tags
+    /// (prefix `test`), and nothing else.
+    fn tagging_listing(listed: Vec<String>) -> Arc<MockResourceGroupsTaggingApi> {
+        let mut tagging = MockResourceGroupsTaggingApi::new();
+        tagging.expect_get_resources().returning(move |request| {
+            Ok(GetResourcesResponse {
+                pagination_token: None,
+                resource_tag_mapping_list: request
+                    .resource_arn_list
+                    .iter()
+                    .filter(|arn| listed.contains(arn))
+                    .map(|arn| ResourceTagMapping {
+                        resource_arn: arn.clone(),
+                        tags: standard_resource_tags("test", "public-func")
+                            .into_iter()
+                            .map(|(key, value)| TaggingTag { key, value })
+                            .collect(),
+                        compliance_details: None,
+                    })
+                    .collect(),
+            })
+        });
+        Arc::new(tagging)
+    }
+
     fn access_denied() -> AlienError<CloudClientErrorData> {
         AlienError::new(CloudClientErrorData::RemoteAccessDenied {
             resource_type: "Worker".to_string(),
@@ -7520,6 +7685,9 @@ mod tests {
         mock_acm: MockAcmApi,
         #[builder(default = MockCloudWatchLogsApi::new())] mock_logs: MockCloudWatchLogsApi,
         #[builder(default)] uses_custom_domain: bool,
+        /// ARNs the tagging lookup still lists; empty means everything is gone.
+        #[builder(default)]
+        listed_arns: Vec<String>,
     ) -> ResourceStatus {
         let worker = function_public_ingress();
         let worker_id = worker.id.clone();
@@ -7565,6 +7733,10 @@ mod tests {
         mock_provider
             .expect_get_aws_logs_client()
             .returning(move |_| Ok(mock_logs.clone()));
+        let tagging = tagging_listing(listed_arns);
+        mock_provider
+            .expect_get_aws_resource_groups_tagging_client()
+            .returning(move |_| Ok(tagging.clone()));
 
         let deployment_config = DeploymentConfig::builder()
             .stack_settings(StackSettings {
@@ -7694,10 +7866,10 @@ mod tests {
         assert_eq!(status, ResourceStatus::Deleted);
     }
 
-    /// Continuing past the denied read must not wedge a delete whose role has lost its
-    /// permissions: the next call is denied too, and the worker still ends as `Deleted`.
+    /// A role that has lost its permissions cannot confirm the Lambda network interfaces are
+    /// released. The delete stops there as `DeleteFailed` instead of reporting `Deleted`.
     #[tokio::test]
-    async fn test_delete_still_ends_when_calls_after_the_function_delete_are_denied() {
+    async fn test_delete_fails_when_calls_after_the_function_delete_are_denied() {
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let mut mock_lambda = MockLambdaApi::new();
@@ -7730,16 +7902,39 @@ mod tests {
             .call()
             .await;
 
-        assert_eq!(
-            *calls.lock().unwrap(),
-            [
-                "GetFunction",
-                "DeleteFunction",
-                "GetFunction",
-                "DescribeNetworkInterfaces"
-            ]
+        // The denial may be transient, so the describe is retried before the delete fails.
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls[..3], ["GetFunction", "DeleteFunction", "GetFunction"]);
+        assert!(calls.len() > 4, "{calls:?}");
+        assert!(
+            calls[3..].iter().all(|call| *call == "DescribeNetworkInterfaces"),
+            "{calls:?}"
         );
-        assert_eq!(status, ResourceStatus::Deleted);
+        assert_eq!(status, ResourceStatus::DeleteFailed);
+    }
+
+    /// The function still exists: the tag-scoped detach and read are both denied, and the
+    /// tagging lookup still lists it. The denial is real, so the delete ends `DeleteFailed`
+    /// without deleting anything, and the worker keeps its ARN.
+    #[tokio::test]
+    async fn test_delete_of_a_function_that_still_exists_behind_a_denial_fails() {
+        let mut mock_lambda = MockLambdaApi::new();
+        mock_lambda.expect_delete_function().times(0);
+        mock_lambda
+            .expect_get_function_configuration()
+            .returning(|_, _| Err(access_denied()));
+
+        let status = delete_public_worker_in_created_vpc()
+            .mock_lambda(mock_lambda)
+            .mock_ec2(MockEc2Api::new())
+            .mock_acm(MockAcmApi::new())
+            .listed_arns(vec![
+                "arn:aws:lambda:us-east-1:123456789012:function:test-public-func".to_string(),
+            ])
+            .call()
+            .await;
+
+        assert_eq!(status, ResourceStatus::DeleteFailed);
     }
 
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────
@@ -8598,6 +8793,10 @@ mod tests {
         provider
             .expect_get_aws_logs_client()
             .returning(move |_| Ok(logs.clone()));
+        let tagging = tagging_listing(Vec::new());
+        provider
+            .expect_get_aws_resource_groups_tagging_client()
+            .returning(move |_| Ok(tagging.clone()));
         Arc::new(provider)
     }
 

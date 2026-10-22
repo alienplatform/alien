@@ -189,6 +189,10 @@ pub struct GetResourcesRequest {
     pub include_compliance_details: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude_compliant_resources: Option<bool>,
+    /// Looks up exactly these ARNs instead of filtering by tags.
+    #[serde(rename = "ResourceARNList", skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub resource_arn_list: Vec<String>,
 }
 
 #[derive(Debug, Clone, Builder, Serialize)]

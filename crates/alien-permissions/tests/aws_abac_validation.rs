@@ -199,7 +199,7 @@ fn kubernetes_public_endpoint_acm_permissions_are_resource_scoped() {
         .as_ref()
         .expect("permission set must have AWS permissions");
 
-    assert_eq!(aws_permissions.len(), 3);
+    assert_eq!(aws_permissions.len(), 4);
     for permission in aws_permissions {
         assert!(
             permission.binding.stack.is_none(),
@@ -211,13 +211,13 @@ fn kubernetes_public_endpoint_acm_permissions_are_resource_scoped() {
             .as_ref()
             .expect("resource binding required");
         let actions = permission.grant.actions.as_ref().expect("actions required");
-        // ListCertificates supports no resource scoping, so it is the one unscoped grant, and
-        // it may carry nothing else.
-        if actions
+        // ListCertificates and GetResources support no resource scoping, so they are the only
+        // unscoped grants, and each may carry nothing else.
+        if let Some(unscoped) = actions
             .iter()
-            .any(|action| action == "acm:ListCertificates")
+            .find(|action| *action == "acm:ListCertificates" || *action == "tag:GetResources")
         {
-            assert_eq!(actions, &["acm:ListCertificates"]);
+            assert_eq!(actions, &[unscoped.clone()]);
             assert_eq!(binding.resources, ["*"]);
             assert!(binding.condition.is_none());
             continue;

@@ -123,16 +123,53 @@ async fn test_recreate_deleted_resource() -> Result<()> {
     Ok(())
 }
 
-/// Tests best-effort delete cleanup when the remote resource is already gone.
+/// A delete that finds the remote resource already gone ends Deleted.
 #[tokio::test]
 async fn test_delete_not_found_marks_deleted() -> Result<()> {
     assert_best_effort_delete_error_marks_deleted("SIMULATE_DELETE_NOT_FOUND").await
 }
 
-/// Tests best-effort delete cleanup when imported-resource credentials can no longer access it.
+/// A denied delete is not proof the resource is gone. After its retries it ends DeleteFailed,
+/// keeping the controller state that identifies the remote object and the denial as its error.
 #[tokio::test]
-async fn test_delete_access_denied_marks_deleted() -> Result<()> {
-    assert_best_effort_delete_error_marks_deleted("SIMULATE_DELETE_ACCESS_DENIED").await
+async fn test_delete_access_denied_keeps_resource_delete_failed() -> Result<()> {
+    let mut func1 = test_function("func1");
+    func1.environment.insert(
+        "SIMULATE_DELETE_ACCESS_DENIED".to_string(),
+        "true".to_string(),
+    );
+    let stack = Stack::new("denied-delete".to_owned())
+        .add(func1, ResourceLifecycle::Live)
+        .build();
+
+    let executor = new_executor(&stack)?;
+    let state_after_create = run_to_synced(&executor, new_test_state()).await?;
+    assert_eq!(
+        get_status(&state_after_create, "func1"),
+        Some(ResourceStatus::Running)
+    );
+
+    let deletion_executor = new_deletion_executor()?;
+    let state_after_delete = run_steps(&deletion_executor, state_after_create, 40).await?;
+
+    let resource = &state_after_delete.resources["func1"];
+    assert_eq!(resource.status, ResourceStatus::DeleteFailed);
+    assert!(
+        resource.internal_state.is_some(),
+        "the controller state naming the remote object must be kept"
+    );
+    let error = resource.error.as_ref().expect("the denial is the error");
+    let mut codes = vec![error.code.clone()];
+    let mut source = error.source.as_deref();
+    while let Some(inner) = source {
+        codes.push(inner.code.clone());
+        source = inner.source.as_deref();
+    }
+    assert!(
+        codes.iter().any(|code| code == "REMOTE_ACCESS_DENIED"),
+        "error chain {codes:?} should carry the denial"
+    );
+    Ok(())
 }
 
 /// Tests handling resources that are externally provisioned.

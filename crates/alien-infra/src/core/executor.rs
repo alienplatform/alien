@@ -11,7 +11,7 @@
 //! * [`StackExecutor::step`] – advance every **ready** resource by one step.
 //! * [`StackExecutor::run_until_synced`] – test helper that runs until desired == current.
 
-use alien_error::{AlienError, Context, ContextError, GenericError};
+use alien_error::{AlienError, Context, ContextError};
 use futures::{stream, StreamExt, TryStreamExt};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -322,25 +322,43 @@ mod controller_platform_tests {
     }
 }
 
-/// Whether a failed delete step means the resource is gone or out of reach of these
-/// credentials, so retrying cannot help.
+/// Whether a failed delete step reports that the object does not exist.
 ///
 /// Such an error ends the whole resource as `Deleted` and the delete steps after it never
-/// run. A handler that has more cleanup ahead of it must therefore treat a not-found or
-/// access-denied answer it expects as success and continue, instead of returning it.
+/// run. A handler that has more cleanup ahead of it must therefore treat a not-found answer it
+/// expects as success and continue, instead of returning it.
 ///
-/// Access denied counts only when `access_denied_ends_delete`. A replace passes false: the
-/// resource is still desired and is created right after its delete, so treating a denied
-/// delete as done would create a second one next to the first.
-fn is_best_effort_delete_error(
+/// Access denied never ends a delete, because the object may still exist. It stays an error, so
+/// the resource keeps its identifiers and ends `DeleteFailed` once retries run out. A handler
+/// that can prove a denied object is gone reports that itself (see `aws_tag_scoped`).
+fn is_not_found_delete_error(err: &AlienError<ErrorData>) -> bool {
+    error_chain_matches(err, |code, status| {
+        status == Some(404) || code == "REMOTE_RESOURCE_NOT_FOUND"
+    })
+}
+
+fn is_access_denied_error(err: &AlienError<ErrorData>) -> bool {
+    error_chain_matches(err, |code, status| {
+        matches!(status, Some(401 | 403)) || code == "REMOTE_ACCESS_DENIED"
+    })
+}
+
+/// Whether the error or any of its causes matches on code and HTTP status.
+fn error_chain_matches(
     err: &AlienError<ErrorData>,
-    access_denied_ends_delete: bool,
+    matches: impl Fn(&str, Option<u16>) -> bool,
 ) -> bool {
-    is_best_effort_delete_code(&err.code, err.http_status_code, access_denied_ends_delete)
-        || err
-            .source
-            .as_deref()
-            .is_some_and(|source| is_best_effort_delete_source(source, access_denied_ends_delete))
+    if matches(&err.code, err.http_status_code) {
+        return true;
+    }
+    let mut source = err.source.as_deref();
+    while let Some(inner) = source {
+        if matches(&inner.code, inner.http_status_code) {
+            return true;
+        }
+        source = inner.source.as_deref();
+    }
+    false
 }
 
 /// Clears the denial of every replace that waits for an explicit retry, so the planner plans
@@ -377,28 +395,6 @@ fn error_chain_text(err: &AlienError<ErrorData>) -> String {
 
 fn is_dependency_not_ready_error(err: &AlienError<ErrorData>) -> bool {
     err.code == DEPENDENCY_NOT_READY_CODE
-}
-
-fn is_best_effort_delete_source(
-    err: &AlienError<GenericError>,
-    access_denied_ends_delete: bool,
-) -> bool {
-    is_best_effort_delete_code(&err.code, err.http_status_code, access_denied_ends_delete)
-        || err
-            .source
-            .as_deref()
-            .is_some_and(|source| is_best_effort_delete_source(source, access_denied_ends_delete))
-}
-
-fn is_best_effort_delete_code(
-    code: &str,
-    http_status_code: Option<u16>,
-    access_denied_ends_delete: bool,
-) -> bool {
-    let not_found = http_status_code == Some(404) || code == "REMOTE_RESOURCE_NOT_FOUND";
-    let access_denied =
-        matches!(http_status_code, Some(401 | 403)) || code == "REMOTE_ACCESS_DENIED";
-    not_found || (access_denied_ends_delete && access_denied)
 }
 
 fn validate_stack_controller_state_versions(state: &StackState) -> Result<()> {
@@ -2463,17 +2459,17 @@ impl StackExecutor {
                     warn!("Step failed for '{}': {}", resource_id, err);
 
                     if current_resource_state.status == ResourceStatus::Deleting
-                        && is_best_effort_delete_error(&err, !replacing)
+                        && is_not_found_delete_error(&err)
                     {
                         info!(
                             resource_id = %resource_id,
                             error = %err,
-                            "Best-effort delete accepted missing or inaccessible resource"
+                            "Delete found the resource already gone"
                         );
                         (0, None, None, false, true)
                     } else if current_resource_state.status == ResourceStatus::Deleting
                         && replacing
-                        && is_best_effort_delete_error(&err, true)
+                        && is_access_denied_error(&err)
                     {
                         // Access denied while deleting to replace. Below, the failed create is
                         // restored if nothing was deleted yet, including by this step before its

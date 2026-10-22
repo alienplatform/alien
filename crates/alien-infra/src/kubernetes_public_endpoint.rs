@@ -1199,15 +1199,26 @@ async fn delete_managed_acm_certificate(
     for certificate_arn in &certificate_arns {
         // The delete and read are granted only on certificates carrying this resource's tags,
         // so ACM answers both with AccessDenied for a certificate that is already gone.
-        let outcome = delete_imported_certificate(acm_client.as_ref(), certificate_arn)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to delete Kubernetes public endpoint ACM certificate '{certificate_arn}'"
-                ),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+        let outcome = delete_imported_certificate(
+            acm_client.as_ref(),
+            ctx.service_provider.as_ref(),
+            &aws_config,
+            ctx.resource_prefix,
+            certificate_arn,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to delete Kubernetes public endpoint ACM certificate '{certificate_arn}'"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })?;
         info!(certificate_arn=%certificate_arn, outcome=?outcome, "Kubernetes public endpoint ACM certificate removed");
+        // A retry after a later certificate fails must not delete this one again. Token lookups
+        // list only certificates that still exist.
+        if state.managed_acm_certificate_arn.as_ref() == Some(certificate_arn) {
+            state.managed_acm_certificate_arn = None;
+        }
     }
     state.managed_acm_certificate_arn = None;
     state.managed_acm_import_token = None;
@@ -3887,6 +3898,20 @@ mod tests {
                         .unwrap_or_else(|| panic!("no ACM call expected in {}", config.region))
                         .clone())
                 });
+            // A certificate in these tests is either ours (readable) or gone or someone
+            // else's, which the tagging lookup does not list with this stack's tags.
+            let mut tagging =
+                alien_aws_clients::resourcegroupstagging::MockResourceGroupsTaggingApi::new();
+            tagging.expect_get_resources().returning(|_| {
+                Ok(alien_aws_clients::resourcegroupstagging::GetResourcesResponse {
+                    pagination_token: None,
+                    resource_tag_mapping_list: Vec::new(),
+                })
+            });
+            let tagging: Arc<dyn alien_aws_clients::ResourceGroupsTaggingApi> = Arc::new(tagging);
+            provider
+                .expect_get_aws_resource_groups_tagging_client()
+                .returning(move |_| Ok(tagging.clone()));
             provider
                 .expect_get_kubernetes_service_client()
                 .returning(move |_| Ok(services.clone()));
