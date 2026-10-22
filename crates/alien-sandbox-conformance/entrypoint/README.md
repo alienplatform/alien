@@ -35,3 +35,24 @@ An Azure native-image baseline on 2026-10-22 ran both this kind of root image
 entrypoint and native exec as uid 0 with all 41 Linux capabilities, and permitted
 tmpfs mounts and loopback MTU changes. Agent packaging and exec privilege drops
 are therefore required to satisfy this contract there.
+
+For cloud metadata qualification, build with `--build-arg METADATA_BACKEND=aws`
+(or `gcp` / `azure`) and pass `--metadata-backend aws` to the first exec checker.
+The boot process, its uid-2000 child and exec probe metadata independently. Requests
+bypass proxy environment variables, use the provider's required headers, and cover
+IPv4, both documented cloud IPv6 metadata addresses, and the GCP metadata hostname.
+AWS probes both IMDSv1 and IMDSv2, including the role and instance-identity credential
+paths. The IPv6 addresses are attempted on every backend; this does not claim that
+every provider implements both addresses.
+
+Reports retain status, response size, transport error type, and the known AWS MMDS
+`placement/` and `tags/` directory names. They never print response bodies or tokens.
+A successful credential endpoint, redirect, unfamiliar status, or unfamiliar MMDS
+directory fails the checker. An HTTP refusal or inability to connect establishes
+only that this request obtained no credentials; it does not prove the absence of
+other metadata paths or a permanent network policy. Save these observations beside
+the external-boundary and provider-configuration evidence.
+
+Run the local HTTP response controls with `python3 -m unittest test_metadata` in
+this directory. These controls verify that credential responses fail without
+leaking their contents; they do not replace live cloud qualification.

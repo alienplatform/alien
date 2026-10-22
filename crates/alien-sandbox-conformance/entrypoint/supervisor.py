@@ -10,6 +10,8 @@ import struct
 import subprocess
 import sys
 
+from metadata import collect
+
 ROOT = Path("/tmp/alien-entrypoint")
 
 
@@ -53,9 +55,14 @@ def net_admin_probe():
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "identity":
-        print(json.dumps(identity()))
+        report = identity()
+        if os.environ.get("ALIEN_CONFORMANCE_METADATA"):
+            report["metadata"] = collect(os.environ["ALIEN_CONFORMANCE_METADATA"])
+        print(json.dumps(report))
         return
     report = identity()
+    if os.environ.get("ALIEN_CONFORMANCE_METADATA"):
+        report["metadata"] = collect(os.environ["ALIEN_CONFORMANCE_METADATA"])
     report["mount"] = mount_probe()
     report["netAdmin"] = net_admin_probe()
     report["child"] = None

@@ -6,12 +6,14 @@ from pathlib import Path
 import time
 
 from supervisor import ROOT, identity
+from metadata import collect, verify
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image-uid", type=int, required=True)
     parser.add_argument("--exec-uid", type=int, required=True)
+    parser.add_argument("--metadata-backend", choices=("aws", "gcp", "azure"))
     args = parser.parse_args()
     command = identity()
     # A spawned interpreter may still be loading modules. Observe the boot process
@@ -26,7 +28,7 @@ def main():
             except FileNotFoundError:
                 pass  # A process exiting during enumeration is expected.
     assert present, "image command was not running when the first exec started"
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 90
     while not (ROOT / "complete").exists():
         assert time.monotonic() < deadline, "image supervisor never produced its report"
         time.sleep(0.01)
@@ -35,7 +37,14 @@ def main():
     image = reports[0]
     assert image["pid"] in present, "report is from a different boot process"
     evidence = {"image": image, "exec": command, "supervisorPresentAtFirstExec": True}
+    if args.metadata_backend:
+        command["metadata"] = collect(args.metadata_backend)
     print(json.dumps(evidence), flush=True)
+    if args.metadata_backend:
+        identities = [image, command] + ([image["child"]] if args.image_uid == 0 else [])
+        for process in identities:
+            assert process["metadata"]["backend"] == args.metadata_backend
+            verify(process["metadata"])
     assert image["uid"] == args.image_uid, image
     expected_caps = 0xA80405FB if args.image_uid == 0 else 0
     for key, value in image["capabilities"].items():
