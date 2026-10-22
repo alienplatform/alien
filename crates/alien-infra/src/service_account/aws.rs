@@ -17,7 +17,9 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use alien_permissions::{
     BindingTarget, PermissionContext,
-    aws_resource_policies::aws_service_account_injected_statements,
+    aws_resource_policies::{
+        aws_resource_policy_name, aws_service_account_injected_statements, legacy_policy_name,
+    },
     generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator},
 };
 use chrono::Utc;
@@ -306,6 +308,7 @@ impl AwsServiceAccountController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         Self::apply_resource_permissions(ctx).await?;
+        self.remove_dropped_resource_grants(ctx).await?;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -660,6 +663,65 @@ impl AwsServiceAccountController {
         }
 
         self.stack_permissions_applied = true;
+        Ok(())
+    }
+
+    /// Delete the inline policies that granted this role access to a specific resource it no
+    /// longer has grants on, typically because the resource or its profile grant was removed.
+    /// Each resource writes `deployment-<resource>-<set>` onto the role when created and never
+    /// removes it, so without this the role keeps access to a removed resource, and to anything
+    /// later created under the same name. Requires privileged setup, like every role change.
+    async fn remove_dropped_resource_grants(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        let previous = ctx.previous_resource_config::<ServiceAccount>()?;
+        let dropped: Vec<String> = previous
+            .resource_permission_sets
+            .iter()
+            .flat_map(|(resource_id, sets)| {
+                let kept = config.resource_permission_sets.get(resource_id);
+                sets.iter()
+                    .filter(move |set| !kept.is_some_and(|kept| kept.iter().any(|k| k.id == set.id)))
+                    .map(move |set| aws_resource_policy_name(resource_id, &set.id))
+            })
+            .flat_map(|name| [legacy_policy_name(&name), Some(name)])
+            .flatten()
+            .collect();
+        if dropped.is_empty() {
+            return Ok(());
+        }
+        let role_name = self.role_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "IAM role name not set in state".to_string(),
+            })
+        })?;
+        let client = ctx
+            .service_provider
+            .get_aws_iam_client(ctx.get_aws_config()?)
+            .await?;
+        for policy_name in dropped {
+            match client.delete_role_policy(role_name, &policy_name).await {
+                Ok(()) => info!(
+                    role_name = %role_name,
+                    policy_name = %policy_name,
+                    "Removed a resource grant the service account no longer has"
+                ),
+                // Never written under this name, or removed by an earlier attempt.
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete inline policy '{policy_name}' from IAM role '{role_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1381,6 +1443,77 @@ mod tests {
                 }
             );
         }
+    }
+
+    /// A grant on a resource the account no longer has, for example because the resource was
+    /// removed from the stack, is deleted from the role by setup. Grants it keeps stay.
+    #[tokio::test]
+    async fn setup_removes_the_grant_of_a_removed_resource() {
+        let account = |profile: PermissionProfile| {
+            ServiceAccount::from_permission_profile("app-sa".to_string(), &profile, |id| {
+                alien_permissions::get_permission_set(id).cloned()
+            })
+            .unwrap()
+        };
+        let installed = account(
+            PermissionProfile::new()
+                .resource("jobs", ["queue/data-write"])
+                .resource("extra", ["queue/data-write"]),
+        );
+        let desired = account(PermissionProfile::new().resource("jobs", ["queue/data-write"]));
+
+        let deleted = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut iam = alien_aws_clients::iam::MockIamApi::new();
+        let recorded = deleted.clone();
+        iam.expect_delete_role_policy().returning(move |role, policy| {
+            recorded
+                .lock()
+                .unwrap()
+                .push(format!("{role}/{policy}"));
+            if policy == "deployment-extra-queue-data-write" {
+                Ok(())
+            } else {
+                Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "IAM role policy".to_string(),
+                        resource_name: policy.to_string(),
+                    },
+                ))
+            }
+        });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(desired)
+            .previous_resource(installed)
+            .controller(AwsServiceAccountController {
+                state: AwsServiceAccountState::UpdatingResourcePermissions,
+                role_arn: Some("arn:aws:iam::123456789012:role/test-app-sa".to_string()),
+                role_name: Some("test-app-sa".to_string()),
+                stack_permissions_applied: true,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.expect("the resource permission step succeeds");
+
+        let deleted = deleted.lock().unwrap();
+        assert!(
+            deleted.contains(&"test-app-sa/deployment-extra-queue-data-write".to_string()),
+            "{deleted:?}"
+        );
+        assert!(
+            deleted.iter().all(|call| call.contains("-extra-")),
+            "only the removed resource's grant is deleted: {deleted:?}"
+        );
     }
 
     /// The executor replaces a ProvisionFailed resource whose config changed.
