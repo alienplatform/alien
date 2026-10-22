@@ -354,9 +354,11 @@ FROM {DEFAULT_SANDBOX_BASE_IMAGE}
 
 # No version pins: the -updates and -security pockets supersede a pinned version and the arm64
 # ports lag behind, so a pin breaks the build. The published digest is what fixes the versions.
+# ca-certificates is already in the base; naming it upgrades the trust store to the archive's
+# current one instead of the one frozen in the base digest.
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      {packages} \
+      ca-certificates {packages} \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from={DEFAULT_SANDBOX_UV_IMAGE} /uv /uvx /usr/local/bin/

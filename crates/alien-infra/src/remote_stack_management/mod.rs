@@ -144,8 +144,21 @@ mod tests {
                 executor(platform, controller, authority, setup_run).await
             }
             Platform::Azure => {
+                // Hold the runtime roles' revision current, so only the management
+                // permissions' revision is under test.
+                let probe = executor(
+                    platform,
+                    AzureRemoteStackManagementController::mock_ready("test"),
+                    authority,
+                    setup_run,
+                )
+                .await;
+                let runtime = probe
+                    .with_context(super::azure::current_runtime_roles_revision)
+                    .expect("runtime roles revision");
                 let mut controller = AzureRemoteStackManagementController::mock_ready("test");
                 controller.management_permissions_revision = applied;
+                controller.runtime_roles_revision = Some(runtime);
                 executor(platform, controller, authority, setup_run).await
             }
             other => panic!("no remote stack management controller for {other:?}"),

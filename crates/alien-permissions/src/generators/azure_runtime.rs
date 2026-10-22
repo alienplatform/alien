@@ -116,6 +116,8 @@ pub struct AzureScopedCustomRole {
     pub actions: Vec<String>,
     /// Union of the data actions of every custom grant bound at `scope`.
     pub data_actions: Vec<String>,
+    /// Actions excluded from `actions`.
+    pub not_actions: Vec<String>,
 }
 
 /// The scopes a stack-level Azure grant can bind at.
@@ -184,6 +186,7 @@ pub fn custom_roles_by_scope(plan: &AzureGrantPlan) -> Result<Vec<AzureScopedCus
                 scope_kind,
                 actions: actions.into_iter().collect(),
                 data_actions: data_actions.into_iter().collect(),
+                not_actions: Vec::new(),
             })
         })
         .collect()
@@ -191,6 +194,8 @@ pub fn custom_roles_by_scope(plan: &AzureGrantPlan) -> Result<Vec<AzureScopedCus
 
 const ROLE_ASSIGNMENT_WRITE: &str = "Microsoft.Authorization/roleAssignments/write";
 const ROLE_ASSIGNMENT_DELETE: &str = "Microsoft.Authorization/roleAssignments/delete";
+const ROLE_DEFINITION_WRITE: &str = "Microsoft.Authorization/roleDefinitions/write";
+const ROLE_DEFINITION_DELETE: &str = "Microsoft.Authorization/roleDefinitions/delete";
 
 /// Whether an Azure action pattern (`*` wildcards allowed, case-insensitive) covers `action`.
 fn azure_action_covers(pattern: &str, action: &str) -> bool {
@@ -214,23 +219,28 @@ fn grants_role_assignment_writes(action: &str) -> bool {
 }
 
 /// The management roles for each scope, with every action that writes role assignments moved
-/// into a role of its own.
+/// into a role of its own, and no way to write role definitions.
 ///
-/// The management identity may assign roles to the identities it runs workloads as, but never
-/// to itself: with that it could grant itself a read on the deployment's secrets vault. Azure
-/// can only express "not to itself" as a condition on the role assignment that grants
-/// `roleAssignments/write`, so those actions must sit in a role assigned on its own.
+/// The management identity may assign the roles setup made for the stack, but never another
+/// role: with that it could grant itself a read on the deployment's secrets vault. Azure can only
+/// express which roles an identity may assign as a condition on the role assignment that grants
+/// `roleAssignments/write`, so those actions sit in a role assigned on its own. Setup creates
+/// every role the runtime assigns, so management never writes a role definition: one it could
+/// write is one it could widen and then assign.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AzureManagementRoles {
-    /// The management roles without role-assignment writes. A scope whose grants were only
-    /// role-assignment writes has none.
+    /// The management roles without role-assignment writes or role-definition writes. A scope
+    /// whose grants were only role-assignment writes has none.
     pub roles: Vec<AzureScopedCustomRole>,
-    /// One role per scope holding the role-assignment writes bound there, to assign with
-    /// [`azure_role_assignment_delegation_condition`].
+    /// One role per scope holding the role-assignment writes bound there, to assign with the
+    /// conditions of
+    /// [`azure_role_assignment_allowlist_conditions`](super::azure_role_assignment_allowlist_conditions).
     pub role_assignment_roles: Vec<AzureScopedCustomRole>,
 }
 
-/// Splits [`custom_roles_by_scope`] into the management roles and their role-assignment roles.
+/// Splits [`custom_roles_by_scope`] into the management roles and their role-assignment roles,
+/// and takes role-definition writes out of both: an exact action is dropped, a wildcard that
+/// covers one is kept with the write in `not_actions`.
 pub fn management_roles_by_scope(plan: &AzureGrantPlan) -> Result<AzureManagementRoles> {
     let mut roles = Vec::new();
     let mut role_assignment_roles = Vec::new();
@@ -240,15 +250,24 @@ pub fn management_roles_by_scope(plan: &AzureGrantPlan) -> Result<AzureManagemen
             .into_iter()
             .partition(|action| grants_role_assignment_writes(action));
         if !writes.is_empty() {
+            // The role-assignment condition only constrains `roleAssignments/write`; a wildcard
+            // here that also covers role-definition writes would grant those unconditionally.
+            let (actions, not_actions) = without_role_definition_writes(writes);
             role_assignment_roles.push(AzureScopedCustomRole {
                 scope: role.scope.clone(),
                 scope_kind: role.scope_kind,
-                actions: writes,
+                actions,
                 data_actions: Vec::new(),
+                not_actions,
             });
         }
+        let (actions, not_actions) = without_role_definition_writes(actions);
         if !actions.is_empty() || !role.data_actions.is_empty() {
-            roles.push(AzureScopedCustomRole { actions, ..role });
+            roles.push(AzureScopedCustomRole {
+                actions,
+                not_actions,
+                ..role
+            });
         }
     }
     Ok(AzureManagementRoles {
@@ -257,27 +276,31 @@ pub fn management_roles_by_scope(plan: &AzureGrantPlan) -> Result<AzureManagemen
     })
 }
 
-/// The condition on the management identity's role-assignment role: it may create role
-/// assignments for any principal except itself.
-///
-/// Deleting assignments stays unconditioned: it removes access, and it lets the runtime clean
-/// up assignments it made for itself before this condition existed.
-///
-/// Azure treats a role-assignment write that carries a condition as restricted, so the same
-/// condition also keeps the identity from switching a Key Vault from RBAC to access policies,
-/// which needs unrestricted `roleAssignments/write`.
-pub fn azure_role_assignment_delegation_condition(management_principal_id: &str) -> String {
-    format!(
-        "((!(ActionMatches{{'{ROLE_ASSIGNMENT_WRITE}'}})) OR (@Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAllValues:GuidNotEquals {{{management_principal_id}}}))"
-    )
+/// `actions` without role-definition writes: an exact one is dropped, and the writes a remaining
+/// wildcard covers are returned as `not_actions`.
+fn without_role_definition_writes(actions: Vec<String>) -> (Vec<String>, Vec<String>) {
+    let actions: Vec<String> = actions
+        .into_iter()
+        .filter(|action| {
+            !action.eq_ignore_ascii_case(ROLE_DEFINITION_WRITE)
+                && !action.eq_ignore_ascii_case(ROLE_DEFINITION_DELETE)
+        })
+        .collect();
+    let not_actions = [ROLE_DEFINITION_DELETE, ROLE_DEFINITION_WRITE]
+        .into_iter()
+        .filter(|denied| actions.iter().any(|action| azure_action_covers(action, denied)))
+        .map(str::to_string)
+        .collect();
+    (actions, not_actions)
 }
 
-/// Assignable scopes for a role setup creates for the management identity.
+/// Assignable scopes for a role setup creates for the management identity or for the runtime to
+/// assign.
 ///
 /// Changing a custom role needs `roleDefinitions/write` on every scope it is assignable at.
-/// Management holds that only at the deployment resource group (to create workload roles), so
-/// listing the subscription too keeps it from adding actions, such as `secrets/getSecret`, to a
-/// role it is assigned.
+/// Management never holds that at the subscription, so listing the subscription too keeps it from
+/// adding actions, such as `secrets/getSecret`, to a role it may assign, even on a setup from
+/// before management lost `roleDefinitions/write` at the resource group.
 pub fn protected_management_assignable_scopes(
     scope: &str,
     subscription_scope: &str,
@@ -803,5 +826,76 @@ pub fn azure_predefined_role_id(role_name: &str) -> Option<&'static str> {
         "Storage Table Data Contributor" => Some("0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3"),
         "Storage Table Data Reader" => Some("76199698-9eea-4c19-bc75-cec21354c6b6"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod management_role_tests {
+    use super::*;
+
+    fn plan(actions: &[&str]) -> AzureGrantPlan {
+        AzureGrantPlan {
+            custom_roles: vec![AzureCustomRole {
+                key: "mgmt:resource-group".to_string(),
+                role_definition: AzureRoleDefinition {
+                    name: "management".to_string(),
+                    id: None,
+                    is_custom: true,
+                    description: "test".to_string(),
+                    actions: actions.iter().map(|a| a.to_string()).collect(),
+                    not_actions: Vec::new(),
+                    data_actions: Vec::new(),
+                    not_data_actions: Vec::new(),
+                    assignable_scopes: vec!["/subscriptions/s/resourceGroups/rg".to_string()],
+                },
+            }],
+            bindings: Vec::new(),
+        }
+    }
+
+    /// Setup creates every role the runtime assigns, so management never writes a role
+    /// definition: an exact write is dropped, a wildcard keeps everything else with the writes
+    /// excluded, and role-assignment writes still move to their own role.
+    #[test]
+    fn management_roles_cannot_write_role_definitions() {
+        let roles = management_roles_by_scope(&plan(&[
+            "Microsoft.KeyVault/vaults/write",
+            "Microsoft.Authorization/roleDefinitions/write",
+            "Microsoft.Authorization/roleDefinitions/delete",
+            "Microsoft.Authorization/roleAssignments/write",
+        ]))
+        .unwrap();
+        assert_eq!(roles.roles.len(), 1);
+        assert_eq!(roles.roles[0].actions, vec!["Microsoft.KeyVault/vaults/write"]);
+        assert!(roles.roles[0].not_actions.is_empty());
+        assert_eq!(
+            roles.role_assignment_roles[0].actions,
+            vec!["Microsoft.Authorization/roleAssignments/write"]
+        );
+
+        let wildcard =
+            management_roles_by_scope(&plan(&["Microsoft.KeyVault/*", "Microsoft.Authorization/*"]))
+                .unwrap();
+        assert_eq!(wildcard.roles[0].actions, vec!["Microsoft.KeyVault/*"]);
+        assert!(wildcard.roles[0].not_actions.is_empty());
+        // `Microsoft.Authorization/*` covers role-assignment writes, so it moves whole to the
+        // conditioned role, which the condition does not limit for role-definition writes.
+        assert_eq!(
+            wildcard.role_assignment_roles[0].actions,
+            vec!["Microsoft.Authorization/*"]
+        );
+        assert_eq!(
+            wildcard.role_assignment_roles[0].not_actions,
+            vec![
+                "Microsoft.Authorization/roleDefinitions/delete",
+                "Microsoft.Authorization/roleDefinitions/write"
+            ]
+        );
+
+        let broad = management_roles_by_scope(&plan(&["Microsoft.Authorization/role*/w*"])).unwrap();
+        assert_eq!(
+            broad.role_assignment_roles[0].not_actions,
+            vec!["Microsoft.Authorization/roleDefinitions/write"]
+        );
     }
 }

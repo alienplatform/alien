@@ -222,6 +222,9 @@ locals {
       }
     }
   ]
+  management_runtime_role_ids = {
+    r0 = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:sandbox/images:manage-sandbox-disk-images")
+  }
 }
 
 === default_resource_group.tf ===
@@ -315,6 +318,43 @@ resource "azurerm_role_assignment" "management_self_read" {
   ]
 }
 
+resource "azurerm_role_definition" "management_management_role_assignments_resource_group_role" {
+  name               = "${local.resource_prefix}-management-role-assignments-resource-group-role"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-role-assignments-role-def:${local.resource_prefix}:/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description        = "Role assignments the management identity of Terraform resource 'management' makes, limited to the roles setup made for the stack. Scope: resource-group."
+
+  permissions {
+    actions = [
+      "Microsoft.Authorization/roleAssignments/delete",
+      "Microsoft.Authorization/roleAssignments/write"
+    ]
+    data_actions     = []
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
+    "/subscriptions/${var.azure_subscription_id}"
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_assignment" "management_management_role_assignments_resource_group_role_assignment" {
+  name               = uuidv5("oid", "deployment:azure:mgmt-role-assignments-assign:${local.resource_prefix}:/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  role_definition_id = azurerm_role_definition.management_management_role_assignments_resource_group_role.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.management.principal_id
+  condition          = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${local.management_runtime_role_ids.r0}} AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {${azurerm_user_assigned_identity.management.principal_id}}))"
+  condition_version  = "2.0"
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
 resource "azurerm_federated_identity_credential" "management_fic" {
   count               = var.azure_oidc_issuer != "" && var.azure_oidc_subject != "" ? 1 : 0
   name                = "${local.resource_prefix}-federated-credential"
@@ -354,6 +394,8 @@ resource "terraform_data" "deployment_registration" {
     azurerm_role_assignment.agents_images_0,
     azurerm_user_assigned_identity.management,
     azurerm_role_assignment.management_self_read,
+    azurerm_role_definition.management_management_role_assignments_resource_group_role,
+    azurerm_role_assignment.management_management_role_assignments_resource_group_role_assignment,
     azurerm_federated_identity_credential.management_fic
   ]
 }
