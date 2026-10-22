@@ -930,8 +930,12 @@ async fn live_setup_removes_permissions_after_cleanup() {
             "install exact historical fixture grant"
         );
     }
+    // IAM changes are eventually consistent; this is a bounded observation
+    // window for the real-cloud proof, not a promised revocation deadline.
+    // https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot.html#troubleshoot_general_eventual-consistency
+    const IAM_PROPAGATION_ATTEMPTS: usize = 120;
     let mut positive = false;
-    for _ in 0..24 {
+    for _ in 0..IAM_PROPAGATION_ATTEMPTS {
         if workload
             .send_message(
                 url,
@@ -1068,7 +1072,7 @@ async fn live_setup_removes_permissions_after_cleanup() {
         assert!(!policies.iter().any(|policy| policy == removed));
     }
     let mut denied = false;
-    for _ in 0..24 {
+    for _ in 0..IAM_PROPAGATION_ATTEMPTS {
         let result = workload
             .send_message(
                 url,
