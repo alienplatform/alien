@@ -137,10 +137,10 @@ fn a_frozen_queue_and_table_grant_the_workload_role_by_name() {
             .unwrap_or_else(|| panic!("aws_iam_role_policy.{label} must render"));
         assert_eq!(policy.role, "execution_sa");
         assert_eq!(policy.name, name);
-        assert!(
-            policy.resources.iter().any(|value| value == resource),
-            "{label} must be scoped to {resource}: {:?}",
-            policy.resources
+        assert_eq!(
+            policy.resources,
+            [resource],
+            "{label} must be scoped to {resource} alone"
         );
     }
     // The stack-level policy already grants the "*" set on every prefixed queue.
