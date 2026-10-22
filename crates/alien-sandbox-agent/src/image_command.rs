@@ -91,6 +91,7 @@ mod tests {
     async fn image_command_refuses_a_directory_the_command_cannot_enter() {
         let temp = tempfile::tempdir().expect("private directory");
         let image = SandboxImageCommand {
+            user: None,
             command: vec!["/bin/true".to_string()],
             env: Default::default(),
             working_directory: temp.path().display().to_string(),
@@ -148,6 +149,7 @@ mod tests {
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o777))
             .expect("command can write its test output");
         let image = SandboxImageCommand {
+            user: None,
             command: vec!["/bin/sh".to_string(), "-c".to_string(), "id -u > identity; printf '%s' \"$IMAGE_VAR\" >> identity; test -z \"$ALIEN_SANDBOX_PUBLIC_KEY\"".to_string()],
             env: std::collections::BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string()), ("IMAGE_VAR".to_string(), "image-only".to_string())]),
             working_directory: temp.path().display().to_string(),

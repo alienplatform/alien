@@ -103,6 +103,7 @@ pub fn image_command(image: &Image) -> Result<SandboxImageCommand> {
         env.insert(key.to_string(), value.to_string());
     }
     Ok(SandboxImageCommand {
+        user: Some(config.user),
         command: config
             .entrypoint
             .into_iter()

@@ -196,6 +196,7 @@ pub fn image_command_from_config(config: &Config) -> Result<SandboxImageCommand>
         env.insert(key.to_string(), value.to_string());
     }
     let command = SandboxImageCommand {
+        user: Some(config.user.clone().unwrap_or_default()),
         command: config
             .entrypoint
             .iter()

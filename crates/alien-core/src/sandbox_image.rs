@@ -609,6 +609,10 @@ mod tests {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxImageCommand {
+    /// Original OCI USER, including an empty string for Docker's root default.
+    /// Absent only in released metadata whose boot command used the exec identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
     /// OCI Entrypoint followed by Cmd; empty means there is no image command.
     pub command: Vec<String>,
     /// Image environment only, before runtime authorization and provider variables are added.

@@ -4,7 +4,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 
 use crate::error::{ErrorData, Result};
 
-/// Numeric identity used for sandbox commands, never uid zero.
+/// Numeric image identity. Exec identities must additionally exclude uid and gid zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecIdentity {
     /// User id.
@@ -32,6 +32,38 @@ impl ImageUser<'_> {
         default_uid: u32,
         command_uid: Option<u32>,
     ) -> Result<ExecIdentity> {
+        let identity = self.image_identity()?;
+        let invalid = |reason: String| ErrorData::SandboxImageUserInvalid {
+            user: self.user.to_string(),
+            reason,
+        };
+        if identity.uid == 0 {
+            let uid = command_uid.unwrap_or(default_uid);
+            if uid == 0 || uid == u32::MAX {
+                return Err(AlienError::new(invalid(
+                    "command uid must be non-root and cannot be -1".to_string(),
+                )));
+            }
+            return Ok(ExecIdentity { uid, gid: uid });
+        }
+        if command_uid.is_some_and(|declared| declared != identity.uid) {
+            return Err(AlienError::new(invalid(format!(
+                "privilegedSupervisor.commandUid {} disagrees with image USER uid {}",
+                command_uid.unwrap_or_default(),
+                identity.uid
+            ))));
+        }
+        if identity.gid == 0 {
+            return Err(AlienError::new(invalid(
+                "the root group is not permitted for sandbox commands; declare USER with a non-root primary group".to_string(),
+            )));
+        }
+        Ok(identity)
+    }
+
+    /// Resolve OCI USER for the image boot process, including root and an absent USER.
+    /// Numeric users without passwd entries use group zero, as Docker does.
+    pub fn image_identity(&self) -> Result<ExecIdentity> {
         let invalid = |reason: String| ErrorData::SandboxImageUserInvalid {
             user: self.user.to_string(),
             reason,
@@ -76,21 +108,6 @@ impl ImageUser<'_> {
                 })?[2],
             )?,
         };
-        if uid == 0 {
-            let uid = command_uid.unwrap_or(default_uid);
-            if uid == 0 || uid == u32::MAX {
-                return Err(AlienError::new(invalid(
-                    "command uid must be non-root and cannot be -1".to_string(),
-                )));
-            }
-            return Ok(ExecIdentity { uid, gid: uid });
-        }
-        if command_uid.is_some_and(|declared| declared != uid) {
-            return Err(AlienError::new(invalid(format!(
-                "privilegedSupervisor.commandUid {} disagrees with image USER uid {uid}",
-                command_uid.unwrap_or_default()
-            ))));
-        }
         let gid = match group {
             Some(group) if !group.is_empty() && group.bytes().all(|c| c.is_ascii_digit()) => {
                 parse_id(group)?
@@ -116,11 +133,104 @@ impl ImageUser<'_> {
                 None => 0,
             },
         };
-        if gid == 0 {
-            return Err(AlienError::new(invalid(
-                "the root group is not permitted for sandbox commands; declare USER with a non-root primary group".to_string(),
-            )));
-        }
         Ok(ExecIdentity { uid, gid })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_root_is_distinct_from_the_non_root_exec_fallback() {
+        for user in ["", "0", "0:0", "root", "supervisor:workers"] {
+            let image = ImageUser {
+                user,
+                passwd: "root:x:0:0::/:/bin/sh\nsupervisor:x:0:2000::/:/bin/sh\n",
+                group: "workers:x:2000:\n",
+            };
+            assert_eq!(image.image_identity().unwrap().uid, 0);
+            assert_eq!(
+                image.exec_identity(60000, None).unwrap(),
+                ExecIdentity {
+                    uid: 60000,
+                    gid: 60000
+                }
+            );
+            assert_eq!(
+                image.exec_identity(1000, Some(60001)).unwrap(),
+                ExecIdentity {
+                    uid: 60001,
+                    gid: 60001
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn image_and_exec_preserve_non_root_users_and_named_primary_groups() {
+        for user in ["worker", "worker:workers", "2001:2000", "2001"] {
+            let image = ImageUser {
+                user,
+                passwd: "worker:x:2001:2000::/:/bin/sh\n",
+                group: "workers:x:2000:\n",
+            };
+            let expected = ExecIdentity {
+                uid: 2001,
+                gid: 2000,
+            };
+            assert_eq!(image.image_identity().unwrap(), expected);
+            assert_eq!(image.exec_identity(60000, None).unwrap(), expected);
+            assert!(image.exec_identity(60000, Some(2002)).is_err());
+        }
+    }
+
+    #[test]
+    fn numeric_image_user_can_have_root_group_but_exec_cannot() {
+        let image = ImageUser {
+            user: "2001",
+            passwd: "",
+            group: "",
+        };
+        assert_eq!(
+            image.image_identity().unwrap(),
+            ExecIdentity { uid: 2001, gid: 0 }
+        );
+        assert!(image.exec_identity(60000, None).is_err());
+    }
+
+    #[test]
+    fn invalid_image_users_fail_before_startup() {
+        for user in [
+            "missing",
+            "0:missing",
+            "4294967295",
+            "1:4294967295",
+            "1:2:3",
+        ] {
+            let image = ImageUser {
+                user,
+                passwd: "",
+                group: "",
+            };
+            assert_eq!(
+                image.image_identity().unwrap_err().code,
+                "SANDBOX_IMAGE_USER_INVALID"
+            );
+        }
+    }
+
+    #[test]
+    fn released_command_metadata_keeps_its_legacy_identity() {
+        let image: crate::sandbox_image::SandboxImageCommand = serde_json::from_str(
+            r#"{"command":["/bin/sleep","infinity"],"env":{},"workingDirectory":"/"}"#,
+        )
+        .unwrap();
+        assert_eq!(image.user, None);
+        let root: crate::sandbox_image::SandboxImageCommand = serde_json::from_str(
+            r#"{"user":"","command":["/bin/sleep","infinity"],"env":{},"workingDirectory":"/"}"#,
+        )
+        .unwrap();
+        assert_eq!(root.user.as_deref(), Some(""));
     }
 }

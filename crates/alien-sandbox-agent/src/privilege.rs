@@ -32,6 +32,38 @@ pub fn block_command_ipv6() {
 ///
 /// Must be called only between `fork` and `exec`.
 pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
+    drop_unprivileged_to(identity, false)
+}
+
+/// Docker's default capabilities without NET_RAW. Root image processes can manage
+/// their workers, but cannot administer networking, mount filesystems or set socket
+/// marks (which recent kernels also permit with NET_RAW).
+#[cfg(target_os = "linux")]
+pub const IMAGE_ROOT_CAPABILITIES: u32 = 0xa80405fb;
+
+/// Enter the image USER with a bounded root grant or no capabilities for non-root.
+///
+/// # Safety
+/// Must be called only between `fork` and `exec`.
+#[cfg(target_os = "linux")]
+pub unsafe fn drop_image_to(identity: ExecIdentity) -> io::Result<()> {
+    if identity.uid != 0 {
+        return drop_unprivileged_to(identity, true);
+    }
+    if libc::geteuid() != 0 {
+        return Err(io::Error::from_raw_os_error(libc::EPERM));
+    }
+    if libc::setgroups(0, std::ptr::null()) != 0 || libc::setgid(identity.gid) != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    restrict_capabilities(IMAGE_ROOT_CAPABILITIES)?;
+    if BLOCK_IPV6.load(Ordering::Relaxed) {
+        deny_ipv6_sockets()?;
+    }
+    Ok(())
+}
+
+unsafe fn drop_unprivileged_to(identity: ExecIdentity, allow_root_group: bool) -> io::Result<()> {
     // Shedding groups needs `CAP_SETGID`, which a process that is not crossing a privilege
     // boundary does not have and does not need: if the command already runs as this identity,
     // there is no membership for it to inherit that it would not have had anyway. A real drop
@@ -43,7 +75,7 @@ pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        if identity.uid == 0 || identity.gid == 0 {
+        if identity.uid == 0 || (identity.gid == 0 && !allow_root_group) {
             return Err(io::Error::from_raw_os_error(libc::EPERM));
         }
         // Clear ambient capabilities; where the kernel rejects that, the capset after setuid
@@ -160,6 +192,15 @@ fn clear_ambient_capabilities() -> io::Result<()> {
 /// Retains only network administration, identity dropping, and access to command-owned files.
 #[cfg(target_os = "linux")]
 pub fn restrict_supervisor() -> io::Result<()> {
+    // CHOWN, DAC_OVERRIDE, FOWNER (file projection), KILL (timeouts/cancellation),
+    // SETGID, SETUID, SETPCAP (irreversible child drop), NET_ADMIN.
+    let keep: u32 =
+        (1 << 0) | (1 << 1) | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 12);
+    restrict_capabilities(keep)
+}
+
+#[cfg(target_os = "linux")]
+fn restrict_capabilities(keep: u32) -> io::Result<()> {
     #[repr(C)]
     struct Header {
         version: u32,
@@ -171,10 +212,6 @@ pub fn restrict_supervisor() -> io::Result<()> {
         permitted: u32,
         inheritable: u32,
     }
-    // CHOWN, DAC_OVERRIDE, FOWNER (file projection), KILL (timeouts/cancellation),
-    // SETGID, SETUID, SETPCAP (irreversible child drop), NET_ADMIN.
-    let keep: u32 =
-        (1 << 0) | (1 << 1) | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 12);
     unsafe {
         for capability in 0..64 {
             let present = libc::prctl(libc::PR_CAPBSET_READ, capability, 0, 0, 0);
@@ -274,6 +311,68 @@ unsafe fn deny_ipv6_sockets() -> io::Result<()> {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+
+    #[test]
+    #[ignore = "requires root with the Docker default capability set and setpriv"]
+    fn root_image_capabilities_survive_exec_without_network_administration() {
+        assert_eq!(unsafe { libc::geteuid() }, 0, "run this test as root");
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "cat /proc/self/status; setpriv --reuid 2000 --regid 2000 --clear-groups id -u",
+        ]);
+        unsafe {
+            command.pre_exec(|| {
+                drop_image_to(ExecIdentity { uid: 0, gid: 0 })?;
+                let socket = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+                if socket < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let mark: u32 = 0xa11e;
+                let result = libc::setsockopt(
+                    socket,
+                    libc::SOL_SOCKET,
+                    libc::SO_MARK,
+                    (&mark as *const u32).cast(),
+                    size_of::<u32>() as _,
+                );
+                let error = io::Error::last_os_error();
+                libc::close(socket);
+                if result == 0 || error.raw_os_error() != Some(libc::EPERM) {
+                    return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                }
+                Ok(())
+            });
+        }
+        let output = command
+            .output()
+            .expect("bounded root can exec, but cannot set SO_MARK");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("process status is UTF-8");
+        for set in ["CapPrm", "CapEff", "CapBnd"] {
+            assert!(
+                stdout.contains(&format!("{set}:\t00000000a80405fb")),
+                "{stdout}"
+            );
+        }
+        for set in ["CapInh", "CapAmb"] {
+            assert!(
+                stdout.contains(&format!("{set}:\t0000000000000000")),
+                "{stdout}"
+            );
+        }
+        assert!(stdout.contains("Uid:\t0\t0\t0\t0"), "{stdout}");
+        assert!(
+            stdout.ends_with("2000\n"),
+            "root must be able to start a worker: {stdout}"
+        );
+    }
 
     fn unprivileged_identity() -> ExecIdentity {
         unsafe {
