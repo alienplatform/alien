@@ -1363,6 +1363,7 @@ dependencies = [
 name = "alien-terraform"
 version = "3.3.39"
 dependencies = [
+ "alien-cloudformation",
  "alien-core",
  "alien-error",
  "alien-permissions",

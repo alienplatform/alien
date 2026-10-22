@@ -13,12 +13,13 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, Network, NetworkSettings, PermissionSet, ResourceDefinition,
-    ResourceRef, ResourceType, Result, ServiceAccount, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    import::EmitContext, ErrorData, Network, NetworkSettings, PermissionSet,
+    PermissionSetReference, ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
+    aws_resource_policies::{aws_resource_policy_name, without_refs_the_stack_policy_grants},
     generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
 };
@@ -390,6 +391,85 @@ pub fn emit_iam_role_policy_for_target(
         context,
         target,
     )
+}
+
+/// Attaches the `<prefix>` sets each permission profile grants on this resource, by id or under
+/// `"*"`, to that profile's service-account role, scoped to the resource's
+/// `${local.resource_prefix}-<id>` name.
+///
+/// Setup owns these grants: after a Terraform handoff the runtime refuses to write them, so a
+/// set left out here is never granted. Policy names and the omission of `"*"` sets the
+/// stack-level policy already grants follow the runtime writer.
+pub fn emit_workload_resource_grants(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    permission_set_prefix: &str,
+) -> Result<()> {
+    let resource_label = required_label(ctx)?;
+    let context = aws_terraform_permission_context()
+        .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
+    let generator = AwsRuntimePermissionsGenerator::new();
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let service_account_id = format!("{profile_name}-sa");
+        let Some(role_label) = ctx.stack.resources().find_map(|(id, entry)| {
+            (id.as_str() == service_account_id
+                && entry.config.downcast_ref::<ServiceAccount>().is_some())
+            .then(|| ctx.name_for(id))
+            .flatten()
+        }) else {
+            continue;
+        };
+        let mut seen = HashSet::new();
+        let granted: Vec<PermissionSetReference> = [ctx.resource_id, "*"]
+            .into_iter()
+            .filter_map(|key| profile.0.get(key))
+            .flatten()
+            .filter(|reference| reference.id().starts_with(permission_set_prefix))
+            .filter(|reference| seen.insert(reference.id().to_string()))
+            .cloned()
+            .collect();
+        let granted = without_refs_the_stack_policy_grants(
+            ctx.stack,
+            profile_name,
+            profile,
+            ctx.resource_id,
+            granted,
+            &generator,
+            &context,
+        )
+        .context(ErrorData::GenericError {
+            message: format!(
+                "failed to select profile '{profile_name}' policies for '{}'",
+                ctx.resource_id
+            ),
+        })?;
+        for reference in granted {
+            let permission_set = reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "permission set '{}' granted on '{}' is not registered",
+                            reference.id(),
+                            ctx.resource_id
+                        ),
+                    })
+                })?;
+            emit_iam_role_policy_for_target_with_label(
+                fragment,
+                role_label,
+                &permission_set,
+                &format!(
+                    "{role_label}_{resource_label}_{}",
+                    permission_set.id.replace(['/', '-'], "_")
+                ),
+                &aws_resource_policy_name(ctx.resource_id, &permission_set.id),
+                &context,
+                BindingTarget::Resource,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 pub fn emit_iam_role_policy_for_target_with_label(

@@ -5,7 +5,7 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
         aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
-        required_label, resource_prefix_template, tags,
+        emit_workload_resource_grants, required_label, resource_prefix_template, tags,
     },
     expr,
 };
@@ -111,6 +111,7 @@ impl TfEmitter for AwsQueueEmitter {
                 )?;
             }
         }
+        emit_workload_resource_grants(ctx, &mut fragment, "queue/")?;
         Ok(fragment)
     }
 
