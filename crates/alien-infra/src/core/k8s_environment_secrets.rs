@@ -468,8 +468,13 @@ fn optional_secret_key_ref_env_var(
 ///    projected as its own `secretKeyRef` and the binding is emitted as
 ///    `ALIEN_<NAME>_BINDING` with `$(VAR)` placeholders. Extraction failures
 ///    propagate (fail fast) rather than silently dropping the binding.
-/// 3. `env_map` — the remaining plain env vars; a name already projected as a
-///    secret above wins and is never overwritten with an inline value.
+/// 3. `env_map` — the remaining plain env vars, sorted by name; a name already
+///    projected as a secret above wins and is never overwritten with an inline
+///    value.
+///
+/// The output order must not depend on `HashMap` iteration order: the env list
+/// is part of the pod template, so a different order between two reconciles of
+/// the same config makes Kubernetes roll every pod.
 ///
 /// The legacy `ALIEN_SECRETS` vault-load pointer is dropped from `env_map`.
 /// Kubernetes workloads project secrets natively via `secretKeyRef`, so the
@@ -530,7 +535,9 @@ pub fn projected_env_vars(
         });
     }
 
-    for (key, value) in env_map {
+    let mut plain_vars = env_map.into_iter().collect::<Vec<_>>();
+    plain_vars.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    for (key, value) in plain_vars {
         if key == ENV_ALIEN_SECRETS {
             continue;
         }

@@ -3071,8 +3071,8 @@ mod tests {
     // assert on the typed fields — no string snapshots.
 
     use crate::core::kubernetes_manifest_test_support::{
-        assert_secret_key_ref, deployment_env, pod_template_checksum_annotation, secret_env_var,
-        KubernetesManifestTestHarness,
+        assert_secret_key_ref, deployment_env, pod_template_checksum_annotation, pod_template_env,
+        secret_env_var, KubernetesManifestTestHarness,
     };
     use crate::core::{
         direct_monitoring_auth_headers, environment_secret_plan,
@@ -3418,6 +3418,61 @@ mod tests {
             );
         }
         assert!(GATEWAY_READY_DELAY_SECONDS > 30);
+    }
+
+    /// Renders the Deployment the controller would submit for a fresh copy of
+    /// the same container config, as a reconcile after a new release does.
+    async fn render_deployment_for_replicas(replicas: u32) -> Deployment {
+        let names = (0..24)
+            .map(|index| (format!("APP_VAR_{index:02}"), format!("value-{index}")))
+            .collect::<Vec<_>>();
+        let environment = names
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        let mut config = manifest_test_container(&environment, false);
+        config.replicas = Some(replicas);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        manifest_test_controller()
+            .build_deployment(
+                &config,
+                "web",
+                "test-ns",
+                "web-sa",
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("deployment manifest")
+    }
+
+    #[tokio::test]
+    async fn scale_only_change_keeps_the_pod_template_identical() {
+        let before = render_deployment_for_replicas(1)
+            .await
+            .spec
+            .expect("deployment spec");
+        let after = render_deployment_for_replicas(3)
+            .await
+            .spec
+            .expect("deployment spec");
+
+        assert_eq!(before.replicas, Some(1));
+        assert_eq!(after.replicas, Some(3));
+        // Kubernetes starts a new rollout whenever the pod template changes,
+        // so a replica-count change must leave it byte-for-byte equal.
+        assert_eq!(before.template, after.template);
+
+        let app_vars = pod_template_env(&after.template)
+            .into_iter()
+            .map(|variable| variable.name)
+            .filter(|name| name.starts_with("APP_VAR_"))
+            .collect::<Vec<_>>();
+        let expected = (0..24)
+            .map(|index| format!("APP_VAR_{index:02}"))
+            .collect::<Vec<_>>();
+        assert_eq!(app_vars, expected, "plain env vars render sorted by name");
     }
 
     #[tokio::test]
