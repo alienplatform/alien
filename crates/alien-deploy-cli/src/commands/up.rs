@@ -2008,6 +2008,7 @@ mod tests {
             join_token: " aj1_wrapped-token ".to_string(),
             control_plane_url: Some("https://horizon.example.com".to_string()),
             cluster_id: Some("cluster-123".to_string()),
+            capacity_groups: None,
         })
         .expect("wrapped token should be accepted");
 
@@ -2020,6 +2021,7 @@ mod tests {
             join_token: " hj_secret ".to_string(),
             control_plane_url: Some(" https://horizon.example.com ".to_string()),
             cluster_id: Some(" cluster-123 ".to_string()),
+            capacity_groups: None,
         })
         .expect("raw token with context should be wrapped");
 
@@ -2035,11 +2037,36 @@ mod tests {
     }
 
     #[test]
+    fn machines_join_token_response_preserves_capacity_requirements() {
+        let response = serde_json::from_value(serde_json::json!({
+            "joinToken": "hj_secret",
+            "controlPlaneUrl": "https://horizon.example.com",
+            "clusterId": "cluster-123",
+            "capacityGroups": {"general": {
+                "cpu": "500m", "memoryBytes": 1024, "ephemeralStorageBytes": 2048,
+                "dataDisk": {"sizeBytes": 4096}
+            }}
+        }))
+        .expect("response should parse");
+        let token = normalize_machines_join_token_response(response).expect("wrap token");
+        let payload = URL_SAFE_NO_PAD
+            .decode(token.trim_start_matches("aj1_"))
+            .expect("decode token");
+        let payload: serde_json::Value = serde_json::from_slice(&payload).expect("parse token");
+        assert_eq!(payload["capacityGroups"]["general"]["cpu"], "500m");
+        assert_eq!(
+            payload["capacityGroups"]["general"]["dataDisk"]["sizeBytes"],
+            4096
+        );
+    }
+
+    #[test]
     fn machines_join_token_response_rejects_raw_token_without_context() {
         let error = normalize_machines_join_token_response(MachinesJoinTokenResponse {
             join_token: "hj_secret".to_string(),
             control_plane_url: None,
             cluster_id: Some("cluster-123".to_string()),
+            capacity_groups: None,
         })
         .expect_err("raw token should require context");
 
@@ -4205,6 +4232,8 @@ struct MachinesJoinTokenResponse {
     join_token: String,
     control_plane_url: Option<String>,
     cluster_id: Option<String>,
+    #[serde(default)]
+    capacity_groups: Option<std::collections::BTreeMap<String, alien_core::MachineProfile>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4213,6 +4242,8 @@ struct WrappedMachinesJoinToken<'a> {
     join_token: &'a str,
     control_plane_url: &'a str,
     cluster_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capacity_groups: Option<&'a std::collections::BTreeMap<String, alien_core::MachineProfile>>,
 }
 
 async fn create_machines_join_token(
@@ -4285,6 +4316,7 @@ fn normalize_machines_join_token_response(response: MachinesJoinTokenResponse) -
                 join_token,
                 control_plane_url,
                 cluster_id,
+                capacity_groups: response.capacity_groups.as_ref(),
             };
             let json = serde_json::to_vec(&payload).into_alien_error().context(
                 ErrorData::ConfigurationError {

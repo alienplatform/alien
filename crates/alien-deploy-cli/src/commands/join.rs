@@ -4,7 +4,7 @@ use crate::commands::up::read_token_file;
 use crate::error::{ErrorData, Result};
 use crate::output;
 use alien_core::embedded_config::DeployCliConfig;
-use alien_core::instance_catalog::Architecture;
+use alien_core::instance_catalog::{parse_cpu, Architecture};
 use alien_core::MachineProfile;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -35,12 +35,15 @@ const DRAIN_POLL_INTERVAL_MS: u64 = 1_000;
 const DRAIN_POLL_INTERVAL_MS: u64 = 10;
 const WRAPPED_JOIN_TOKEN_PREFIX: &str = "aj1_";
 /// The machine runtime keeps container images and writable layers under this
-/// directory, so pool ephemeral storage is checked against its free space.
+/// directory, so pool ephemeral storage is checked against its total capacity.
 const EPHEMERAL_STORAGE_DIR: &str = "var/lib";
 /// `MemTotal` excludes memory the firmware and kernel reserve (including a
 /// crash kernel on some distributions), so a host sold as 8 GiB reports less.
 /// Accept hosts reporting at least this share of the pool's memory.
 const MEMORY_TOLERANCE_PERCENT: u64 = 90;
+/// Filesystem metadata and boot partitions reduce the reported usable total
+/// below the advertised disk size. Allow five percent for that overhead.
+const STORAGE_TOLERANCE_PERCENT: u64 = 95;
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
 #[derive(Args, Debug)]
@@ -173,6 +176,7 @@ struct JoinPreview<'a> {
 #[derive(Debug, Clone)]
 struct JoinRequest {
     token: String,
+    admitted_capacity_group: Option<String>,
     plan: JoinPlan,
     install_root: PathBuf,
 }
@@ -358,6 +362,8 @@ struct MachineInstallState {
     cluster_id: Option<String>,
     machine_id: Option<String>,
     #[serde(default)]
+    capacity_group: Option<String>,
+    #[serde(default)]
     network_interface: Option<String>,
     #[serde(default)]
     wireguard_endpoint: Option<String>,
@@ -388,7 +394,7 @@ struct HostCapacity {
     cpu_count: u32,
     memory_bytes: u64,
     ephemeral_storage_path: PathBuf,
-    ephemeral_storage_free_bytes: u64,
+    ephemeral_storage_total_bytes: u64,
     /// Whole disks, or why they could not be listed. Only needed when the
     /// capacity group requires an additional empty disk.
     disks: std::result::Result<Vec<BlockDevice>, String>,
@@ -561,13 +567,19 @@ fn build_join_request(
     let arch = preflight_host(&host)?;
     let capacity_group = normalize_non_empty("capacity-group", &args.capacity_group)?;
     let requirements = capacity_group_requirements(wrapped_token.as_ref(), &capacity_group)?;
-    // A joined host has already been admitted, and its runtime and workload now
-    // use the disks being measured, so only a host joining for the first time is
-    // checked against its capacity group.
-    if previous_state.is_none() {
-        if let Some(requirements) = requirements {
-            check_capacity_group_requirements(&capacity_group, requirements, &host, arch)?;
+    if let Some(requirements) = requirements {
+        // A workload may have formatted its admitted data disk. Recheck the
+        // host totals on every join, but require an empty disk again when the
+        // requested group differs or the previous admission is unknown.
+        let mut requirements = requirements.clone();
+        if previous_state
+            .as_ref()
+            .and_then(|state| state.capacity_group.as_deref())
+            == Some(capacity_group.as_str())
+        {
+            requirements.data_disk = None;
         }
+        check_capacity_group_requirements(&capacity_group, &requirements, &host, arch)?;
     }
     let network_interface = resolve_persisted_override(
         args.network_interface.as_deref(),
@@ -596,6 +608,7 @@ fn build_join_request(
         || wireguard_endpoint.is_some();
 
     Ok(JoinRequest {
+        admitted_capacity_group: requirements.map(|_| capacity_group.clone()),
         token: wrapped_token
             .map(|wrapped| wrapped.join_token)
             .unwrap_or(token),
@@ -859,18 +872,18 @@ fn current_host_capacity(install_root: &Path) -> Result<HostCapacity> {
         })?;
     let ephemeral_storage_path = install_root.join(EPHEMERAL_STORAGE_DIR);
     let measured_path = nearest_existing_ancestor(&ephemeral_storage_path);
-    let ephemeral_storage_free_bytes = fs2::available_space(&measured_path)
+    let ephemeral_storage_total_bytes = fs2::total_space(&measured_path)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "statvfs".to_string(),
             file_path: measured_path.display().to_string(),
-            reason: "Failed to measure free disk space".to_string(),
+            reason: "Failed to measure total disk space".to_string(),
         })?;
     Ok(HostCapacity {
         cpu_count,
         memory_bytes: parse_meminfo_total(&meminfo)?,
         ephemeral_storage_path,
-        ephemeral_storage_free_bytes,
+        ephemeral_storage_total_bytes,
         disks: list_disks().map_err(|error| error.message),
     })
 }
@@ -1066,7 +1079,7 @@ fn check_capacity_group_requirements(
         }
     }
 
-    let required_cpu: f64 = requirements.cpu.trim().parse().map_err(|_| {
+    let required_cpu = parse_cpu(&requirements.cpu).map_err(|_| {
         AlienError::new(ErrorData::ValidationError {
             field: "token.capacityGroups".to_string(),
             message: format!(
@@ -1093,12 +1106,14 @@ fn check_capacity_group_requirements(
         ));
     }
 
-    if capacity.ephemeral_storage_free_bytes < requirements.ephemeral_storage_bytes {
+    let minimum_storage = requirements.ephemeral_storage_bytes / 100 * STORAGE_TOLERANCE_PERCENT;
+    if capacity.ephemeral_storage_total_bytes < minimum_storage {
         shortfalls.push(format!(
-            "free space for container storage under {}: needs {}, found {}",
+            "total space for container storage under {}: needs {} (at least {} after filesystem overhead), found {}",
             capacity.ephemeral_storage_path.display(),
             format_gib(requirements.ephemeral_storage_bytes),
-            format_gib(capacity.ephemeral_storage_free_bytes)
+            format_gib(minimum_storage),
+            format_gib(capacity.ephemeral_storage_total_bytes)
         ));
     }
 
@@ -1246,7 +1261,8 @@ fn join_configuration_changed(
     request: &JoinRequest,
     manifest: &MachineBundleManifest,
 ) -> Result<bool> {
-    if state.network_interface != request.plan.network_interface
+    if state.capacity_group != request.admitted_capacity_group
+        || state.network_interface != request.plan.network_interface
         || state.wireguard_endpoint != request.plan.wireguard_endpoint
         || state.public_ip != request.plan.public_ip
     {
@@ -1428,6 +1444,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
         control_plane_url: Some(request.plan.control_plane_url.clone()),
         cluster_id: Some(request.plan.cluster_id.clone()),
         machine_id: None,
+        capacity_group: request.admitted_capacity_group.clone(),
         network_interface: request.plan.network_interface.clone(),
         wireguard_endpoint: request.plan.wireguard_endpoint.clone(),
         public_ip: request.plan.public_ip.clone(),
@@ -1485,6 +1502,7 @@ async fn reconcile_existing_join(
     state.config_path = config_path.clone();
     state.control_plane_url = Some(request.plan.control_plane_url.clone());
     state.cluster_id = Some(request.plan.cluster_id.clone());
+    state.capacity_group = request.admitted_capacity_group.clone();
     state.network_interface = request.plan.network_interface.clone();
     state.wireguard_endpoint = request.plan.wireguard_endpoint.clone();
     state.public_ip = request.plan.public_ip.clone();
@@ -3388,6 +3406,7 @@ mod tests {
             control_plane_url: Some(format!("http://{address}/control")),
             cluster_id: Some("cluster-test".to_string()),
             machine_id: Some("machine-test".to_string()),
+            capacity_group: None,
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
@@ -3792,7 +3811,7 @@ mod tests {
         systemd_runtime_dir: &Path,
         cpu_count: u32,
         memory_gib: u64,
-        free_gib: u64,
+        total_gib: u64,
         disks: Vec<BlockDevice>,
     ) -> HostFacts<'_> {
         HostFacts {
@@ -3800,7 +3819,7 @@ mod tests {
                 cpu_count,
                 memory_bytes: memory_gib * TEST_GIB,
                 ephemeral_storage_path: PathBuf::from("/var/lib"),
-                ephemeral_storage_free_bytes: free_gib * TEST_GIB,
+                ephemeral_storage_total_bytes: total_gib * TEST_GIB,
                 disks: Ok(disks),
             }),
             ..linux_host(systemd_runtime_dir)
@@ -3856,6 +3875,18 @@ mod tests {
     }
 
     #[test]
+    fn capacity_check_accepts_millicores_and_total_storage() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let host = host_with_capacity(dir.path(), 1, 8, 19, vec![root_disk()]);
+        let mut requirements = pool_requirements(None);
+        requirements.cpu = "500m".to_string();
+        check_capacity_group_requirements("general", &requirements, &host, MachineArch::X64)
+            .expect(
+                "millicores and storage within filesystem overhead allowance should be accepted",
+            );
+    }
+
+    #[test]
     fn capacity_check_names_every_shortfall_and_what_was_found() {
         let dir = tempfile::tempdir().expect("temp dir");
         let formatted = BlockDevice {
@@ -3886,7 +3917,7 @@ mod tests {
              - CPU architecture: needs x86_64, found arm64\n  \
              - CPU: needs 4 cores, found 2\n  \
              - memory: needs 8 GiB (at least 7.2 GiB reported by the kernel), found 4 GiB\n  \
-             - free space for container storage under /var/lib: needs 20 GiB, found 12 GiB\n  \
+             - total space for container storage under /var/lib: needs 20 GiB (at least 19 GiB after filesystem overhead), found 12 GiB\n  \
              - additional empty disk: needs a disk of at least 50 GiB with no partitions, no filesystem and no mounts; \
              found /dev/nvme0n1 (100 GiB, has partitions), /dev/nvme1n1 (100 GiB, has a filesystem signature (xfs)), \
              /dev/nvme2n1 (10 GiB, empty but too small)"
@@ -3983,7 +4014,7 @@ mod tests {
     }
 
     #[test]
-    fn rejoin_skips_capacity_checks_for_an_admitted_host() {
+    fn rejoin_rechecks_capacity_but_accepts_its_admitted_data_disk() {
         let root = tempfile::tempdir().expect("install root");
         let state = MachineInstallState {
             bundle_version: "old".to_string(),
@@ -3997,6 +4028,7 @@ mod tests {
             control_plane_url: None,
             cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-123".to_string()),
+            capacity_group: Some("general".to_string()),
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
@@ -4023,7 +4055,28 @@ mod tests {
             None,
             host_with_capacity(root.path(), 8, 16, 100, vec![root_disk(), mounted]),
         )
-        .expect("an already joined host should not be measured again");
+        .expect("the admitted group may use its data disk");
+
+        let error = build_join_request(
+            &args,
+            None,
+            host_with_capacity(root.path(), 1, 16, 100, vec![root_disk()]),
+        )
+        .expect_err("existing hosts must still meet CPU requirements");
+        assert!(error.message.contains("CPU: needs 4 cores, found 1"));
+
+        let mut changed_group = args;
+        changed_group.capacity_group = "larger".to_string();
+        changed_group.token = Some(wrapped_join_token_with_groups(serde_json::json!({
+            "larger": pool_requirements(Some(50)),
+        })));
+        let error = build_join_request(
+            &changed_group,
+            None,
+            host_with_capacity(root.path(), 8, 16, 100, vec![root_disk()]),
+        )
+        .expect_err("changing groups must check the new data disk requirement");
+        assert!(error.message.contains("additional empty disk"));
     }
 
     #[test]
@@ -4476,6 +4529,7 @@ mod tests {
             control_plane_url: Some("https://old-control.example.com".to_string()),
             cluster_id: Some("old-cluster".to_string()),
             machine_id: None,
+            capacity_group: None,
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
@@ -4492,6 +4546,7 @@ mod tests {
             control_plane_url: Some("https://control.example.com".to_string()),
             cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-new".to_string()),
+            capacity_group: None,
             network_interface: Some("ens3f0np0".to_string()),
             wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
             public_ip: Some("10.0.1.12".to_string()),
@@ -4544,6 +4599,7 @@ mod tests {
             control_plane_url: None,
             cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-123".to_string()),
+            capacity_group: None,
             network_interface: Some("ens3f0np0".to_string()),
             wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
             public_ip: Some("10.0.1.12".to_string()),
@@ -4584,6 +4640,7 @@ mod tests {
             control_plane_url: None,
             cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-123".to_string()),
+            capacity_group: None,
             network_interface: Some("ens3f0np0".to_string()),
             wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
             public_ip: Some("10.0.1.12".to_string()),
@@ -4642,6 +4699,7 @@ mod tests {
                 control_plane_url: Some(request.plan.control_plane_url.clone()),
                 cluster_id: Some(request.plan.cluster_id.clone()),
                 machine_id: Some("machine-123".to_string()),
+                capacity_group: None,
                 network_interface: None,
                 wireguard_endpoint: None,
                 public_ip: None,
@@ -4682,6 +4740,7 @@ mod tests {
             control_plane_url: Some(request.plan.control_plane_url.clone()),
             cluster_id: Some(request.plan.cluster_id.clone()),
             machine_id: Some("machine-123".to_string()),
+            capacity_group: None,
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
@@ -4735,6 +4794,7 @@ mod tests {
             control_plane_url: None,
             cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-123".to_string()),
+            capacity_group: None,
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
@@ -4781,6 +4841,7 @@ mod tests {
             control_plane_url: Some(request.plan.control_plane_url.clone()),
             cluster_id: Some(request.plan.cluster_id.clone()),
             machine_id: Some("machine-123".to_string()),
+            capacity_group: None,
             network_interface: None,
             wireguard_endpoint: None,
             public_ip: None,
