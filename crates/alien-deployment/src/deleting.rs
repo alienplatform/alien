@@ -421,15 +421,21 @@ fn compute_runtime_cleanup_status(
 }
 
 /// Whether runtime cleanup of an automatic package keeps this resource because a package
-/// resource still depends on it. The executor never schedules that delete, so waiting for it
-/// would hold the deployment in Deleting.
+/// resource still depends on it. The executor never deletes it while that dependent exists,
+/// whether it is Running or a failed resource destroy preparation moved to Deleting, so
+/// waiting for it would hold the deployment in Deleting. A failed delete still surfaces.
 fn held_for_setup_teardown(
     stack_state: &StackState,
     resource_id: &str,
     resource: &alien_core::StackResourceState,
     management: SetupManagement,
 ) -> Result<bool> {
-    if management != SetupManagement::Automatic || resource.status != ResourceStatus::Running {
+    if management != SetupManagement::Automatic
+        || matches!(
+            resource.status,
+            ResourceStatus::Deleted | ResourceStatus::DeleteFailed
+        )
+    {
         return Ok(false);
     }
     for dependent in stack_state.resources.values() {

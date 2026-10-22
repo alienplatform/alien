@@ -1768,15 +1768,9 @@ async fn test_delete_runtime_cleanup_reaches_teardown_required() {
     assert_eq!(state.status, DeploymentStatus::TeardownRequired);
 }
 
-/// An automatic setup package creates only its scaffolding types, vaults among them. The
-/// runtime created the Frozen storage, and the package's teardown cannot see it, so runtime
-/// cleanup must delete it before handing off. A vault belongs to the package even when Live, so
-/// it stays for that teardown: deleting it here makes the package's destroy fail on a missing
-/// resource.
-#[tokio::test]
-async fn automatic_setup_runtime_cleanup_removes_only_what_the_runtime_created() {
-    let _vault = test_vault_env().await;
-
+/// A running automatic-setup deployment with Frozen storage the runtime created and a Live
+/// vault the package owns.
+async fn running_automatic_setup_with_package_vault() -> (DeploymentState, DeploymentConfig) {
     let mut stack = create_test_stack_with_storage("automatic", "data", "api");
     stack.resources.insert(
         "app-secrets".to_string(),
@@ -1794,9 +1788,15 @@ async fn automatic_setup_runtime_cleanup_removes_only_what_the_runtime_created()
 
     state = run_to_completion(state, config.clone()).await;
     assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+    (state, config)
+}
 
+async fn delete_until_setup_teardown(
+    mut state: DeploymentState,
+    config: DeploymentConfig,
+) -> DeploymentState {
     start_delete(&mut state);
-    state = run_until_status(
+    let state = run_until_status(
         state,
         config,
         &[
@@ -1806,6 +1806,19 @@ async fn automatic_setup_runtime_cleanup_removes_only_what_the_runtime_created()
     )
     .await;
     assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+    state
+}
+
+/// An automatic setup package creates only its scaffolding types, vaults among them. The
+/// runtime created the Frozen storage, and the package's teardown cannot see it, so runtime
+/// cleanup must delete it before handing off. A vault belongs to the package even when Live, so
+/// it stays for that teardown: deleting it here makes the package's destroy fail on a missing
+/// resource.
+#[tokio::test]
+async fn automatic_setup_runtime_cleanup_removes_only_what_the_runtime_created() {
+    let _vault = test_vault_env().await;
+    let (state, config) = running_automatic_setup_with_package_vault().await;
+    let state = delete_until_setup_teardown(state, config).await;
 
     let resources = &state.stack_state.expect("stack state").resources;
     for runtime_created in ["data", "api"] {
@@ -1825,6 +1838,41 @@ async fn automatic_setup_runtime_cleanup_removes_only_what_the_runtime_created()
     assert_eq!(
         resources["default-sa"].status,
         alien_core::ResourceStatus::Running
+    );
+}
+
+/// Destroy preparation moves a failed runtime-created account to Deleting, but the executor
+/// cannot delete it while the package's vault still depends on it. Runtime cleanup must hand
+/// off to setup teardown instead of waiting for that delete forever.
+#[tokio::test]
+async fn automatic_setup_runtime_cleanup_hands_off_a_failed_account_the_package_needs() {
+    let _vault = test_vault_env().await;
+    let (mut state, config) = running_automatic_setup_with_package_vault().await;
+    let account = state
+        .stack_state
+        .as_mut()
+        .expect("stack state")
+        .resources
+        .get_mut("default-sa")
+        .expect("default service account");
+    let mut checkpoint = account.internal_state.clone().expect("account controller");
+    checkpoint["state"] = serde_json::json!("updateConfig");
+    account.status = alien_core::ResourceStatus::UpdateFailed;
+    account.internal_state = Some(checkpoint.clone());
+    account.last_failed_state = Some(checkpoint);
+    state.status = DeploymentStatus::UpdateFailed;
+
+    let state = delete_until_setup_teardown(state, config).await;
+
+    let resources = &state.stack_state.expect("stack state").resources;
+    assert_eq!(
+        resources["app-secrets"].status,
+        alien_core::ResourceStatus::Running
+    );
+    assert_eq!(
+        resources["default-sa"].status,
+        alien_core::ResourceStatus::Deleting,
+        "the account waits for the vault, which setup teardown removes"
     );
 }
 
