@@ -71,3 +71,11 @@ credentials as root ENTRYPOINT, its uid-2000 child, native root exec, or a caple
 uid-60000 exec. IPv4 returned ECONNREFUSED and IPv6 EAFNOSUPPORT. Native root still
 had all 41 capabilities and could mount/change MTU, so this only qualifies metadata
 exclusion; Alien agent packaging must supply the image and exec privilege bounds.
+
+GCP production-assembler and runtime-binding qualification on 2026-10-22 passed
+root, absent USER, and non-root USER images, including metadata exclusion. Each
+case used an internet-enabled template and the binding's create/run/terminate
+path. Identical fixtures assembled with the parent builder and agent reached the
+checker and failed all three cases. This establishes the startup regression
+without relying on a deployment or health-probe failure. All six sessions and
+all six templates were deleted and their absence verified.

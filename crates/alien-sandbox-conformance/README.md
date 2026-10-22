@@ -92,3 +92,25 @@ an accepted NetworkPolicy object alone do not establish enforcement.
 After-only runtime policy, NAT, gateway-log and connector-refusal probes live in
 [`after/`](after/README.md). They require the implementation under test’s Python
 SDK and preserve this baseline runner unchanged.
+
+Run the image boot/USER fixture through real runtime bindings with:
+
+```sh
+cargo run -p alien-sandbox-conformance --features gcp -- \
+  entrypoint entrypoint-suite.json sessions.jsonl
+```
+
+The suite contains `backend`, `revision`, `binding`, `imageUid`, `execUid`, and
+optional `metadataBackend` (`aws`, `gcp`, or `azure`). Build the image from
+[`entrypoint/`](entrypoint/README.md), using the same metadata backend at build
+time, then pass it through the normal backend image assembler. The runner creates
+one session, persists its handle, and runs the fixture inspector as the first user
+exec. It reports the observed identities and the checker's exit status, then
+terminates the session even on failure. A failed checker returns a failing process
+status. As with the network suite, verify deletion through provider inventory and
+retain the journal for recovery; termination calls alone are not proof of absence.
+
+For before/after qualification, keep the base fixture and checker identical while
+assembling once with the parent builder/agent and once with the changed
+builder/agent. A before run must reach the checker and fail its assertions; a
+failed deployment or readiness probe does not establish the intended regression.
