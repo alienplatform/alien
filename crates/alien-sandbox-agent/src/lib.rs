@@ -22,3 +22,6 @@ pub mod egress;
 
 #[cfg(target_os = "linux")]
 mod netfilter;
+
+#[cfg(unix)]
+pub mod native_token;

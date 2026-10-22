@@ -182,6 +182,7 @@ pub const GCP_AGENT_PLATFORM: SandboxImage = SandboxImage {
 pub fn gcp_agent_platform_env() -> Vec<(&'static str, String)> {
     let mut env = GCP_AGENT_PLATFORM.contract_env_vars().to_vec();
     env.push(("RUST_LOG", GCP_AGENT_LOG_FILTER.to_string()));
+    env.push(("ALIEN_SANDBOX_IMAGE_COMMAND", "true".into()));
     env
 }
 
@@ -477,10 +478,24 @@ COPY --from=binary-selector --chown=0:0 --chmod={AGENT_MODE:04o} \
 # The release build resolves tracing-subscriber once across every package it names, and five of
 # them ask for env-filter, so the agent's fmt::init() has an EnvFilter under it. Unset, that
 # filter discards the startup warning saying this image serves requests without a capability.
-ENV RUST_LOG={GCP_AGENT_LOG_FILTER}
+ENV RUST_LOG={GCP_AGENT_LOG_FILTER} \
+    ALIEN_SANDBOX_IMAGE_COMMAND=true
+
+# These published agent images have no application startup command. Declare that explicitly so
+# inherited base CMD values cannot become agent arguments or a second shell process.
+RUN mkdir -p /opt/alien \
+ && printf '%s\n' '{empty_image_command}' > {IMAGE_COMMAND_PATH} \
+ && chmod 0600 {IMAGE_COMMAND_PATH}
 
 {entrypoint}
+CMD []
 "#,
+        empty_image_command = serde_json::to_string(&SandboxImageCommand {
+            user: Some(String::new()),
+            working_directory: "/".into(),
+            ..Default::default()
+        })
+        .expect("static default image command must serialize"),
         exec_uid = image.exec_uid,
         identity = identity_setup(image),
         env = contract_env(image),
@@ -617,3 +632,6 @@ pub struct SandboxImageCommand {
 
 /// Installed outside the command-writable session directory.
 pub const IMAGE_COMMAND_PATH: &str = "/opt/alien/image-command.json";
+
+/// Per-boot agent credential read only through an authenticated native file API.
+pub const NATIVE_TOKEN_PATH: &str = "/opt/alien/native-token";

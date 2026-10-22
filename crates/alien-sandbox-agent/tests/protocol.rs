@@ -53,6 +53,10 @@ struct Agent {
 
 impl Agent {
     async fn start() -> Self {
+        Self::start_with_authorization(None).await
+    }
+
+    async fn start_with_authorization(authorization: Option<AgentAuthorization>) -> Self {
         let dir = TempDir::new().expect("temp dir");
         let root = dir.path().canonicalize().expect("canonical root");
         let keys = KeyPair::from_seed(Seed::new([3u8; 32]));
@@ -62,13 +66,13 @@ impl Agent {
             #[cfg(target_os = "linux")]
             gateway_egress: None,
             session_root: root.clone(),
-            authorization: AgentAuthorization::Capability {
+            authorization: authorization.unwrap_or(AgentAuthorization::Capability {
                 public_key: keys.pk,
                 identity: SandboxSessionIdentity {
                     session_id: SESSION.to_string(),
                     generation: GENERATION,
                 },
-            },
+            }),
             exec_identity: test_identity(),
             output_cap: 1 << 20,
             jobs: JobRegistry::new(),
@@ -1173,4 +1177,51 @@ async fn starting_a_job_without_a_capability_is_refused() {
         agent.state.jobs.is_empty(),
         "a refused start creates no job"
     );
+}
+
+/// The native file API delivers only a boot credential; exec still uses the normal confined path.
+#[cfg(unix)]
+#[tokio::test]
+async fn native_file_credential_authorizes_only_its_own_boot() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("token");
+    let old = alien_sandbox_agent::native_token::NativeToken::create(&path).unwrap();
+    let old_value = std::fs::read_to_string(&path).unwrap();
+    drop(old);
+    let token = alien_sandbox_agent::native_token::NativeToken::create(&path).unwrap();
+    let current = std::fs::read_to_string(&path).unwrap();
+    let agent = Agent::start_with_authorization(Some(AgentAuthorization::NativeFile(token))).await;
+    let client = reqwest::Client::new();
+    let request = json!({"command": ["/bin/sh", "-c", "touch accepted; id -u"], "timeoutMs": 5000});
+    for rejected in [None, Some(old_value.as_str()), Some("incorrect")] {
+        let mut send = client
+            .post(format!("{}/v1/exec", agent.base_url))
+            .json(&request);
+        if let Some(value) = rejected {
+            send = send.bearer_auth(value);
+        }
+        let response = send.send().await.unwrap();
+        assert_eq!(response.status(), 401);
+        assert!(!agent.root.join("accepted").exists());
+    }
+    let response = client
+        .post(format!("{}/v1/exec", agent.base_url))
+        .bearer_auth(current)
+        .json(&request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let output = frames(&response.text().await.unwrap());
+    assert_eq!(output.last().unwrap()["code"], 0);
+    let stdout: Vec<u8> = output
+        .iter()
+        .filter(|frame| frame["t"] == "stdout")
+        .flat_map(|frame| BASE64.decode(frame["data"].as_str().unwrap()).unwrap())
+        .collect();
+    assert_eq!(
+        String::from_utf8(stdout).unwrap().trim(),
+        test_identity().uid.to_string()
+    );
+    assert!(agent.root.join("accepted").exists());
 }

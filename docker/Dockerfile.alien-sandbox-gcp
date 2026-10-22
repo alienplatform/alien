@@ -56,7 +56,15 @@ ENV ALIEN_SANDBOX_ROOT=/sandbox \
 # The release build resolves tracing-subscriber once across every package it names, and five of
 # them ask for env-filter, so the agent's fmt::init() has an EnvFilter under it. Unset, that
 # filter discards the startup warning saying this image serves requests without a capability.
-ENV RUST_LOG=info
+ENV RUST_LOG=info \
+    ALIEN_SANDBOX_IMAGE_COMMAND=true
+
+# These published agent images have no application startup command. Declare that explicitly so
+# inherited base CMD values cannot become agent arguments or a second shell process.
+RUN mkdir -p /opt/alien \
+ && printf '%s\n' '{"user":"","command":[],"env":{},"workingDirectory":"/"}' > /opt/alien/image-command.json \
+ && chmod 0600 /opt/alien/image-command.json
 
 EXPOSE 8080/tcp
 ENTRYPOINT ["/usr/local/bin/alien-sandbox-agent"]
+CMD []

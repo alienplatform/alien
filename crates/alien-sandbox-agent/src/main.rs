@@ -392,6 +392,20 @@ fn load_authorization() -> Result<AgentAuthorization> {
             );
             Ok(AgentAuthorization::Transport)
         }
+        #[cfg(unix)]
+        "native-file" => {
+            if unsafe { libc::geteuid() } != 0 || !image_command_enabled()? {
+                return Err(invalid(
+                    ENV_AUTHORIZATION,
+                    "native-file requires a packaged root agent",
+                ));
+            }
+            Ok(AgentAuthorization::NativeFile(
+                alien_sandbox_agent::native_token::NativeToken::create(std::path::Path::new(
+                    alien_core::sandbox_image::NATIVE_TOKEN_PATH,
+                ))?,
+            ))
+        }
         "capability" => {
             let encoded = required(ENV_PUBLIC_KEY)?;
             let bytes = BASE64
@@ -411,7 +425,7 @@ fn load_authorization() -> Result<AgentAuthorization> {
         }
         other => Err(invalid(
             ENV_AUTHORIZATION,
-            &format!("'{other}' is not one of: capability, transport"),
+            &format!("'{other}' is not one of: capability, transport, native-file"),
         )),
     }
 }

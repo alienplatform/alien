@@ -73,6 +73,11 @@ pub enum AgentAuthorization {
     /// One MicroVM is one session, so the scope the capability would add is already enforced,
     /// and terminate is `TerminateMicrovm`, which destroys the VM rather than fencing it.
     Transport,
+
+    /// The cloud authenticates a native file read of a per-boot token. Requests use that
+    /// credential on a published HTTP port without executing a privileged native process.
+    #[cfg(unix)]
+    NativeFile(crate::native_token::NativeToken),
 }
 
 /// Everything the agent knows about itself, fixed at session start.
@@ -743,14 +748,7 @@ fn authorize_control(
     headers: &HeaderMap,
     required: SandboxOperationClass,
 ) -> std::result::Result<(), ApiError> {
-    let AgentAuthorization::Capability {
-        public_key,
-        identity,
-    } = &state.authorization
-    else {
-        // Transport mode trusts what arrives through the transport. The command this agent
-        // spawned shares the guest's network stack and reaches the same port without it, so a
-        // caller has to be from off the machine, or in the guest under some other user.
+    if matches!(&state.authorization, AgentAuthorization::Transport) {
         if !crate::peer::transport_may_serve(peer, state.exec_identity.uid) {
             return Err(ApiError {
                 status: StatusCode::FORBIDDEN,
@@ -758,25 +756,40 @@ fn authorize_control(
             });
         }
         return Ok(());
+    }
+    let refused = || ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        message: "a valid agent credential is required".to_string(),
     };
-
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or_else(|| ApiError {
-            status: StatusCode::UNAUTHORIZED,
-            message: "a capability is required".to_string(),
-        })?;
-
-    sandbox_capability_token::verify(
-        token,
-        public_key,
-        identity,
-        required,
-        chrono::Utc::now().timestamp(),
-    )
-    .map_err(ApiError::from)?;
+        .ok_or_else(refused)?;
+    match &state.authorization {
+        AgentAuthorization::Capability {
+            public_key,
+            identity,
+        } => {
+            sandbox_capability_token::verify(
+                token,
+                public_key,
+                identity,
+                required,
+                chrono::Utc::now().timestamp(),
+            )
+            .map_err(ApiError::from)?;
+        }
+        #[cfg(unix)]
+        AgentAuthorization::NativeFile(expected) => {
+            if !expected.accepts(token) {
+                return Err(refused());
+            }
+        }
+        AgentAuthorization::Transport => {
+            unreachable!("transport handled before credential parsing")
+        }
+    }
 
     Ok(())
 }

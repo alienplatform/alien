@@ -79,6 +79,7 @@ repository = "https://github.com/alienplatform/alien"
 license-file = "LICENSE.md"
 
 [workspace.dependencies]
+subtle = "2.6"
 idna = "1.1"
 ipnet = "2.11"
 psl = "2.1"

@@ -5,6 +5,7 @@ edition.workspace = true
 license-file.workspace = true
 
 [dependencies]
+subtle = { workspace = true }
 httparse = "1.10"
 alien-core = { workspace = true, features = ["sandbox-capability", "sandbox-process"] }
 alien-error = { workspace = true }
