@@ -30,6 +30,7 @@ use alien_core::{
     PermissionSet, Stack,
 };
 use alien_error::Context;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
@@ -250,14 +251,16 @@ pub fn azure_runtime_roles(stack: &Stack) -> Result<AzureRuntimeRoles> {
         }
         roles
             .custom_roles
-            .extend(plan.custom_roles.into_iter().map(|custom_role| {
-                AzureRuntimeCustomRole {
-                    holder: holder.clone(),
-                    permission_set_id: permission_set.id.clone(),
-                    key: custom_role.key,
-                    role_definition: custom_role.role_definition,
-                }
-            }));
+            .extend(
+                plan.custom_roles
+                    .into_iter()
+                    .map(|custom_role| AzureRuntimeCustomRole {
+                        holder: holder.clone(),
+                        permission_set_id: permission_set.id.clone(),
+                        key: custom_role.key,
+                        role_definition: custom_role.role_definition,
+                    }),
+            );
         Ok(())
     };
 
@@ -304,6 +307,25 @@ pub fn azure_runtime_roles(stack: &Stack) -> Result<AzureRuntimeRoles> {
         }
     }
     Ok(roles)
+}
+
+/// Bind an automatic Azure setup registration to the identities, permissions,
+/// and roles it installed, including built-in roles introduced by Live workers.
+pub fn azure_setup_update_digest(stack: &Stack) -> Result<String> {
+    let roles = azure_runtime_roles(stack)?;
+    let custom_roles: std::collections::BTreeMap<_, _> = roles
+        .custom_roles
+        .iter()
+        .map(|role| (role.uuid("setup-update"), &role.role_definition))
+        .collect();
+    let encoded = serde_json::to_vec(&(
+        stack.setup_update_digest(),
+        custom_roles,
+        roles.management_predefined_role_ids,
+        roles.workload_predefined_role_ids,
+    ))
+    .expect("Azure setup roles always serialize to JSON");
+    Ok(format!("{:x}", Sha256::digest(encoded)))
 }
 
 /// The grants a profile names for one resource: those keyed by the resource, then the stack-wide
@@ -425,7 +447,10 @@ pub fn azure_role_assignment_allowlist_conditions(
 
     let mut clauses = Vec::new();
     let management_principal = [management_principal_id];
-    for roles in chunks(&management_roles, budget.saturating_sub(management_principal_id.len())) {
+    for roles in chunks(
+        &management_roles,
+        budget.saturating_sub(management_principal_id.len()),
+    ) {
         clauses.push(clause(&roles, &management_principal));
     }
     // An application role with no application identity to hold it is assignable to no one.
@@ -506,7 +531,10 @@ mod tests {
 
     fn vault_stack(management: &[(&str, &[&str])]) -> Stack {
         let mut stack = Stack::new("app".to_string())
-            .add(Vault::new("app-secrets".to_string()).build(), ResourceLifecycle::Live)
+            .add(
+                Vault::new("app-secrets".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
             .build();
         stack.permissions.profiles.insert(
             "execution".to_string(),
@@ -551,8 +579,14 @@ mod tests {
             )
             .to_string()
         );
-        assert_eq!(write.role_name("p1"), format!("p1-{} [mgmt]", write.role_definition.name));
-        assert_eq!(roles.management_role_ids("p1"), BTreeSet::from([write.uuid("p1")]));
+        assert_eq!(
+            write.role_name("p1"),
+            format!("p1-{} [mgmt]", write.role_definition.name)
+        );
+        assert_eq!(
+            roles.management_role_ids("p1"),
+            BTreeSet::from([write.uuid("p1")])
+        );
 
         // The application's read is a built-in: listed for the application's identities only.
         let secrets_user = "4633458b-17de-408a-b874-0445c86b69e6".to_string();
@@ -638,11 +672,19 @@ mod tests {
     /// No roles admit no write, and application roles with no application identity admit none.
     #[test]
     fn nothing_listed_admits_no_role_assignment_write() {
-        let deny = vec!["((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})))".to_string()];
+        let deny = vec![
+            "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})))".to_string(),
+        ];
         let none = BTreeSet::new();
-        assert_eq!(azure_role_assignment_allowlist_conditions("mp", &none, &none, &none), deny);
+        assert_eq!(
+            azure_role_assignment_allowlist_conditions("mp", &none, &none, &none),
+            deny
+        );
         let workload = BTreeSet::from(["w1".to_string()]);
-        assert_eq!(azure_role_assignment_allowlist_conditions("mp", &none, &none, &workload), deny);
+        assert_eq!(
+            azure_role_assignment_allowlist_conditions("mp", &none, &none, &workload),
+            deny
+        );
     }
 
     /// A list longer than one condition holds is split, every shard under the limit, with every
@@ -661,25 +703,39 @@ mod tests {
         );
         assert!(conditions.len() >= 2, "{} shards", conditions.len());
         for condition in &conditions {
-            assert!(condition.len() <= AZURE_CONDITION_SHARD_LIMIT, "{}", condition.len());
+            assert!(
+                condition.len() <= AZURE_CONDITION_SHARD_LIMIT,
+                "{}",
+                condition.len()
+            );
         }
         for id in management.iter().chain(&workload) {
             assert_eq!(
-                conditions.iter().filter(|c| c.contains(id.as_str())).count(),
+                conditions
+                    .iter()
+                    .filter(|c| c.contains(id.as_str()))
+                    .count(),
                 1,
                 "{id}"
             );
         }
         let management_clause = |c: &str| {
-            c.find("GuidEquals {ead6f253").map(|end| c[..end].to_string())
+            c.find("GuidEquals {ead6f253")
+                .map(|end| c[..end].to_string())
         };
         for id in &management {
             let shard = conditions.iter().find(|c| c.contains(id.as_str())).unwrap();
             let before = management_clause(shard).expect("management clause");
-            assert!(before.contains(id.as_str()), "{id} outside the management clause");
+            assert!(
+                before.contains(id.as_str()),
+                "{id} outside the management clause"
+            );
         }
         // Every shard with application roles names every application identity.
-        for shard in conditions.iter().filter(|c| workload.iter().any(|id| c.contains(id.as_str()))) {
+        for shard in conditions
+            .iter()
+            .filter(|c| workload.iter().any(|id| c.contains(id.as_str())))
+        {
             for principal in &principals {
                 assert!(shard.contains(principal.as_str()));
             }
@@ -701,7 +757,11 @@ mod tests {
         );
         assert!(conditions.len() >= 2, "{} shards", conditions.len());
         for condition in &conditions {
-            assert!(condition.len() <= AZURE_CONDITION_SHARD_LIMIT, "{}", condition.len());
+            assert!(
+                condition.len() <= AZURE_CONDITION_SHARD_LIMIT,
+                "{}",
+                condition.len()
+            );
         }
         let role = workload.iter().next().unwrap();
         for principal in &principals {
@@ -709,11 +769,17 @@ mod tests {
                 .iter()
                 .find(|c| c.contains(principal.as_str()))
                 .unwrap_or_else(|| panic!("{principal} in no shard"));
-            assert!(shard.contains(role.as_str()), "{principal} without the role");
+            assert!(
+                shard.contains(role.as_str()),
+                "{principal} without the role"
+            );
         }
         // The management role is never paired with an application identity.
         let management_role = management.iter().next().unwrap();
-        for shard in conditions.iter().filter(|c| c.contains(management_role.as_str())) {
+        for shard in conditions
+            .iter()
+            .filter(|c| c.contains(management_role.as_str()))
+        {
             let clause_end = shard.find(management_role.as_str()).unwrap();
             let clause = &shard[clause_end..shard[clause_end..].find(')').unwrap() + clause_end];
             assert!(principals.iter().all(|p| !clause.contains(p.as_str())));
