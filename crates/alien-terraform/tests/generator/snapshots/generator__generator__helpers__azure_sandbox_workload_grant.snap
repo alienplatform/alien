@@ -262,6 +262,9 @@ resource "azurerm_role_definition" "setup_execution_sandbox_management_microsoft
     "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
     "/subscriptions/${var.azure_subscription_id}"
   ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
 }
 
 === default_container_apps_environment.tf ===

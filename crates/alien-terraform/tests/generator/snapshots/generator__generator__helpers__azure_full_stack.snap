@@ -372,6 +372,9 @@ resource "azurerm_role_definition" "setup_management_write_key_vault_secrets_0" 
     "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
     "/subscriptions/${var.azure_subscription_id}"
   ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
 }
 
 resource "azurerm_role_definition" "setup_management_manage_container_apps_0" {
@@ -420,6 +423,9 @@ resource "azurerm_role_definition" "setup_management_manage_container_apps_0" {
   assignable_scopes = [
     "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
     "/subscriptions/${var.azure_subscription_id}"
+  ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
   ]
 }
 
