@@ -254,6 +254,9 @@ pub struct RemoteAwsSandboxBinding {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteAzureSandboxBinding {
+    /// Uses the packaged agent HTTP transport; absent in released native images.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<bool>,
     /// Sandbox group the credential lease authorizes sandboxes against.
     pub sandbox_group: String,
     /// Per-region data-plane host, which is separate from the ARM control plane.
@@ -1979,6 +1982,7 @@ fn remote_sandbox_binding(
                 };
 
             Ok(RemoteSandboxBinding::Azure(RemoteAzureSandboxBinding {
+                agent: binding.agent.then_some(true),
                 sandbox_group: concrete_binding_value(
                     &binding.sandbox_group,
                     "Azure sandbox sandboxGroup",

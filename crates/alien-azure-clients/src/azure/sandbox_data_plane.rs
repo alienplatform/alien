@@ -339,6 +339,31 @@ pub struct ListedSandbox {
     pub state: String,
 }
 
+/// Only the requested port is a route to the agent; unrelated published ports never substitute.
+fn port_url(body: serde_json::Value, port: u16) -> Result<String> {
+    let matches: Vec<_> = body
+        .get("ports")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| {
+            entry.get("port").and_then(serde_json::Value::as_u64) == Some(u64::from(port))
+        })
+        .collect();
+    if matches.len() == 1 {
+        if let Some(url) = matches[0]
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .filter(|url| !url.is_empty())
+        {
+            return Ok(url.to_string());
+        }
+    }
+    Err(alien_error::AlienError::new(ErrorData::GenericError {
+        message: format!("Azure sandbox did not report exactly one URL for agent port {port}"),
+    }))
+}
+
 /// Result of a shell command.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -368,6 +393,12 @@ pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
 
     /// Deletes a sandbox. Returns before it is gone; confirm by polling `get_sandbox` to 404.
     async fn delete_sandbox(&self, group: &str, sandbox_id: &str) -> Result<()>;
+
+    /// Publish the agent port; its application token authenticates every session operation.
+    async fn publish_agent_port(&self, group: &str, sandbox_id: &str, port: u16) -> Result<String>;
+
+    /// Read the published agent route from the authenticated sandbox record.
+    async fn agent_port_url(&self, group: &str, sandbox_id: &str, port: u16) -> Result<String>;
 
     /// Runs a shell command inside a sandbox.
     ///
@@ -745,6 +776,47 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
         Ok(())
     }
 
+    async fn publish_agent_port(&self, group: &str, sandbox_id: &str, port: u16) -> Result<String> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
+        let url = self.base.build_url(
+            &format!("{}/ports/add", self.sandbox_path(group, sandbox_id)),
+            Some(vec![("api-version", API_VERSION.into())]),
+        );
+        let body = serde_json::json!({"port": port, "auth": {"anonymous": true}}).to_string();
+        let request = AzureRequestBuilder::new(Method::POST, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body)
+            .build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        let response = self
+            .base
+            .execute_request_once(signed, "PublishAgentPort", sandbox_id)
+            .await?;
+        port_url(Self::parse(response, "PublishAgentPort").await?, port)
+    }
+
+    async fn agent_port_url(&self, group: &str, sandbox_id: &str, port: u16) -> Result<String> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
+        let url = self.base.build_url(
+            &self.sandbox_path(group, sandbox_id),
+            Some(vec![("api-version", API_VERSION.into())]),
+        );
+        let request = AzureRequestBuilder::new(Method::GET, url).build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        let response = self
+            .base
+            .execute_request(signed, "GetAgentPort", sandbox_id)
+            .await?;
+        port_url(Self::parse(response, "GetAgentPort").await?, port)
+    }
+
     async fn execute_shell_command(
         &self,
         group: &str,
@@ -1046,6 +1118,50 @@ mod tests {
             "rg",
             AzureTokenCache::new(config),
         )
+    }
+
+    #[tokio::test]
+    async fn agent_port_is_published_and_recovered_from_the_authenticated_record() {
+        let server = MockServer::start_async().await;
+        let path = format!(
+            "/subscriptions/{}/resourceGroups/rg/sandboxGroups/grp/sandboxes/session",
+            AzureClientConfig::mock().subscription_id
+        );
+        let response = serde_json::json!({"ports": [
+            {"port": 8080, "url": "https://unrelated.example"},
+            {"port": 8971, "url": "https://session--8971.eastus.adcproxy.io"}
+        ]});
+        let publish = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path(format!("{path}/ports/add"))
+                    .query_param("api-version", API_VERSION)
+                    .header_exists("authorization")
+                    .json_body(serde_json::json!({"port":8971,"auth":{"anonymous":true}}));
+                then.status(200).json_body(response.clone());
+            })
+            .await;
+        let read = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(&path)
+                    .header_exists("authorization");
+                then.status(200).json_body(response);
+            })
+            .await;
+        let client = client_against(&server);
+        let published = client
+            .publish_agent_port("grp", "session", 8971)
+            .await
+            .unwrap();
+        assert_eq!(published, "https://session--8971.eastus.adcproxy.io");
+        assert_eq!(
+            client.agent_port_url("grp", "session", 8971).await.unwrap(),
+            published
+        );
+        assert!(client.agent_port_url("grp", "session", 9999).await.is_err());
+        publish.assert_async().await;
+        read.assert_hits_async(2).await;
     }
 
     #[tokio::test]

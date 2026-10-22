@@ -1,11 +1,13 @@
 //! Azure sandbox provider.
 //!
-//! The one backend with no Alien agent inside the sandbox: the ADC data plane implements exec,
-//! files and lifecycle natively, so this provider is a translation layer rather than a transport
-//! for a protocol. Verified against a stock `ubuntu` catalog disk containing no Alien code.
+//! New packages use the bounded root agent over HTTPS, authorized through native file access.
+//! Released catalog and raw disk images retain the native exec/files transport.
 
 #[path = "azure_egress.rs"]
 mod gateway;
+
+#[path = "azure_agent.rs"]
+mod agent;
 
 use std::collections::BTreeMap;
 
@@ -32,6 +34,7 @@ use tracing::warn;
 /// A Sandbox backed by the Azure ADC data plane.
 #[derive(Debug)]
 pub struct AzureSandbox {
+    agent: bool,
     client: std::sync::Arc<dyn SandboxDataPlaneApi>,
     sandbox_group: String,
     /// Catalog name or registry image every sandbox is created from, from the declaration.
@@ -66,6 +69,7 @@ impl AzureSandbox {
         disk: Option<String>,
     ) -> Self {
         Self {
+            agent: false,
             client,
             sandbox_group,
             disk_image,
@@ -317,12 +321,27 @@ impl Sandbox for AzureSandbox {
     /// sandbox declared — narrowing it (as AWS does for `preview`) would read `false` on an
     /// `allow` sandbox as "can't do this at all".
     fn capabilities(&self) -> SandboxCapabilities {
-        SandboxCapabilities::azure()
+        let mut capabilities = SandboxCapabilities::azure();
+        capabilities.jobs = self.agent;
+        capabilities.supervisor_isolation = self.agent;
+        capabilities
     }
 
     async fn create(&self, mut request: CreateSandboxRequest) -> Result<SandboxInstance> {
         let policy = self.requested_policy(request.egress.as_ref())?;
         checked_sandbox_env(CREATE, &request.env)?;
+        if self.agent
+            && request
+                .env
+                .keys()
+                .any(|key| key.starts_with("ALIEN_SANDBOX_"))
+        {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: CREATE.into(),
+                details: "ALIEN_SANDBOX_ variables are reserved for the packaged agent".into(),
+                field_name: Some("env".into()),
+            }));
+        }
         refuse_unsupported_create_fields(&request, CREATE)?;
 
         let mut labels = BTreeMap::new();
@@ -393,6 +412,17 @@ impl Sandbox for AzureSandbox {
                 (&self.egress_manager, &identity, &policy)
             {
                 manager.update(identity, policy).await?;
+            }
+            if self.agent {
+                self.client
+                    .publish_agent_port(
+                        &self.sandbox_group,
+                        &sandbox.id,
+                        alien_core::sandbox_image::AGENT_PORT,
+                    )
+                    .await
+                    .map_err(|error| Self::failed(CREATE, error))?;
+                self.wait_for_agent(&sandbox.id).await?;
             }
             Ok(instance)
         }
@@ -492,6 +522,9 @@ impl Sandbox for AzureSandbox {
         // caller kept and the egress it was built with. One extra read against a data plane the
         // command itself is about to cross.
         self.judged_sandbox(RUN_COMMAND, sandbox_id).await?;
+        if self.agent {
+            return super::agent_protocol::run_command(self, sandbox_id, request).await;
+        }
 
         // The timeout bounds the untrusted code, not the caller's patience. Read out of the
         // preview SDK rather than assumed: `executeShellCommand` sends `command` and an optional
@@ -595,6 +628,9 @@ impl Sandbox for AzureSandbox {
     /// removed.
     async fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
         Self::checked_sandbox_id("sandbox.readFile", sandbox_id)?;
+        if self.agent {
+            return super::agent_protocol::read_file(self, sandbox_id, path).await;
+        }
         let path = &checked_path("sandbox.readFile", path)?;
 
         self.client
@@ -605,6 +641,11 @@ impl Sandbox for AzureSandbox {
 
     async fn write_files(&self, sandbox_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
         Self::checked_sandbox_id("sandbox.writeFiles", sandbox_id)?;
+        if self.agent {
+            self.judged_sandbox("sandbox.writeFiles", sandbox_id)
+                .await?;
+            return super::agent_protocol::write_files(self, sandbox_id, files).await;
+        }
         // Checked before anything is written, and before anything is read: partial application is
         // the contract for a data plane that refuses midway, not for a path this process could
         // have rejected without a round trip.
@@ -705,6 +746,10 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn start_job(&self, _sandbox_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
+        if self.agent {
+            self.judged_sandbox("sandbox.jobStart", _sandbox_id).await?;
+            return super::agent_protocol::start_job(self, _sandbox_id, _request).await;
+        }
         Err(self.unsupported("sandbox.jobStart", NO_JOB_HOST))
     }
 
@@ -714,10 +759,16 @@ impl Sandbox for AzureSandbox {
         _job_id: &str,
         _since_seq: Option<u64>,
     ) -> Result<JobPoll> {
+        if self.agent {
+            return super::agent_protocol::poll_job(self, _sandbox_id, _job_id, _since_seq).await;
+        }
         Err(self.unsupported("sandbox.jobPoll", NO_JOB_HOST))
     }
 
     async fn cancel_job(&self, _sandbox_id: &str, _job_id: &str) -> Result<()> {
+        if self.agent {
+            return super::agent_protocol::cancel_job(self, _sandbox_id, _job_id).await;
+        }
         Err(self.unsupported("sandbox.jobCancel", NO_JOB_HOST))
     }
 
@@ -2132,6 +2183,23 @@ mod tests {
 
     #[async_trait]
     impl SandboxDataPlaneApi for ScriptedExec {
+        async fn publish_agent_port(
+            &self,
+            _: &str,
+            _: &str,
+            _: u16,
+        ) -> alien_client_core::Result<String> {
+            panic!("legacy native exec must not publish an agent port")
+        }
+        async fn agent_port_url(
+            &self,
+            _: &str,
+            _: &str,
+            _: u16,
+        ) -> alien_client_core::Result<String> {
+            panic!("legacy native exec must not read an agent port")
+        }
+
         async fn stop_sandbox(
             &self,
             _group: &str,

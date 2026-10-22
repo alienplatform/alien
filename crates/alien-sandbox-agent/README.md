@@ -14,6 +14,23 @@ invalid configuration fails startup. Released packages without the marker retain
 their previous startup and identity semantics. AWS packaging has not yet enabled
 this marker; its released modes are described below.
 
+# Azure native-file transport
+
+Azure packages use `ALIEN_SANDBOX_AUTHORIZATION=native-file`. Before boot code
+starts, the agent replaces `/opt/alien/native-token` with a random per-boot
+credential, owned by root with mode 0600. The binding reads it through Azure's
+authenticated native file API and sends bearer-authenticated requests to the
+agent's published HTTPS port. It never runs a native shell command: Azure's
+native exec can grant capabilities beyond those available to the image process.
+The token grants access only to this sandbox's agent, never to cloud APIs.
+
+Exec, jobs and files use the shared agent protocol. Missing or invalid tokens
+are refused before session operations. A fresh boot replaces the token; a
+resume preserving the process keeps it. Create-time user environment and gateway
+proxy settings remain defaults for boot and session commands; agent settings
+are reserved. Released bindings without `agent: true` retain native operations.
+Build/controller integration for new Azure releases is still in progress.
+
 # Released supervisor declarations
 
 Released stacks may contain `privilegedSupervisor` with a `commandUid`. The

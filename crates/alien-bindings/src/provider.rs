@@ -2075,7 +2075,7 @@ impl BindingsProviderApi for BindingsProvider {
                     cpu.unwrap_or_else(|| DEFAULT_AZURE_CPU.to_string()),
                     memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
                     disk,
-                );
+                ).with_agent(azure_binding.agent);
                 if let Some(manager) = egress_manager {
                     sandbox = sandbox.with_egress_manager(
                         manager,

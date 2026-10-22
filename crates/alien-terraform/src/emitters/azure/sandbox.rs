@@ -857,6 +857,7 @@ mod tests {
         let rendered = binding_with(SandboxEgress::Internet, Some(900));
 
         let binding = AzureSandboxBinding {
+            agent: false,
             default_policy: None,
             sandbox_group: BindingValue::Value("sbg".to_string()),
             data_plane_endpoint: BindingValue::Value("https://example.invalid".to_string()),

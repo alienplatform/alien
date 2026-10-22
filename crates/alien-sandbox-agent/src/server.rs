@@ -102,9 +102,25 @@ pub struct AgentState {
 }
 
 impl AgentState {
+    /// Azure's create-time environment includes user variables and gateway proxy settings.
+    /// Preserve those defaults without letting agent configuration become a child contract.
+    fn native_environment(&self, env: &mut std::collections::BTreeMap<String, String>) {
+        #[cfg(unix)]
+        if matches!(self.authorization, AgentAuthorization::NativeFile(_)) {
+            for (name, value) in std::env::vars() {
+                if !name.starts_with("ALIEN_SANDBOX_") {
+                    env.entry(name).or_insert(value);
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = env;
+    }
+
     /// Called only after network checks, before accepting any session operation.
     pub fn start_image_once(&self) -> crate::error::Result<()> {
         let mut env = std::collections::BTreeMap::new();
+        self.native_environment(&mut env);
         #[cfg(target_os = "linux")]
         if let Some(egress) = &self.gateway_egress {
             egress.ensure_ready()?;
@@ -437,6 +453,7 @@ async fn run_command(
 ) -> std::result::Result<Response, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
+    state.native_environment(&mut request.env);
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
         egress.command_environment(&mut request.env)?;
@@ -535,6 +552,7 @@ async fn job_start(
 ) -> std::result::Result<Json<JobStartResponse>, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
+    state.native_environment(&mut request.env);
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
         egress.command_environment(&mut request.env)?;
