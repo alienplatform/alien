@@ -4592,7 +4592,7 @@ fn readme_md(
                 "service-account" | "resource-access"
             )
         }) {
-        "## Application identities\n\nSetup creates the declared application identities and their stack-level roles before registration. The management role can assign application roles only to these identities. Adding an identity or a role definition requires another setup run.\n\nWhen upgrading an existing automatic Terraform installation whose application identities were created during provisioning, use `terraform import` to attach each existing managed identity to its matching `azurerm_user_assigned_identity` address in the generated files before applying. Keep the existing identity IDs so running applications retain their access.\n\n"
+        "## Application identities\n\nSetup creates the declared application identities and their stack-level roles before registration. The management role can assign application roles only to these identities. Adding an identity or a role definition requires another setup run.\n\nWhen upgrading an existing automatic Terraform installation whose application identities were created during provisioning, use `terraform import` to attach each existing managed identity to its matching `azurerm_user_assigned_identity` address in the generated files before applying. Also import matching `azurerm_role_definition` and `azurerm_role_assignment` resources for any existing stack-level grants. Review the plan and keep existing identities and grants so running applications retain their access.\n\n"
     } else {
         ""
     };
