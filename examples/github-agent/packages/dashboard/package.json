@@ -23,7 +23,7 @@
     "@tanstack/react-table": "^9.1.2",
     "autoprefixer": "^10.4.20",
     "bcrypt": "^6.0.0",
-    "better-auth": "^1.2.8",
+    "better-auth": "^1.7.7",
     "canvas-confetti": "^1.9.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -69,9 +69,10 @@
   },
   "pnpm": {
     "overrides": {
+      "@workflow/core>devalue": "5.9.3",
       "@workflow/core>nanoid": "5.1.16",
-      "@workflow/world-local>undici": "7.29.0",
-      "@workflow/world-vercel>undici": "7.29.0",
+      "@workflow/world-local>undici": "7.29.1",
+      "@workflow/world-vercel>undici": "7.29.1",
       "next>postcss": "8.5.18"
     }
   }
