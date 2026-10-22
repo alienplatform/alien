@@ -33,7 +33,7 @@ use alien_aws_clients::apigatewayv2::{
 use alien_aws_clients::cloudwatch_logs::{CreateLogGroupRequest, PutRetentionPolicyRequest};
 use alien_aws_clients::ec2::{DescribeNetworkInterfacesRequest, Filter};
 use alien_aws_clients::eventbridge::{
-    EventBridgeTag, EventBridgeTarget, PutRuleRequest, PutTargetsRequest,
+    EventBridgeApi, EventBridgeTag, EventBridgeTarget, PutRuleRequest, PutTargetsRequest,
 };
 use alien_aws_clients::lambda::{
     AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode, FunctionConfiguration,
@@ -130,6 +130,46 @@ fn eventbridge_tags(prefix: &str, resource_id: &str) -> Vec<EventBridgeTag> {
         .into_iter()
         .map(|(key, value)| EventBridgeTag { key, value })
         .collect()
+}
+
+/// Removes a schedule rule's target, then the rule.
+///
+/// NotFound means the rule is already gone. A denial is logged and skipped, as before: the grant
+/// covers only rules carrying the stack's tags, so AWS also denies calls on a rule that is gone.
+/// Every other failure is returned, including a target AWS reports it could not remove, because
+/// the rule would keep invoking the function.
+async fn delete_schedule_rule(
+    client: &dyn EventBridgeApi,
+    worker_id: &str,
+    rule_name: &str,
+) -> std::result::Result<(), AlienError<CloudClientErrorData>> {
+    match client
+        .remove_targets(rule_name, vec!["1".to_string()])
+        .await
+    {
+        Ok(()) => {}
+        Err(error) if is_remote_not_found(&error) => {
+            info!(worker=%worker_id, rule=%rule_name, "EventBridge rule already gone");
+            return Ok(());
+        }
+        Err(error) if is_remote_access_denied(&error) => {
+            warn!(worker=%worker_id, rule=%rule_name, error=%error, "RemoveTargets denied; treating the EventBridge rule as gone");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    }
+    match client.delete_rule(rule_name).await {
+        Ok(()) => {
+            info!(worker=%worker_id, rule=%rule_name, "EventBridge rule deleted");
+            Ok(())
+        }
+        Err(error) if is_remote_not_found(&error) => Ok(()),
+        Err(error) if is_remote_access_denied(&error) => {
+            warn!(worker=%worker_id, rule=%rule_name, error=%error, "DeleteRule denied; treating the EventBridge rule as gone");
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
@@ -4030,28 +4070,19 @@ impl AwsWorkerController {
                     .get_aws_eventbridge_client(aws_cfg)
                     .await?;
 
-                for rule_name in &self.eventbridge_rule_names.clone() {
-                    if let Err(e) = eventbridge_client
-                        .remove_targets(rule_name, vec!["1".to_string()])
-                        .await
-                    {
-                        warn!(
-                            worker=%current_config.id,
-                            rule=%rule_name,
-                            error=%e,
-                            "Failed to remove targets from old EventBridge rule (best-effort)"
-                        );
-                    }
-                    if let Err(e) = eventbridge_client.delete_rule(rule_name).await {
-                        warn!(
-                            worker=%current_config.id,
-                            rule=%rule_name,
-                            error=%e,
-                            "Failed to delete old EventBridge rule (best-effort)"
-                        );
-                    }
+                for rule_name in self.eventbridge_rule_names.clone() {
+                    delete_schedule_rule(
+                        eventbridge_client.as_ref(),
+                        &current_config.id,
+                        &rule_name,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete old EventBridge rule '{rule_name}'"),
+                        resource_id: Some(current_config.id.clone()),
+                    })?;
+                    self.eventbridge_rule_names.retain(|name| name != &rule_name);
                 }
-                self.eventbridge_rule_names.clear();
                 self.eventbridge_permission_statement_ids.clear();
             }
 
@@ -4581,7 +4612,7 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let aws_cfg = ctx.get_aws_config()?;
 
-        // Delete EventBridge rules and their targets (best-effort)
+        // Delete EventBridge rules and their targets
         if !self.eventbridge_rule_names.is_empty() {
             info!(
                 worker=%worker_config.id,
@@ -4594,35 +4625,15 @@ impl AwsWorkerController {
                 .get_aws_eventbridge_client(aws_cfg)
                 .await?;
 
-            for rule_name in &self.eventbridge_rule_names.clone() {
-                // Remove targets first (required before deleting rule)
-                if let Err(e) = eventbridge_client
-                    .remove_targets(rule_name, vec!["1".to_string()])
+            for rule_name in self.eventbridge_rule_names.clone() {
+                delete_schedule_rule(eventbridge_client.as_ref(), &worker_config.id, &rule_name)
                     .await
-                {
-                    warn!(
-                        worker=%worker_config.id,
-                        rule=%rule_name,
-                        error=%e,
-                        "Failed to remove targets from EventBridge rule (best-effort)"
-                    );
-                } else {
-                    info!(worker=%worker_config.id, rule=%rule_name, "EventBridge rule targets removed");
-                }
-
-                // Delete the rule
-                if let Err(e) = eventbridge_client.delete_rule(rule_name).await {
-                    warn!(
-                        worker=%worker_config.id,
-                        rule=%rule_name,
-                        error=%e,
-                        "Failed to delete EventBridge rule (best-effort)"
-                    );
-                } else {
-                    info!(worker=%worker_config.id, rule=%rule_name, "EventBridge rule deleted");
-                }
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete EventBridge rule '{rule_name}'"),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?;
+                self.eventbridge_rule_names.retain(|name| name != &rule_name);
             }
-            self.eventbridge_rule_names.clear();
         }
 
         // Clear EventBridge permission statement IDs
@@ -5805,6 +5816,7 @@ mod tests {
     };
     use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
     use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, Ec2Client, MockEc2Api};
+    use alien_aws_clients::eventbridge::MockEventBridgeApi;
     use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::lambda::{
         AddPermissionResponse, EventSourceMapping, FunctionConfiguration, GetFunctionResponse,
@@ -7053,6 +7065,110 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    /// A ready basic worker with one schedule rule, deleted with `eventbridge` as the
+    /// EventBridge client. Returns the executor after the delete flow stopped.
+    async fn delete_worker_with_schedule_rule(
+        eventbridge: MockEventBridgeApi,
+    ) -> (SingleControllerExecutor, crate::error::Result<()>) {
+        let worker = basic_function();
+        let worker_name = format!("test-{}", worker.id);
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        let mock_lambda = setup_mock_client_for_best_effort_deletion(&worker_name, false);
+        mock_provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(mock_lambda.clone()));
+        let mock_logs = create_logs_mock_accepting_log_groups();
+        mock_provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(mock_logs.clone()));
+        let eventbridge = Arc::new(eventbridge);
+        mock_provider
+            .expect_get_aws_eventbridge_client()
+            .returning(move |_| Ok(eventbridge.clone()));
+
+        let mut ready_controller = AwsWorkerController::mock_ready(&worker_name);
+        ready_controller.eventbridge_rule_names = vec![format!("{worker_name}-cron-0")];
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(ready_controller)
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(mock_provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.delete().unwrap();
+        let result = executor.run_until_terminal().await;
+        (executor, result)
+    }
+
+    /// RemoveTargets answers HTTP 200 even when it could not remove a target. The rule then
+    /// keeps invoking the function, so the delete must stop with the rule still recorded and
+    /// not try to delete a rule that still has a target.
+    #[tokio::test]
+    async fn test_delete_stops_when_a_schedule_target_is_not_removed() {
+        let mut eventbridge = MockEventBridgeApi::new();
+        eventbridge
+            .expect_remove_targets()
+            .withf(|rule, ids| rule == "test-basic-func-cron-0" && *ids == ["1"])
+            .returning(|rule, _| {
+                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+                    message: "RemoveTargets failed for target '1'".to_string(),
+                    resource_type: "Rule".to_string(),
+                    resource_name: rule.to_string(),
+                }))
+            });
+        eventbridge.expect_delete_rule().times(0);
+
+        let (executor, result) = delete_worker_with_schedule_rule(eventbridge).await;
+
+        let error = result.expect_err("a schedule target that is still there must fail the delete");
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert!(error.retryable, "a concurrent modification is retryable");
+        assert_eq!(executor.status(), ResourceStatus::Deleting);
+        let controller = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(
+            controller.eventbridge_rule_names,
+            ["test-basic-func-cron-0"],
+            "the rule must stay recorded so the retry deletes it"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_removes_schedule_target_then_rule() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut eventbridge = MockEventBridgeApi::new();
+        let recorded = calls.clone();
+        eventbridge
+            .expect_remove_targets()
+            .times(1)
+            .returning(move |rule, _| {
+                recorded.lock().unwrap().push(format!("RemoveTargets {rule}"));
+                Ok(())
+            });
+        let recorded = calls.clone();
+        eventbridge
+            .expect_delete_rule()
+            .times(1)
+            .returning(move |rule| {
+                recorded.lock().unwrap().push(format!("DeleteRule {rule}"));
+                Ok(())
+            });
+
+        let (executor, result) = delete_worker_with_schedule_rule(eventbridge).await;
+
+        result.expect("delete should finish");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                "RemoveTargets test-basic-func-cron-0",
+                "DeleteRule test-basic-func-cron-0"
+            ]
+        );
     }
 
     fn add_recorded_test_network(state: &mut StackState) {
