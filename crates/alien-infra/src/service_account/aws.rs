@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -17,7 +18,10 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use alien_permissions::{
     BindingTarget, PermissionContext,
-    aws_resource_policies::aws_service_account_injected_statements,
+    aws_resource_policies::{
+        aws_resource_policy_name, aws_service_account_injected_statements, legacy_policy_name,
+        names_aws_resource_grant,
+    },
     generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator},
 };
 use chrono::Utc;
@@ -306,6 +310,7 @@ impl AwsServiceAccountController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         Self::apply_resource_permissions(ctx).await?;
+        self.remove_dropped_resource_grants(ctx).await?;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -660,6 +665,114 @@ impl AwsServiceAccountController {
         }
 
         self.stack_permissions_applied = true;
+        Ok(())
+    }
+
+    /// Delete the inline policies that grant this role access to a resource it no longer has
+    /// grants on, typically because the resource or its profile grant was removed. Each resource
+    /// writes `deployment-<resource>-<set>` onto the role when created and never removes it, so
+    /// without this the role keeps access to a removed resource, and to anything later created
+    /// under the same name. Requires privileged setup, like every role change.
+    ///
+    /// The role is the source of truth for what it holds: an account installed before grants
+    /// were captured records none, so the previous config cannot say what to remove.
+    async fn remove_dropped_resource_grants(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        let previous = ctx.previous_resource_config::<ServiceAccount>()?;
+        let desired_profile = config
+            .id
+            .strip_suffix("-sa")
+            .and_then(|name| ctx.desired_stack.permissions.profiles.get(name));
+        let desired = config
+            .concrete_permission_sets(desired_profile, |name| {
+                alien_permissions::get_permission_set(name).cloned()
+            })
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "Cannot resolve the service account's resource grants".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+        let with_legacy = |name: String| [legacy_policy_name(&name), Some(name)];
+        let kept: HashSet<String> = desired
+            .iter()
+            .flat_map(|(resource_id, sets)| {
+                sets.iter()
+                    .map(move |set| aws_resource_policy_name(resource_id, &set.id))
+            })
+            .flat_map(with_legacy)
+            .flatten()
+            .collect();
+        let set_ids: HashSet<&str> = alien_permissions::list_permission_set_ids()
+            .into_iter()
+            .chain(
+                previous
+                    .resource_permission_sets
+                    .values()
+                    .chain(desired.values())
+                    .flatten()
+                    .map(|set| set.id.as_str()),
+            )
+            .collect();
+
+        let role_name = self.role_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "IAM role name not set in state".to_string(),
+            })
+        })?;
+        let client = ctx
+            .service_provider
+            .get_aws_iam_client(ctx.get_aws_config()?)
+            .await?;
+        let held = client
+            .list_role_policies(role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to list inline policies of IAM role '{role_name}'"),
+                resource_id: Some(config.id.clone()),
+            })?
+            .list_role_policies_result;
+        if held.is_truncated == Some(true) {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "IAM role '{role_name}' has more inline policies than one ListRolePolicies page; cannot tell which resource grants it still holds"
+                ),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+        let dropped = held
+            .policy_names
+            .map(|names| names.member)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|name| {
+                !kept.contains(name) && names_aws_resource_grant(name, set_ids.iter().copied())
+            });
+        for policy_name in dropped {
+            match client.delete_role_policy(role_name, &policy_name).await {
+                Ok(()) => info!(
+                    role_name = %role_name,
+                    policy_name = %policy_name,
+                    "Removed a resource grant the service account no longer has"
+                ),
+                // Removed concurrently, or by an earlier attempt.
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete inline policy '{policy_name}' from IAM role '{role_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1163,6 +1276,7 @@ mod tests {
         controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
     };
     use alien_core::permissions::PermissionProfile;
+    use alien_aws_clients::iam::{ListRolePoliciesResponse, ListRolePoliciesResult, PolicyNames};
     use std::sync::Arc;
 
     fn policy_account(count: usize) -> ServiceAccount {
@@ -1379,6 +1493,89 @@ mod tests {
                 } else {
                     ResourceStatus::Running
                 }
+            );
+        }
+    }
+
+    /// A grant on a resource the account no longer has, for example because the resource was
+    /// removed from the stack, is deleted from the role by setup, whether or not the installed
+    /// account recorded its grants (accounts installed before grants were captured record none).
+    /// Grants it keeps, under either name, and the role's other policies stay.
+    #[tokio::test]
+    async fn setup_removes_the_grant_of_a_removed_resource() {
+        let account = |profile: &PermissionProfile| {
+            ServiceAccount::from_permission_profile("app-sa".to_string(), profile, |id| {
+                alien_permissions::get_permission_set(id).cloned()
+            })
+            .unwrap()
+        };
+        let installed = account(
+            &PermissionProfile::new()
+                .resource("jobs", ["queue/data-write"])
+                .resource("extra", ["queue/data-write"]),
+        );
+        let mut legacy = installed.clone();
+        legacy.resource_permission_sets.clear();
+        let desired_profile = PermissionProfile::new().resource("jobs", ["queue/data-write"]);
+        let desired = account(&desired_profile);
+
+        for (case, previous) in [("captured", installed), ("legacy", legacy)] {
+            let deleted = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut iam = alien_aws_clients::iam::MockIamApi::new();
+            iam.expect_list_role_policies().returning(|_| {
+                Ok(ListRolePoliciesResponse {
+                    list_role_policies_result: ListRolePoliciesResult {
+                        policy_names: Some(PolicyNames {
+                            member: [
+                                "deployment-permissions",
+                                "alien-jobs-queue-data-write",
+                                "deployment-extra-queue-data-write",
+                                "sandbox-image-build",
+                            ]
+                            .map(String::from)
+                            .to_vec(),
+                        }),
+                        is_truncated: Some(false),
+                        marker: None,
+                    },
+                })
+            });
+            let recorded = deleted.clone();
+            iam.expect_delete_role_policy().returning(move |role, policy| {
+                recorded.lock().unwrap().push(format!("{role}/{policy}"));
+                Ok(())
+            });
+            let iam = Arc::new(iam);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_iam_client()
+                .returning(move |_| Ok(iam.clone()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(desired.clone())
+                .previous_resource(previous)
+                .controller(AwsServiceAccountController {
+                    state: AwsServiceAccountState::UpdatingResourcePermissions,
+                    role_arn: Some("arn:aws:iam::123456789012:role/test-app-sa".to_string()),
+                    role_name: Some("test-app-sa".to_string()),
+                    stack_permissions_applied: true,
+                    ..Default::default()
+                })
+                .platform(Platform::Aws)
+                .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+                .service_provider(Arc::new(provider))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            executor
+                .step()
+                .await
+                .unwrap_or_else(|error| panic!("{case}: the resource permission step fails: {error}"));
+
+            assert_eq!(
+                *deleted.lock().unwrap(),
+                vec!["test-app-sa/deployment-extra-queue-data-write".to_string()],
+                "{case}"
             );
         }
     }

@@ -1,4 +1,3 @@
-use crate::compatibility::narrowing::service_account_narrowed;
 use crate::error::{ErrorData, Result};
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::{find_instance_type, is_same_architecture_machine};
@@ -9,13 +8,14 @@ use alien_core::{
 use alien_error::Context;
 use std::collections::{HashMap, HashSet};
 
-/// Validates that frozen resources haven't been added or modified during stack updates.
+/// Validates that frozen resources haven't been added, modified or removed during stack updates.
 ///
-/// Frozen resources are created once during initial deployment and should remain unchanged.
-/// This is critical because:
+/// Frozen resources are setup-owned: only setup creates, changes and deletes them. This is
+/// critical because:
 /// 1. Updates only deploy live resources (frozen resources are skipped)
-/// 2. Adding frozen resources during update creates inconsistent state
-/// 3. Modifying frozen resources risks breaking security/permission models
+/// 2. Adding or removing frozen resources during an update leaves them out of sync with setup
+/// 3. Modifying frozen resources, including removing a service account's grants, changes the
+///    security model, which only setup may do
 ///
 /// The platform is the installed stack's, because some runtime-owned fields exist on some
 /// platforms only.
@@ -297,7 +297,6 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                         &old_entry.config,
                         &new_entry.config,
                     )
-                    && !service_account_narrowed(new_stack, &old_entry.config, &new_entry.config)
                     && !unchanged_legacy_service_account_grants(
                         self.platform,
                         old_stack,
@@ -322,8 +321,13 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                         id, details
                     ));
                 }
+            } else {
+                errors.push(format!(
+                    "Frozen resource '{}' was removed. Frozen resources are setup-owned: rerun \
+                     setup with the updated stack to delete it and its grants.",
+                    id
+                ));
             }
-            // Note: Removal of frozen resources is allowed (deletion scenario)
         }
 
         if errors.is_empty() {
@@ -358,11 +362,10 @@ mod tests {
             .build()
     }
 
-    /// Dropping an account's last resource-scoped grant narrows it, while
-    /// dropping only the capture of grants its profile still holds is the
-    /// legacy format and still needs setup.
+    /// Dropping an account's last resource-scoped grant changes its installed role, so it needs
+    /// setup, as does dropping only the capture of grants its profile still holds.
     #[tokio::test]
-    async fn losing_the_last_resource_grant_is_narrowing() {
+    async fn losing_the_last_resource_grant_needs_setup() {
         let with_grant = PermissionProfile::new().resource("objects", ["storage/data-read"]);
         let check = FrozenResourcesUnchangedCheck {
             platform: Platform::Aws,
@@ -374,7 +377,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(removed.success, "{:?}", removed.errors);
+        assert!(!removed.success);
+        assert!(removed.errors[0].contains("'reader-sa' was modified"), "{:?}", removed.errors);
         let uncaptured = check
             .check(
                 &account_stack(with_grant.clone(), true),
@@ -723,7 +727,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_removed_frozen_resource_allowed() {
+    async fn test_removed_frozen_resource_needs_setup() {
         let storage = Storage::new("test-storage".to_string()).build();
 
         let mut old_resources = IndexMap::new();
@@ -766,9 +770,14 @@ mod tests {
             platform: Platform::Aws,
         };
         let result = check.check(&old_stack, &new_stack).await.unwrap();
-        // Should succeed - removing frozen resources is allowed (deletion scenario)
-        assert!(result.success);
-        assert!(result.errors.is_empty());
+        // Only setup deletes a setup-owned resource and its grants.
+        assert!(!result.success);
+        assert_eq!(result.errors.len(), 1);
+        assert!(
+            result.errors[0].contains("'test-storage' was removed"),
+            "{:?}",
+            result.errors
+        );
     }
 
     fn compute_stack(cluster: ComputeCluster) -> Stack {
@@ -872,10 +881,10 @@ mod tests {
         assert!(!result.errors.is_empty());
     }
 
-    /// A frozen service account that only lost permission sets keeps its
-    /// installed role until setup; one that gained any still needs setup.
+    /// Setup owns a frozen service account's role: losing permission sets needs setup just as
+    /// gaining them does.
     #[tokio::test]
-    async fn a_service_account_may_lose_but_not_gain_permissions() {
+    async fn a_service_account_change_in_either_direction_needs_setup() {
         let account = |sets: &[&str]| {
             let profile = alien_core::PermissionProfile::new().global(sets.iter().copied());
             alien_core::ServiceAccount::from_permission_profile(
@@ -901,7 +910,7 @@ mod tests {
             )
             .await
             .expect("check should run");
-        assert!(narrowed.success, "{:?}", narrowed.errors);
+        assert!(!narrowed.success);
 
         let widened = check
             .check(

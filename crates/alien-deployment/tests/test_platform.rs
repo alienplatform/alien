@@ -1221,7 +1221,10 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
 }
 
 #[tokio::test]
-async fn consecutive_updates_cannot_delete_an_omitted_frozen_resource() {
+/// A release that omits a setup-owned resource needs setup, exactly like one that adds one: the
+/// update stops for setup before changing anything, instead of completing with the resource and
+/// its grants left behind.
+async fn an_update_omitting_a_frozen_resource_waits_for_setup() {
     let config = create_test_config("hash_v1", false);
     let mut state = run_to_completion(
         create_initial_state(create_test_stack("test-stack", "test-function")),
@@ -1269,45 +1272,114 @@ async fn consecutive_updates_cannot_delete_an_omitted_frozen_resource() {
         .resources
         .insert("setup-storage".to_string(), frozen_state);
 
-    for release_number in [2, 3] {
-        let mut target = create_test_stack("test-stack", "test-function");
-        target.permissions = state
-            .current_release
-            .as_ref()
-            .expect("running deployment has current release")
-            .stack
-            .permissions
-            .clone();
-        start_update(
-            &mut state,
-            ReleaseInfo {
-                release_id: Some(format!("rel_v{release_number}")),
-                version: Some(format!("{release_number}.0.0")),
-                description: None,
-                // Both later releases omit the setup-owned frozen resource.
-                stack: target,
+    let mut target = create_test_stack("test-stack", "test-function");
+    target.permissions = state
+        .current_release
+        .as_ref()
+        .expect("running deployment has current release")
+        .stack
+        .permissions
+        .clone();
+    start_update(
+        &mut state,
+        ReleaseInfo {
+            release_id: Some("rel_v2".to_string()),
+            version: Some("2.0.0".to_string()),
+            description: None,
+            // The release omits the setup-owned frozen resource.
+            stack: target,
+        },
+    );
+    // The update step refuses before changing anything; the runner records this as
+    // UpdateFailed and the control plane shows the update as blocked for setup.
+    let error = alien_deployment::step(state.clone(), config, ClientConfig::Test, None)
+        .await
+        .expect_err("the update needs setup");
+    let mut codes = vec![error.code.clone()];
+    let mut source = error.source.as_deref();
+    while let Some(inner) = source {
+        codes.push(inner.code.clone());
+        source = inner.source.as_deref();
+    }
+    assert!(
+        codes.iter().any(|code| code == "DEPLOYMENT_SETUP_REQUIRED"),
+        "{codes:?}"
+    );
+    assert!(
+        format!("{error:?}").contains("'setup-storage' was removed"),
+        "{error:?}"
+    );
+}
+
+/// Once setup has deleted an omitted setup-owned resource (an imported setup re-imports state
+/// without it), the update that follows must not bring it back from the installed baseline.
+#[tokio::test]
+async fn an_update_after_setup_removed_a_frozen_resource_does_not_recreate_it() {
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "test-function")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    let metadata = state
+        .runtime_metadata
+        .as_mut()
+        .expect("running deployment has runtime metadata");
+    let desired = metadata
+        .prepared_stack
+        .clone()
+        .expect("running deployment has prepared stack");
+    // The installed baseline still lists the resource; setup already deleted it, so the
+    // re-imported state no longer holds it.
+    metadata
+        .prepared_stack
+        .as_mut()
+        .expect("prepared stack")
+        .resources
+        .insert(
+            "setup-storage".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(Storage::new("setup-storage".to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
             },
         );
-        state = run_to_completion(state, config.clone()).await;
-        assert_eq!(state.status, DeploymentStatus::Running);
-        assert_eq!(
-            state
-                .stack_state
-                .as_ref()
-                .and_then(|stack| stack.resources.get("setup-storage"))
-                .map(|resource| resource.status),
-            Some(alien_core::ResourceStatus::Running),
-            "release {release_number} must retain the installed frozen resource"
-        );
-        assert!(
-            state
-                .runtime_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.prepared_stack.as_ref())
-                .is_some_and(|stack| stack.resources.contains_key("setup-storage")),
-            "release {release_number} must retain frozen ownership in the promoted baseline"
-        );
-    }
+    metadata.pending_prepared_stack = Some(desired.clone());
+    metadata.pending_prepared_release_id = Some("rel_v2".to_string());
+    state.target_release = Some(ReleaseInfo {
+        release_id: Some("rel_v2".to_string()),
+        version: Some("2.0.0".to_string()),
+        description: None,
+        stack: create_test_stack("test-stack", "test-function"),
+    });
+    state.status = DeploymentStatus::Updating;
+
+    let state = run_to_completion(state, config).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(
+        !state
+            .stack_state
+            .as_ref()
+            .expect("stack state")
+            .resources
+            .contains_key("setup-storage"),
+        "the update recreated a resource setup deleted"
+    );
+    assert!(
+        !state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.prepared_stack.as_ref())
+            .expect("prepared stack")
+            .resources
+            .contains_key("setup-storage"),
+        "the new baseline still lists a resource setup deleted"
+    );
 }
 
 #[tokio::test]
