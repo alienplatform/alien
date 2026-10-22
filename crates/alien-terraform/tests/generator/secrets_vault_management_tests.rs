@@ -167,10 +167,18 @@ fn azure_secret_grants(module: &ModuleFiles, principal: &str, action: &str) -> V
                 && block.body.contains(&format!("principal_id = {principal}"))
         })
         .filter(|assignment| {
+            // The role the assignment grants, not ids a condition merely lists.
             (action == AZURE_GET_SECRET
-                && AZURE_SECRET_READ_ROLES
-                    .iter()
-                    .any(|role| assignment.body.contains(role)))
+                && assignment
+                    .body
+                    .split("role_definition_id = ")
+                    .nth(1)
+                    .and_then(|rest| rest.split_whitespace().next())
+                    .is_some_and(|role| {
+                        AZURE_SECRET_READ_ROLES
+                            .iter()
+                            .any(|read_role| role.contains(read_role))
+                    }))
                 || custom_role(&blocks, assignment, "azurerm_role_definition")
                     .is_some_and(|definition| azure_definition_allows(definition, action))
         })
@@ -232,4 +240,101 @@ async fn azure_management_writes_but_cannot_read_the_secrets_vault() {
         AZURE_GET_SECRET,
     );
     assert!(!workload.is_empty(), "the workload keeps its read");
+}
+
+/// Azure: management assigns roles to the workload identities it runs and to itself, so it holds
+/// `roleAssignments/write`. It must not be able to use that to give itself or anyone a role the
+/// stack does not declare, such as a read on the secrets vault, nor write a role definition. So:
+/// - every unconditioned role management holds leaves out role-assignment writes, and no role it
+///   holds can write role definitions;
+/// - the role that has the writes is assigned with a condition that pairs every listed role with
+///   an exact list of principals: management's own roles with management, the application's
+///   with the application's identities, and the secrets read only with the application's;
+/// - every custom role management holds is also assignable at the subscription, where it
+///   cannot change role definitions.
+#[tokio::test]
+async fn azure_management_cannot_assign_itself_roles_or_change_its_own() {
+    let prepared = prepare(stack(), Platform::Azure).await;
+    let module = render(&prepared, TerraformTarget::Azure, StackSettings::default());
+    assert_terraform_valid(&module, "azure_management_role_assignments");
+    let blocks = resource_blocks(&module);
+    let management = "principal_id = azurerm_user_assigned_identity.management.principal_id";
+    let writes = |block: &Block| {
+        block
+            .body
+            .contains("\"Microsoft.Authorization/roleAssignments/write\"")
+            || block
+                .body
+                .contains("\"Microsoft.Authorization/roleAssignments/*\"")
+            || block.body.contains("\"Microsoft.Authorization/*\"")
+            || block.body.contains("actions = [ \"*\"")
+    };
+    let role_definition_write = "\"Microsoft.Authorization/roleDefinitions/write\"";
+    let management_principal = "{${azurerm_user_assigned_identity.management.principal_id}}";
+    let secrets_user = "4633458b-17de-408a-b874-0445c86b69e6";
+
+    let mut conditioned = 0;
+    for assignment in blocks
+        .iter()
+        .filter(|block| block.kind == "azurerm_role_assignment" && block.body.contains(management))
+    {
+        let Some(definition) = custom_role(&blocks, assignment, "azurerm_role_definition") else {
+            continue;
+        };
+        assert!(
+            definition
+                .body
+                .contains("\"/subscriptions/${var.azure_subscription_id}\" ]"),
+            "{} is assignable only where management can change it: {}",
+            definition.label,
+            definition.body
+        );
+        let actions = definition
+            .body
+            .split("not_actions")
+            .next()
+            .unwrap_or_default();
+        assert!(
+            !actions.contains(role_definition_write),
+            "{} lets management write role definitions: {}",
+            definition.label,
+            definition.body
+        );
+        if writes(definition) {
+            let body = &assignment.body;
+            let roles = body
+                .matches("@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals")
+                .count();
+            let principals = body
+                .matches("@Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals")
+                .count();
+            assert!(
+                body.contains("condition_version = \"2.0\"")
+                    && body.contains("(!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'}))")
+                    && roles > 0
+                    && roles == principals
+                    && !body.contains("GuidNotEquals"),
+                "{} lets management assign roles it does not list to principals it does not list: {}",
+                assignment.label,
+                body
+            );
+            let own_clause = body
+                .split(" OR ")
+                .find(|clause| clause.contains(management_principal))
+                .expect("a clause for management's own roles");
+            assert!(
+                !own_clause.contains(secrets_user),
+                "management may give itself a secrets read: {own_clause}"
+            );
+            assert!(
+                body.contains("{${azurerm_user_assigned_identity.execution_sa.principal_id}}"),
+                "the application's roles name the application's identity: {body}"
+            );
+            conditioned += 1;
+        }
+    }
+    assert!(
+        conditioned > 0,
+        "management still assigns roles to workloads"
+    );
 }

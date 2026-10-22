@@ -52,6 +52,21 @@ pub struct MachineProfile {
     /// GPU specification (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<GpuSpec>,
+    /// Additional empty block device each machine must provide, besides the
+    /// disk holding the operating system. Supported on Machines, where
+    /// `join` refuses a host without such a device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_disk: Option<DataDiskRequirement>,
+}
+
+/// An additional block device a machine must provide with no partitions,
+/// no filesystem signature, and no mounts, so the workload can format it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DataDiskRequirement {
+    /// Minimum device size in bytes.
+    pub size_bytes: u64,
 }
 
 /// Allowed range and default for a count selected by the installer.
@@ -228,6 +243,7 @@ impl CapacityGroup {
 ///             ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
 ///             architecture: None,
 ///             gpu: None,
+///             data_disk: None,
 ///         }),
 ///         min_size: 1,
 ///         max_size: 5,
@@ -491,6 +507,7 @@ mod tests {
                     ephemeral_storage_bytes: bytes,
                     architecture: None,
                     gpu: None,
+                    data_disk: None,
                 }),
                 min_size: 1,
                 max_size: 1,
@@ -549,6 +566,7 @@ mod tests {
                         gpu_type: "nvidia-a10g".to_string(),
                         count: 1,
                     }),
+                    data_disk: None,
                 }),
                 min_size: 0,
                 max_size: 2,

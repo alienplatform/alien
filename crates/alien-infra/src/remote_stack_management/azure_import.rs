@@ -48,6 +48,12 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
             fic_name: None,
             role_definition_id: None,
             scoped_role_definition_ids: Default::default(),
+            role_assignment_role_definition_ids: Default::default(),
+            // Setup was applied by an external engine, which owns the role layout.
+            role_layout: super::azure::MANAGEMENT_ROLE_LAYOUT,
+            // The external engine creates and tracks the roles the runtime assigns.
+            runtime_role_definition_ids: Default::default(),
+            runtime_roles_revision: None,
             role_assignment_ids: Vec::new(),
             role_assignment_wait_until_epoch_secs: None,
             // Setup was applied by an external engine, which refreshes it itself.

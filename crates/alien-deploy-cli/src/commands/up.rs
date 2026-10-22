@@ -224,6 +224,9 @@ pub struct UpArgs {
 struct DeployConfigFile {
     /// Deployment name.
     name: Option<String>,
+    /// Subdomain to request under the project's generated domain. The manager
+    /// validates it when the deployment is created.
+    public_subdomain: Option<String>,
     /// Target platform: aws, gcp, azure, kubernetes, machines, or local.
     platform: Option<String>,
     /// Base cloud platform when `platform = "kubernetes"`.
@@ -2005,6 +2008,7 @@ mod tests {
             join_token: " aj1_wrapped-token ".to_string(),
             control_plane_url: Some("https://horizon.example.com".to_string()),
             cluster_id: Some("cluster-123".to_string()),
+            capacity_groups: None,
         })
         .expect("wrapped token should be accepted");
 
@@ -2017,6 +2021,7 @@ mod tests {
             join_token: " hj_secret ".to_string(),
             control_plane_url: Some(" https://horizon.example.com ".to_string()),
             cluster_id: Some(" cluster-123 ".to_string()),
+            capacity_groups: None,
         })
         .expect("raw token with context should be wrapped");
 
@@ -2032,11 +2037,36 @@ mod tests {
     }
 
     #[test]
+    fn machines_join_token_response_preserves_capacity_requirements() {
+        let response = serde_json::from_value(serde_json::json!({
+            "joinToken": "hj_secret",
+            "controlPlaneUrl": "https://horizon.example.com",
+            "clusterId": "cluster-123",
+            "capacityGroups": {"general": {
+                "cpu": "500m", "memoryBytes": 1024, "ephemeralStorageBytes": 2048,
+                "dataDisk": {"sizeBytes": 4096}
+            }}
+        }))
+        .expect("response should parse");
+        let token = normalize_machines_join_token_response(response).expect("wrap token");
+        let payload = URL_SAFE_NO_PAD
+            .decode(token.trim_start_matches("aj1_"))
+            .expect("decode token");
+        let payload: serde_json::Value = serde_json::from_slice(&payload).expect("parse token");
+        assert_eq!(payload["capacityGroups"]["general"]["cpu"], "500m");
+        assert_eq!(
+            payload["capacityGroups"]["general"]["dataDisk"]["sizeBytes"],
+            4096
+        );
+    }
+
+    #[test]
     fn machines_join_token_response_rejects_raw_token_without_context() {
         let error = normalize_machines_join_token_response(MachinesJoinTokenResponse {
             join_token: "hj_secret".to_string(),
             control_plane_url: None,
             cluster_id: Some("cluster-123".to_string()),
+            capacity_groups: None,
         })
         .expect_err("raw token should require context");
 
@@ -2635,6 +2665,66 @@ mod tests {
         apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
 
         assert!(config.external_bindings.has("storage"));
+    }
+
+    #[tokio::test]
+    async fn deploy_config_public_subdomain_is_requested_on_initialize() {
+        let server = MockServer::start_async().await;
+        let base_url = server.base_url();
+        let resolve = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/v1/resolve");
+                then.status(200)
+                    .json_body(serde_json::json!({"managerUrl": base_url}));
+            })
+            .await;
+        // Answer only an initialize request that carries the subdomain, and
+        // stop there so nothing is tracked or deployed.
+        let initialize = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/initialize")
+                    .json_body_partial(r#"{"name":"subdomain-app","publicSubdomain":"eu-prod"}"#);
+                then.status(409).json_body(serde_json::json!({
+                    "code": "STOP_AFTER_INITIALIZE",
+                    "message": "stop after initialize",
+                    "retryable": false,
+                    "internal": false
+                }));
+            })
+            .await;
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+name = "subdomain-app"
+publicSubdomain = "eu-prod"
+platform = "aws"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+            "--base-url",
+            &base_url,
+            "--manager-url",
+            &base_url,
+            "--token",
+            "test-subdomain-token",
+        ]);
+        let error = up_command(args, None)
+            .await
+            .expect_err("the mock stops the command after initialize");
+
+        assert!(
+            error.to_string().contains("stop after initialize"),
+            "{error:?}"
+        );
+        resolve.assert_async().await;
+        initialize.assert_async().await;
     }
 
     #[test]
@@ -3642,6 +3732,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         &stack_settings,
         stack_input_values,
         setup_item,
+        deploy_config
+            .as_ref()
+            .and_then(|config| config.public_subdomain.as_deref()),
     )
     .await?;
     let deployment_id = init.deployment_id;
@@ -4139,6 +4232,8 @@ struct MachinesJoinTokenResponse {
     join_token: String,
     control_plane_url: Option<String>,
     cluster_id: Option<String>,
+    #[serde(default)]
+    capacity_groups: Option<std::collections::BTreeMap<String, alien_core::MachineProfile>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4147,6 +4242,8 @@ struct WrappedMachinesJoinToken<'a> {
     join_token: &'a str,
     control_plane_url: &'a str,
     cluster_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capacity_groups: Option<&'a std::collections::BTreeMap<String, alien_core::MachineProfile>>,
 }
 
 async fn create_machines_join_token(
@@ -4219,6 +4316,7 @@ fn normalize_machines_join_token_response(response: MachinesJoinTokenResponse) -
                 join_token,
                 control_plane_url,
                 cluster_id,
+                capacity_groups: response.capacity_groups.as_ref(),
             };
             let json = serde_json::to_vec(&payload).into_alien_error().context(
                 ErrorData::ConfigurationError {
@@ -6007,9 +6105,11 @@ async fn initialize_deployment(
     stack_settings: &StackSettings,
     input_values: HashMap<String, serde_json::Value>,
     setup_item: Option<SetupItem>,
+    public_subdomain: Option<&str>,
 ) -> Result<InitResult> {
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
+        public_subdomain: public_subdomain.map(str::to_string),
         // Helm needs the runtime prefix before it creates workload identities.
         // Register the same prefix with the manager so its StackState and the
         // chart agree even before the Operator's first sync.

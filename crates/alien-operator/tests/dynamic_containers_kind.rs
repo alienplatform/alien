@@ -40,6 +40,7 @@ fn compute_stack() -> alien_core::Stack {
                 ephemeral_storage_bytes: 20 << 30,
                 architecture: Some(architecture),
                 gpu: None,
+                data_disk: None,
             }),
             min_size: 1,
             max_size: 3,

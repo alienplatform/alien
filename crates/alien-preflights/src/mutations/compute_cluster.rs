@@ -1202,6 +1202,7 @@ fn build_categorized_capacity_groups(
                 ephemeral_storage_bytes: 50 * 1024 * 1024 * 1024,
                 architecture: None,
                 gpu: None,
+                data_disk: None,
             }),
             min_size: 1,
             max_size: 1,
@@ -1217,6 +1218,7 @@ fn build_categorized_capacity_groups(
                 ephemeral_storage_bytes: 50 * 1024 * 1024 * 1024,
                 architecture: None,
                 gpu: None,
+                data_disk: None,
             }),
             min_size: 0,
             // Machines groups need a concrete capacity bound.
@@ -1267,6 +1269,7 @@ fn build_capacity_group_for_id(
             ephemeral_storage_bytes: requirements.max_ephemeral_storage_bytes,
             architecture: requirements.architecture,
             gpu: requirements.gpu.clone(),
+            data_disk: None,
         }),
         min_size: default_min_machines(&requirements),
         max_size: default_max_machines(&requirements),
@@ -1309,6 +1312,7 @@ fn build_capacity_group_for_id(
                 .max(20 * 1024 * 1024 * 1024),
             architecture: requirements.architecture,
             gpu: requirements.gpu,
+            data_disk: None,
         });
     }
     Ok(group)
@@ -2572,6 +2576,7 @@ mod tests {
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
                     architecture: None,
                     gpu: None,
+                    data_disk: None,
                 }),
                 min_size: 1,
                 max_size: 10,
@@ -3616,6 +3621,7 @@ mod tests {
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
                     architecture: None,
                     gpu: None,
+                    data_disk: None,
                 }),
                 min_size: 1,
                 max_size: 10,
@@ -3935,6 +3941,7 @@ mod tests {
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
                     architecture: None,
                     gpu: None,
+                    data_disk: None,
                 }),
                 min_size: 1,
                 max_size: 1,
@@ -4117,6 +4124,7 @@ mod tests {
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
                     architecture: None,
                     gpu: None,
+                    data_disk: None,
                 }),
                 min_size: 1,
                 max_size: 1,

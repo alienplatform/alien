@@ -605,6 +605,7 @@ async fn a_sandbox_base_is_built_for_its_backend_architecture() {
                             ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
                             architecture: Some(architecture),
                             gpu: None,
+                            data_disk: None,
                         }),
                         min_size: 1,
                         max_size: 1,

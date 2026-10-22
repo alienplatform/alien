@@ -398,6 +398,7 @@ mod tests {
                 ephemeral_storage_bytes: bytes,
                 architecture: None,
                 gpu: None,
+                data_disk: None,
             });
             desired.capacity_groups[0].nested_virtualization = nested;
             let demand = demands_for(&stack(desired), &state, true).unwrap();

@@ -32,8 +32,11 @@ tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-t
 reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 
 # AWS SDK for `register --import cloudformation`.
-aws-config = { version = "1", default-features = false, features = ["rustls", "behavior-version-latest"] }
-aws-sdk-cloudformation = { version = "1", default-features = false, features = ["rustls"] }
+# Use `default-https-client` (hyper 1 + rustls 0.23). The `rustls` feature
+# selects the legacy hyper 0.14 client, which pulls rustls 0.21 and
+# rustls-webpki 0.101, and is also part of aws-sdk-* default features.
+aws-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"] }
+aws-sdk-cloudformation = { version = "1", default-features = false, features = ["default-https-client"] }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }
@@ -64,12 +67,10 @@ oci-client = { workspace = true }
 sha2 = { workspace = true }
 tar = { workspace = true }
 base64 = { workspace = true }
+fs2 = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-[target.'cfg(windows)'.dependencies]
-fs2 = "0.4"
 
 [dev-dependencies]
 httpmock = { workspace = true }
