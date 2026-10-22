@@ -127,7 +127,7 @@ struct JobPollResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct JobErrorResponse {
+pub(super) struct JobErrorResponse {
     code: String,
     message: String,
 }
