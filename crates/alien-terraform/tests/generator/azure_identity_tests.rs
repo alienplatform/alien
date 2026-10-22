@@ -966,3 +966,68 @@ fn azure_setup_role_definitions_wait_for_the_resource_group() {
         );
     }
 }
+
+/// An automatic package creates the vault and the identity, so it also assigns the identity's
+/// role on that vault. Left to the runtime, the assignment of the setup-owned role outlives the
+/// vault on destroy, and Azure then refuses to delete the role (`RoleDefinitionHasAssignments`).
+#[test]
+fn azure_automatic_setup_assigns_application_roles_on_its_vaults() {
+    let vault_write = alien_permissions::get_permission_set("vault/data-write")
+        .expect("vault/data-write permission set")
+        .clone();
+    let stack = Stack::new("automatic-vault-roles".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().global(["vault/data-write"]),
+        )
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            ServiceAccount::new("execution-sa".to_string())
+                .stack_permission_set(vault_write)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(dispatch_worker("api"), ResourceLifecycle::Live)
+        .build();
+    let registry = TfRegistry::built_in();
+    let module = generate_product_terraform_module_with_profile(
+        &stack,
+        TerraformTarget::Azure,
+        TerraformOptions {
+            display_name: None,
+            registry: &registry,
+            stack_settings: StackSettings {
+                setup_management: SetupManagement::Automatic,
+                ..StackSettings::default()
+            },
+            registration: None,
+            helm_install: None,
+            supported_aws_regions: Vec::new(),
+        },
+        false,
+        SetupConfigurationProfile::Standard,
+    )
+    .expect("render automatic module");
+    assert_terraform_valid(&module, "automatic vault roles");
+
+    let rendered = normalized(&module);
+    assert!(
+        rendered.split("resource \"").skip(1).any(|block| {
+            block.starts_with("azurerm_role_assignment\"")
+                && block.contains("scope = azurerm_key_vault.secrets.id")
+                && block.contains("role_definition_id = azurerm_role_definition.setup_execution_")
+                && block.contains(
+                    "principal_id = azurerm_user_assigned_identity.execution_sa.principal_id",
+                )
+        }),
+        "setup must assign the execution role on its secrets vault"
+    );
+}
