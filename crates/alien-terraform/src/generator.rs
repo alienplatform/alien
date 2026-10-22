@@ -279,7 +279,11 @@ fn generate_terraform_module_internal(
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
-        if !alien_core::emits_package_scaffolding(resource, stack_settings.setup_management) {
+        if !alien_core::emits_package_scaffolding(
+            resource,
+            stack_settings.setup_management,
+            platform,
+        ) {
             continue;
         }
 
@@ -4580,6 +4584,18 @@ fn readme_md(
     } else {
         ""
     };
+    let azure_identity_note = if target.cloud_platform() == alien_core::Platform::Azure
+        && stack_settings.setup_management == alien_core::SetupManagement::Automatic
+        && stack.resources().any(|(_, entry)| {
+            matches!(
+                entry.config.resource_type().as_ref(),
+                "service-account" | "resource-access"
+            )
+        }) {
+        "## Application identities\n\nSetup creates the declared application identities and their stack-level roles before registration. The management role can assign application roles only to these identities. Adding an identity or a role definition requires another setup run.\n\nAn automatic installation set up by an earlier version created these identities, their stack-level roles and the resource-access federated credential during provisioning, under ids this module does not use. Applying this module over it fails on the existing identities and credential. Reinstall such an installation instead of upgrading it in place.\n\n"
+    } else {
+        ""
+    };
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -4587,7 +4603,7 @@ Target: `{target}`.\n\n\
 This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.\n\n\
 ## Inputs\n\n\
 {inputs}\n\n\
-{azure_sandbox_note}## Run\n\n\
+{azure_sandbox_note}{azure_identity_note}## Run\n\n\
 Use your organization's normal backend and approval workflow. A typical local review looks like:\n\n\
 ```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n{runtime_sandbox_note}\n\
 ## Registration\n\n\
@@ -4607,7 +4623,8 @@ Use your organization's normal backend and approval workflow. A typical local re
         registration_note = registration_note,
         kubernetes_operations = kubernetes_operations,
         retained_key_operations = retained_key_operations,
-        azure_sandbox_note = azure_sandbox_note
+        azure_sandbox_note = azure_sandbox_note,
+        azure_identity_note = azure_identity_note
     )
 }
 

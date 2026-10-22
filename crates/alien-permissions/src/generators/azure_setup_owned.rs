@@ -11,10 +11,8 @@
 //!   neither create a role nor change one setup made.
 //! - Management's `roleAssignments/write` is assigned with a condition that admits only those
 //!   roles onto their holders: the management roles onto the management identity, the
-//!   application roles onto the application's identities. No other role.
-//! - When setup creates the application's identities, the condition names their principal ids
-//!   and admits no other principal. An automatic setup package leaves them to the runtime, so their
-//!   ids do not exist yet: the application roles then go to any principal except management.
+//!   application roles onto the application's identities (which setup creates, so their principal
+//!   ids are known). No other role, and no other principal.
 //!
 //! The condition cannot name the assignment scope, so a listed role can be assigned anywhere in
 //! the scope management's role-assignment role is assigned at (the deployment resource group).
@@ -383,44 +381,30 @@ fn enumeration_context() -> PermissionContext {
         .with_region("region".to_string())
 }
 
-/// Who may hold the application's roles.
-#[derive(Debug, Clone, Copy)]
-pub enum AzureWorkloadPrincipals<'a> {
-    /// The principal ids of the application's identities, which setup created.
-    Listed(&'a BTreeSet<String>),
-    /// Setup does not create the application's identities (an automatic setup package leaves them
-    /// to the runtime), so their ids are unknown: any principal except management.
-    AnyButManagement,
-}
-
 /// The conditions to assign management's role-assignment role with, one per role assignment.
 ///
 /// Each admits a write only when it assigns a listed management role to `management_principal_id`,
-/// or a listed application role to one of `workload_principals`. Azure grants a write when any
-/// assignment of the action admits it, so lists longer than one condition holds
-/// ([`AZURE_CONDITION_SHARD_LIMIT`]) are split across several assignments, each with its own role
-/// definition. Both the role lists and a listed principal list are split: every (role chunk,
-/// principal chunk) pair becomes its own clause.
+/// or a listed application role to one of `workload_principal_ids`: the application's identities,
+/// which setup creates. Azure grants a write when any assignment of the action admits it, so lists
+/// longer than one condition holds ([`AZURE_CONDITION_SHARD_LIMIT`]) are split across several
+/// assignments, each with its own role definition. Both the role lists and the principal list are
+/// split: every (role chunk, principal chunk) pair becomes its own clause.
 ///
 /// With no roles at all, a single condition that admits no write. Principal ids may be template
 /// expressions that resolve to GUIDs.
 pub fn azure_role_assignment_allowlist_conditions(
     management_principal_id: &str,
-    workload_principals: AzureWorkloadPrincipals<'_>,
+    workload_principal_ids: &BTreeSet<String>,
     management_role_ids: &BTreeSet<String>,
     workload_role_ids: &BTreeSet<String>,
 ) -> Vec<String> {
     let deny_writes = format!("(!(ActionMatches{{'{ROLE_ASSIGNMENT_WRITE}'}}))");
-    let any_of = |principals: &[&str]| {
+    let clause = |roles: &[&str], principals: &[&str]| {
         format!(
-            "{REQUEST}:PrincipalId] ForAnyOfAnyValues:GuidEquals {{{}}}",
+            "({REQUEST}:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {{{}}} \
+             AND {REQUEST}:PrincipalId] ForAnyOfAnyValues:GuidEquals {{{}}})",
+            roles.join(", "),
             principals.join(", ")
-        )
-    };
-    let clause = |roles: &[&str], principal_test: &str| {
-        format!(
-            "({REQUEST}:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {{{}}} AND {principal_test})",
-            roles.join(", ")
         )
     };
     let shard = |clauses: &[String]| {
@@ -431,37 +415,24 @@ pub fn azure_role_assignment_allowlist_conditions(
         }
     };
     // What one clause in its own shard costs before its lists, and what that leaves for them.
-    let empty_test = any_of(&[]);
-    let overhead = shard(&[clause(&[], &empty_test)]).len();
+    let overhead = shard(&[clause(&[], &[])]).len();
     let budget = AZURE_CONDITION_SHARD_LIMIT.saturating_sub(overhead);
 
     let management_roles: Vec<&str> = management_role_ids.iter().map(String::as_str).collect();
     let workload_roles: Vec<&str> = workload_role_ids.iter().map(String::as_str).collect();
+    let workload_principals: Vec<&str> =
+        workload_principal_ids.iter().map(String::as_str).collect();
 
     let mut clauses = Vec::new();
-    let management_test = any_of(&[management_principal_id]);
+    let management_principal = [management_principal_id];
     for roles in chunks(&management_roles, budget.saturating_sub(management_principal_id.len())) {
-        clauses.push(clause(&roles, &management_test));
+        clauses.push(clause(&roles, &management_principal));
     }
-    match workload_principals {
-        AzureWorkloadPrincipals::Listed(principal_ids) => {
-            let principals: Vec<&str> = principal_ids.iter().map(String::as_str).collect();
-            // An application role with no application identity to hold it is assignable to no one.
-            if !principals.is_empty() {
-                for roles in chunks(&workload_roles, budget / 2) {
-                    for principals in chunks(&principals, budget / 2) {
-                        clauses.push(clause(&roles, &any_of(&principals)));
-                    }
-                }
-            }
-        }
-        AzureWorkloadPrincipals::AnyButManagement => {
-            let not_management = format!(
-                "{REQUEST}:PrincipalId] ForAnyOfAllValues:GuidNotEquals {{{management_principal_id}}}"
-            );
-            let extra = not_management.len().saturating_sub(empty_test.len());
-            for roles in chunks(&workload_roles, budget.saturating_sub(extra)) {
-                clauses.push(clause(&roles, &not_management));
+    // An application role with no application identity to hold it is assignable to no one.
+    if !workload_principals.is_empty() {
+        for roles in chunks(&workload_roles, budget / 2) {
+            for principals in chunks(&workload_principals, budget / 2) {
+                clauses.push(clause(&roles, &principals));
             }
         }
     }
@@ -505,7 +476,7 @@ fn chunks<'a>(ids: &[&'a str], budget: usize) -> Vec<Vec<&'a str>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AzureWorkloadPrincipals::*, *};
+    use super::*;
     use alien_core::{
         permissions::{ManagementPermissions, PermissionProfile},
         ResourceLifecycle, Vault, Worker, WorkerCode,
@@ -650,7 +621,7 @@ mod tests {
         let workload = BTreeSet::from(["w1".to_string(), "w2".to_string()]);
         let principals = BTreeSet::from(["e1".to_string(), "e2".to_string()]);
         let conditions =
-            azure_role_assignment_allowlist_conditions("mp", Listed(&principals), &management, &workload);
+            azure_role_assignment_allowlist_conditions("mp", &principals, &management, &workload);
         assert_eq!(
             conditions,
             vec![
@@ -664,36 +635,14 @@ mod tests {
         );
     }
 
-    /// When the runtime creates the application's identities, the application roles go to any
-    /// principal but management, and management still gets only its own roles.
-    #[test]
-    fn identities_created_after_setup_take_application_roles_but_management_does_not() {
-        let management = BTreeSet::from(["m1".to_string()]);
-        let workload = BTreeSet::from(["w1".to_string(), "w2".to_string()]);
-        let conditions =
-            azure_role_assignment_allowlist_conditions("mp", AnyButManagement, &management, &workload);
-        assert_eq!(
-            conditions,
-            vec![
-                "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR \
-                 (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {m1} \
-                 AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {mp}) OR \
-                 (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {w1, w2} \
-                 AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAllValues:GuidNotEquals {mp}))"
-                    .to_string()
-            ]
-        );
-    }
-
     /// No roles admit no write, and application roles with no application identity admit none.
     #[test]
     fn nothing_listed_admits_no_role_assignment_write() {
         let deny = vec!["((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})))".to_string()];
         let none = BTreeSet::new();
-        assert_eq!(azure_role_assignment_allowlist_conditions("mp", Listed(&none), &none, &none), deny);
-        assert_eq!(azure_role_assignment_allowlist_conditions("mp", AnyButManagement, &none, &none), deny);
+        assert_eq!(azure_role_assignment_allowlist_conditions("mp", &none, &none, &none), deny);
         let workload = BTreeSet::from(["w1".to_string()]);
-        assert_eq!(azure_role_assignment_allowlist_conditions("mp", Listed(&none), &none, &workload), deny);
+        assert_eq!(azure_role_assignment_allowlist_conditions("mp", &none, &none, &workload), deny);
     }
 
     /// A list longer than one condition holds is split, every shard under the limit, with every
@@ -704,19 +653,9 @@ mod tests {
         let workload = ids("w", 250);
         let principal = "ead6f253-2dec-4841-b608-f2b9fc67dc86";
         let principals = ids("e", 5);
-        // Identities created after setup are not listed, so their shards carry roles only.
-        let unlisted =
-            azure_role_assignment_allowlist_conditions(principal, AnyButManagement, &management, &workload);
-        assert!(unlisted.len() >= 2, "{} shards", unlisted.len());
-        for condition in &unlisted {
-            assert!(condition.len() <= AZURE_CONDITION_SHARD_LIMIT, "{}", condition.len());
-        }
-        for id in management.iter().chain(&workload) {
-            assert_eq!(unlisted.iter().filter(|c| c.contains(id.as_str())).count(), 1, "{id}");
-        }
         let conditions = azure_role_assignment_allowlist_conditions(
             principal,
-            Listed(&principals),
+            &principals,
             &management,
             &workload,
         );
@@ -756,7 +695,7 @@ mod tests {
         let principals = ids("e", 400);
         let conditions = azure_role_assignment_allowlist_conditions(
             "ead6f253-2dec-4841-b608-f2b9fc67dc86",
-            Listed(&principals),
+            &principals,
             &management,
             &workload,
         );

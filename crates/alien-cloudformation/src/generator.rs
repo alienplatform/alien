@@ -474,7 +474,11 @@ pub fn generate_cloudformation_template_with_profile(
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
-        if !alien_core::emits_package_scaffolding(resource, stack_settings.setup_management) {
+        if !alien_core::emits_package_scaffolding(
+            resource,
+            stack_settings.setup_management,
+            Platform::Aws,
+        ) {
             continue;
         }
         // A sandbox on a Kubernetes target is a pod bounded by the chart's NetworkPolicy, not
@@ -1586,9 +1590,7 @@ fn add_sandbox_gateway_replica_secret(
             ("ExcludePunctuation", CfExpression::from(true)),
         ]),
     );
-    template
-        .resources
-        .insert(secret.logical_id.clone(), secret);
+    template.resources.insert(secret.logical_id.clone(), secret);
 }
 
 fn add_network_parameters(
@@ -2104,7 +2106,7 @@ fn add_standard_conditions(
 
 fn stack_has_created_network(stack: &Stack, management: alien_core::SetupManagement) -> bool {
     stack.resources().any(|(_resource_id, resource)| {
-        alien_core::emits_package_scaffolding(resource, management)
+        alien_core::emits_package_scaffolding(resource, management, Platform::Aws)
             && resource
                 .config
                 .downcast_ref::<Network>()

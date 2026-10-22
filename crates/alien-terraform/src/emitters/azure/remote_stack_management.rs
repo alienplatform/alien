@@ -30,7 +30,7 @@ use alien_permissions::{
         dedupe_azure_role_bindings, management_roles_by_scope,
         protected_management_assignable_scopes, AzureGrantPlan, AzureManagementRoles,
         AzureManagementScopeKind, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
-        AzureRuntimeRoleHolder, AzureRuntimeRoles, AzureScopedCustomRole, AzureWorkloadPrincipals,
+        AzureRuntimeRoleHolder, AzureRuntimeRoles, AzureScopedCustomRole,
         AZURE_REMOTE_BINDINGS_PROFILE,
     },
     BindingTarget,
@@ -121,7 +121,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
         let runtime_roles = azure_runtime_roles(ctx.stack).context(ErrorData::GenericError {
             message: "failed to list the Azure roles the runtime assigns".to_string(),
         })?;
-        let conditions = runtime_role_conditions(ctx, &mut fragment, label, &runtime_roles);
+        let conditions = runtime_role_conditions(ctx, &mut fragment, label, &runtime_roles)?;
         // The runtime assigns those roles even when the stack grants management no
         // role-assignment writes itself; the conditions make the role safe to add.
         if !runtime_roles.is_empty()
@@ -324,7 +324,7 @@ fn runtime_role_conditions(
     fragment: &mut TfFragment,
     label: &str,
     runtime_roles: &AzureRuntimeRoles,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let local_name = format!("{label}_runtime_role_ids");
     let placeholder =
         |seed: &str| Uuid::new_v5(&Uuid::NAMESPACE_URL, seed.as_bytes()).to_string();
@@ -366,11 +366,9 @@ fn runtime_role_conditions(
         format!("${{azurerm_user_assigned_identity.{label}.principal_id}}"),
     ));
     // The application's identities: every service account's and the remote-bindings identity,
-    // each an `azurerm_user_assigned_identity` under its resource's label when this module creates
-    // it. An automatic package leaves them to the runtime, which creates them after setup, so their
-    // ids cannot be named here.
+    // each an `azurerm_user_assigned_identity` under its resource's label. The condition names
+    // their principals, so setup must create every one of them.
     let mut workload_principals = BTreeSet::new();
-    let mut created_after_setup = false;
     for (resource_id, entry) in ctx.stack.resources() {
         let kind = entry.config.resource_type();
         if kind != alien_core::ServiceAccount::RESOURCE_TYPE
@@ -378,9 +376,17 @@ fn runtime_role_conditions(
         {
             continue;
         }
-        if !alien_core::emits_package_scaffolding(entry, ctx.stack_settings.setup_management) {
-            created_after_setup = true;
-            continue;
+        if !alien_core::emits_package_scaffolding(
+            entry,
+            ctx.stack_settings.setup_management,
+            ctx.platform,
+        ) {
+            return Err(alien_error::AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("Azure setup without identity '{resource_id}'"),
+                reason: "management's role-assignment condition names every application \
+                         identity, so setup must create it"
+                    .to_string(),
+            }));
         }
         let Some(identity_label) = ctx.name_for(resource_id) else {
             continue;
@@ -392,14 +398,9 @@ fn runtime_role_conditions(
         ));
         workload_principals.insert(stand_in);
     }
-    let workload_principals = if created_after_setup {
-        AzureWorkloadPrincipals::AnyButManagement
-    } else {
-        AzureWorkloadPrincipals::Listed(&workload_principals)
-    };
-    azure_role_assignment_allowlist_conditions(
+    Ok(azure_role_assignment_allowlist_conditions(
         &principal,
-        workload_principals,
+        &workload_principals,
         &management_ids,
         &workload_ids,
     )
@@ -411,7 +412,7 @@ fn runtime_role_conditions(
                     condition.replace(stand_in.as_str(), reference)
                 })
         })
-        .collect()
+        .collect())
 }
 
 /// One conditioned assignment per role-assignment role and shard. Not gated: the conditions

@@ -901,7 +901,10 @@ fn merge_reimported_stack_state(
     if automatic_setup {
         for (resource_id, resource) in &existing.resources {
             if !imported.resources.contains_key(resource_id)
-                && !alien_core::is_automatic_setup_package_resource_type(&resource.resource_type)
+                && !alien_core::is_automatic_setup_package_resource_type(
+                    &resource.resource_type,
+                    req.base_platform.unwrap_or(req.platform),
+                )
             {
                 imported
                     .resources
@@ -1724,7 +1727,11 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
     let expected: std::collections::HashSet<&str> = stack
         .resources()
         .filter(|(_, entry)| {
-            alien_core::emits_package_scaffolding(entry, req.stack_settings.setup_management)
+            alien_core::emits_package_scaffolding(
+                entry,
+                req.stack_settings.setup_management,
+                req.base_platform.unwrap_or(req.platform),
+            )
         })
         .map(|(resource_id, _)| resource_id.as_str())
         .collect();

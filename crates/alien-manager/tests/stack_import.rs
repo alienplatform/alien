@@ -2811,8 +2811,27 @@ async fn imported_installations_cannot_request_automatic_setup() {
 
 #[tokio::test]
 async fn automatic_registration_requires_approval_and_defers_application_resources() {
-    for approved in [false, true] {
-        let fixture = make_fixture(Some(stack_with_storage("archive"))).await;
+    for (platform, approved) in [
+        (Platform::Aws, false),
+        (Platform::Aws, true),
+        (Platform::Azure, false),
+        (Platform::Azure, true),
+    ] {
+        let source_stack = if platform == Platform::Azure {
+            Stack::new("imported".to_string())
+                .add_with_remote_access(
+                    Storage::new("archive".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    ServiceAccount::new("execution-sa".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        } else {
+            stack_with_storage("archive")
+        };
+        let fixture = make_fixture_for_platform(platform, Some(source_stack.clone())).await;
         let release_id = fixture.release_id.clone().unwrap();
         let settings = StackSettings {
             setup_management: if approved {
@@ -2829,21 +2848,25 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
                 CreateImportedDeploymentParams {
                     name: "own-application".into(),
                     deployment_group_id: fixture.deployment_group_id.clone(),
-                    platform: Platform::Aws,
+                    platform,
                     deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                     base_platform: None,
                     stack_settings: settings,
-                    stack_state: StackState::new(Platform::Aws),
+                    stack_state: StackState::new(platform),
                     environment_info: None,
                     runtime_metadata: RuntimeMetadata::default(),
                     status: "pending".into(),
                     current_release_id: None,
                     desired_release_id: None,
-                    import_source: Some(ImportSourceKind::CloudFormation),
+                    import_source: Some(if platform == Platform::Azure {
+                        ImportSourceKind::Terraform
+                    } else {
+                        ImportSourceKind::CloudFormation
+                    }),
                     setup_metadata: Some(
                         serde_json::json!({ "setupReservation": { "releaseId": release_id } }),
                     ),
-                    setup_target: "aws".into(),
+                    setup_target: platform.to_string(),
                     setup_fingerprint: "test".into(),
                     setup_fingerprint_version: 1,
                     deployment_token: None,
@@ -2853,12 +2876,63 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
             )
             .await
             .unwrap();
-        let mut request = aws_remote_management_import_request(
-            "own-application",
-            "us-east-1",
-            "management",
-            "123456789012",
-        );
+        let mut request = if platform == Platform::Azure {
+            let mut request = azure_remote_management_import_request(
+                "own-application",
+                "eastus",
+                "management",
+                "00000000-0000-0000-0000-000000000123",
+                "00000000-0000-0000-0000-000000000456",
+            );
+            request.resources.extend([
+                ImportedResource {
+                    id: "enable-storage".into(),
+                    resource_type: alien_core::ServiceActivation::RESOURCE_TYPE,
+                    import_data: serde_json::json!({
+                        "subscriptionId": "00000000-0000-0000-0000-000000000123",
+                        "providerNamespace": "Microsoft.Storage", "registered": false
+                    }),
+                },
+                ImportedResource {
+                    id: "default-resource-group".into(),
+                    resource_type: alien_core::AzureResourceGroup::RESOURCE_TYPE,
+                    import_data: serde_json::json!({
+                        "subscriptionId": "00000000-0000-0000-0000-000000000123",
+                        "resourceGroup": "own-application-rg", "location": "eastus"
+                    }),
+                },
+                ImportedResource {
+                    id: "execution-sa".into(),
+                    resource_type: ServiceAccount::RESOURCE_TYPE,
+                    import_data: serde_json::json!({
+                        "subscriptionId": "00000000-0000-0000-0000-000000000123",
+                        "resourceGroup": "own-application-rg",
+                        "identityId": "/subscriptions/00000000-0000-0000-0000-000000000123/resourceGroups/own-application-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/execution-sa",
+                        "principalId": "00000000-0000-0000-0000-000000000003",
+                        "clientId": "00000000-0000-0000-0000-000000000004",
+                        "stackPermissionsApplied": true
+                    }),
+                },
+                ImportedResource {
+                    id: "access".into(),
+                    resource_type: alien_core::RemoteBindings::RESOURCE_TYPE,
+                    import_data: serde_json::json!({
+                        "tenantId": "00000000-0000-0000-0000-000000000456",
+                        "identityId": "/subscriptions/00000000-0000-0000-0000-000000000123/resourceGroups/own-application-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/access",
+                        "principalId": "00000000-0000-0000-0000-000000000005",
+                        "clientId": "00000000-0000-0000-0000-000000000006"
+                    }),
+                },
+            ]);
+            request
+        } else {
+            aws_remote_management_import_request(
+                "own-application",
+                "us-east-1",
+                "management",
+                "123456789012",
+            )
+        };
         request.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
         let (status, body) = post_import(&fixture, Some(&fixture.dg_token), &request).await;
         if !approved {
@@ -2887,6 +2961,13 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
             .contains_key("archive"));
         let state = installed.stack_state.unwrap();
         assert!(state.resources.contains_key("management"));
+        if platform == Platform::Azure {
+            assert_eq!(
+                state.resources["execution-sa"].status,
+                ResourceStatus::Provisioning
+            );
+            assert_eq!(state.resources["access"].status, ResourceStatus::Running);
+        }
         assert!(
             !state.resources.contains_key("archive"),
             "Application infrastructure must be created after registration using installed access"
@@ -2934,12 +3015,12 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
                     execution_claim: None,
                     state: DeploymentState {
                         status: DeploymentStatus::Running,
-                        platform: Platform::Aws,
+                        platform,
                         current_release: Some(ReleaseInfo {
                             release_id: fixture.release_id.clone(),
                             version: None,
                             description: None,
-                            stack: stack_with_storage("archive"),
+                            stack: source_stack.clone(),
                         }),
                         target_release: None,
                         stack_state: Some(running_state),
