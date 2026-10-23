@@ -1517,6 +1517,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn amd64_memory_pool_keeps_small_configurable_storage() {
+        for machine in ["r6a.2xlarge", "r7i.2xlarge"] {
+            let stack = Stack::new("memory-pool".to_string())
+                .add(
+                    test_container("api", "6.4", "38Gi"),
+                    ResourceLifecycle::Live,
+                )
+                .build();
+            let settings: ComputeSettings = serde_json::from_value(serde_json::json!({
+                "pools": {
+                    "general": {"mode": "fixed", "machines": 1, "machine": machine}
+                }
+            }))
+            .unwrap();
+            let plan = plan_compute(&stack, Platform::Aws, Some(&settings)).unwrap();
+            assert!(
+                plan.pools[0].errors.is_empty(),
+                "{:?}",
+                plan.pools[0].errors
+            );
+            assert!(plan.pools[0]
+                .machines
+                .iter()
+                .any(|option| option.machine == machine));
+
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings {
+                    compute: Some(settings),
+                    ..StackSettings::default()
+                })
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let state = StackState::new(Platform::Aws);
+            let prepared = ComputeClusterMutation
+                .mutate(stack, &state, &config)
+                .await
+                .unwrap();
+            let container = prepared.resources["api"]
+                .config
+                .downcast_ref::<Container>()
+                .unwrap();
+            assert_eq!(container.cpu.desired, "6.4");
+            assert_eq!(container.memory.desired, "38Gi");
+            let cluster = prepared.resources[container.cluster.as_deref().unwrap()]
+                .config
+                .downcast_ref::<ComputeCluster>()
+                .unwrap();
+            assert_eq!(cluster.capacity_groups.len(), 1);
+            let group = &cluster.capacity_groups[0];
+            assert_eq!(group.instance_type.as_deref(), Some(machine));
+            assert_eq!((group.min_size, group.max_size), (1, 1));
+            let profile = group.profile.as_ref().unwrap();
+            assert_eq!(profile.cpu, "8.0");
+            assert_eq!(
+                profile.architecture,
+                Some(alien_core::instance_catalog::Architecture::X86_64)
+            );
+            assert_eq!(profile.memory_bytes, 64 * 1024 * 1024 * 1024);
+            assert_eq!(profile.ephemeral_storage_bytes, 20 * 1024 * 1024 * 1024);
+            assert_eq!(group.aws_root_volume_size_gib(), 37);
+            assert_eq!(group.aws_runtime_data_volume_size_gib(), None);
+
+            let repeated = ComputeClusterMutation
+                .mutate(prepared.clone(), &state, &config)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(repeated).unwrap(),
+                serde_json::to_value(prepared).unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn machines_implicit_cluster_has_bounded_capacity() {
         for platform in [Platform::Machines, Platform::Kubernetes, Platform::Test] {
             let container = test_container("api", "1", "1Gi");
