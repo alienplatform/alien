@@ -222,6 +222,13 @@ fn start_from_with_env(
     } else {
         identity
     };
+    #[cfg(target_os = "linux")]
+    if image_identity.uid == 0 && crate::egress::legacy_from_env()?.is_some() {
+        return Err(AlienError::new(ErrorData::ConfigInvalid {
+            setting: "ALIEN_SANDBOX_EGRESS".into(),
+            reason: "root image USER cannot run with legacy UID-scoped egress; rebuild with a gateway-backed policy".into(),
+        }));
+    }
     // Allocate before fork; enter the directory only after dropping privileges.
     let directory = CString::new(image.working_directory)
         .into_alien_error()
@@ -527,5 +534,68 @@ mod tests {
             fs::read_to_string(output).expect("image output"),
             format!("{uid}\nimage-only")
         );
+    }
+    #[test]
+    #[ignore = "requires root with Docker default capabilities"]
+    fn legacy_egress_refuses_root_image_before_spawn() {
+        const CHILD: &str = "ALIEN_TEST_LEGACY_BOOT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            for mode in [
+                r#"{"mode":"deny"}"#,
+                r#"{"mode":"allow"}"#,
+                r#"{"mode":"allowDomains","domains":["example.com"]}"#,
+            ] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "image_command::tests::legacy_egress_refuses_root_image_before_spawn",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, "1")
+                    .env("ALIEN_SANDBOX_EGRESS", mode)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{mode}: {} {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        }
+        assert_eq!(unsafe { libc::geteuid() }, 0);
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            for user in ["root", "0", "", "0:2001"] {
+                let (temp, path, exec) =
+                    process_fixture(vec!["/bin/sh".into(), "-c".into(), "touch started".into()]);
+                let mut metadata: SandboxImageCommand =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                metadata.user = Some(user.into());
+                fs::write(&path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+                let result = start_from_with_env(&path, exec, &Default::default(), true);
+                // Reap even the broken version so the regression never leaves a root process.
+                let error = match result {
+                    Ok(Some(mut child)) => {
+                        child.wait().await.unwrap();
+                        panic!("legacy UID-scoped egress started root USER {user:?}");
+                    }
+                    Ok(None) => panic!("fixture must contain a command"),
+                    Err(error) => error,
+                };
+                assert_eq!(error.code, "CONFIG_INVALID");
+                assert!(
+                    error.to_string().contains("legacy UID-scoped egress"),
+                    "{error}"
+                );
+                assert!(!temp.path().join("started").exists());
+                // Released packages continue to run their command as the exec identity.
+                let mut legacy = start_from_with_env(&path, exec, &Default::default(), false)
+                    .unwrap()
+                    .unwrap();
+                assert!(legacy.wait().await.unwrap().success());
+            }
+        });
     }
 }
