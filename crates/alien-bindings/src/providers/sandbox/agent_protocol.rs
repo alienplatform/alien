@@ -33,18 +33,19 @@ const JOB_START: &str = "sandbox.jobStart";
 const JOB_POLL: &str = "sandbox.jobPoll";
 const JOB_CANCEL: &str = "sandbox.jobCancel";
 
-/// How long a request to the agent may take to answer with its headers.
+/// How long agent response headers or a non-success response body may take to arrive.
 ///
-/// Bounds reaching the agent, not what it then streams: a command's own deadline governs its
-/// output. Wrapped around `send()` alone rather than set as the request's timeout, which reqwest
-/// runs until the whole body has arrived and so would cut off any command outliving it. A caller
-/// cancelling a command waits for this request to settle before it can close the stream, so an
-/// unbounded one would leave that cancel unable to complete.
+/// Bounds reaching the agent and reading an error, not successful streams: a command's own
+/// deadline governs its output. Applied separately to headers and error bodies rather than set
+/// as the request's timeout, which reqwest runs until the whole body has arrived and so would
+/// cut off any command outliving it. A caller cancelling a command waits for this request to
+/// settle before it can close the stream, so an unbounded one would leave that cancel unable
+/// to complete.
 #[cfg(not(test))]
-const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(super) const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Short in tests so a stalled agent is exercised in milliseconds rather than waited out.
 #[cfg(test)]
-const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_millis(200);
+pub(super) const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// How long past a command's own timeout the agent may still take to write a terminal frame.
 ///
@@ -71,6 +72,17 @@ pub trait AgentTransport: Send + Sync + std::fmt::Debug {
         method: reqwest::Method,
         path: &str,
     ) -> Result<reqwest::RequestBuilder>;
+
+    /// Send an authorized request. A transport may renew an expired boot credential
+    /// after a definite authorization refusal, before any command can start.
+    async fn send(
+        &self,
+        _sandbox_id: &str,
+        request: reqwest::RequestBuilder,
+        operation: &str,
+    ) -> Result<reqwest::Response> {
+        send(request, operation).await
+    }
 
     /// Name used in errors, so a failure says which backend refused.
     fn provider(&self) -> &'static str;
@@ -140,14 +152,16 @@ pub async fn run_command<T: AgentTransport + ?Sized>(
 ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
     let body = exec_body(&request)?;
 
-    let response = send(
-        transport
-            .request(sandbox_id, reqwest::Method::POST, "/v1/exec")
-            .await?
-            .json(&body),
-        RUN_COMMAND,
-    )
-    .await?;
+    let response = transport
+        .send(
+            sandbox_id,
+            transport
+                .request(sandbox_id, reqwest::Method::POST, "/v1/exec")
+                .await?
+                .json(&body),
+            RUN_COMMAND,
+        )
+        .await?;
 
     Ok(frame_stream(
         response,
@@ -164,14 +178,16 @@ pub async fn start_job<T: AgentTransport + ?Sized>(
 ) -> Result<JobStart> {
     let body = exec_body(&request)?;
 
-    let response = send(
-        transport
-            .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/start")
-            .await?
-            .json(&body),
-        JOB_START,
-    )
-    .await?;
+    let response = transport
+        .send(
+            sandbox_id,
+            transport
+                .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/start")
+                .await?
+                .json(&body),
+            JOB_START,
+        )
+        .await?;
 
     let started: JobStartResponse = response
         .json()
@@ -202,14 +218,16 @@ pub async fn poll_job<T: AgentTransport + ?Sized>(
     job_id: &str,
     since_seq: Option<u64>,
 ) -> Result<JobPoll> {
-    let response = send(
-        transport
-            .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/poll")
-            .await?
-            .json(&json!({ "jobId": job_id, "sinceSeq": since_seq })),
-        JOB_POLL,
-    )
-    .await?;
+    let response = transport
+        .send(
+            sandbox_id,
+            transport
+                .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/poll")
+                .await?
+                .json(&json!({ "jobId": job_id, "sinceSeq": since_seq })),
+            JOB_POLL,
+        )
+        .await?;
 
     let JobPollResponse {
         running,
@@ -246,14 +264,16 @@ pub async fn cancel_job<T: AgentTransport + ?Sized>(
     sandbox_id: &str,
     job_id: &str,
 ) -> Result<()> {
-    send(
-        transport
-            .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/cancel")
-            .await?
-            .json(&json!({ "jobId": job_id })),
-        JOB_CANCEL,
-    )
-    .await?;
+    transport
+        .send(
+            sandbox_id,
+            transport
+                .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/cancel")
+                .await?
+                .json(&json!({ "jobId": job_id })),
+            JOB_CANCEL,
+        )
+        .await?;
 
     Ok(())
 }
@@ -283,14 +303,16 @@ pub async fn read_file<T: AgentTransport + ?Sized>(
     sandbox_id: &str,
     path: &str,
 ) -> Result<Vec<u8>> {
-    let response = send(
-        transport
-            .request(sandbox_id, reqwest::Method::GET, "/v1/files")
-            .await?
-            .query(&[("path", path)]),
-        "sandbox.readFile",
-    )
-    .await?;
+    let response = transport
+        .send(
+            sandbox_id,
+            transport
+                .request(sandbox_id, reqwest::Method::GET, "/v1/files")
+                .await?
+                .query(&[("path", path)]),
+            "sandbox.readFile",
+        )
+        .await?;
 
     let body: ReadFileResponse =
         response
@@ -319,17 +341,19 @@ pub async fn write_files<T: AgentTransport + ?Sized>(
     files: BTreeMap<String, Vec<u8>>,
 ) -> Result<()> {
     for (path, contents) in files {
-        send(
-            transport
-                .request(sandbox_id, reqwest::Method::PUT, "/v1/files")
-                .await?
-                .json(&json!({
-                    "path": path,
-                    "contentsBase64": BASE64.encode(contents),
-                })),
-            "sandbox.writeFiles",
-        )
-        .await?;
+        transport
+            .send(
+                sandbox_id,
+                transport
+                    .request(sandbox_id, reqwest::Method::PUT, "/v1/files")
+                    .await?
+                    .json(&json!({
+                        "path": path,
+                        "contentsBase64": BASE64.encode(contents),
+                    })),
+                "sandbox.writeFiles",
+            )
+            .await?;
     }
 
     Ok(())
@@ -349,7 +373,7 @@ fn timeout_millis(timeout: Duration) -> u64 {
 /// For a file operation every one of those is safe to repeat. For `run_command` the agent may
 /// have started the command — and past the headers it certainly did — so a repeat could run it
 /// twice, and the refusal must not carry the retry signal.
-fn unanswered(operation: &str, reason: &str) -> ErrorData {
+pub(super) fn unanswered(operation: &str, reason: &str) -> ErrorData {
     // Both take a command the agent may already be running, so an unanswered one leaves the
     // outcome unestablished. Every other operation is idempotent and safe to send again.
     if operation == RUN_COMMAND || operation == JOB_START {
@@ -370,10 +394,17 @@ fn unanswered(operation: &str, reason: &str) -> ErrorData {
 /// `run_command` — that request may have already started the command. Nothing retries on this
 /// path today; whoever adds a retry layer has to treat `run_command` as the exception.
 pub async fn send(request: reqwest::RequestBuilder, operation: &str) -> Result<reqwest::Response> {
-    let response = match tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, request.send()).await {
+    check_response(send_raw(request, operation).await?, operation).await
+}
+
+pub(super) async fn send_raw(
+    request: reqwest::RequestBuilder,
+    operation: &str,
+) -> Result<reqwest::Response> {
+    match tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, request.send()).await {
         Ok(sent) => sent
             .into_alien_error()
-            .context(unanswered(operation, "the request never reached the agent"))?,
+            .context(unanswered(operation, "the request never reached the agent")),
         Err(_) => {
             return Err(AlienError::new(unanswered(
                 operation,
@@ -383,25 +414,59 @@ pub async fn send(request: reqwest::RequestBuilder, operation: &str) -> Result<r
                 ),
             )));
         }
-    };
+    }
+}
 
+/// Read an error without letting a proxy's response consume unbounded memory or time.
+/// An incomplete body cannot establish whether a command was executed.
+pub(super) async fn error_body(mut response: reqwest::Response, operation: &str) -> Result<String> {
+    const MAX_ERROR_BODY: usize = 4096;
+    let status = response.status();
+    let read = async {
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .into_alien_error()
+            .context(unanswered(
+                operation,
+                &format!("{operation} returned {status} and its body could not be read"),
+            ))?
+        {
+            if chunk.len() > MAX_ERROR_BODY - body.len() {
+                return Err(AlienError::new(unanswered(
+                    operation,
+                    &format!(
+                        "{operation} returned {status} and its body exceeded {MAX_ERROR_BODY} bytes"
+                    ),
+                )));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(String::from_utf8_lossy(&body).into_owned())
+    };
+    tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, read)
+        .await
+        .map_err(|_| {
+            AlienError::new(unanswered(
+                operation,
+                &format!(
+                    "{operation} returned {status} and its body exceeded the response deadline"
+                ),
+            ))
+        })?
+}
+
+pub(super) async fn check_response(
+    response: reqwest::Response,
+    operation: &str,
+) -> Result<reqwest::Response> {
     if response.status().is_success() {
         return Ok(response);
     }
 
     let status = response.status();
-    // Read the body first: the agent puts the actual cause there, and a bare status turns a
-    // specific refusal into a guess. A read that *fails* is not an empty body — collapsing the
-    // two would let a dropped connection claim the request never arrived.
-    let body = match response.text().await {
-        Ok(body) => body,
-        Err(error) => {
-            return Err(error).into_alien_error().context(unanswered(
-                operation,
-                &format!("{operation} returned {status} and its body could not be read"),
-            ))
-        }
-    };
+    let body = error_body(response, operation).await?;
 
     // A 5xx never proves the agent answered, with or without a body: the cloud's proxy emits them
     // too, and a 504 means the request reached the guest and no answer came back in time. A body

@@ -30,9 +30,9 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AZURE_DISK_IMAGE_LABEL, AZURE_GATEWAY_MAX_LIFETIME_SECONDS, AzureSandboxImage,
-    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxEgress, SandboxLimits,
-    SandboxOutputs, azure_disk_image_label,
+    azure_disk_image_label, AzureSandboxImage, ResourceOutputs as CoreResourceOutputs,
+    ResourceStatus, Sandbox, SandboxEgress, SandboxLimits, SandboxOutputs, AZURE_DISK_IMAGE_LABEL,
+    AZURE_GATEWAY_MAX_LIFETIME_SECONDS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -72,6 +72,9 @@ pub(crate) struct PendingDiskImage {
 /// Azure Sandbox controller.
 #[controller]
 pub struct AzureSandboxController {
+    /// Transport for the currently serving disk image; changes only when its replacement is Ready.
+    #[serde(default)]
+    pub(crate) agent: bool,
     /// Withhold new Internet bindings until actual Azure network facts have been verified.
     #[serde(default)]
     pub(crate) egress_network_verified: bool,
@@ -480,6 +483,7 @@ impl AzureSandboxController {
         };
         // All three or none, as the declaration has them: the data plane reads a missing ceiling
         // as its own default, so filling one in alone would assert a size nobody declared.
+        azure.agent = self.agent;
         azure.egress = egress.clone();
         azure.default_policy = self
             .default_policy
@@ -570,6 +574,7 @@ impl AzureSandboxController {
         match image {
             AzureSandboxImage::Catalog(name) => {
                 self.disk_image = Some(name.to_string());
+                self.agent = false;
                 if let Some(replaced) = self.disk_image_id.take() {
                     self.retire(replaced, true);
                 }
@@ -598,8 +603,10 @@ impl AzureSandboxController {
         let Ok(AzureSandboxImage::Registry(reference)) = config.azure_image() else {
             return None;
         };
-        (self.disk_image.as_deref() != Some(reference) || self.disk_image_id.is_none())
-            .then(|| reference.to_string())
+        (self.disk_image.as_deref() != Some(reference)
+            || self.disk_image_id.is_none()
+            || self.agent != config.image_user.is_some())
+        .then(|| reference.to_string())
     }
 
     /// Looked up by label before any create and on every poll: the id is server-minted, so only the
@@ -774,6 +781,7 @@ impl AzureSandboxController {
             }
         }
         self.disk_image = Some(reference.clone());
+        self.agent = config.image_user.is_some();
         info!(sandbox_id = %config.id, %reference, image = %image.id, "disk image is Ready");
 
         Ok(AzureSandboxHandlerAction::Continue {
@@ -1048,8 +1056,8 @@ mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::{
-        MockPlatformServiceProvider, ResourceController, ResourceRegistry, deserialize_controller,
-        serialize_controller,
+        deserialize_controller, serialize_controller, MockPlatformServiceProvider,
+        ResourceController, ResourceRegistry,
     };
     use alien_core::SandboxEgress;
     use alien_core::{
@@ -1062,6 +1070,7 @@ mod tests {
     #[test]
     fn the_binding_carries_the_regional_data_plane_endpoint() {
         let controller = AzureSandboxController {
+            agent: false,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1115,6 +1124,7 @@ mod tests {
             })
             .build();
         let controller = AzureSandboxController {
+            agent: false,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1196,6 +1206,7 @@ mod tests {
             .unwrap();
 
         assert!(matches!(restored.state, AzureSandboxState::Ready));
+        assert!(!restored.agent, "released rows retain native transport");
         assert_eq!(restored.sandbox_group.as_deref(), Some("sbg"));
         assert_eq!(restored.region.as_deref(), Some("swedencentral"));
         assert_eq!(restored.resource_group.as_deref(), Some("rg"));
@@ -1278,6 +1289,7 @@ mod tests {
     #[test]
     fn a_failed_capture_leaves_the_declaration_whole() {
         let mut controller = AzureSandboxController {
+            agent: false,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1328,6 +1340,7 @@ mod tests {
     #[test]
     fn a_failed_capture_does_not_apply_a_tightened_egress_either() {
         let mut controller = AzureSandboxController {
+            agent: false,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1381,6 +1394,7 @@ mod tests {
     #[test]
     fn the_binding_carries_the_declared_ceilings() {
         let controller = AzureSandboxController {
+            agent: false,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1421,6 +1435,7 @@ mod tests {
     #[test]
     fn a_sandbox_without_declared_ceilings_publishes_none() {
         let controller = AzureSandboxController {
+            agent: false,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1500,11 +1515,11 @@ mod tests {
     mod disk_images {
         use super::*;
         use crate::core::{StackExecutor, StackResourceStateExt};
-        use alien_azure_clients::AzureClientConfigExt as _;
         use alien_azure_clients::azure::sandbox_data_plane::{
             DiskImageStatus, ListedSandbox, MockSandboxDataPlaneApi,
         };
         use alien_azure_clients::azure::sandbox_groups::MockSandboxGroupsApi;
+        use alien_azure_clients::AzureClientConfigExt as _;
         use alien_core::{ClientConfig, StackResourceState, StackState};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1529,6 +1544,7 @@ mod tests {
             disk_image_id: Option<&str>,
         ) -> AzureSandboxController {
             AzureSandboxController {
+                agent: false,
                 state: AzureSandboxState::Ready,
                 sandbox_group: Some("sbg".to_string()),
                 region: Some("westus2".to_string()),
@@ -1930,6 +1946,57 @@ mod tests {
 
             assert_eq!(state_of(&executor).disk_image_id.as_deref(), Some("img-1"));
             assert_eq!(polls.load(Ordering::SeqCst), 2);
+        }
+
+        #[tokio::test]
+        async fn agent_transport_switches_with_the_ready_disk_and_survives_reload() {
+            for (old_agent, new_agent) in [(false, true), (true, false)] {
+                let polls = Arc::new(AtomicUsize::new(0));
+                let seen = polls.clone();
+                let mut client = MockSandboxDataPlaneApi::new();
+                client.expect_list_disk_images().returning(move |_| {
+                    let state = if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                        "Building"
+                    } else {
+                        "Ready"
+                    };
+                    Ok(vec![image("new", NODE, state)])
+                });
+                client.expect_create_disk_image().never();
+                let mut declared = sandbox(NODE);
+                declared.image_user = new_agent.then_some(0);
+                let mut old = adopted(Some(PYTHON), Some("old"));
+                old.agent = old_agent;
+                old.state = AzureSandboxState::UpdatingDiskImage;
+                let mut run = executor(declared, old, client).await;
+                run.step().await.expect("new disk still building");
+                let current = state_of(&run);
+                assert_eq!(current.agent, old_agent);
+                assert_eq!(current.disk_image.as_deref(), Some(PYTHON));
+                let binding = current.get_binding_params().unwrap().unwrap();
+                assert_eq!(
+                    binding
+                        .get("agent")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                    old_agent
+                );
+                run.step().await.expect("new disk ready");
+                let current = state_of(&run);
+                let restored: AzureSandboxController =
+                    serde_json::from_value(serde_json::to_value(current).unwrap()).unwrap();
+                assert_eq!(restored.agent, new_agent);
+                assert_eq!(restored.disk_image.as_deref(), Some(NODE));
+                let binding = restored.get_binding_params().unwrap().unwrap();
+                assert_eq!(
+                    binding
+                        .get("agent")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                    new_agent
+                );
+                assert_eq!(polls.load(Ordering::SeqCst), 2);
+            }
         }
 
         /// A changed reference builds a new image and retires the old one, which stays for the
@@ -2502,12 +2569,14 @@ mod tests {
         #[test]
         fn a_catalog_name_retires_the_image_a_registry_reference_built() {
             let mut controller = adopted(Some(PYTHON), Some("img-1"));
+            controller.agent = true;
 
             controller
                 .capture_session_inputs(&sandbox("ubuntu"))
                 .expect("a catalog name captures");
 
             assert_eq!(controller.disk_image.as_deref(), Some("ubuntu"));
+            assert!(!controller.agent);
             assert_eq!(controller.disk_image_id, None);
             assert!(held(&controller, "img-1"));
         }

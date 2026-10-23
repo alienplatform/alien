@@ -269,6 +269,43 @@ impl CommandStreamHandle {
     }
 }
 
+fn capability_names(value: alien_core::SandboxCapabilities) -> Vec<String> {
+    let alien_core::SandboxCapabilities {
+        files,
+        reconnect,
+        jobs,
+        preview,
+        pause_resume,
+        snapshot: _,
+        domain_egress_rules,
+        egress_deny,
+        enforced_limits,
+        process_limit,
+        sandbox_lifetime,
+        supervisor_pid_namespace,
+        supervisor_isolation,
+    } = value;
+
+    [
+        (files, "files"),
+        (reconnect, "reconnect"),
+        (jobs, "jobs"),
+        (preview, "preview"),
+        (pause_resume, "pauseResume"),
+        (domain_egress_rules, "domainEgressRules"),
+        (egress_deny, "egressDeny"),
+        (enforced_limits, "enforcedLimits"),
+        (process_limit, "processLimit"),
+        (sandbox_lifetime, "sandboxLifetime"),
+        (supervisor_pid_namespace, "supervisorPidNamespace"),
+        (supervisor_isolation, "supervisorIsolation"),
+    ]
+    .into_iter()
+    .filter(|(supported, _)| *supported)
+    .map(|(_, name)| name.to_string())
+    .collect()
+}
+
 /// Handle to a resolved sandbox binding.
 #[napi]
 pub struct SandboxHandle {
@@ -298,40 +335,17 @@ impl SandboxHandle {
     /// compile here instead of being silently dropped, which is how `egressDeny` went missing.
     #[napi]
     pub fn capabilities(&self) -> Vec<String> {
-        let alien_core::SandboxCapabilities {
-            files,
-            reconnect,
-            jobs,
-            preview,
-            pause_resume,
-            snapshot: _,
-            domain_egress_rules,
-            egress_deny,
-            enforced_limits,
-            process_limit,
-            sandbox_lifetime,
-            supervisor_pid_namespace,
-            supervisor_isolation,
-        } = self.inner.capabilities();
+        capability_names(self.inner.capabilities())
+    }
 
-        [
-            (files, "files"),
-            (reconnect, "reconnect"),
-            (jobs, "jobs"),
-            (preview, "preview"),
-            (pause_resume, "pauseResume"),
-            (domain_egress_rules, "domainEgressRules"),
-            (egress_deny, "egressDeny"),
-            (enforced_limits, "enforcedLimits"),
-            (process_limit, "processLimit"),
-            (sandbox_lifetime, "sandboxLifetime"),
-            (supervisor_pid_namespace, "supervisorPidNamespace"),
-            (supervisor_isolation, "supervisorIsolation"),
-        ]
-        .into_iter()
-        .filter(|(supported, _)| *supported)
-        .map(|(_, name)| name.to_string())
-        .collect()
+    /// Capabilities of the specified session, including its persisted transport.
+    #[napi]
+    pub async fn session_capabilities(&self, sandbox_id: String) -> napi::Result<Vec<String>> {
+        self.inner
+            .session_capabilities(&sandbox_id)
+            .await
+            .map(capability_names)
+            .map_err(map_alien_error)
     }
 
     /// Creates a sandbox.

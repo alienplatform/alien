@@ -1,7 +1,7 @@
 lockVersion: 2.0.0
 id: 8940d7e8-6d5d-4ea9-9632-85457ecd75f0
 management:
-  docChecksum: 4718d406eefeb2de97e754e3131d67cd
+  docChecksum: 027b0fccb5759fc4d2769ec6b3cd9c61
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
@@ -10,9 +10,9 @@ management:
   repoURL: https://github.com/alienplatform/alien.git
   repoSubDirectory: client-sdks/manager/typescript
 persistentEdits:
-  generation_id: f4b6cc77-cc7f-415d-b104-3a62444aac8a
-  pristine_commit_hash: 3ad34eaefa165faf150bbbab881d79c6a8a04917
-  pristine_tree_hash: 2d1d8cc6a8d0d2d77f52369d8f2b88cc596dc782
+  generation_id: 5ac6ae7e-68e7-4e96-9926-e1fb1f839038
+  pristine_commit_hash: 0130d4d660022ca4501b0c1b5107323f1f77e46b
+  pristine_tree_hash: 25428eb78b8f381f18217d5927171edf686c5eea
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -1605,8 +1605,8 @@ trackedFiles:
     pristine_git_object: 1ae2f8dc2e404e4a6a67f9c178dc882e9f16cf24
   docs/models/remoteazuresandboxbinding.md:
     id: d1233fc843f2
-    last_write_checksum: sha1:8834cb9aee0e4b3f4215e3aeccaecb136b3c4176
-    pristine_git_object: 9a94a0929688f8e77f269fb7f1553b0336509b01
+    last_write_checksum: sha1:644e4046097f388980b4136436d1a588e70bc52d
+    pristine_git_object: 85ce701a5ba628fb8eadeab138efd85943073943
   docs/models/remoteblobstoragebinding.md:
     id: 5a82d2097d0e
     last_write_checksum: sha1:ee4a448bca6d3b964714766c1e1efbe839a981fc
@@ -2385,8 +2385,8 @@ trackedFiles:
     pristine_git_object: 6f72b50c89ff813bbc36879647bf26fb8ae35ce0
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:ad90f3c8538b70274047d72be6e70bb5800235ed
-    pristine_git_object: 875d731c5cab511963b0518ae988f05d51760112
+    last_write_checksum: sha1:c6044d164c2b8228077fe16b1e1b92e968c99080
+    pristine_git_object: 9c10e34aa58a7153df8c7d0acdef5da14aa6253e
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:a3b94f76908a8f9a4857fea8aac869403adb797c
@@ -2605,8 +2605,8 @@ trackedFiles:
     pristine_git_object: 66e86fa415a1d732617f6fd023b20a3ef5023944
   src/hooks/hooks.ts:
     id: a2463fc6f69b
-    last_write_checksum: sha1:3a90d88b4c6c07247db8e5f6441a79538232394e
-    pristine_git_object: 94ad0a323123b34dc638717c5d67a3c23c54d5c6
+    last_write_checksum: sha1:7dd975bbcc46a32dd394f86a4652b74ecc70d874
+    pristine_git_object: 7ed9e0445ac189e0f90687c6ef602212702bde90
   src/hooks/index.ts:
     id: 5f2dab62b520
     last_write_checksum: sha1:1a11c073a6cd792932218e1d4ed36b8567bad8ef
@@ -3745,8 +3745,8 @@ trackedFiles:
     pristine_git_object: 8fa97528e83aa24343d334076fcb6ce4af400dc4
   src/models/remoteazuresandboxbinding.ts:
     id: b9b63c589525
-    last_write_checksum: sha1:20accd2ab43b270e6b89d37ed1f9e86eefe9f9e9
-    pristine_git_object: b6809b833686b22413a38f256e3ac6fa8b3c9b70
+    last_write_checksum: sha1:300844bdd849dcc905038c4c71908588ae64ea69
+    pristine_git_object: 9b4ac741aa969da63bd4788a663c5e0bb880a8d5
   src/models/remoteblobstoragebinding.ts:
     id: 0933bbb9f14f
     last_write_checksum: sha1:4ce044396a12f8b9fe405c74e95473ffe0abe798

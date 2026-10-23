@@ -6,6 +6,8 @@
 //! rather than a body it might mistake for a result.
 
 use std::net::SocketAddr;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -53,21 +55,26 @@ struct Agent {
 
 impl Agent {
     async fn start() -> Self {
+        Self::start_with_authorization(None).await
+    }
+
+    async fn start_with_authorization(authorization: Option<AgentAuthorization>) -> Self {
         let dir = TempDir::new().expect("temp dir");
         let root = dir.path().canonicalize().expect("canonical root");
         let keys = KeyPair::from_seed(Seed::new([3u8; 32]));
 
         let state = Arc::new(AgentState {
+            image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
             #[cfg(target_os = "linux")]
             gateway_egress: None,
             session_root: root.clone(),
-            authorization: AgentAuthorization::Capability {
+            authorization: authorization.unwrap_or(AgentAuthorization::Capability {
                 public_key: keys.pk,
                 identity: SandboxSessionIdentity {
                     session_id: SESSION.to_string(),
                     generation: GENERATION,
                 },
-            },
+            }),
             exec_identity: test_identity(),
             output_cap: 1 << 20,
             jobs: JobRegistry::new(),
@@ -442,6 +449,7 @@ async fn transport_authorization_needs_no_capability() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -494,6 +502,7 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -587,6 +596,7 @@ async fn the_validate_hook_passes_and_leaves_the_session_root_empty() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     validate::run(&AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -615,6 +625,7 @@ async fn the_validate_hook_refuses_a_caller_running_as_the_exec_identity() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let base_url = serve(Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         gateway_egress: None,
         session_root: root.clone(),
         authorization: AgentAuthorization::Transport,
@@ -654,6 +665,7 @@ async fn the_validate_hook_refuses_a_caller_without_a_capability() {
     let keys = KeyPair::from_seed(Seed::new([3u8; 32]));
 
     let base_url = serve(Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -705,6 +717,7 @@ async fn the_validate_hook_names_the_file_check_when_the_session_root_is_not_wri
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o500)).expect("chmod");
 
     let outcome = validate::run(&AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -741,6 +754,7 @@ async fn the_validate_hook_names_the_identity_check_when_the_probe_cannot_run_as
     let root = dir.path().canonicalize().expect("canonical root");
 
     let base_url = serve(Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -986,6 +1000,7 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
     let root = dir.path().canonicalize().expect("canonical root");
 
     let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
         #[cfg(target_os = "linux")]
         gateway_egress: None,
         session_root: root.clone(),
@@ -1164,4 +1179,130 @@ async fn starting_a_job_without_a_capability_is_refused() {
         agent.state.jobs.is_empty(),
         "a refused start creates no job"
     );
+}
+
+/// The native file API delivers only a boot credential; exec still uses the normal confined path.
+#[cfg(unix)]
+#[tokio::test]
+async fn native_file_credential_authorizes_only_its_own_boot() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("token");
+    let old = alien_sandbox_agent::native_token::NativeToken::create(&path).unwrap();
+    let old_value = std::fs::read_to_string(&path).unwrap();
+    drop(old);
+    let token = alien_sandbox_agent::native_token::NativeToken::create(&path).unwrap();
+    let current = std::fs::read_to_string(&path).unwrap();
+    let agent = Agent::start_with_authorization(Some(AgentAuthorization::NativeFile(token))).await;
+    let client = reqwest::Client::new();
+    let request = json!({"command": ["/bin/sh", "-c", "touch accepted; id -u"], "timeoutMs": 5000});
+    for rejected in [None, Some(old_value.as_str()), Some("incorrect")] {
+        let mut send = client
+            .post(format!("{}/v1/exec", agent.base_url))
+            .json(&request);
+        if let Some(value) = rejected {
+            send = send.bearer_auth(value);
+        }
+        let response = send.send().await.unwrap();
+        assert_eq!(response.status(), 401);
+        assert!(!agent.root.join("accepted").exists());
+        let mut activation = client.post(format!("{}/v1/activate", agent.base_url));
+        if let Some(value) = rejected {
+            activation = activation.bearer_auth(value);
+        }
+        assert_eq!(activation.send().await.unwrap().status(), 401);
+    }
+    assert_eq!(
+        client
+            .post(format!("{}/v1/activate", agent.base_url))
+            .bearer_auth(&current)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        204
+    );
+    let response = client
+        .post(format!("{}/v1/exec", agent.base_url))
+        .bearer_auth(current)
+        .json(&request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let output = frames(&response.text().await.unwrap());
+    assert_eq!(output.last().unwrap()["code"], 0);
+    let stdout: Vec<u8> = output
+        .iter()
+        .filter(|frame| frame["t"] == "stdout")
+        .flat_map(|frame| BASE64.decode(frame["data"].as_str().unwrap()).unwrap())
+        .collect();
+    assert_eq!(
+        String::from_utf8(stdout).unwrap().trim(),
+        test_identity().uid.to_string()
+    );
+    assert!(agent.root.join("accepted").exists());
+}
+
+/// Exercise the same root spawn restriction as an OCI supervisor, over real TCP.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires root with Docker default capabilities and Python 3"]
+async fn root_image_cannot_call_control_routes() {
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    let dir = TempDir::new().unwrap();
+    let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::awaiting_activation(),
+        gateway_egress: None,
+        session_root: dir.path().to_owned(),
+        authorization: AgentAuthorization::Transport,
+        exec_identity: ExecIdentity {
+            uid: 60000,
+            gid: 60000,
+        },
+        output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
+        agent_binary: agent_binary(),
+    });
+    let base = serve(state).await;
+    let mut command = std::process::Command::new("python3");
+    command.args(["-c", r#"
+import json, sys, urllib.request, urllib.error
+routes = [
+ ('POST', '/aws/lambda-microvms/runtime/v1/resume', {}),
+ ('POST', '/aws/lambda-microvms/runtime/v1/run', {}),
+ ('GET', '/aws/lambda-microvms/runtime/v1/validate', None),
+ ('PUT', '/v1/egress', {'policy':'forged','caCert':'forged'}),
+ ('POST', '/v1/exec', {'command':['/bin/true'],'timeoutMs':1000}),
+ ('PUT', '/v1/files', {'path':'forged','contentsBase64':'eA=='}),
+ ('GET', '/v1/files?path=forged', None),
+ ('POST', '/v1/jobs/start', {'command':['/bin/true'],'timeoutMs':1000}),
+ ('POST', '/', {'v':1,'op':'exec','command':['/bin/true'],'timeoutMs':1000}),
+]
+failures=[]
+for method,path,body in routes:
+ request=urllib.request.Request(sys.argv[1]+path, method=method,
+   data=None if body is None else json.dumps(body).encode(), headers={'Content-Type':'application/json'})
+ try:
+  with urllib.request.urlopen(request, timeout=5) as response: code=response.status
+ except urllib.error.HTTPError as error: code=error.code
+ print(method, path, code, flush=True)
+ if code != 403: failures.append((path,code))
+assert not failures, failures
+"#, &base]);
+    unsafe {
+        command.pre_exec(|| {
+            alien_sandbox_agent::privilege::drop_image_to(ExecIdentity { uid: 0, gid: 0 })
+        });
+    }
+    let output = tokio::process::Command::from(command)
+        .output()
+        .await
+        .unwrap();
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!dir.path().join("forged").exists());
 }

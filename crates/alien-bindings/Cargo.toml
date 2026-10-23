@@ -64,6 +64,7 @@ base64 = { workspace = true }
 k8s-openapi = { version = "0.25.0", features = ["v1_33"], optional = true }
 
 [dev-dependencies]
+alien-sandbox-agent = { workspace = true }
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }

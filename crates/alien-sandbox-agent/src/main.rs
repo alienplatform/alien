@@ -42,6 +42,8 @@ const ENV_EXEC_GID: &str = "ALIEN_SANDBOX_EXEC_GID";
 /// Which isolation model is in force: `uid-split` or `platform`. Declared, never defaulted — it
 /// selects a security model, so an unset value must fail to start rather than silently pick one.
 const ENV_ISOLATION: &str = "ALIEN_SANDBOX_ISOLATION";
+/// New package boot contract; absent in released packages.
+const ENV_IMAGE_COMMAND: &str = "ALIEN_SANDBOX_IMAGE_COMMAND";
 
 /// Bytes of each stream kept when the environment does not say.
 const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
@@ -69,10 +71,27 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt::init();
 
+    let aws_image_transport =
+        image_command_enabled()? && alien_sandbox_agent::image_command::defer_to_run_hook()?;
+    if aws_image_transport && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file") {
+        return Err(invalid(
+            ENV_AUTHORIZATION,
+            "native-file cannot be combined with AWS Run-hook transport",
+        ));
+    }
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
-    let mut run_image_command = false;
-    if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
+    let network_admin = std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() || aws_image_transport;
+    #[cfg(target_os = "linux")]
+    if aws_image_transport && state.gateway_egress.is_none() {
+        alien_sandbox_agent::gateway_egress::isolate_control_callers()?;
+    }
+    #[cfg(target_os = "linux")]
+    if image_command_enabled()? && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file")
+    {
+        alien_sandbox_agent::gateway_egress::isolate_image_devices()?;
+    }
+    if network_admin || image_command_enabled()? {
         #[cfg(target_os = "linux")]
         if let Some(policy) = alien_sandbox_agent::egress::legacy_from_env()? {
             alien_sandbox_agent::egress::install(&policy, state.exec_identity.uid)?;
@@ -88,7 +107,19 @@ fn main() -> Result<()> {
                 "prepare declared command identity",
                 "cannot write the image's passwd/group entries".to_string(),
             ))?;
-            alien_sandbox_agent::privilege::restrict_supervisor()
+            if image_command_enabled()? {
+                alien_sandbox_agent::protected_files::protect(
+                    &state.agent_binary,
+                    std::path::Path::new("/opt/alien"),
+                )
+                .into_alien_error()
+                .context(failed(
+                    "protect agent bootstrap files",
+                    "cannot make the agent binary and metadata read-only before image startup"
+                        .into(),
+                ))?;
+            }
+            alien_sandbox_agent::privilege::restrict_supervisor(network_admin)
                 .into_alien_error()
                 .context(failed(
                     "reduce supervisor capabilities",
@@ -115,7 +146,6 @@ fn main() -> Result<()> {
                     )));
             }
         }
-        run_image_command = true;
         #[cfg(not(target_os = "linux"))]
         return Err(invalid("ALIEN_SANDBOX_EGRESS", "requires Linux netfilter"));
     }
@@ -144,44 +174,50 @@ fn main() -> Result<()> {
             "start agent runtime",
             "could not create the runtime".to_string(),
         ))?;
-    runtime.block_on(async move {
+    let result = runtime.block_on(async move {
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .into_alien_error().context(failed("listen for shutdown", "cannot install SIGTERM handler".into()))?;
+        let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .into_alien_error().context(failed("listen for shutdown", "cannot install SIGINT handler".into()))?;
         #[cfg(target_os = "linux")]
         if let Some(egress) = &state.gateway_egress {
             match egress.start().await {
-                Ok(()) => { if egress.ensure_ready().is_ok() { egress.start_image_once(state.exec_identity)?; } }
+                Ok(()) => { if egress.ensure_ready().is_ok() { state.start_image_once()?; } }
                 Err(error) => tracing::error!(code = %error.code, "egress startup failed; session routes remain unavailable"),
             }
-            run_image_command = false;
         }
-        let image_child = if run_image_command {
-            alien_sandbox_agent::image_command::start(state.exec_identity)?
-        } else {
-            None
-        };
-        if let Some(mut child) = image_child {
-            tokio::spawn(async move {
-                match child.wait().await {
-                    Ok(status) => tracing::info!(%status, "image command exited"),
-                    Err(error) => tracing::error!(%error, "could not reap image command"),
-                }
-            });
+        #[cfg(target_os = "linux")]
+        if state.gateway_egress.is_none() && !state.image_process.waiting_for_activation()? {
+            state.start_image_once()?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        if !state.image_process.waiting_for_activation()? {
+            state.start_image_once()?;
         }
         tracing::info!("sandbox agent listening on {address}");
 
-        axum::serve(
+        let server = axum::serve(
             // tap_io is a no-op that wraps the listener in axum's TapIo, which is what makes the
             // SocketAddr connect-info available for a custom listener (the orphan rule blocks impls
             // straight onto SocketAddr).
             BlockingListener::new(std_listener, address).tap_io(|_| {}),
-            router(state).into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .into_alien_error()
-        .context(failed(
-            "serve the agent protocol",
-            "the agent stopped serving".to_string(),
-        ))
-    })
+            router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>(),
+        );
+        let outcome = tokio::select! {
+            result = std::future::IntoFuture::into_future(server) => result
+                .into_alien_error().context(failed("serve the agent protocol", "the agent stopped serving".into())),
+            result = alien_sandbox_agent::children::reap_orphans() => result
+                .into_alien_error().context(failed("reap orphaned children", "cannot collect abandoned processes".into())),
+            _ = terminate.recv() => Ok(()),
+            _ = interrupt.recv() => Ok(()),
+        };
+        state.image_process.shutdown().await?;
+        outcome
+    });
+    // A blocking accept may still own a listener clone. It must not keep shutdown
+    // waiting for another network connection after the boot group has stopped.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    result
 }
 
 /// A listener whose accept blocks in the `accept(2)` syscall instead of waiting on an epoll edge.
@@ -290,6 +326,14 @@ fn enforce_exec_identity(
     Ok(())
 }
 
+fn image_command_enabled() -> Result<bool> {
+    match std::env::var(ENV_IMAGE_COMMAND) {
+        Ok(value) if value == "true" => Ok(true),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        _ => Err(invalid(ENV_IMAGE_COMMAND, "must be true when set")),
+    }
+}
+
 fn load_state() -> Result<AgentState> {
     let root = PathBuf::from(required(ENV_ROOT)?);
 
@@ -336,16 +380,40 @@ fn load_state() -> Result<AgentState> {
         "the validate hook needs the path of this executable".to_string(),
     ))?;
 
+    let authorization = load_authorization()?;
+    let wait_for_run_hook = alien_sandbox_agent::image_command::defer_to_run_hook()?;
+    #[cfg(target_os = "linux")]
+    let gateway_egress =
+        alien_sandbox_agent::gateway_egress::GatewayEgress::from_env(exec_identity)?;
+    // Gateway readiness already waits for Run and its network checks. Only modes
+    // without that state machine need a separate image activation gate.
+    #[cfg(target_os = "linux")]
+    let wait_for_run_hook = wait_for_run_hook && gateway_egress.is_none();
     Ok(AgentState {
+        image_process: if image_command_enabled()? {
+            if agent_uid != 0 || isolation != Isolation::UidSplit {
+                return Err(invalid(
+                    ENV_IMAGE_COMMAND,
+                    "requires a root agent with uid-split isolation",
+                ));
+            }
+            if authorization.requires_activation() || wait_for_run_hook {
+                alien_sandbox_agent::image_command::ImageProcess::awaiting_activation()
+            } else {
+                alien_sandbox_agent::image_command::ImageProcess::with_image_user()
+            }
+        } else if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() {
+            Default::default()
+        } else {
+            alien_sandbox_agent::image_command::ImageProcess::not_configured()
+        },
         session_root,
-        authorization: load_authorization()?,
+        authorization,
         exec_identity,
         output_cap,
         jobs: JobRegistry::new(),
         #[cfg(target_os = "linux")]
-        gateway_egress: alien_sandbox_agent::gateway_egress::GatewayEgress::from_env(
-            exec_identity,
-        )?,
+        gateway_egress,
         agent_binary,
     })
 }
@@ -378,6 +446,20 @@ fn load_authorization() -> Result<AgentAuthorization> {
             );
             Ok(AgentAuthorization::Transport)
         }
+        #[cfg(unix)]
+        "native-file" => {
+            if unsafe { libc::geteuid() } != 0 || !image_command_enabled()? {
+                return Err(invalid(
+                    ENV_AUTHORIZATION,
+                    "native-file requires a packaged root agent",
+                ));
+            }
+            Ok(AgentAuthorization::NativeFile(
+                alien_sandbox_agent::native_token::NativeToken::create(std::path::Path::new(
+                    alien_core::sandbox_image::NATIVE_TOKEN_PATH,
+                ))?,
+            ))
+        }
         "capability" => {
             let encoded = required(ENV_PUBLIC_KEY)?;
             let bytes = BASE64
@@ -397,7 +479,7 @@ fn load_authorization() -> Result<AgentAuthorization> {
         }
         other => Err(invalid(
             ENV_AUTHORIZATION,
-            &format!("'{other}' is not one of: capability, transport"),
+            &format!("'{other}' is not one of: capability, transport, native-file"),
         )),
     }
 }

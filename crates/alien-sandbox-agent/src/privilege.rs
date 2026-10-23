@@ -12,12 +12,19 @@ use std::{
 
 use crate::exec::ExecIdentity;
 
+static BLOCK_BPF: AtomicBool = AtomicBool::new(false);
 static BLOCK_IPV6: AtomicBool = AtomicBool::new(false);
 
 /// Set once before any image command or exec request can run. AWS transport may need IPv6,
 /// so retain it for the agent while denying it irreversibly to every command.
 pub fn block_command_ipv6() {
     BLOCK_IPV6.store(true, Ordering::Relaxed);
+}
+
+/// Prevent image descendants from changing the AWS cgroup socket marker, even
+/// when unrestricted egress does not need the IPv6 filter.
+pub fn block_command_bpf() {
+    BLOCK_BPF.store(true, Ordering::Relaxed);
 }
 
 /// Drops to `identity` and makes the drop irreversible.
@@ -32,6 +39,38 @@ pub fn block_command_ipv6() {
 ///
 /// Must be called only between `fork` and `exec`.
 pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
+    drop_unprivileged_to(identity, false)
+}
+
+/// Docker's default capabilities without NET_RAW. Root image processes can manage
+/// their workers, but cannot administer networking, mount filesystems or set socket
+/// marks (which recent kernels also permit with NET_RAW).
+#[cfg(target_os = "linux")]
+pub const IMAGE_ROOT_CAPABILITIES: u32 = 0xa80405fb;
+
+/// Enter the image USER with a bounded root grant or no capabilities for non-root.
+///
+/// # Safety
+/// Must be called only between `fork` and `exec`.
+#[cfg(target_os = "linux")]
+pub unsafe fn drop_image_to(identity: ExecIdentity) -> io::Result<()> {
+    if identity.uid != 0 {
+        return drop_unprivileged_to(identity, true);
+    }
+    if libc::geteuid() != 0 {
+        return Err(io::Error::from_raw_os_error(libc::EPERM));
+    }
+    if libc::setgroups(0, std::ptr::null()) != 0 || libc::setgid(identity.gid) != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    restrict_capabilities(IMAGE_ROOT_CAPABILITIES)?;
+    if BLOCK_IPV6.load(Ordering::Relaxed) || BLOCK_BPF.load(Ordering::Relaxed) {
+        deny_network_bypass(BLOCK_IPV6.load(Ordering::Relaxed))?;
+    }
+    Ok(())
+}
+
+unsafe fn drop_unprivileged_to(identity: ExecIdentity, allow_root_group: bool) -> io::Result<()> {
     // Shedding groups needs `CAP_SETGID`, which a process that is not crossing a privilege
     // boundary does not have and does not need: if the command already runs as this identity,
     // there is no membership for it to inherit that it would not have had anyway. A real drop
@@ -43,7 +82,7 @@ pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        if identity.uid == 0 || identity.gid == 0 {
+        if identity.uid == 0 || (identity.gid == 0 && !allow_root_group) {
             return Err(io::Error::from_raw_os_error(libc::EPERM));
         }
         // Clear ambient capabilities; where the kernel rejects that, the capset after setuid
@@ -123,8 +162,8 @@ pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
     }
 
     #[cfg(target_os = "linux")]
-    if BLOCK_IPV6.load(Ordering::Relaxed) {
-        deny_ipv6_sockets()?;
+    if BLOCK_IPV6.load(Ordering::Relaxed) || BLOCK_BPF.load(Ordering::Relaxed) {
+        deny_network_bypass(BLOCK_IPV6.load(Ordering::Relaxed))?;
     }
     Ok(())
 }
@@ -156,10 +195,17 @@ fn clear_ambient_capabilities() -> io::Result<()> {
     }
 }
 
-/// Shrinks AWS's ALL capability grant before the supervisor starts image code or serves exec.
-/// Retains only network administration, identity dropping, and access to command-owned files.
+/// Retains the image's bounded root grant so children can inherit it after bootstrap.
+/// Only an agent installing guest network rules also retains NET_ADMIN; the image
+/// spawn path always drops it. A missing required capability fails startup.
 #[cfg(target_os = "linux")]
-pub fn restrict_supervisor() -> io::Result<()> {
+pub fn restrict_supervisor(network_admin: bool) -> io::Result<()> {
+    let keep = IMAGE_ROOT_CAPABILITIES | if network_admin { 1 << 12 } else { 0 };
+    restrict_capabilities(keep)
+}
+
+#[cfg(target_os = "linux")]
+fn restrict_capabilities(keep: u32) -> io::Result<()> {
     #[repr(C)]
     struct Header {
         version: u32,
@@ -171,10 +217,6 @@ pub fn restrict_supervisor() -> io::Result<()> {
         permitted: u32,
         inheritable: u32,
     }
-    // CHOWN, DAC_OVERRIDE, FOWNER (file projection), KILL (timeouts/cancellation),
-    // SETGID, SETUID, SETPCAP (irreversible child drop), NET_ADMIN.
-    let keep: u32 =
-        (1 << 0) | (1 << 1) | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 12);
     unsafe {
         for capability in 0..64 {
             let present = libc::prctl(libc::PR_CAPBSET_READ, capability, 0, 0, 0);
@@ -217,10 +259,12 @@ pub fn restrict_supervisor() -> io::Result<()> {
     Ok(())
 }
 
-/// Kernel-enforced even if the guest later acquires a new IPv6 route. Blocking io_uring prevents
-/// IORING_OP_SOCKET from creating a socket without passing through the socket syscall filter.
+/// Always deny BPF when cgroup socket attribution is installed: a new user/cgroup
+/// namespace could otherwise expose a writable mount and detach the marker.
+/// Gateway mode also denies IPv6 sockets and io_uring (whose socket operation
+/// bypasses the socket syscall filter), even if the guest acquires a new route.
 #[cfg(target_os = "linux")]
-unsafe fn deny_ipv6_sockets() -> io::Result<()> {
+unsafe fn deny_network_bypass(block_ipv6: bool) -> io::Result<()> {
     #[cfg(target_arch = "x86_64")]
     const ARCH: u32 = 0xc000003e;
     #[cfg(target_arch = "aarch64")]
@@ -243,9 +287,22 @@ unsafe fn deny_ipv6_sockets() -> io::Result<()> {
         jump(ARCH, 1, 0),
         stmt(0x06, 0x80000000), // kill foreign ABI
         stmt(0x20, 0),
-        jump(libc::SYS_io_uring_setup as u32, 7, 0),
-        jump(libc::SYS_io_uring_enter as u32, 6, 0),
-        jump(libc::SYS_io_uring_register as u32, 5, 0),
+        jump(libc::SYS_bpf as u32, 8, 0),
+        jump(
+            libc::SYS_io_uring_setup as u32,
+            if block_ipv6 { 7 } else { 8 },
+            0,
+        ),
+        jump(
+            libc::SYS_io_uring_enter as u32,
+            if block_ipv6 { 6 } else { 7 },
+            0,
+        ),
+        jump(
+            libc::SYS_io_uring_register as u32,
+            if block_ipv6 { 5 } else { 6 },
+            0,
+        ),
         // x32 uses a different syscall number under AUDIT_ARCH_X86_64. Kill that ABI too.
         libc::sock_filter {
             code: 0x45,
@@ -256,7 +313,7 @@ unsafe fn deny_ipv6_sockets() -> io::Result<()> {
         stmt(0x06, 0x80000000),
         jump(libc::SYS_socket as u32, 0, 4),
         stmt(0x20, 16),
-        jump(libc::AF_INET6 as u32, 0, 2),
+        jump(libc::AF_INET6 as u32, if block_ipv6 { 0 } else { 1 }, 2),
         stmt(0x06, 0x00050000 | libc::EPERM as u32),
         stmt(0x06, 0x7fff0000),
         stmt(0x06, 0x7fff0000),
@@ -274,7 +331,150 @@ unsafe fn deny_ipv6_sockets() -> io::Result<()> {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
 
+    #[test]
+    #[ignore = "requires root with the Docker default capability set and setpriv"]
+    fn root_image_capabilities_survive_exec_without_network_administration() {
+        supervisor_can_start_bounded_root(false);
+    }
+
+    #[test]
+    #[ignore = "requires root with the Docker default capability set, NET_ADMIN and setpriv"]
+    fn root_image_does_not_inherit_supervisor_network_administration() {
+        supervisor_can_start_bounded_root(true);
+    }
+
+    fn supervisor_can_start_bounded_root(network_admin: bool) {
+        assert_eq!(unsafe { libc::geteuid() }, 0, "run this test as root");
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "cat /proc/self/status; setpriv --reuid 2000 --regid 2000 --clear-groups id -u",
+        ]);
+        unsafe {
+            command.pre_exec(move || {
+                restrict_supervisor(network_admin)?;
+                drop_image_to(ExecIdentity { uid: 0, gid: 0 })?;
+                let socket = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+                if socket < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let mark: u32 = 0xa11e;
+                let result = libc::setsockopt(
+                    socket,
+                    libc::SOL_SOCKET,
+                    libc::SO_MARK,
+                    (&mark as *const u32).cast(),
+                    size_of::<u32>() as _,
+                );
+                let error = io::Error::last_os_error();
+                libc::close(socket);
+                if result == 0 || error.raw_os_error() != Some(libc::EPERM) {
+                    return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                }
+                Ok(())
+            });
+        }
+        let output = command
+            .output()
+            .expect("bounded root can exec, but cannot set SO_MARK");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("process status is UTF-8");
+        for set in ["CapPrm", "CapEff", "CapBnd"] {
+            assert!(
+                stdout.contains(&format!("{set}:\t00000000a80405fb")),
+                "{stdout}"
+            );
+        }
+        for set in ["CapInh", "CapAmb"] {
+            assert!(
+                stdout.contains(&format!("{set}:\t0000000000000000")),
+                "{stdout}"
+            );
+        }
+        assert!(stdout.contains("Uid:\t0\t0\t0\t0"), "{stdout}");
+        assert!(
+            stdout.ends_with("2000\n"),
+            "root must be able to start a worker: {stdout}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an isolated writable cgroup2 mount and privileged bootstrap"]
+    fn cgroup_attribution_filters_bpf_without_disabling_ipv6() {
+        let temp = tempfile::tempdir().unwrap();
+        let existing =
+            std::ffi::CString::new(temp.path().join("block").as_os_str().as_encoded_bytes())
+                .unwrap();
+        let fresh = std::ffi::CString::new(
+            temp.path()
+                .join("fresh-block")
+                .as_os_str()
+                .as_encoded_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe {
+                libc::mknod(
+                    existing.as_ptr(),
+                    libc::S_IFBLK | 0o600,
+                    libc::makedev(1, 0),
+                )
+            },
+            0
+        );
+        crate::gateway_egress::isolate_control_callers().unwrap();
+        for uid in [0, 60000] {
+            let mut child = Command::new("/bin/true");
+            let existing = existing.clone();
+            let fresh = fresh.clone();
+            unsafe {
+                child.pre_exec(move || {
+                    restrict_supervisor(true)?;
+                    drop_image_to(ExecIdentity { uid, gid: uid })?;
+                    // Privileged test containers begin without a seccomp filter. Every
+                    // guest path must install one even when IPv6 remains unrestricted.
+                    if libc::prctl(libc::PR_GET_SECCOMP, 0, 0, 0, 0) != 2 {
+                        return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                    }
+                    if libc::syscall(libc::SYS_bpf, -1, std::ptr::null::<u8>(), 0) != -1
+                        || *libc::__errno_location() != libc::EPERM
+                    {
+                        return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                    }
+                    if uid == 0 {
+                        if libc::open(existing.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) != -1
+                            || *libc::__errno_location() != libc::EPERM
+                            || libc::mknod(
+                                fresh.as_ptr(),
+                                libc::S_IFBLK | 0o600,
+                                libc::makedev(1, 0),
+                            ) != -1
+                            || *libc::__errno_location() != libc::EPERM
+                        {
+                            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                        }
+                    }
+                    let socket = libc::socket(libc::AF_INET6, libc::SOCK_STREAM, 0);
+                    if socket < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    libc::close(socket);
+                    Ok(())
+                });
+            }
+            assert!(child
+                .status()
+                .expect("BPF filter with working IPv6")
+                .success());
+        }
+    }
     fn unprivileged_identity() -> ExecIdentity {
         unsafe {
             let uid = if libc::geteuid() == 0 {

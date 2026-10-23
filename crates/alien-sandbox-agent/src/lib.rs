@@ -1,3 +1,4 @@
+pub mod children;
 pub mod confine;
 pub mod error;
 pub mod exec;
@@ -22,3 +23,9 @@ pub mod egress;
 
 #[cfg(target_os = "linux")]
 mod netfilter;
+
+#[cfg(unix)]
+pub mod native_token;
+
+#[cfg(target_os = "linux")]
+pub mod protected_files;

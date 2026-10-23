@@ -48,7 +48,10 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
     unsafe {
         command.pre_exec(move || crate::privilege::drop_to(identity));
     }
-    let status = tokio::time::timeout(Duration::from_secs(5), command.status())
+    let (mut child, _registration) = crate::children::spawn(&mut command)
+        .into_alien_error()
+        .context(failed("spawn command path check"))?;
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
         .await
         .into_alien_error()
         .context(failed("command path check timeout"))?

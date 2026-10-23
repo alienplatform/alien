@@ -4,14 +4,15 @@
 
 use crate::error::{ErrorData, Result};
 use crate::registry::{registry_failure, RegistryFailure};
-use crate::sandbox_identity::{unreadable_file, BaseIdentity};
+use crate::sandbox_identity::{image_command, image_layers, unreadable_file, BaseIdentity};
 use crate::{
     base_image_build_retry_delay, is_retryable_dockdash_image_pull_error,
     BASE_IMAGE_BUILD_MAX_ATTEMPTS,
 };
 use alien_core::presigned::redact_url_for_error;
 use alien_core::sandbox_image::{
-    AGENT_MODE, AGENT_PATH, GCP_AGENT_LOG_FILTER, GCP_AGENT_PLATFORM, SESSION_ROOT_MODE,
+    SandboxImage, AGENT_MODE, AGENT_PATH, AZURE_SANDBOX, GCP_AGENT_PLATFORM, IMAGE_COMMAND_PATH,
+    SESSION_ROOT_MODE,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use dockdash::{
@@ -33,9 +34,9 @@ pub fn sandbox_agent_image() -> String {
     )
 }
 
-/// A layered GCP sandbox image and the agent it was layered from.
+/// A layered sandbox image and the agent it was layered from.
 #[derive(Debug)]
-pub struct GcpSandboxImage {
+pub struct SandboxAgentImage {
     pub image: Image,
     /// Manifest digest the agent reference resolved to for linux/amd64.
     pub agent_digest: String,
@@ -64,7 +65,54 @@ pub async fn build_gcp_sandbox_image(
     protocol: ClientProtocol,
     base_auth: RegistryAuth,
     cache: BlobCache,
-) -> Result<GcpSandboxImage> {
+) -> Result<SandboxAgentImage> {
+    build_sandbox_agent_image(
+        resource_name,
+        base,
+        base_image,
+        agent_image,
+        protocol,
+        base_auth,
+        cache,
+        GCP_AGENT_PLATFORM,
+    )
+    .await
+}
+
+/// Assemble an Azure image with bounded root startup and native-file HTTP authorization.
+/// This function does not use native exec; the runtime must publish and authenticate the agent port.
+pub async fn build_azure_sandbox_image(
+    resource_name: &str,
+    base: Image,
+    base_image: &str,
+    agent_image: &str,
+    protocol: ClientProtocol,
+    base_auth: RegistryAuth,
+    cache: BlobCache,
+) -> Result<SandboxAgentImage> {
+    build_sandbox_agent_image(
+        resource_name,
+        base,
+        base_image,
+        agent_image,
+        protocol,
+        base_auth,
+        cache,
+        AZURE_SANDBOX,
+    )
+    .await
+}
+
+pub(crate) async fn build_sandbox_agent_image(
+    resource_name: &str,
+    base: Image,
+    base_image: &str,
+    agent_image: &str,
+    protocol: ClientProtocol,
+    base_auth: RegistryAuth,
+    cache: BlobCache,
+    default_contract: SandboxImage,
+) -> Result<SandboxAgentImage> {
     let failed = |reason: String| ErrorData::ImageBuildFailed {
         resource_name: resource_name.to_string(),
         reason,
@@ -75,8 +123,13 @@ pub async fn build_gcp_sandbox_image(
         reason,
     };
     let identity = BaseIdentity::read(&base, resource_name).await?;
-    let contract = identity.contract(GCP_AGENT_PLATFORM, None)?;
-    // Only the identity files were needed, and a pulled base is a full archive on disk.
+    let contract = identity.contract(default_contract, None)?;
+    let original_command = image_command(&base).await?;
+    let command = serde_json::to_vec(&original_command)
+        .into_alien_error()
+        .context(failed("Cannot preserve the image command".into()))?;
+    // Only the identity files and command were needed, and a pulled base is a full archive on disk.
+    let base_layers = image_layers(&base)?;
     drop(base);
 
     // The agent image is public, so no registry credential is sent to its registry.
@@ -117,11 +170,6 @@ pub async fn build_gcp_sandbox_image(
     // Each pulled image holds a full archive on disk; only the agent binary was needed.
     drop(agent);
 
-    let user = contract.user().ok_or_else(|| {
-        AlienError::new(rejected(
-            "The GCP image contract declares no user".to_string(),
-        ))
-    })?;
     let passwd = merge_identity(
         identity.passwd.as_deref(),
         "root:x:0:0:root:/root:/sbin/nologin",
@@ -144,7 +192,12 @@ pub async fn build_gcp_sandbox_image(
         || async {
             // A layer is consumed by the image builder, so each attempt builds its own.
             let layer = Layer::builder()
-                .map(|layer| layer.blob_cache(cache.clone()))
+                .map(|layer| {
+                    layer
+                        .blob_cache(cache.clone())
+                        .compression(dockdash::LayerCompression::Gzip)
+                })
+                .and_then(|layer| layer.data_with_owner(IMAGE_COMMAND_PATH, &command, 0o600, 0, 0))
                 .and_then(|layer| {
                     layer.data_with_owner("/etc/passwd", passwd.as_bytes(), 0o644, 0, 0)
                 })
@@ -174,11 +227,29 @@ pub async fn build_gcp_sandbox_image(
                 .protocol(protocol.clone())
                 .auth(base_auth.clone())
                 .blob_cache(cache.clone())
-                .layer(layer)
-                .user(&user)
+                .user("0:0")
                 .expose_port(&contract.exposed_port())
-                .entrypoint(vec![AGENT_PATH.to_string()]);
-            builder = builder.env("RUST_LOG", GCP_AGENT_LOG_FILTER);
+                .entrypoint(vec![AGENT_PATH.to_string()])
+                .cmd(Vec::new());
+            // Reapplying the exact final layer changes no files. Keep it once: the image
+            // builder deduplicates manifest descriptors but appends configuration diff IDs.
+            // If another layer follows it, skipping would lose overrides, so refuse instead
+            // of publishing a corrupt image or silently retaining the wrong files.
+            if base_layers.last().map(String::as_str) != Some(layer.diff_id()) {
+                if base_layers.iter().any(|digest| digest == layer.diff_id()) {
+                    return Err(AlienError::new(rejected(
+                        "The same agent layer occurs below other image layers; rebuild from the original base image".into(),
+                    )));
+                }
+                builder = builder.layer(layer);
+            }
+            // Logging belongs to the application environment. The agent supplies its own
+            // default without injecting it into the image; create-time overrides still win.
+            // Restore saved values when repackaging an image with an older agent layer.
+            if let Some(filter) = original_command.env.get("RUST_LOG") {
+                builder = builder.env("RUST_LOG", filter);
+            }
+            builder = builder.env("ALIEN_SANDBOX_IMAGE_COMMAND", "true");
             for (name, value) in contract.contract_env_vars() {
                 builder = builder.env(name, &value);
             }
@@ -186,7 +257,12 @@ pub async fn build_gcp_sandbox_image(
         },
     )
     .await?;
-    Ok(GcpSandboxImage {
+    crate::sandbox_manifest::normalize(&image)
+        .into_alien_error()
+        .context(failed(
+            "Cannot normalize the assembled OCI layer media types".into(),
+        ))?;
+    Ok(SandboxAgentImage {
         image,
         agent_digest: agent_build.resolved_manifest_digest,
     })
@@ -390,7 +466,6 @@ fn merge_identity(base: Option<&str>, root_line: &str, exec_line: &str, exec_id:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::sandbox_image::gcp_agent_platform_env;
     use dockdash::test_utils::setup_local_registry;
     use dockdash::PushOptions;
     use httpmock::Method::GET;
@@ -408,6 +483,7 @@ mod tests {
         }
         let (image, _) = Image::builder()
             .platform("linux", &Arch::Amd64)
+            .env("RUST_LOG", "application=debug")
             .layer(layer.build().await.expect("layer builds"))
             .build()
             .await
@@ -577,7 +653,7 @@ mod tests {
         assert_eq!(config["architecture"], "amd64");
         assert_eq!(config["os"], "linux");
         let runtime = &config["config"];
-        assert_eq!(runtime["User"], "1000:1000");
+        assert_eq!(runtime["User"], "0:0");
         assert_eq!(
             runtime["ExposedPorts"],
             serde_json::json!({ "8080/tcp": {} })
@@ -589,7 +665,8 @@ mod tests {
             .iter()
             .filter_map(|value| value.as_str())
             .collect();
-        for (name, value) in gcp_agent_platform_env() {
+        assert!(env.contains(&"RUST_LOG=application=debug"), "{env:?}");
+        for (name, value) in GCP_AGENT_PLATFORM.contract_env_vars() {
             assert!(
                 env.contains(&format!("{name}={value}").as_str()),
                 "{name}: {env:?}"
@@ -657,7 +734,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(pushed_config(&target).await["config"]["User"], "1000:1000");
+        assert_eq!(pushed_config(&target).await["config"]["User"], "0:0");
         assert_eq!(
             pushed_file(&target, protocol.clone(), "/etc/passwd").await,
             Some(format!(
@@ -1227,6 +1304,99 @@ mod tests {
             archive_at_pull.try_recv(),
             Ok(false),
             "the base archive was deleted before the agent pull"
+        );
+    }
+    #[tokio::test]
+    async fn docker_base_layers_work_with_an_oci_only_runtime() {
+        let (_registry, host) = setup_local_registry().await.unwrap();
+        let base_reference = format!("{host}/sandbox/base:docker");
+        let options = PushOptions {
+            protocol: ClientProtocol::Http,
+            ..Default::default()
+        };
+        let layer = Layer::builder()
+            .unwrap()
+            .compression(dockdash::LayerCompression::Gzip)
+            .data_with_owner("/base-marker", b"preserved base", 0o644, 0, 0)
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let (base, _) = Image::builder()
+            .platform("linux", &Arch::Amd64)
+            .layer(layer)
+            .build()
+            .await
+            .unwrap();
+        base.push(&base_reference, &options).await.unwrap();
+        // Publish the same blobs as a Docker image, as produced by docker push.
+        let reference: Reference = base_reference.parse().unwrap();
+        let (manifest, _) = client()
+            .pull_image_manifest(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
+            .await
+            .unwrap();
+        let mut docker = serde_json::to_value(manifest).unwrap();
+        docker["mediaType"] = "application/vnd.docker.distribution.manifest.v2+json".into();
+        docker["config"]["mediaType"] = "application/vnd.docker.container.image.v1+json".into();
+        for layer in docker["layers"].as_array_mut().unwrap() {
+            layer["mediaType"] = "application/vnd.docker.image.rootfs.diff.tar.gzip".into();
+        }
+        reqwest::Client::new()
+            .put(format!("http://{host}/v2/sandbox/base/manifests/docker"))
+            .header(
+                "Content-Type",
+                "application/vnd.docker.distribution.manifest.v2+json",
+            )
+            .body(serde_json::to_vec(&docker).unwrap())
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let agent = format!("{host}/sandbox/agent:test");
+        push_image(&agent, &[(AGENT_PATH, b"agent")]).await;
+        let (base, _) = Image::builder()
+            .from(&base_reference)
+            .protocol(ClientProtocol::Http)
+            .platform("linux", &Arch::Amd64)
+            .pull_policy(PullPolicy::Always)
+            .build()
+            .await
+            .unwrap();
+        let result = build_azure_sandbox_image(
+            "box",
+            base,
+            &base_reference,
+            &agent,
+            ClientProtocol::Http,
+            RegistryAuth::Anonymous,
+            default_cache(),
+        )
+        .await
+        .unwrap();
+        let target = format!("{host}/sandbox/output:oci");
+        result.image.push(&target, &options).await.unwrap();
+        // A strict OCI consumer must actually download all layers successfully.
+        let pulled = client()
+            .pull(
+                &target.parse().unwrap(),
+                &oci_client::secrets::RegistryAuth::Anonymous,
+                vec!["application/vnd.oci.image.layer.v1.tar+gzip"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(pulled.layers.len(), 2);
+        assert_eq!(
+            pushed_file(&target, ClientProtocol::Http, "/base-marker")
+                .await
+                .as_deref(),
+            Some("preserved base")
+        );
+        assert_eq!(
+            pushed_file(&target, ClientProtocol::Http, AGENT_PATH)
+                .await
+                .as_deref(),
+            Some("agent")
         );
     }
 }

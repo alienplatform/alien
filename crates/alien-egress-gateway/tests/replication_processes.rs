@@ -14,7 +14,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpSocket, TcpStream},
     process::{Child, Command},
     sync::watch,
     task::JoinHandle,
@@ -127,6 +127,11 @@ struct Cluster {
     links: Vec<(usize, usize, Link)>,
     children: [Option<Child>; 3],
     client: reqwest::Client,
+    // Bound, non-listening sockets keep ephemeral clients from taking the replica ports,
+    // including while a replica is stopped. Linux listeners also use SO_REUSEADDR and can
+    // bind alongside these reservations without inheriting test-only descriptors.
+    #[cfg(target_os = "linux")]
+    _reserved: Vec<TcpSocket>,
 }
 impl Drop for Cluster {
     fn drop(&mut self) {
@@ -139,7 +144,10 @@ impl Cluster {
     async fn new() -> Self {
         let mut reserved = Vec::new();
         for _ in 0..6 {
-            reserved.push(std::net::TcpListener::bind("127.0.0.1:0").unwrap());
+            let socket = TcpSocket::new_v4().unwrap();
+            socket.set_reuseaddr(true).unwrap();
+            socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+            reserved.push(socket);
         }
         let proxy = std::array::from_fn(|i| reserved[i].local_addr().unwrap());
         let admin = std::array::from_fn(|i| reserved[i + 3].local_addr().unwrap());
@@ -151,12 +159,17 @@ impl Cluster {
                 }
             }
         }
+        // Concurrent reusable bindings have different rules outside Linux; preserve the
+        // existing child startup there instead of assuming the same reservation semantics.
+        #[cfg(not(target_os = "linux"))]
         drop(reserved);
         let mut cluster = Self {
             proxy,
             admin,
             links,
             children: [None, None, None],
+            #[cfg(target_os = "linux")]
+            _reserved: reserved,
             client: reqwest::Client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(8))
@@ -586,4 +599,22 @@ async fn rejected_recovery_cannot_forward_an_old_allow_past_a_retained_narrowing
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rejected_recovery_cannot_forward_an_old_allow_past_a_retained_tombstone() {
     rejected_recovery_keeps_missing_peers_restricted(None).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopped_replica_ports_cannot_be_claimed_by_an_ephemeral_client() {
+    let mut cluster = Cluster::new().await;
+    cluster.stop(0).await;
+    let competing = TcpSocket::new_v4().unwrap();
+    assert_eq!(
+        competing.bind(cluster.proxy[0]).unwrap_err().kind(),
+        std::io::ErrorKind::AddrInUse,
+        "the replica port must stay reserved between child processes"
+    );
+    cluster.start(0);
+    cluster.ready_all().await;
+    for index in 0..3 {
+        cluster.stop(index).await;
+    }
 }

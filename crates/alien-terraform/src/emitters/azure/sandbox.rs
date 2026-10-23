@@ -202,6 +202,10 @@ impl TfEmitter for AzureSandboxEmitter {
             ),
         ];
 
+        if sandbox.image_user.is_some() {
+            fields.push(("agent", Expression::Bool(true)));
+        }
+
         if let Some(seconds) = sandbox.lifecycle.idle_pause_seconds {
             fields.push((
                 "idlePauseSeconds",
@@ -857,6 +861,7 @@ mod tests {
         let rendered = binding_with(SandboxEgress::Internet, Some(900));
 
         let binding = AzureSandboxBinding {
+            agent: false,
             default_policy: None,
             sandbox_group: BindingValue::Value("sbg".to_string()),
             data_plane_endpoint: BindingValue::Value("https://example.invalid".to_string()),

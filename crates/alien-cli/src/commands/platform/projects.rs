@@ -1004,7 +1004,7 @@ async fn source_input_hash(
     let hash = alien_build::docker_source_input_hash(src, toolchain, settings)
         .await
         .context(ErrorData::BuildFailed)?;
-    // The GCP image also carries the sandbox agent, which the source does not name, so a CLI
+    // GCP and Azure images carry the sandbox agent, which the source does not name, so a CLI
     // with a new agent misses the tag and pushes again.
     Ok(SourceInputHash(alien_build::sandbox_image_hash(
         hash, platform,
@@ -2366,7 +2366,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_the_gcp_source_tag_names_the_layered_agent() {
+    async fn layered_cloud_source_tags_distinguish_agents_and_backends() {
         let src = tempfile::tempdir().expect("temp dir");
         std::fs::write(src.path().join("Dockerfile"), "FROM scratch\n").expect("Dockerfile");
         let toolchain = ToolchainConfig::Docker {
@@ -2391,14 +2391,15 @@ mod tests {
                     .tag()
             }
         };
-        for platform in [Platform::Aws, Platform::Azure] {
-            assert_eq!(
-                tag(platform).await,
-                format!("remote-sandbox-src-{}", &source_hash[..16]),
-                "{platform}: nothing is layered onto the image"
-            );
+        assert_eq!(
+            tag(Platform::Aws).await,
+            format!("remote-sandbox-src-{}", &source_hash[..16]),
+            "AWS publishes the base before bundle assembly"
+        );
+        for platform in [Platform::Gcp, Platform::Azure] {
+            assert_ne!(tag(platform).await, tag(Platform::Aws).await);
         }
-        assert_ne!(tag(Platform::Gcp).await, tag(Platform::Aws).await);
+        assert_ne!(tag(Platform::Gcp).await, tag(Platform::Azure).await);
     }
 
     /// The configure endpoint accepts a GCP image only as the manager's host, then the GCP project,

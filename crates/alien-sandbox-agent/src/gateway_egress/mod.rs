@@ -5,6 +5,9 @@
 )]
 
 mod dns;
+mod guest_network;
+#[cfg(test)]
+mod guest_network_tests;
 mod probe;
 mod recovery;
 pub use probe::command_path_is_closed;
@@ -13,7 +16,7 @@ mod transport;
 
 use std::{
     collections::BTreeMap,
-    io::Write,
+    io::{Seek, SeekFrom, Write},
     net::{SocketAddr, ToSocketAddrs},
     os::fd::AsRawFd,
     os::unix::fs::OpenOptionsExt,
@@ -65,11 +68,30 @@ pub struct GatewayEgress {
     ready: AtomicBool,
     listeners_live: AtomicBool,
     names: Names,
-    image_started: AtomicBool,
     ca_path: RwLock<Option<String>>,
+    // Opened before the read-only bind mount. Never inherited by image code;
+    // dumpable=0 prevents same-UID root from reopening it through /proc.
+    ca_file: Option<std::sync::Mutex<std::fs::File>>,
     identity: RwLock<Option<(String, String)>>,
     update_lock: tokio::sync::Mutex<()>,
     unanswered_since: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+/// AWS packages without a gateway still need to distinguish provider control
+/// sockets from every image and exec process. Install only the cgroup marker;
+/// unrestricted packages keep their existing network routing.
+pub fn isolate_control_callers() -> Result<()> {
+    guest_network::install(true)
+        .into_alien_error()
+        .context(failed("isolate guest sockets before starting image code"))
+}
+
+/// Azure's VM supplies privileged bootstrap but no device controller. Keep guest
+/// raw-device access out of the provider cgroup without changing socket marks.
+pub fn isolate_image_devices() -> Result<()> {
+    guest_network::install(false)
+        .into_alien_error()
+        .context(failed("isolate guest devices before starting image code"))
 }
 
 impl GatewayEgress {
@@ -114,30 +136,40 @@ impl GatewayEgress {
             .ok()
             .zip(std::env::var("ALIEN_SANDBOX_SESSION_ID").ok());
         let privileged = unsafe { libc::geteuid() } == 0;
-        let defer_routing = match std::env::var("ALIEN_SANDBOX_EGRESS_RUN_HOOK") {
-            Ok(value) if value == "true" => true,
-            Ok(value) if value == "false" => false,
-            Err(std::env::VarError::NotPresent) => false,
-            _ => {
-                return Err(invalid(
-                    "ALIEN_SANDBOX_EGRESS_RUN_HOOK must be true or false",
-                ))
-            }
-        };
+        let defer_routing = crate::image_command::defer_to_run_hook()?;
         if defer_routing && !privileged {
             return Err(invalid("Run-hook firewall installation requires root"));
         }
         if privileged {
+            isolate_control_callers()?;
             // IPv6 sockets can exist on kernels without IPv6 netfilter support.
             // Every image command and exec child installs the irreversible socket
             // filter before executing; an installation failure prevents its launch.
             crate::privilege::block_command_ipv6();
             if !defer_routing {
-                redirect::install(command_identity.uid)
+                redirect::install()
                     .into_alien_error()
                     .context(failed("install transparent forwarding"))?;
             }
         }
+        let ca_file = if privileged {
+            std::fs::create_dir_all("/opt/alien")
+                .into_alien_error()
+                .context(failed("create egress CA directory"))?;
+            Some(std::sync::Mutex::new(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o644)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open("/opt/alien/egress-ca-bundle.pem")
+                    .into_alien_error()
+                    .context(failed("prepare egress trust bundle"))?,
+            ))
+        } else {
+            None
+        };
         Ok(Some(Arc::new(Self {
             address: RwLock::new(address),
             token: RwLock::new(token),
@@ -151,44 +183,12 @@ impl GatewayEgress {
             ready: AtomicBool::new(false),
             listeners_live: AtomicBool::new(false),
             names: Names::default(),
-            image_started: AtomicBool::new(false),
             ca_path: RwLock::new(None),
+            ca_file,
             identity: RwLock::new(identity),
             update_lock: tokio::sync::Mutex::new(()),
             unanswered_since: std::sync::Mutex::new(None),
         })))
-    }
-
-    /// Launch image code at most once, after a successful path check.
-    pub fn start_image_once(&self, identity: crate::exec::ExecIdentity) -> Result<()> {
-        self.ensure_ready()?;
-        if std::env::var_os("ALIEN_SANDBOX_EGRESS").is_none()
-            || self.image_started.swap(true, Ordering::AcqRel)
-        {
-            return Ok(());
-        }
-        let start = || {
-            let mut env = BTreeMap::new();
-            self.command_environment(&mut env)?;
-            crate::image_command::start_with_env(identity, &env)
-        };
-        let child = match start() {
-            Ok(child) => child,
-            Err(error) => {
-                self.image_started.store(false, Ordering::Release);
-                self.ready.store(false, Ordering::Release);
-                return Err(error);
-            }
-        };
-        if let Some(mut child) = child {
-            tokio::spawn(async move {
-                match child.wait().await {
-                    Ok(status) => tracing::info!(%status, "image command exited"),
-                    Err(error) => tracing::error!(%error, "image command wait failed"),
-                }
-            });
-        }
-        Ok(())
     }
 
     /// Health remains available while create is waiting to deliver the policy.
@@ -439,7 +439,7 @@ impl GatewayEgress {
     // Callers hold update_lock, so token installation cannot race this transaction.
     async fn install_routing_at_run(&self) -> Result<()> {
         if !self.routing_ready.load(Ordering::Acquire) {
-            redirect::install_at_run(self.command_identity.uid)
+            redirect::install_at_run()
                 .await
                 .into_alien_error()
                 .context(failed("install Run-hook transparent forwarding"))?;
@@ -511,29 +511,34 @@ impl GatewayEgress {
         } else {
             "/tmp/alien-egress-ca-bundle.pem"
         };
-        if self.privileged {
-            std::fs::create_dir_all("/opt/alien")
-                .into_alien_error()
-                .context(failed("create egress CA directory"))?;
-        }
         let system = std::fs::read("/etc/ssl/certs/ca-certificates.crt")
             .into_alien_error()
             .context(failed("read system trust roots"))?;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o644)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
-            .into_alien_error()
-            .context(failed("create egress trust bundle"))?;
-        file.write_all(&system)
-            .into_alien_error()
-            .context(failed("write trust roots"))?;
-        file.write_all(certificate.as_bytes())
-            .into_alien_error()
-            .context(failed("write egress CA"))?;
+        let write_bundle = |file: &mut std::fs::File| -> std::io::Result<()> {
+            file.set_len(0)?;
+            file.seek(SeekFrom::Start(0))?;
+            file.write_all(&system)?;
+            file.write_all(certificate.as_bytes())
+        };
+        if let Some(file) = &self.ca_file {
+            let mut file = file.lock().map_err(|_| invalid("CA file lock poisoned"))?;
+            write_bundle(&mut file)
+                .into_alien_error()
+                .context(failed("write egress trust bundle"))?;
+        } else {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o644)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(path)
+                .into_alien_error()
+                .context(failed("create egress trust bundle"))?;
+            write_bundle(&mut file)
+                .into_alien_error()
+                .context(failed("write egress trust bundle"))?;
+        }
         *self
             .ca_path
             .write()
@@ -857,9 +862,11 @@ mod forwarder_tests {
     #[test]
     fn an_http_1_0_tunnel_without_host_gets_its_target_as_host() {
         let (head, end) =
-            gateway_request_head(b"CONNECT example.com:443 HTTP/1.0\r\n\r\nbody", "token")
-                .unwrap();
-        assert!(head.starts_with("CONNECT example.com:443 HTTP/1.1\r\n"), "{head}");
+            gateway_request_head(b"CONNECT example.com:443 HTTP/1.0\r\n\r\nbody", "token").unwrap();
+        assert!(
+            head.starts_with("CONNECT example.com:443 HTTP/1.1\r\n"),
+            "{head}"
+        );
         assert_eq!(hosts(&head), ["example.com:443"]);
         assert!(head.ends_with("Proxy-Authorization: Bearer token\r\n\r\n"));
         assert_eq!(end, "CONNECT example.com:443 HTTP/1.0\r\n\r\n".len());
@@ -869,8 +876,7 @@ mod forwarder_tests {
     #[test]
     fn an_http_1_0_plain_request_without_host_gets_the_uri_authority() {
         let (head, _) =
-            gateway_request_head(b"GET http://example.com/path HTTP/1.0\r\n\r\n", "token")
-                .unwrap();
+            gateway_request_head(b"GET http://example.com/path HTTP/1.0\r\n\r\n", "token").unwrap();
         assert_eq!(hosts(&head), ["example.com"]);
     }
 

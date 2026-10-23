@@ -4,7 +4,8 @@ use std::{fs::File, io::Read};
 
 use alien_core::{
     sandbox_identity::ImageUser,
-    sandbox_image::{SandboxImage, SandboxImageCommand},
+    sandbox_image::{SandboxImage, SandboxImageCommand, AGENT_PATH, IMAGE_COMMAND_PATH},
+    Platform,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use dockdash::Image;
@@ -40,21 +41,87 @@ pub(crate) async fn validate_declared_uid(
     Ok(())
 }
 
+/// Resolve the planning identity from every built architecture before publishing a declaration.
+/// Different users across architectures would make the plan depend on which host runs it.
+pub(crate) async fn built_image_user(
+    sandbox: &alien_core::Sandbox,
+    directory: &std::path::Path,
+    targets: &[alien_core::BinaryTarget],
+    platform: Platform,
+    aws_connector: bool,
+) -> Result<Option<u32>> {
+    let failed = |message: String| ErrorData::BuildConfigInvalid { message };
+    let mut uid = None;
+    for target in targets {
+        let path = directory.join(format!("{}.oci.tar", target.runtime_platform_id()));
+        let image = Image::from_tarball(&path)
+            .into_alien_error()
+            .context(failed(format!(
+                "Cannot inspect sandbox '{}' image {}",
+                sandbox.id,
+                path.display()
+            )))?;
+        let base = BaseIdentity::read(&image, &sandbox.id).await?;
+        let current = ImageUser {
+            user: &base.user,
+            passwd: base.passwd.as_deref().unwrap_or_default(),
+            group: base.group.as_deref().unwrap_or_default(),
+        }
+        .image_identity()
+        .context(failed(format!(
+            "Cannot resolve sandbox '{}' image USER",
+            sandbox.id
+        )))?
+        .uid;
+        // Preserve released startup where root cannot be bounded. Explicit root still
+        // reaches planning as Some(0), so an unsupported request fails before deployment.
+        let legacy_default = base.user.is_empty()
+            && (matches!(platform, Platform::Local | Platform::Kubernetes)
+                || (platform == Platform::Aws && !aws_connector));
+        let current = (current, legacy_default);
+        if uid.is_some_and(|previous| previous != current) {
+            return Err(AlienError::new(failed(format!(
+                "Sandbox '{}' image USER differs across architectures",
+                sandbox.id
+            ))));
+        }
+        uid = Some(current);
+    }
+    let (uid, legacy_default) = uid.ok_or_else(|| {
+        AlienError::new(failed(format!(
+            "Sandbox '{}' has no built image targets",
+            sandbox.id
+        )))
+    })?;
+    // Preserve old-reader compatibility where the runtime does not need this marker.
+    Ok(Some(uid).filter(|uid| {
+        !legacy_default && (*uid == 0 || matches!(platform, Platform::Aws | Platform::Azure))
+    }))
+}
+
 /// The image's USER and account databases, read from the same immutable archive.
 pub struct BaseIdentity {
     pub user: String,
     pub passwd: Option<String>,
     pub group: Option<String>,
+    /// Original startup configuration from the same inspected image. Absent only
+    /// for callers constructing a released identity contract without inspection.
+    pub image_command: Option<SandboxImageCommand>,
 }
 
 impl BaseIdentity {
     /// Read the image configuration and account files before packaging it.
     pub async fn read(image: &Image, resource_name: &str) -> Result<Self> {
-        let config = image_config(image)?;
+        let command = image_command(image).await?;
         Ok(Self {
-            user: config.user,
+            user: command.user.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::BuildConfigInvalid {
+                    message: "The sandbox image has no original USER metadata".into(),
+                })
+            })?,
             passwd: read_identity_file(image, "/etc/passwd", resource_name).await?,
             group: read_identity_file(image, "/etc/group", resource_name).await?,
+            image_command: Some(command),
         })
     }
 
@@ -91,8 +158,36 @@ struct ProcessConfig {
 }
 
 /// Preserve the base image command from the same archive used to resolve its identity.
-pub fn image_command(image: &Image) -> Result<SandboxImageCommand> {
-    let config = image_config(image)?;
+pub async fn image_command(image: &Image) -> Result<SandboxImageCommand> {
+    let config = image_config(image)?.config;
+    if config
+        .entrypoint
+        .as_ref()
+        .and_then(|argv| argv.first())
+        .map(String::as_str)
+        == Some(AGENT_PATH)
+    {
+        // Repackaging must preserve the user's command, never start a second agent as it.
+        // Old packages without the original USER can still deploy unchanged, but rebuilding
+        // one requires the original base image; guessing would silently change its identity.
+        let invalid = || ErrorData::BuildConfigInvalid {
+            message: concat!(
+                "Cannot repackage this agent image without saved original command and USER ",
+                "metadata; rebuild from the original base image"
+            )
+            .into(),
+        };
+        let saved = read_identity_file(image, IMAGE_COMMAND_PATH, "sandbox")
+            .await?
+            .ok_or_else(|| AlienError::new(invalid()))?;
+        let command: SandboxImageCommand = serde_json::from_str(&saved)
+            .into_alien_error()
+            .context(invalid())?;
+        if command.user.is_none() {
+            return Err(AlienError::new(invalid()));
+        }
+        return Ok(command);
+    }
     let mut env = std::collections::BTreeMap::new();
     for entry in config.env.unwrap_or_default() {
         let (key, value) = entry.split_once('=').ok_or_else(|| {
@@ -103,6 +198,7 @@ pub fn image_command(image: &Image) -> Result<SandboxImageCommand> {
         env.insert(key.to_string(), value.to_string());
     }
     Ok(SandboxImageCommand {
+        user: Some(config.user),
         command: config
             .entrypoint
             .into_iter()
@@ -121,9 +217,20 @@ pub fn image_command(image: &Image) -> Result<SandboxImageCommand> {
 struct ImageConfig {
     #[serde(default)]
     config: ProcessConfig,
+    rootfs: RootFs,
 }
 
-fn image_config(image: &Image) -> Result<ProcessConfig> {
+#[derive(Deserialize)]
+struct RootFs {
+    diff_ids: Vec<String>,
+}
+
+/// Ordered uncompressed layer identities, used to avoid reapplying an unchanged final layer.
+pub(crate) fn image_layers(image: &Image) -> Result<Vec<String>> {
+    Ok(image_config(image)?.rootfs.diff_ids)
+}
+
+fn image_config(image: &Image) -> Result<ImageConfig> {
     let failed = || ErrorData::BuildConfigInvalid {
         message: "Cannot read the sandbox base image's OCI configuration".to_string(),
     };
@@ -151,7 +258,7 @@ fn image_config(image: &Image) -> Result<ProcessConfig> {
             let config: ImageConfig = serde_json::from_slice(&bytes)
                 .into_alien_error()
                 .context(failed())?;
-            return Ok(config.config);
+            return Ok(config);
         }
     }
     Err(AlienError::new(failed()))
@@ -206,7 +313,13 @@ pub(crate) fn unreadable_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::sandbox_image::{AWS_MICROVM, GCP_AGENT_PLATFORM};
+    use alien_core::{
+        sandbox_image::{AWS_MICROVM, GCP_AGENT_PLATFORM},
+        ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
+    };
+    use alien_preflights::{
+        compile_time::sandbox_platform_support::SandboxPlatformSupportCheck, CompileTimeCheck,
+    };
     use dockdash::{Arch, Layer};
 
     async fn base(user: &str) -> Image {
@@ -214,7 +327,7 @@ mod tests {
             .unwrap()
             .data_with_owner(
                 "/etc/passwd",
-                b"root:x:0:0::/root:/bin/sh\n1001:x:9001:9001::/:/bin/sh\napp:x:1001:2001::/home/app:/bin/sh\n",
+                b"root:x:0:0::/root:/bin/sh\nsupervisor:x:0:0::/root:/bin/sh\n1001:x:9001:9001::/:/bin/sh\napp:x:1001:2001::/home/app:/bin/sh\n",
                 0o644,
                 0,
                 0,
@@ -239,6 +352,337 @@ mod tests {
             .await
             .unwrap()
             .0
+    }
+
+    async fn packaged(saved: Option<&str>) -> Image {
+        let mut layer = Layer::builder()
+            .unwrap()
+            .data_with_owner(
+                "/etc/passwd",
+                b"root:x:0:0::/root:/bin/sh\napp:x:2001:2001::/home/app:/bin/sh\n",
+                0o644,
+                0,
+                0,
+            )
+            .unwrap()
+            .data_with_owner("/etc/group", b"root:x:0:\napp:x:2001:\n", 0o644, 0, 0)
+            .unwrap();
+        if let Some(saved) = saved {
+            layer = layer
+                .data_with_owner(IMAGE_COMMAND_PATH, saved.as_bytes(), 0o600, 0, 0)
+                .unwrap();
+        }
+        Image::builder()
+            .platform("linux", &Arch::Amd64)
+            .user("0:0")
+            .entrypoint(vec![AGENT_PATH.to_string()])
+            .layer(layer.build().await.unwrap())
+            .build()
+            .await
+            .unwrap()
+            .0
+    }
+
+    #[tokio::test]
+    async fn repackaging_preserves_original_command_and_user_instead_of_the_agent() {
+        for (user, uid) in [("", 0), ("root", 0), ("app", 2001)] {
+            let saved = serde_json::json!({
+                "user": user, "command": ["/app/supervisor", "--serve"],
+                "env": {"ORIGINAL": "kept"}, "workingDirectory": "/app"
+            });
+            let image = packaged(Some(&saved.to_string())).await;
+            let command = image_command(&image).await.unwrap();
+            assert_eq!(serde_json::to_value(command).unwrap(), saved);
+            let identity = BaseIdentity::read(&image, "repackaged").await.unwrap();
+            assert_eq!(identity.user, user);
+            assert_eq!(
+                ImageUser {
+                    user: &identity.user,
+                    passwd: identity.passwd.as_deref().unwrap(),
+                    group: identity.group.as_deref().unwrap(),
+                }
+                .image_identity()
+                .unwrap()
+                .uid,
+                uid
+            );
+        }
+        for saved in [
+            None,
+            Some("invalid"),
+            Some(r#"{"command":[],"env":{},"workingDirectory":"/"}"#),
+        ] {
+            let image = packaged(saved).await;
+            let error = image_command(&image).await.unwrap_err();
+            assert_eq!(error.code, "PACKAGE_CONFIG_INVALID");
+            assert!(!error.retryable);
+        }
+    }
+
+    #[tokio::test]
+    async fn built_archives_resolve_boot_user_and_refuse_architecture_mismatch() {
+        let sandbox = alien_core::Sandbox::new("boot".into())
+            .code(alien_core::SandboxCode::Image {
+                image: "unused".into(),
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let directory = tempfile::tempdir().unwrap();
+        let targets = [
+            alien_core::BinaryTarget::LinuxX64,
+            alien_core::BinaryTarget::LinuxArm64,
+        ];
+        for (user, expected) in [
+            ("", 0),
+            ("root", 0),
+            ("0", 0),
+            ("0:0", 0),
+            ("supervisor", 0),
+            ("app", 1001),
+            ("2000:2000", 2000),
+        ] {
+            let image = base(user).await;
+            for target in &targets {
+                std::fs::copy(
+                    image.path(),
+                    directory
+                        .path()
+                        .join(format!("{}.oci.tar", target.runtime_platform_id())),
+                )
+                .unwrap();
+            }
+            for platform in [
+                Platform::Aws,
+                Platform::Gcp,
+                Platform::Azure,
+                Platform::Local,
+                Platform::Kubernetes,
+            ] {
+                let legacy_default =
+                    user.is_empty() && matches!(platform, Platform::Local | Platform::Kubernetes);
+                let marker = built_image_user(&sandbox, directory.path(), &targets, platform, true)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    marker,
+                    (!legacy_default
+                        && (expected == 0 || matches!(platform, Platform::Aws | Platform::Azure)))
+                    .then_some(expected)
+                );
+                let mut planned = sandbox.clone();
+                planned.image_user = marker;
+                if matches!(platform, Platform::Local | Platform::Kubernetes)
+                    && expected == 0
+                    && !user.is_empty()
+                {
+                    assert_eq!(
+                        planned.validate_for_platform(platform).unwrap_err().code,
+                        "SANDBOX_CAPABILITY_UNSUPPORTED"
+                    );
+                } else {
+                    planned.validate_for_platform(platform).unwrap();
+                }
+            }
+        }
+        let root = base("0").await;
+        std::fs::copy(
+            root.path(),
+            directory
+                .path()
+                .join(format!("{}.oci.tar", targets[0].runtime_platform_id())),
+        )
+        .unwrap();
+        let error = built_image_user(&sandbox, directory.path(), &targets, Platform::Aws, true)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("differs across architectures"));
+        let absent = base("").await;
+        std::fs::copy(
+            absent.path(),
+            directory
+                .path()
+                .join(format!("{}.oci.tar", targets[1].runtime_platform_id())),
+        )
+        .unwrap();
+        for (platform, connector) in [
+            (Platform::Local, false),
+            (Platform::Kubernetes, false),
+            (Platform::Aws, false),
+        ] {
+            assert!(
+                built_image_user(&sandbox, directory.path(), &targets, platform, connector)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("differs across architectures")
+            );
+        }
+        assert_eq!(
+            built_image_user(&sandbox, directory.path(), &targets, Platform::Aws, true)
+                .await
+                .unwrap(),
+            Some(0)
+        );
+        std::fs::remove_file(
+            directory
+                .path()
+                .join(format!("{}.oci.tar", targets[1].runtime_platform_id())),
+        )
+        .unwrap();
+        assert!(
+            built_image_user(&sandbox, directory.path(), &targets, Platform::Aws, true)
+                .await
+                .is_err()
+        );
+        assert!(
+            built_image_user(&sandbox, directory.path(), &[], Platform::Aws, true)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn absent_user_preserves_legacy_modes_through_planning_and_preflight() {
+        let directory = tempfile::tempdir().unwrap();
+        let targets = [alien_core::BinaryTarget::LinuxArm64];
+        for user in ["", "root", "app"] {
+            let image = base(user).await;
+            std::fs::copy(
+                image.path(),
+                directory
+                    .path()
+                    .join(format!("{}.oci.tar", targets[0].runtime_platform_id())),
+            )
+            .unwrap();
+            for (platform, egress, gateway, legacy, root_supported) in [
+                (Platform::Aws, SandboxEgress::Allow, false, false, false),
+                (Platform::Aws, SandboxEgress::Internet, false, false, true),
+                (Platform::Aws, SandboxEgress::None, false, false, true),
+                (Platform::Aws, SandboxEgress::Internet, true, false, true),
+                (Platform::Aws, SandboxEgress::Allow, false, true, false),
+                (Platform::Aws, SandboxEgress::None, false, true, false),
+                (
+                    Platform::Aws,
+                    SandboxEgress::AllowDomains {
+                        domains: vec!["example.com".into()],
+                    },
+                    false,
+                    true,
+                    false,
+                ),
+                (Platform::Gcp, SandboxEgress::None, false, false, true),
+                (Platform::Azure, SandboxEgress::None, false, false, true),
+                (Platform::Local, SandboxEgress::Allow, false, false, false),
+                (
+                    Platform::Kubernetes,
+                    SandboxEgress::Allow,
+                    false,
+                    false,
+                    false,
+                ),
+            ] {
+                let mut sandbox = Sandbox::new("identity".into())
+                    .code(SandboxCode::Image {
+                        image: "docker.io/library/ubuntu:24.04".into(),
+                    })
+                    .egress(egress)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build();
+                if legacy {
+                    sandbox.privileged_supervisor = Some(alien_core::SandboxPrivilegedSupervisor {
+                        command_uid: if user == "app" { 1001 } else { 60000 },
+                    });
+                }
+                let mut stack = Stack::new("identity".into()).build();
+                if gateway {
+                    let id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+                    let gateway = alien_core::Container::new(id.into())
+                        .code(alien_core::ContainerCode::Image {
+                            image: "example/gateway:1".into(),
+                        })
+                        .cpu(alien_core::ResourceSpec {
+                            min: "0.25".into(),
+                            desired: "0.25".into(),
+                        })
+                        .memory(alien_core::ResourceSpec {
+                            min: "512Mi".into(),
+                            desired: "512Mi".into(),
+                        })
+                        .replicas(1)
+                        .permissions(id.into())
+                        .port(3128)
+                        .build();
+                    stack.resources.insert(
+                        id.into(),
+                        alien_core::ResourceEntry {
+                            config: alien_core::Resource::new(gateway),
+                            lifecycle: ResourceLifecycle::Live,
+                            dependencies: vec![],
+                            remote_access: false,
+                            enabled_when: None,
+                        },
+                    );
+                }
+                sandbox.image_user = built_image_user(
+                    &sandbox,
+                    directory.path(),
+                    &targets,
+                    platform,
+                    alien_core::sandbox_egress::sandbox_plans_connector(&sandbox),
+                )
+                .await
+                .unwrap();
+                let expected = match user {
+                    "" if !root_supported => None,
+                    "" | "root" => Some(0),
+                    _ if matches!(platform, Platform::Aws | Platform::Azure) => Some(1001),
+                    _ => None,
+                };
+                assert_eq!(
+                    sandbox.image_user, expected,
+                    "{platform} {:?} gateway={gateway} USER={user:?}",
+                    sandbox.egress
+                );
+                let admitted = user != "root" || root_supported;
+                if !matches!(platform, Platform::Aws) {
+                    assert_eq!(sandbox.validate_for_platform(platform).is_ok(), admitted);
+                }
+                if platform == Platform::Aws {
+                    let env =
+                        alien_core::sandbox_egress::aws_sandbox_agent_environment(&stack, &sandbox);
+                    assert_eq!(
+                        env.contains_key("ALIEN_SANDBOX_IMAGE_COMMAND"),
+                        expected.is_some()
+                    );
+                }
+                stack.resources.insert(
+                    sandbox.id.clone(),
+                    alien_core::ResourceEntry {
+                        config: alien_core::Resource::new(sandbox),
+                        lifecycle: ResourceLifecycle::Frozen,
+                        dependencies: vec![],
+                        remote_access: false,
+                        enabled_when: None,
+                    },
+                );
+                let result = SandboxPlatformSupportCheck
+                    .check(&stack, platform)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    result.success, admitted,
+                    "{platform} USER={user:?}: {:?}",
+                    result.errors
+                );
+            }
+        }
     }
 
     #[tokio::test]

@@ -16,6 +16,7 @@ use alien_sandbox_conformance::{evaluate, Expectation, Observation, Probe, Verdi
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
+mod entrypoint;
 mod error;
 use error::{operation, ErrorData, Result};
 
@@ -295,6 +296,15 @@ async fn execute() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let bindings = Bindings::from_env().context(operation("read deployment bindings"))?;
     match args.as_slice() {
+        [action, suite_path, journal_path] if action == "entrypoint" => {
+            let file = File::open(suite_path).into_alien_error().context(operation("open entrypoint suite"))?;
+            let suite = serde_json::from_reader(file).into_alien_error().context(operation("decode entrypoint suite"))?;
+            let report = entrypoint::run(&bindings, suite, Path::new(journal_path)).await?;
+            serde_json::to_writer_pretty(std::io::stdout().lock(), &report).into_alien_error()
+                .context(operation("write entrypoint report"))?;
+            println!();
+            Ok(report.passed)
+        }
         [action, suite_path, journal_path] if action == "run" => {
             let file = File::open(suite_path)
                 .into_alien_error()
@@ -349,7 +359,7 @@ async fn execute() -> Result<bool> {
             Ok(true)
         }
         _ => Err(invalid(
-            "usage: alien-sandbox-conformance run SUITE.json JOURNAL.jsonl | cleanup JOURNAL.jsonl",
+            "usage: alien-sandbox-conformance run SUITE.json JOURNAL.jsonl | entrypoint SUITE.json JOURNAL.jsonl | cleanup JOURNAL.jsonl",
         )),
     }
 }

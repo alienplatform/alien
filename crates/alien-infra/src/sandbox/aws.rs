@@ -1417,10 +1417,12 @@ struct ImageBuildInputs {
 impl ImageBuildInputs {
     fn with_agent_environment(mut self, environment: BTreeMap<String, String>) -> Self {
         self.environment.extend(environment);
-        if self.environment.contains_key("ALIEN_SANDBOX_EGRESS") {
+        if self.environment.contains_key("ALIEN_SANDBOX_EGRESS")
+            || self.environment.contains_key("ALIEN_SANDBOX_IMAGE_COMMAND")
+        {
             // AWS rejects named capabilities (including NET_ADMIN): the API enum is only ALL.
-            // The agent drops to eight capabilities before starting worker threads and gives
-            // commands none. Omitting ALL prevents netlink firewall installation.
+            // The agent reduces its grant before starting threads, bounds root image startup,
+            // and gives exec no capabilities. The grant also permits firewall installation.
             // https://docs.aws.amazon.com/lambda/latest/dg/microvms-images.html#microvms-images-os-capabilities
             self.additional_os_capabilities = vec!["ALL".to_string()];
             // Fold the complete policy into the token without truncating away its digest.

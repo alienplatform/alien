@@ -79,6 +79,7 @@ async fn bundles_run_as_the_image_user_and_keep_the_agent_protected() {
         docker(&["build", "-q", "-t", &base, context.path().to_str().unwrap()]);
         // Read the actual built fixture; only trusted test code is executed here.
         let identity = BaseIdentity {
+            image_command: None,
             user: docker(&["image", "inspect", "--format", "{{.Config.User}}", &base]),
             passwd: Some(docker(&[
                 "run",

@@ -132,6 +132,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
   const sandboxHandle: RawSandboxHandle = {
     updateEgress: async () => {},
     capabilities: () => ["reconnect"],
+    sessionCapabilities: async () => ["reconnect"],
     create: async sandboxId => ({ sandboxId: sandboxId ?? "s1", state: "running", generation: 1 }),
     get: async sandboxId => ({ sandboxId, state: "running", generation: 1 }),
     getOrCreate: async sandboxId => ({

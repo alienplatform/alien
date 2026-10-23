@@ -7,9 +7,16 @@
 //!
 //! The discriminator is the connecting socket's owner, not its address. A proxy that terminates
 //! inside the guest also connects over loopback, so refusing loopback would refuse the one caller
-//! the agent exists to serve. Refusing the exec uid refuses exactly the code being supervised.
+//! the agent exists to serve. Released packages only run the exec uid; new packages
+//! must identify the whole guest cgroup because an image can create arbitrary UIDs.
 
 use std::net::SocketAddr;
+
+#[cfg(target_os = "linux")]
+use nlink::{
+    netlink::{Connection, SockDiag},
+    sockdiag::{SocketFilter, TcpState},
+};
 
 /// Whether transport mode may serve `peer`.
 ///
@@ -26,6 +33,62 @@ pub fn transport_may_serve(peer: SocketAddr, exec_uid: u32) -> bool {
     }
 
     decide(originates_here(peer), owning_uid(peer), exec_uid)
+}
+
+/// Root-capable packages cannot use UID as a trust boundary. GCP has no local
+/// provider caller. AWS's endpoint proxy and lifecycle hooks may originate in
+/// the guest, but their sockets belong to provider processes outside alien-guest.
+/// Missing or racing attribution always refuses a local caller.
+pub async fn image_transport_may_serve(peer: SocketAddr) -> bool {
+    if !originates_here(peer) {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(groups) = std::fs::read_to_string("/proc/self/cgroup") else {
+            return false;
+        };
+        if !in_guest_cgroup(&groups) {
+            return false;
+        }
+        provider_socket(peer).await.unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    false
+}
+
+#[cfg(target_os = "linux")]
+async fn provider_socket(peer: SocketAddr) -> Option<bool> {
+    // The existing cgroup BPF program marks every guest socket across all UIDs.
+    // Kernel socket diagnostics avoids /proc/<pid>/fd, which requires PTRACE
+    // over provider processes after we have already reduced our capabilities.
+    // MARK is only returned with NET_ADMIN; an absent attribute is never zero.
+    let connection = Connection::<SockDiag>::new().ok()?;
+    let filter = SocketFilter::tcp()
+        .states(&[TcpState::Established])
+        .local_addr(peer.ip())
+        .local_port(peer.port())
+        .build();
+    let sockets =
+        tokio::time::timeout(std::time::Duration::from_secs(1), connection.query(&filter))
+            .await
+            .ok()?
+            .ok()?;
+    if sockets.is_empty() {
+        return Some(false);
+    }
+    Some(sockets.iter().all(|socket| {
+        matches!(socket, nlink::sockdiag::SocketInfo::Inet(socket)
+            if socket.local == peer && socket.is_connected() && socket.mark == Some(0))
+    }))
+}
+
+#[cfg(target_os = "linux")]
+fn in_guest_cgroup(groups: &str) -> bool {
+    groups.lines().any(|line| {
+        line.strip_prefix("0::")
+            .is_some_and(|path| path.split('/').any(|component| component == "alien-guest"))
+    })
 }
 
 /// The rule itself, without the I/O, so every combination is testable.
@@ -173,6 +236,8 @@ fn address_matches(column: &str, peer: SocketAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use std::os::fd::AsRawFd;
 
     const TABLE: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
    0: 0100007F:9224 0100007F:2313 01 00000000:00000000 00:00000000 00000000 60000        0 12345 1
@@ -281,6 +346,51 @@ mod tests {
         assert_eq!(
             find_owner(TABLE, SocketAddr::from(([10, 0, 0, 5], 0x9224))),
             None
+        );
+    }
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires root and NET_ADMIN to read and set socket marks"]
+    async fn socket_mark_separates_provider_from_every_guest_uid() {
+        assert_eq!(unsafe { libc::geteuid() }, 0);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        for mark in [0u32, 0xa11f, 0xa11e] {
+            let client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (_accepted, peer) = listener.accept().unwrap();
+            assert_eq!(
+                unsafe {
+                    libc::setsockopt(
+                        client.as_raw_fd(),
+                        libc::SOL_SOCKET,
+                        libc::SO_MARK,
+                        (&mark as *const u32).cast(),
+                        size_of::<u32>() as _,
+                    )
+                },
+                0
+            );
+            assert_eq!(
+                provider_socket(peer).await,
+                Some(mark == 0),
+                "mark {mark:x}"
+            );
+        }
+        // AWS's endpoint and lifecycle proxy runs as a provider UID, not root.
+        // The cgroup mark is the boundary even if guest code chooses that same UID.
+        let mut provider = std::process::Command::new("python3");
+        std::os::unix::process::CommandExt::uid(&mut provider, 991);
+        let mut provider = provider.args(["-c",
+            "import socket,sys;s=socket.create_connection(('127.0.0.1',int(sys.argv[1])));sys.stdin.read()",
+            &listener.local_addr().unwrap().port().to_string()])
+            .stdin(std::process::Stdio::piped()).spawn().unwrap();
+        let (_accepted, peer) = listener.accept().unwrap();
+        let permitted = provider_socket(peer).await;
+        drop(provider.stdin.take());
+        assert!(provider.wait().unwrap().success());
+        assert_eq!(permitted, Some(true), "provider UID991 with mark zero");
+        assert_eq!(
+            provider_socket("127.0.0.1:1".parse().unwrap()).await,
+            Some(false)
         );
     }
 }

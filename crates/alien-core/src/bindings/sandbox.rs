@@ -211,6 +211,10 @@ pub struct AwsSandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AzureSandboxBinding {
+    /// New packages serve commands and files through a bounded root agent. Absent in released
+    /// native images, which retain their original transport until explicitly rebuilt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent: bool,
     /// Default runtime policy when create omits one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_policy: Option<EgressPolicy>,
@@ -383,6 +387,7 @@ impl SandboxBinding {
         idle_pause_seconds: Option<u32>,
     ) -> Self {
         Self::Azure(AzureSandboxBinding {
+            agent: false,
             default_policy: None,
             sandbox_group: sandbox_group.into(),
             data_plane_endpoint: data_plane_endpoint.into(),

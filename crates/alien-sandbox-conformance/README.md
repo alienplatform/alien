@@ -92,3 +92,56 @@ an accepted NetworkPolicy object alone do not establish enforcement.
 After-only runtime policy, NAT, gateway-log and connector-refusal probes live in
 [`after/`](after/README.md). They require the implementation under test’s Python
 SDK and preserve this baseline runner unchanged.
+
+Run the image boot/USER fixture through real runtime bindings with:
+
+```sh
+cargo run -p alien-sandbox-conformance --features gcp -- \
+  entrypoint entrypoint-suite.json sessions.jsonl
+```
+
+The suite contains `backend`, `revision`, `binding`, `imageUid`, `execUid`, and
+optional `metadataBackend` (`aws`, `gcp`, or `azure`). An optional
+`reconnectBinding` creates through `binding` and runs the first exec through the
+other binding, checking that an existing session survives a release change. Build the image from
+[`entrypoint/`](entrypoint/README.md), using the same metadata backend at build
+time, then pass it through the normal backend image assembler. The runner creates
+one session, persists its handle, and runs the fixture inspector as the first user
+exec. It reports the observed identities and the checker's exit status, then
+terminates the session even on failure. A failed checker returns a failing process
+status. As with the network suite, verify deletion through provider inventory and
+retain the journal for recovery; termination calls alone are not proof of absence.
+
+For before/after qualification, keep the base fixture and checker identical while
+assembling once with the parent builder/agent and once with the changed
+builder/agent. A before run must reach the checker and fail its assertions; a
+failed deployment or readiness probe does not establish the intended regression.
+
+Azure boot qualification uses the Azure assembler and a binding with `agent: true`.
+The provider publishes the agent port and reads its boot credential through the
+native file API; the fixture's first user command goes through the agent protocol.
+Use the identical unassembled fixture with a legacy binding as the native control.
+That control must reach the inspector and fail the capability/exec checks, rather
+than fail session creation. Root, absent-USER and non-root variants are all required.
+The metadata-enabled fixture checks boot, child and exec identities without
+printing response bodies. Preserve each report and session journal, then verify
+absence through the provider inventory before removing the disk images and group.
+
+AWS qualification builds the three ARM64 fixtures with `METADATA_BACKEND=aws`,
+passes each inspected image through `sandbox_bundle::write_bundle`, and uses
+`aws_sandbox_agent_environment` from its built declaration for the image build.
+The image's Run, Resume, Ready and Validate hooks must be enabled. Run the entrypoint
+suite against the resulting image version through the ordinary AWS binding.
+Use a gateway connector for `internet`, a denying connector for `none`, and a
+non-root image for legacy `allow`; root images without a connector must fail planning.
+Do not attach an execution role to any test MicroVM.
+
+Gateway fixtures also need `GATEWAY_CONFIG` at build time and `gateway: true` in
+the suite. The fixture's [gateway instructions](entrypoint/README.md) describe its
+HTTP/UDP controls. Correlate each boot, child and exec observation window with the
+gateway's session ID, allowed response, denied hostname and numeric-IP decisions,
+and the controlled origin's requests. A connection reset alone is not proof.
+Record the synthetic DNS answers separately from direct VPC-resolver controls;
+the external DNS firewall must close the resolver path that security groups allow.
+Parent root and absent-USER fixtures must reach the checker and fail the identity
+contract. A passing parent non-root fixture demonstrates preserved behavior.

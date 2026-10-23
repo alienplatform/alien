@@ -225,6 +225,7 @@ export interface RawResolvedSandbox {
 /** Raw napi sandbox handle. */
 export interface RawSandboxHandle {
   capabilities(): string[]
+  sessionCapabilities(sandboxId: string): Promise<string[]>
   create(
     sandboxId?: string | null,
     tenantKey?: string | null,

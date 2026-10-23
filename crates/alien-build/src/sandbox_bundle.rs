@@ -124,6 +124,9 @@ RUN for path in / /usr /usr/local /usr/local/bin /opt /opt/alien /etc; do \
 
 /// Writes the bundle AWS builds a MicroVM image from: the rendered Dockerfile, plus the agent
 /// binary beside it when the agent is a local build rather than a published image.
+/// An inspected identity also carries the original command and environment into the ZIP.
+/// Keep that artifact private, or use `write_supervised_bundle_with_command_image` to copy
+/// metadata from an access-controlled image without including its contents in the ZIP.
 ///
 /// The archive is flat on purpose — `CreateMicrovmImage` looks for the Dockerfile at the root,
 /// and a nested directory produces a build failure minutes in rather than a rejected request.
@@ -137,17 +140,16 @@ pub fn write_bundle(
         destination,
         base_image,
         agent,
-        None,
+        identity.image_command.as_ref(),
         None,
         &identity.contract(AWS_MICROVM, None)?,
     )
 }
 
-/// Packages the declared sandbox, preserving the released layout for legacy egress modes.
+/// Packages an inspected image's original startup in every declared network mode.
 ///
-/// Internet sandboxes need the inspected base image command because the root agent starts that
-/// command only after installing the egress boundary. Both source-built and published images
-/// use their final OCI configuration here; callers must not infer it from a Dockerfile.
+/// Identity inspection retains the original command even when the base is an already packaged
+/// image. Older callers without that metadata retain the released layout for legacy modes.
 pub fn write_declared_bundle(
     destination: &Path,
     base_image: &str,
@@ -156,7 +158,7 @@ pub fn write_declared_bundle(
     image_config: Option<&Config>,
     identity: &BaseIdentity,
 ) -> Result<()> {
-    if !matches!(egress, SandboxEgress::Internet) {
+    if identity.image_command.is_some() || !matches!(egress, SandboxEgress::Internet) {
         return write_bundle(destination, base_image, agent, identity);
     }
     let config = image_config.ok_or_else(|| {
@@ -196,6 +198,7 @@ pub fn image_command_from_config(config: &Config) -> Result<SandboxImageCommand>
         env.insert(key.to_string(), value.to_string());
     }
     let command = SandboxImageCommand {
+        user: Some(config.user.clone().unwrap_or_default()),
         command: config
             .entrypoint
             .iter()
@@ -214,7 +217,8 @@ pub fn image_command_from_config(config: &Config) -> Result<SandboxImageCommand>
     Ok(command)
 }
 
-/// Writes a bundle preserving the base image's OCI command for unprivileged startup.
+/// Writes a bundle preserving the base image's OCI command. The deployment's inspected
+/// image metadata selects OCI USER startup; released declarations retain non-root startup.
 /// `image_command` must come from inspecting the declared base image, not an exec request.
 pub fn write_supervised_bundle(
     destination: &Path,
@@ -297,6 +301,8 @@ fn write_bundle_inner(
             path = alien_core::sandbox_image::IMAGE_COMMAND_PATH,
         ));
     }
+    // Deployment alone selects privileged startup together with its capability grant.
+    // Older releases can use this bundle without inspected imageUser metadata.
     let agent_bytes = match agent {
         AgentSource::Binary(agent_binary) => Some(
             std::fs::read(agent_binary)
@@ -361,6 +367,7 @@ mod tests {
             user: String::new(),
             passwd: None,
             group: None,
+            image_command: None,
         }
     }
     fn write_bundle(
@@ -370,6 +377,66 @@ mod tests {
     ) -> super::Result<()> {
         super::write_bundle(destination, base, agent, &root_identity())
     }
+    #[test]
+    fn inspected_bundle_leaves_privileged_activation_to_release_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let agent = AgentSource::Image("example.com/agent:v1".into());
+        for user in ["", "0", "2001:2001"] {
+            let identity = BaseIdentity {
+                user: user.into(),
+                passwd: None,
+                group: None,
+                image_command: None,
+            };
+            let command = SandboxImageCommand {
+                user: Some(user.into()),
+                command: vec!["/start".into()],
+                env: Default::default(),
+                working_directory: "/".into(),
+            };
+            for copy_from_image in [false, true] {
+                let bundle = directory.path().join("bundle.zip");
+                if copy_from_image {
+                    write_supervised_bundle_with_command_image(
+                        &bundle,
+                        "example.com/base:v1",
+                        &agent,
+                        &format!("example.com/command@sha256:{}", "a".repeat(64)),
+                        &identity,
+                    )
+                    .unwrap();
+                } else {
+                    write_supervised_bundle(
+                        &bundle,
+                        "example.com/base:v1",
+                        &agent,
+                        &command,
+                        &identity,
+                        None,
+                    )
+                    .unwrap();
+                }
+                let mut archive = zip::ZipArchive::new(File::open(bundle).unwrap()).unwrap();
+                let mut dockerfile = String::new();
+                std::io::Read::read_to_string(
+                    &mut archive.by_name("Dockerfile").unwrap(),
+                    &mut dockerfile,
+                )
+                .unwrap();
+                // The same archive serves old and new release readers. Only deployment
+                // can pair these settings with the capability grant from imageUser.
+                assert!(
+                    !dockerfile.contains("ALIEN_SANDBOX_IMAGE_COMMAND="),
+                    "bundle activates privileged startup without release metadata"
+                );
+                assert!(
+                    !dockerfile.contains("ALIEN_SANDBOX_EGRESS_RUN_HOOK="),
+                    "bundle activates privileged hooks without release metadata"
+                );
+            }
+        }
+    }
+
     #[test]
     fn internet_packaging_refuses_missing_or_malformed_image_configuration() {
         let directory = tempfile::tempdir().unwrap();
