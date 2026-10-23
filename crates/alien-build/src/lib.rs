@@ -4146,7 +4146,13 @@ async fn pull_and_export_image(
             && workload == toolchain::WorkloadKind::SandboxBase
         {
             let inspected = Command::new("docker")
-                .args(["image", "inspect", "--format", "{{.Id}}", image])
+                .args([
+                    "image",
+                    "inspect",
+                    "--format",
+                    "{{.Id}} {{.Os}}/{{.Architecture}}",
+                    image,
+                ])
                 .output()
                 .await
                 .into_alien_error()
@@ -4156,15 +4162,27 @@ async fn pull_and_export_image(
                     build_output: None,
                 })?;
             if inspected.status.success() {
-                export_image = String::from_utf8(inspected.stdout)
+                let metadata = String::from_utf8(inspected.stdout)
                     .into_alien_error()
                     .context(ErrorData::ImageBuildFailed {
                         resource_name: container_name.to_string(),
-                        reason: "Docker returned an invalid image ID".into(),
+                        reason: "Docker returned invalid image metadata".into(),
                         build_output: None,
-                    })?
-                    .trim()
-                    .to_owned();
+                    })?;
+                let (id, cached_platform) = metadata.trim().split_once(' ').ok_or_else(|| {
+                    AlienError::new(ErrorData::ImageBuildRejected {
+                        resource_name: container_name.to_string(),
+                        reason: "Docker image inspection omitted its ID or platform".into(),
+                    })
+                })?;
+                if cached_platform == platform_str {
+                    export_image = id.to_owned();
+                } else if image.starts_with("sha256:") {
+                    return Err(AlienError::new(ErrorData::ImageBuildRejected {
+                        resource_name: container_name.to_string(),
+                        reason: format!("Local image {image} targets {cached_platform}; build requires {platform_str}"),
+                    }));
+                }
             }
         }
         // Docker cannot pull an immutable daemon ID from a registry.
@@ -7145,6 +7163,118 @@ mod sandbox_build_tests {
         assert_eq!(sandbox.code, SandboxCode::Image { image: image_id });
         assert_eq!(sandbox.image_user, None);
         sandbox.validate_for_platform(Platform::Local).unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_cached_image_with_another_architecture_pulls_the_requested_platform() {
+        let (_registry, host) = dockdash::test_utils::setup_local_registry().await.unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let tag = format!("{host}/local-platform/sandbox:{}", rand::random::<u64>());
+        let mut ids = Vec::new();
+        let arm_tag = format!("{tag}-arm");
+        for (arch, reference, platform) in [
+            (dockdash::Arch::Amd64, &tag, "linux/amd64"),
+            (dockdash::Arch::ARM64, &arm_tag, "linux/arm64"),
+        ] {
+            let image = DockDashImage::builder()
+                .platform("linux", &arch)
+                .entrypoint(vec!["/start".into()])
+                .layer(
+                    dockdash::Layer::builder()
+                        .unwrap()
+                        .compression(dockdash::LayerCompression::Gzip)
+                        .data_with_owner("/marker", reference.as_bytes(), 0o644, 0, 0)
+                        .unwrap()
+                        .build()
+                        .await
+                        .unwrap(),
+                )
+                .build()
+                .await
+                .unwrap()
+                .0;
+            image
+                .push(
+                    reference,
+                    &dockdash::PushOptions {
+                        protocol: dockdash::ClientProtocol::Http,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let pulled = Command::new("docker")
+                .args(["pull", "--platform", platform, reference])
+                .output()
+                .await
+                .unwrap();
+            assert!(pulled.status.success(), "{:?}", pulled);
+            ids.push(image.config_digest().to_owned());
+        }
+        let tagged = Command::new("docker")
+            .args(["tag", &arm_tag, &tag])
+            .output()
+            .await
+            .unwrap();
+        assert!(tagged.status.success());
+        assert_ne!(ids[0], ids[1]);
+        let mut settings = settings();
+        settings.platform = PlatformBuildSettings::Local {};
+        settings.targets = Some(vec![BinaryTarget::LinuxX64]);
+        settings.output_directory = output.path().to_string_lossy().into_owned();
+        let sandbox = Sandbox::new("local-platform".into())
+            .code(SandboxCode::Image { image: tag })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let built = build_stack(
+            Stack::new("local-platform".into())
+                .add(sandbox, ResourceLifecycle::Frozen)
+                .build(),
+            &settings,
+        )
+        .await;
+        let pinned = Sandbox::new("pinned-platform".into())
+            .code(SandboxCode::Image {
+                image: ids[1].clone(),
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let pinned_result = build_stack(
+            Stack::new("pinned-platform".into())
+                .add(pinned, ResourceLifecycle::Frozen)
+                .build(),
+            &settings,
+        )
+        .await;
+        let removed = Command::new("docker")
+            .args(["image", "rm", "-f", &ids[0], &ids[1]])
+            .output()
+            .await
+            .unwrap();
+        assert!(removed.status.success(), "{:?}", removed);
+        let rejected = pinned_result.expect_err("an immutable ID cannot switch architecture");
+        assert_eq!(rejected.code, "IMAGE_BUILD_REJECTED");
+        assert!(!rejected.retryable);
+        let built = built.expect("a mismatched cached platform must pull the requested image");
+        let sandbox = built
+            .resources()
+            .find_map(|(_, e)| e.config.downcast_ref::<Sandbox>())
+            .unwrap();
+        assert_eq!(
+            sandbox.code,
+            SandboxCode::Image {
+                image: ids[0].clone()
+            }
+        );
+        assert_eq!(sandbox.image_user, None);
     }
 
     #[tokio::test]
