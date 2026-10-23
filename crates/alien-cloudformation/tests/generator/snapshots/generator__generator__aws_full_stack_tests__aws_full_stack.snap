@@ -1117,7 +1117,7 @@ Resources:
         Value: assets
       - Key: resource-type
         Value: storage
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   AssetsBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -1186,7 +1186,7 @@ Resources:
         Value: metadata
       - Key: resource-type
         Value: kv
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   Mailbox:
     Type: AWS::S3::Bucket
@@ -1227,7 +1227,7 @@ Resources:
         Value: mailbox
       - Key: resource-type
         Value: storage
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   MailboxBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -1532,7 +1532,7 @@ Resources:
         Value: registry
       - Key: resource-type
         Value: artifact-registry
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   RegistryPullRole:
     Type: AWS::IAM::Role
@@ -1656,7 +1656,7 @@ Resources:
       LogGroupName:
         Fn::Sub: /aws/codebuild/${AWS::StackName}-builder
       RetentionInDays: 30
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   Builder:
     Type: AWS::CodeBuild::Project

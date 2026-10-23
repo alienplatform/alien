@@ -75,8 +75,7 @@ impl CfEmitter for AwsKvEmitter {
             CfExpression::object([("PointInTimeRecoveryEnabled", CfExpression::from(true))]),
         );
         table.properties.insert("Tags".to_string(), tags(ctx));
-        table.deletion_policy = Some("Retain".to_string());
-        table.update_replace_policy = Some("Retain".to_string());
+        table.retain_data();
 
         let mut resources = vec![table];
         resources.extend(kv_iam_policies(ctx, kv, table_id)?);

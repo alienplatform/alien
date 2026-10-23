@@ -188,7 +188,7 @@ Resources:
         Value: mailbox
       - Key: resource-type
         Value: storage
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   MailboxBucketPolicy:
     Type: AWS::S3::BucketPolicy

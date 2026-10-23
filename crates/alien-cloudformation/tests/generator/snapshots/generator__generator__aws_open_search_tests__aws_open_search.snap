@@ -129,7 +129,7 @@ Resources:
         Value: articles
       - Key: resource-type
         Value: experimental/aws-opensearch
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   ArticlesNetworkPolicy:
     Type: AWS::OpenSearchServerless::SecurityPolicy
@@ -208,7 +208,7 @@ Resources:
         Value: experimental/aws-opensearch
     DependsOn:
     - ArticlesGroup
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   ArticlesDataAccessPolicy:
     Type: AWS::OpenSearchServerless::AccessPolicy

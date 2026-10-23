@@ -50,7 +50,7 @@ fn aws_key_template_is_valid_and_retained() {
         .find(|resource| resource.resource_type == "AWS::KMS::Key")
         .expect("KMS key should render");
 
-    assert_eq!(key.deletion_policy.as_deref(), Some("Retain"));
+    assert_eq!(key.deletion_policy.as_deref(), Some("RetainExceptOnCreate"));
     assert_eq!(key.update_replace_policy.as_deref(), Some("Retain"));
     assert!(yaml.contains("kms:Encrypt"));
     assert!(yaml.contains("kms:Decrypt"));

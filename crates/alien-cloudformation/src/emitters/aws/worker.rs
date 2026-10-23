@@ -75,8 +75,7 @@ impl CfEmitter for AwsWorkerEmitter {
         log_group
             .properties
             .insert("RetentionInDays".to_string(), CfExpression::Integer(30));
-        log_group.deletion_policy = Some("Retain".to_string());
-        log_group.update_replace_policy = Some("Retain".to_string());
+        log_group.retain_data();
 
         let mut lambda =
             CfResource::new(logical_id.to_string(), "AWS::Lambda::Function".to_string());
