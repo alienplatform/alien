@@ -584,7 +584,7 @@ mod tests {
                     Ok(None) => panic!("fixture must contain a command"),
                     Err(error) => error,
                 };
-                assert_eq!(error.code, "CONFIG_INVALID");
+                assert_eq!(error.code, "AGENT_CONFIG_INVALID");
                 assert!(
                     error.to_string().contains("legacy UID-scoped egress"),
                     "{error}"
