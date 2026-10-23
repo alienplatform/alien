@@ -117,7 +117,14 @@ async fn concurrent_shared_image_loads_keep_both_containers_inspectable() {
     manager.delete_container(&second_name).await.unwrap();
     let mut removed = false;
     for candidate in &candidates {
-        match docker.remove_image(candidate, None, None).await {
+        match docker
+            .remove_image(
+                candidate,
+                None::<bollard::query_parameters::RemoveImageOptions>,
+                None,
+            )
+            .await
+        {
             Ok(_) => {
                 removed = true;
                 break;

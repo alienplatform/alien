@@ -653,7 +653,7 @@ mod tests {
         let version = docker.version().await.expect("engine version");
         assert!(version.version.is_some());
         let containers = docker
-            .list_containers::<String>(None)
+            .list_containers(None)
             .await
             .expect("list dedicated engine containers");
         assert!(
