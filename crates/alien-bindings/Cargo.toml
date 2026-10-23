@@ -75,6 +75,7 @@ alien-gcp-clients = { workspace = true, features = ["test-utils"] }
 alien-azure-clients = { workspace = true, features = ["test-utils"] }
 axum = { workspace = true, features = ["tokio", "http1", "json", "query"] }
 dotenvy = { workspace = true }
+httpmock = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = { workspace = true }
 temp-env = { workspace = true, features = ["async_closure"] }

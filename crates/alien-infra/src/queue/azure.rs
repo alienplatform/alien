@@ -6,7 +6,7 @@ use alien_core::{
     ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
     ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 use std::time::Duration;
@@ -221,13 +221,30 @@ impl AzureQueueController {
         let mgmt = ctx
             .service_provider
             .get_azure_service_bus_management_client(cfg)?;
-        let _ = ctx.desired_resource_config::<Queue>()?;
+        let config = ctx.desired_resource_config::<Queue>()?;
         if let (Some(ns), Some(qn)) = (&self.namespace_name, &self.queue_name) {
             let resource_group =
                 crate::infra_requirements::azure_utils::get_resource_group_name(&ctx.state)?;
-            let _ = mgmt
+            match mgmt
                 .delete_queue(resource_group, ns.clone(), qn.clone())
-                .await;
+                .await
+            {
+                Ok(_) => info!(queue=%qn, "Azure Service Bus queue deleted"),
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    info!(queue=%qn, "Azure Service Bus queue was already deleted");
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete Service Bus queue '{qn}'"),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            }
         }
         self.namespace_name = None;
         self.queue_name = None;
@@ -440,5 +457,39 @@ mod tests {
         executor.delete().unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// A denied queue delete is not success: the delete fails and the controller keeps the
+    /// namespace and queue names for the retry.
+    #[tokio::test]
+    async fn denied_queue_delete_fails_and_keeps_the_queue() {
+        let mut mgmt = MockServiceBusManagementApi::new();
+        mgmt.expect_delete_queue().returning(|_, _, _| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "Service Bus queue".to_string(),
+                    resource_name: "azure-queue".to_string(),
+                },
+            ))
+        });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Queue::new("azure-queue".to_string()).build())
+            .controller(AzureQueueController {
+                state: AzureQueueState::DeleteStart,
+                namespace_name: Some("namespace-1".to_string()),
+                queue_name: Some("queue-1".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Azure)
+            .service_provider(setup_mock_provider(Arc::new(mgmt)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.expect_err("the denial is returned");
+        let state = executor.internal_state::<AzureQueueController>().unwrap();
+        assert_eq!(state.namespace_name.as_deref(), Some("namespace-1"));
+        assert_eq!(state.queue_name.as_deref(), Some("queue-1"));
     }
 }

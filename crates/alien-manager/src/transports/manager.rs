@@ -27,6 +27,8 @@ pub struct ManagerTransport {
     project_id: String,
     session: String,
     execution_claim: Option<ExecutionClaim>,
+    /// AWS regions the artifact registry serves; see `reconcile_registry_access_with_proxy`.
+    supported_aws_regions: Vec<String>,
 }
 
 impl ManagerTransport {
@@ -37,6 +39,7 @@ impl ManagerTransport {
         project_id: String,
         session: String,
         execution_claim: Option<ExecutionClaim>,
+        supported_aws_regions: Vec<String>,
     ) -> Self {
         Self {
             deployment_store,
@@ -45,6 +48,7 @@ impl ManagerTransport {
             project_id,
             session,
             execution_claim,
+            supported_aws_regions,
         }
     }
 }
@@ -77,16 +81,20 @@ impl DeploymentLoopTransport for ManagerTransport {
         // 1. Reconcile cross-account registry access (best-effort).
         //    This must happen before persisting so the `registry_access_granted`
         //    flag is included in the persisted state.
+        //    A pending replica is persisted too, then returned as a retryable error so the runner
+        //    holds the step until the replica exists.
         let mut granted_state = state.clone();
-        crate::registry_access::reconcile_registry_access_with_proxy()
+        let replica_pending = crate::registry_access::reconcile_registry_access_with_proxy()
             .bindings_provider(&self.bindings_provider)
             .target_bindings_providers(&self.target_bindings_providers)
             .deployment_id(deployment_id)
             .project_id(&self.project_id)
             .state(&mut granted_state)
             .maybe_proxy_url(config.manager_url.as_deref())
+            .supported_aws_regions(&self.supported_aws_regions)
             .call()
-            .await;
+            .await
+            .err();
 
         // 2. Revoke a deleted AWS deployment's access before persisting the state that hands it
         //    to setup teardown. A denied revoke comes back as a failed delete to persist instead.
@@ -106,7 +114,8 @@ impl DeploymentLoopTransport for ManagerTransport {
         // synthetic system subject (empty bearer signals to embedders that
         // no caller passthrough is available).
         let caller = Subject::system();
-        self.deployment_store
+        let outcome = self
+            .deployment_store
             .reconcile(
                 &caller,
                 ReconcileData {
@@ -135,6 +144,12 @@ impl DeploymentLoopTransport for ManagerTransport {
         )
         .await
         .map_err(|error| error.into_generic())?;
+
+        if let Some(error) = replica_pending.filter(|_| {
+            crate::registry_access::holds_step_for_missing_replica(&outcome.record.status)
+        }) {
+            return Err(error.into_generic());
+        }
 
         // Only return updated state if something actually changed.
         let state_changed = updated_state.runtime_metadata != state.runtime_metadata

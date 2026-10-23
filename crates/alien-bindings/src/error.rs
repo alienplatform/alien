@@ -729,6 +729,23 @@ pub enum ErrorData {
         details: String,
     },
 
+    /// A replicated registry repository has no copy in a region yet.
+    #[error(
+        code = "REGISTRY_REPLICA_NOT_READY",
+        message = "Repository '{repository}' has no replica in {region} yet: {details}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    RegistryReplicaNotReady {
+        /// The replicated repository
+        repository: String,
+        /// The region its replica is missing from
+        region: String,
+        /// What the last lookup returned
+        details: String,
+    },
+
     /// Remote service is temporarily unavailable.
     #[error(
         code = "REMOTE_SERVICE_UNAVAILABLE",

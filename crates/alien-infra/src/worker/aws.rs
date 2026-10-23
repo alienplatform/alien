@@ -4534,11 +4534,11 @@ impl AwsWorkerController {
         if !self.event_source_mappings.is_empty() {
             info!(worker=%worker_config.id, mappings=?self.event_source_mappings, "Deleting event source mappings");
 
-            // Delete all event source mappings using best-effort approach (ignore NotFound)
-            for uuid in &self.event_source_mappings.clone() {
+            // Each mapping leaves the list once it is gone, so a retry resumes after it.
+            while let Some(uuid) = self.event_source_mappings.first().cloned() {
                 let outcome =
-                    delete_tag_scoped(client.delete_event_source_mapping(uuid).await, || async {
-                        client.get_event_source_mapping(uuid).await.map(|_| ())
+                    delete_tag_scoped(client.delete_event_source_mapping(&uuid).await, || async {
+                        client.get_event_source_mapping(&uuid).await.map(|_| ())
                     })
                     .await
                     .context(ErrorData::CloudPlatformError {
@@ -4546,10 +4546,8 @@ impl AwsWorkerController {
                         resource_id: Some(worker_config.id.clone()),
                     })?;
                 info!(worker=%worker_config.id, uuid=%uuid, outcome=?outcome, "Event source mapping removed");
+                self.event_source_mappings.remove(0);
             }
-
-            // Clear the mapping list after successful deletion
-            self.event_source_mappings.clear();
         } else {
             info!(worker=%worker_config.id, "No event source mappings to delete");
         }
@@ -4691,7 +4689,7 @@ impl AwsWorkerController {
                 .await,
             || async {
                 client
-                    .get_function_configuration(function_identifier, None)
+                    .get_function_concurrency(function_identifier)
                     .await
                     .map(|_| ())
             },
@@ -4796,7 +4794,7 @@ impl AwsWorkerController {
             client.delete_function(&aws_worker_name, None).await,
             || async {
                 client
-                    .get_function_configuration(&aws_worker_name, None)
+                    .get_function_concurrency(&aws_worker_name)
                     .await
                     .map(|_| ())
             },
@@ -4834,12 +4832,10 @@ impl AwsWorkerController {
             .get_function_configuration(lookup_identifier, None)
             .await
         {
-            // `lambda:GetFunction` is granted only for functions that carry the stack's tags.
-            // A deleted function has none, so AWS answers AccessDenied instead of
-            // ResourceNotFound. Both mean the function is gone. Returning the denial as an
-            // error would make the executor's best-effort delete rule mark the worker
-            // deleted here, before the network interface wait and the certificate delete
-            // have run.
+            // The delete above succeeded or confirmed the function gone, so this read only
+            // waits for it to disappear. GetFunctionConfiguration is granted only on functions
+            // with the stack's tags and a deleted function has none, so AccessDenied means gone
+            // here just as NotFound does.
             Err(e)
                 if matches!(
                     e.error,
@@ -5048,6 +5044,11 @@ impl AwsWorkerController {
                     resource_id: Some(worker_config.id.clone()),
                 })?;
             info!(worker=%worker_config.id, certificate_arn=%certificate_arn, outcome=?outcome, "ACM certificate removed");
+            // A retry after a later certificate fails must not delete this one again. Token
+            // lookups list only certificates that still exist.
+            if self.certificate_arn.as_ref() == Some(certificate_arn) {
+                self.certificate_arn = None;
+            }
         }
         self.certificate_arn = None;
         self.certificate_import_token = None;
@@ -5823,8 +5824,8 @@ mod tests {
     use alien_aws_clients::eventbridge::MockEventBridgeApi;
     use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::lambda::{
-        AddPermissionResponse, EventSourceMapping, FunctionConfiguration, GetFunctionResponse,
-        ListEventSourceMappingsResponse, MockLambdaApi,
+        AddPermissionResponse, EventSourceMapping, FunctionConcurrency, FunctionConfiguration,
+        GetFunctionResponse, ListEventSourceMappingsResponse, MockLambdaApi,
     };
     use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _, AwsCredentialProvider};
     use alien_client_core::ErrorData as CloudClientErrorData;
@@ -7628,11 +7629,21 @@ mod tests {
         })
     }
 
+    /// Lambda's answer to the concurrency read of a function that is gone, which is granted on
+    /// functions without the stack's tag.
+    fn function_gone() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+            resource_type: "Worker".to_string(),
+            resource_name: "test-public-func".to_string(),
+        })
+    }
+
     /// Deletes a running public worker with the stack executor that production uses, in a
-    /// stack that owns its VPC. Returns the worker's final status.
+    /// stack that owns its VPC. The VPC detach is always denied, as it is for a function
+    /// without the stack's tags. Returns the worker's final state.
     ///
-    /// The stack executor matters here: its best-effort delete rule decides what an
-    /// access-denied answer does to the rest of the delete flow.
+    /// The stack executor matters here: it decides what a denied call does to the rest of the
+    /// delete flow.
     #[bon::builder]
     async fn delete_public_worker_in_created_vpc(
         mut mock_lambda: MockLambdaApi,
@@ -7640,7 +7651,7 @@ mod tests {
         mock_acm: MockAcmApi,
         #[builder(default = MockCloudWatchLogsApi::new())] mock_logs: MockCloudWatchLogsApi,
         #[builder(default)] uses_custom_domain: bool,
-    ) -> ResourceStatus {
+    ) -> StackResourceState {
         let worker = function_public_ingress();
         let worker_id = worker.id.clone();
         let mut controller = AwsWorkerController::mock_ready(&format!("test-{worker_id}"));
@@ -7714,23 +7725,24 @@ mod tests {
         // regression from looping forever.
         for _ in 0..30 {
             state = executor.step(state).await.unwrap().next_state;
-            let status = state.resources[&worker_id].status;
-            if status != ResourceStatus::Running && status != ResourceStatus::Deleting {
-                return status;
+            let worker = &state.resources[&worker_id];
+            if worker.status != ResourceStatus::Running && worker.status != ResourceStatus::Deleting
+            {
+                return worker.clone();
             }
         }
         panic!("worker delete did not finish within 30 steps");
     }
 
-    /// `lambda:GetFunction` is granted only for functions that carry the stack's tags. A
-    /// deleted function has no tags, so AWS answers the read that confirms the delete with
-    /// AccessDenied instead of ResourceNotFound. The delete flow has to treat that as "gone"
-    /// and still wait for the Lambda network interfaces, deleting only imported certificates.
+    /// A function deleted out of band has no tags, so the tag-scoped detach and delete are
+    /// denied. The read granted on functions without the stack's tag answers NotFound, so the
+    /// function is gone, and the delete still waits for the Lambda network interfaces and
+    /// deletes only imported certificates.
     #[rstest]
     #[case::imported_certificate(false)]
     #[case::customer_certificate(true)]
     #[tokio::test]
-    async fn test_delete_finishes_cleanup_when_read_of_deleted_function_is_denied(
+    async fn test_delete_finishes_cleanup_when_the_function_was_deleted_out_of_band(
         #[case] uses_custom_domain: bool,
     ) {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -7739,13 +7751,21 @@ mod tests {
         let recorded = calls.clone();
         mock_lambda.expect_delete_function().returning(move |_, _| {
             recorded.lock().unwrap().push("DeleteFunction");
-            Ok(())
+            Err(access_denied())
         });
+        let recorded = calls.clone();
+        mock_lambda
+            .expect_get_function_concurrency()
+            .returning(move |_| {
+                recorded.lock().unwrap().push("GetFunctionConcurrency");
+                Err(function_gone())
+            });
+        // Tag-scoped, so a gone function answers it AccessDenied.
         let recorded = calls.clone();
         mock_lambda
             .expect_get_function_configuration()
             .returning(move |_, _| {
-                recorded.lock().unwrap().push("GetFunction");
+                recorded.lock().unwrap().push("GetFunctionConfiguration");
                 Err(access_denied())
             });
 
@@ -7791,7 +7811,7 @@ mod tests {
                 Ok(())
             });
 
-        let status = delete_public_worker_in_created_vpc()
+        let worker = delete_public_worker_in_created_vpc()
             .mock_lambda(mock_lambda)
             .mock_ec2(mock_ec2)
             .mock_acm(mock_acm)
@@ -7800,10 +7820,12 @@ mod tests {
             .call()
             .await;
 
+        // Detach probe, delete and its probe, then the wait for the function to be gone.
         let mut expected_calls = vec![
-            "GetFunction",
+            "GetFunctionConcurrency",
             "DeleteFunction",
-            "GetFunction",
+            "GetFunctionConcurrency",
+            "GetFunctionConfiguration",
             "DescribeNetworkInterfaces",
         ];
         if !uses_custom_domain {
@@ -7811,26 +7833,34 @@ mod tests {
         }
         expected_calls.push("DeleteLogGroup");
         assert_eq!(*calls.lock().unwrap(), expected_calls);
-        assert_eq!(status, ResourceStatus::Deleted);
+        assert_eq!(worker.status, ResourceStatus::Deleted);
     }
 
-    /// Continuing past the denied read must not wedge a delete whose role has lost its
-    /// permissions: the next call is denied too, and the worker still ends as `Deleted`.
+    /// A role that has lost its permissions cannot confirm the Lambda network interfaces are
+    /// released. The delete stops there as `DeleteFailed` instead of reporting `Deleted`.
     #[tokio::test]
-    async fn test_delete_still_ends_when_calls_after_the_function_delete_are_denied() {
+    async fn test_delete_fails_when_calls_after_the_function_delete_are_denied() {
         let calls = Arc::new(Mutex::new(Vec::new()));
 
         let mut mock_lambda = MockLambdaApi::new();
         let recorded = calls.clone();
         mock_lambda.expect_delete_function().returning(move |_, _| {
             recorded.lock().unwrap().push("DeleteFunction");
-            Ok(())
+            Err(access_denied())
         });
+        let recorded = calls.clone();
+        mock_lambda
+            .expect_get_function_concurrency()
+            .returning(move |_| {
+                recorded.lock().unwrap().push("GetFunctionConcurrency");
+                Err(function_gone())
+            });
+        // Tag-scoped, so a gone function answers it AccessDenied.
         let recorded = calls.clone();
         mock_lambda
             .expect_get_function_configuration()
             .returning(move |_, _| {
-                recorded.lock().unwrap().push("GetFunction");
+                recorded.lock().unwrap().push("GetFunctionConfiguration");
                 Err(access_denied())
             });
 
@@ -7843,23 +7873,114 @@ mod tests {
                 Err(access_denied())
             });
 
-        let status = delete_public_worker_in_created_vpc()
+        let worker = delete_public_worker_in_created_vpc()
             .mock_lambda(mock_lambda)
             .mock_ec2(mock_ec2)
             .mock_acm(MockAcmApi::new())
             .call()
             .await;
 
+        // The denial may be transient, so the describe is retried before the delete fails.
+        let calls = calls.lock().unwrap();
         assert_eq!(
-            *calls.lock().unwrap(),
+            calls[..4],
             [
-                "GetFunction",
+                "GetFunctionConcurrency",
                 "DeleteFunction",
-                "GetFunction",
-                "DescribeNetworkInterfaces"
+                "GetFunctionConcurrency",
+                "GetFunctionConfiguration"
             ]
         );
-        assert_eq!(status, ResourceStatus::Deleted);
+        assert!(calls.len() > 5, "{calls:?}");
+        assert!(
+            calls[4..]
+                .iter()
+                .all(|call| *call == "DescribeNetworkInterfaces"),
+            "{calls:?}"
+        );
+        assert_eq!(worker.status, ResourceStatus::DeleteFailed);
+    }
+
+    /// Whether the codes of `error` and its sources include `code`.
+    fn error_chain_has_code(error: &AlienError, code: &str) -> bool {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            if error.code == code {
+                return true;
+            }
+            current = error.source.as_deref();
+        }
+        false
+    }
+
+    /// The function still exists: the tag-scoped detach is denied but the concurrency read
+    /// succeeds, so the denial is real. The delete ends `DeleteFailed` with the denial, without
+    /// deleting anything, and the worker keeps its ARN.
+    #[tokio::test]
+    async fn test_delete_of_a_function_that_still_exists_behind_a_denial_fails() {
+        let mut mock_lambda = MockLambdaApi::new();
+        mock_lambda.expect_delete_function().times(0);
+        mock_lambda
+            .expect_get_function_concurrency()
+            .times(1)
+            .returning(|_| {
+                Ok(FunctionConcurrency {
+                    reserved_concurrent_executions: None,
+                })
+            });
+
+        let worker = delete_public_worker_in_created_vpc()
+            .mock_lambda(mock_lambda)
+            .mock_ec2(MockEc2Api::new())
+            .mock_acm(MockAcmApi::new())
+            .call()
+            .await;
+
+        assert_eq!(worker.status, ResourceStatus::DeleteFailed);
+        let error = worker.error.as_ref().expect("the denial is recorded");
+        assert!(
+            error_chain_has_code(error, "REMOTE_ACCESS_DENIED"),
+            "{error:?}"
+        );
+        let kept = worker
+            .internal_state
+            .as_ref()
+            .expect("state is kept")
+            .to_string();
+        assert!(
+            kept.contains("arn:aws:lambda:us-east-1:123456789012:function:test-public-func"),
+            "the worker keeps its ARN: {kept}"
+        );
+    }
+
+    /// A role set up before the read was granted on functions without the stack's tag: the
+    /// read of a gone function is denied like the detach. Nothing confirms the function is
+    /// gone, so the delete ends `DeleteFailed` with the denial instead of `Deleted`.
+    #[tokio::test]
+    async fn test_delete_without_the_tag_absent_read_reports_the_denial() {
+        let mut mock_lambda = MockLambdaApi::new();
+        mock_lambda.expect_delete_function().times(0);
+        mock_lambda
+            .expect_get_function_concurrency()
+            .returning(|_| Err(access_denied()));
+
+        let worker = delete_public_worker_in_created_vpc()
+            .mock_lambda(mock_lambda)
+            .mock_ec2(MockEc2Api::new())
+            .mock_acm(MockAcmApi::new())
+            .call()
+            .await;
+
+        assert_eq!(worker.status, ResourceStatus::DeleteFailed);
+        let error = worker.error.as_ref().expect("the denial is recorded");
+        assert!(
+            error_chain_has_code(error, "REMOTE_ACCESS_DENIED"),
+            "{error:?}"
+        );
+        assert!(
+            worker.internal_state.is_some(),
+            "the controller state is kept"
+        );
     }
 
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────
@@ -9075,8 +9196,8 @@ mod tests {
     }
 
     /// A confirmed object can be gone too (deleted out of band, or by an earlier attempt whose
-    /// response was lost). Its delete and its read are both denied, and the delete goes on to
-    /// the next object instead of ending there.
+    /// response was lost). Its tag-scoped delete is denied, the read granted on untagged APIs
+    /// answers NotFound, and the delete goes on to the next object instead of ending there.
     #[tokio::test]
     async fn denied_delete_of_an_api_that_is_gone_continues_to_the_function() {
         let calls = Calls::default();
@@ -9090,7 +9211,7 @@ mod tests {
         let recorded = calls.clone();
         apigw.expect_get_api().times(1).returning(move |_| {
             record(&recorded, "GetApi");
-            Err(access_denied())
+            Err(not_found("API"))
         });
 
         let mut controller = failed_at_creating_api_domain();
@@ -9110,6 +9231,58 @@ mod tests {
             *calls.lock().unwrap(),
             ["DeleteApi", "GetApi", "DeleteFunction", "DeleteCertificate"]
         );
+    }
+
+    /// On a role set up before the read was granted on untagged APIs, the read of a gone API is
+    /// denied like its delete. Nothing confirms it is gone, so the denial is returned and the API
+    /// id kept, and the function is not deleted.
+    #[tokio::test]
+    async fn denied_delete_of_an_api_whose_read_is_denied_too_is_an_error() {
+        let calls = Calls::default();
+        let mut lambda = MockLambdaApi::new();
+        lambda.expect_delete_function().times(0);
+        let mut acm = MockAcmApi::new();
+        acm.expect_delete_certificate().times(0);
+        let mut apigw = MockApiGatewayV2Api::new();
+        let recorded = calls.clone();
+        apigw.expect_delete_api().returning(move |_| {
+            record(&recorded, "DeleteApi");
+            Err(access_denied())
+        });
+        let recorded = calls.clone();
+        apigw.expect_get_api().returning(move |_| {
+            record(&recorded, "GetApi");
+            Err(access_denied())
+        });
+
+        let mut controller = failed_at_creating_api_domain();
+        controller.domain_name = None;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(lambda, acm, apigw))
+            .build()
+            .await
+            .unwrap();
+        executor.delete().unwrap();
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("the denial stands");
+
+        assert!(
+            error_chain_codes(&error).contains(&"REMOTE_ACCESS_DENIED".to_string()),
+            "{error:?}"
+        );
+        assert!(error.retryable, "the denial may still be transient");
+        let state = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(
+            state.api_id.as_deref(),
+            Some("api-1"),
+            "the API id is kept for a retry"
+        );
+        assert_eq!(*calls.lock().unwrap(), ["DeleteApi", "GetApi"]);
     }
 
     /// When the API is still readable, its denied delete is real and is returned.

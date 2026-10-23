@@ -30,18 +30,22 @@ pub(crate) fn is_remote_not_found(error: &AlienError<CloudClientErrorData>) -> b
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum TagScopedDelete {
     Deleted,
-    /// Already gone, or no longer carrying this resource's tags.
+    /// Confirmed gone: the delete or the read answered NotFound.
     Gone,
 }
 
 /// Interprets a delete of an object behind a tag-conditioned grant.
 ///
-/// The role may delete and read such an object only while it carries the stack's tags. An
-/// object that is gone has no tags, so AWS answers a delete of it (deleted out of band, or by an
-/// earlier attempt whose response was lost) with AccessDenied, not NotFound. A denied delete is
-/// checked with `probe`, a read under the same grant: when the read is denied or not found too,
-/// nothing this resource may delete is left; when it succeeds, the object is there and the
-/// denial is real.
+/// The role may delete such an object only while it carries the stack's tags. A gone object
+/// has no tags, so AWS answers its delete with AccessDenied, not NotFound. A denied delete is
+/// checked with `probe`, a read the permission sets also grant on objects without the stack's
+/// tag, so a gone object answers it NotFound:
+///
+/// - NotFound: the object is gone.
+/// - Success: the object is there and the denial is real. It is returned as not retryable, since
+///   the same call with the same grants cannot succeed.
+/// - AccessDenied: a role set up before that read was granted cannot tell. The delete's denial
+///   is returned and the object is never treated as gone.
 pub(crate) async fn delete_tag_scoped<D, P, F>(
     result: std::result::Result<D, AlienError<CloudClientErrorData>>,
     probe: F,
@@ -50,24 +54,31 @@ where
     F: FnOnce() -> P,
     P: Future<Output = std::result::Result<(), AlienError<CloudClientErrorData>>>,
 {
-    match result {
-        Ok(_) => Ok(TagScopedDelete::Deleted),
-        Err(error) if is_remote_not_found(&error) => Ok(TagScopedDelete::Gone),
-        Err(error) if is_remote_access_denied(&error) => match probe().await {
-            Ok(()) => Err(error),
-            Err(probe_error)
-                if is_remote_not_found(&probe_error) || is_remote_access_denied(&probe_error) =>
-            {
-                Ok(TagScopedDelete::Gone)
-            }
-            Err(probe_error) => Err(probe_error),
-        },
-        Err(error) => Err(error),
+    let mut denial = match result {
+        Ok(_) => return Ok(TagScopedDelete::Deleted),
+        Err(error) if is_remote_not_found(&error) => return Ok(TagScopedDelete::Gone),
+        Err(error) if is_remote_access_denied(&error) => error,
+        Err(error) => return Err(error),
+    };
+    match probe().await {
+        Ok(()) => {
+            denial.retryable = false;
+            Err(denial)
+        }
+        Err(probe_error) if is_remote_not_found(&probe_error) => Ok(TagScopedDelete::Gone),
+        Err(probe_error) if is_remote_access_denied(&probe_error) => {
+            warn!(
+                error = %denial,
+                "A denied delete could not be checked: the read that tells a gone object from a real denial is denied too. Rerunning setup grants it"
+            );
+            Err(denial)
+        }
+        Err(probe_error) => Err(probe_error),
     }
 }
 
-/// Deletes an ACM certificate this resource imported. DescribeCertificate, granted under the
-/// same tag condition, tells a certificate that is gone from a real denial.
+/// Deletes an ACM certificate this resource imported. DescribeCertificate tells a certificate
+/// that is gone from a real denial.
 pub(crate) async fn delete_imported_certificate(
     acm: &dyn AcmApi,
     certificate_arn: &str,
@@ -109,5 +120,59 @@ pub(crate) async fn certificates_imported_with_token(
             Ok(None)
         }
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn denied() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+            resource_type: "Lambda function".to_string(),
+            resource_name: "stack-api".to_string(),
+        })
+    }
+
+    fn not_found() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+            resource_type: "Lambda function".to_string(),
+            resource_name: "stack-api".to_string(),
+        })
+    }
+
+    /// A role set up before the tag-absent reads were granted: the read of a gone object is
+    /// denied like the delete, so nothing tells it from a real denial. The denial stands and
+    /// stays retryable, never gone.
+    #[tokio::test]
+    async fn denied_delete_whose_read_is_denied_too_keeps_the_denial() {
+        let error = delete_tag_scoped(Err::<(), _>(denied()), || async { Err(denied()) })
+            .await
+            .expect_err("the denial stands");
+        assert!(is_remote_access_denied(&error), "{error:?}");
+        assert!(error.retryable);
+    }
+
+    /// A readable object is there: its denied delete is real.
+    #[tokio::test]
+    async fn denied_delete_of_a_readable_object_is_a_permanent_error() {
+        let error = delete_tag_scoped(Err::<(), _>(denied()), || async { Ok(()) })
+            .await
+            .expect_err("the denial is real");
+        assert!(is_remote_access_denied(&error));
+        assert!(!error.retryable);
+    }
+
+    #[tokio::test]
+    async fn not_found_from_the_delete_or_the_read_is_gone() {
+        let from_delete = delete_tag_scoped(Err::<(), _>(not_found()), || async {
+            panic!("no read after NotFound")
+        })
+        .await;
+        assert_eq!(from_delete.unwrap(), TagScopedDelete::Gone);
+        // A gone object answers the tag-absent read NotFound.
+        let from_read =
+            delete_tag_scoped(Err::<(), _>(denied()), || async { Err(not_found()) }).await;
+        assert_eq!(from_read.unwrap(), TagScopedDelete::Gone);
     }
 }

@@ -2,5 +2,5 @@
 - Prefer one externally durable mutating operation per handler state — this is the retry boundary.
 - Always proceed through predictable phases, even if some are no-ops.
 - Composite controllers may batch child operations only when idempotent, progress-tracked, or best-effort cleanup.
-- Deletion must be best-effort — succeed even if resource is already gone.
+- Deletion succeeds when the resource is already gone (NotFound). Any other delete error, including access denied, is returned with the identifiers kept.
 - Never store raw secrets in resource configs — store a hash for change detection, read actual value from `DeploymentConfig` at provisioning time.
