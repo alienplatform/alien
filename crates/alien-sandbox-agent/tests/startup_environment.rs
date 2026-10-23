@@ -76,3 +76,20 @@ fn runtime_defaults_do_not_become_the_startup_network_floor() {
         alien_sandbox_agent::egress::LegacyEgress::Deny
     ));
 }
+
+#[test]
+fn conflicting_image_transports_fail_before_bootstrap() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_alien-sandbox-agent"))
+        .env_clear()
+        .env("ALIEN_SANDBOX_IMAGE_COMMAND", "true")
+        .env("ALIEN_SANDBOX_EGRESS_RUN_HOOK", "true")
+        .env("ALIEN_SANDBOX_AUTHORIZATION", "native-file")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        error.contains("native-file cannot be combined with AWS Run-hook transport"),
+        "{error}"
+    );
+}
