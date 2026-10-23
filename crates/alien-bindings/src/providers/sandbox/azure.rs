@@ -911,7 +911,15 @@ impl AzureSandbox {
             Ok(running) => running,
             Err(error) => return Err(self.put_back(sandbox_id, resumed_here, error).await),
         };
-        if let Err(error) = self.policy_must_hold(&running) {
+        let ready = async {
+            self.policy_must_hold(&running)?;
+            if agent::uses_agent(&running)? {
+                self.wait_for_agent(sandbox_id).await?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = ready {
             return Err(self.put_back(sandbox_id, resumed_here, error).await);
         }
 

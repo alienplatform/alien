@@ -175,7 +175,7 @@ impl AgentTransport for AzureSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::{CommandOutput, RunCommandRequest, Sandbox};
+    use crate::traits::{CommandOutput, CreateSandboxRequest, RunCommandRequest, Sandbox};
     use alien_azure_clients::azure::sandbox_data_plane::{
         MockSandboxDataPlaneApi, Sandbox as AzureRecord,
     };
@@ -185,7 +185,7 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     #[tokio::test]
-    async fn readiness_activates_boot_before_health_and_does_not_retry_authorization_refusal() {
+    async fn reconnect_activates_a_fresh_boot_and_does_not_retry_authorization_refusal() {
         for refused in [false, true] {
             let token = STANDARD.encode([4u8; 32]);
             let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -207,6 +207,15 @@ mod tests {
             });
             let count = if refused { 1 } else { 2 };
             let mut native = MockSandboxDataPlaneApi::new();
+            native.expect_get_sandbox().times(2).returning(|_, id| {
+                Ok(AzureRecord {
+                    id: id.into(),
+                    labels: BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]),
+                    vnet_connection_name: None,
+                    egress_policy: super::super::egress_policy(&SandboxEgress::None),
+                    state: Some("Running".into()),
+                })
+            });
             native.expect_execute_shell_command().never();
             native
                 .expect_agent_port_url()
@@ -229,8 +238,15 @@ mod tests {
                 "2048Mi".into(),
                 None,
             )
-            .with_agent(true);
-            let result = provider.wait_for_agent("session").await;
+            .with_agent(false);
+            // A fresh process is awaiting activation even though the provider is Running.
+            // Session metadata must also select it through a rollback binding.
+            let result = provider
+                .get_or_create(CreateSandboxRequest {
+                    sandbox_id: Some("session".into()),
+                    ..Default::default()
+                })
+                .await;
             if refused {
                 let error = result.unwrap_err();
                 assert_eq!(error.code, "SANDBOX_COMMAND_FAILED");

@@ -11,8 +11,8 @@ use crate::{
 };
 use alien_core::presigned::redact_url_for_error;
 use alien_core::sandbox_image::{
-    SandboxImage, AGENT_MODE, AGENT_PATH, AZURE_SANDBOX, GCP_AGENT_LOG_FILTER, GCP_AGENT_PLATFORM,
-    IMAGE_COMMAND_PATH, SESSION_ROOT_MODE,
+    SandboxImage, AGENT_MODE, AGENT_PATH, AZURE_SANDBOX, GCP_AGENT_PLATFORM, IMAGE_COMMAND_PATH,
+    SESSION_ROOT_MODE,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use dockdash::{
@@ -124,7 +124,8 @@ pub(crate) async fn build_sandbox_agent_image(
     };
     let identity = BaseIdentity::read(&base, resource_name).await?;
     let contract = identity.contract(default_contract, None)?;
-    let command = serde_json::to_vec(&image_command(&base).await?)
+    let original_command = image_command(&base).await?;
+    let command = serde_json::to_vec(&original_command)
         .into_alien_error()
         .context(failed("Cannot preserve the image command".into()))?;
     // Only the identity files and command were needed, and a pulled base is a full archive on disk.
@@ -242,9 +243,13 @@ pub(crate) async fn build_sandbox_agent_image(
                 }
                 builder = builder.layer(layer);
             }
-            builder = builder
-                .env("RUST_LOG", GCP_AGENT_LOG_FILTER)
-                .env("ALIEN_SANDBOX_IMAGE_COMMAND", "true");
+            // Logging belongs to the application environment. The agent supplies its own
+            // default without injecting it into the image; create-time overrides still win.
+            // Restore saved values when repackaging an image with an older agent layer.
+            if let Some(filter) = original_command.env.get("RUST_LOG") {
+                builder = builder.env("RUST_LOG", filter);
+            }
+            builder = builder.env("ALIEN_SANDBOX_IMAGE_COMMAND", "true");
             for (name, value) in contract.contract_env_vars() {
                 builder = builder.env(name, &value);
             }
@@ -456,7 +461,6 @@ fn merge_identity(base: Option<&str>, root_line: &str, exec_line: &str, exec_id:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::sandbox_image::gcp_agent_platform_env;
     use dockdash::test_utils::setup_local_registry;
     use dockdash::PushOptions;
     use httpmock::Method::GET;
@@ -474,6 +478,7 @@ mod tests {
         }
         let (image, _) = Image::builder()
             .platform("linux", &Arch::Amd64)
+            .env("RUST_LOG", "application=debug")
             .layer(layer.build().await.expect("layer builds"))
             .build()
             .await
@@ -655,7 +660,8 @@ mod tests {
             .iter()
             .filter_map(|value| value.as_str())
             .collect();
-        for (name, value) in gcp_agent_platform_env() {
+        assert!(env.contains(&"RUST_LOG=application=debug"), "{env:?}");
+        for (name, value) in GCP_AGENT_PLATFORM.contract_env_vars() {
             assert!(
                 env.contains(&format!("{name}={value}").as_str()),
                 "{name}: {env:?}"
