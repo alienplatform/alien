@@ -118,6 +118,16 @@ impl CfResource {
             update_replace_policy: None,
         }
     }
+
+    /// Keeps the resource and its data when the stack is deleted, the resource is removed from
+    /// the template, or a property change replaces it. A resource the failing operation itself
+    /// created is deleted when that operation rolls back: it is new and unused, and keeping it
+    /// would leave a named resource outside the stack that blocks the next attempt with a name
+    /// conflict.
+    pub fn retain_data(&mut self) {
+        self.deletion_policy = Some("RetainExceptOnCreate".to_string());
+        self.update_replace_policy = Some("Retain".to_string());
+    }
 }
 
 /// CloudFormation output.

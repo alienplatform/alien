@@ -160,8 +160,7 @@ impl CfEmitter for AwsStorageEmitter {
         }
 
         bucket.properties.insert("Tags".to_string(), tags(ctx));
-        bucket.deletion_policy = Some("Retain".to_string());
-        bucket.update_replace_policy = Some("Retain".to_string());
+        bucket.retain_data();
 
         let mut policy = CfResource::new(
             format!("{bucket_id}BucketPolicy"),

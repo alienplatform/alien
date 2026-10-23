@@ -133,7 +133,7 @@ Resources:
       - Key: resource-type
         Value: kv
     Condition: InputStoreEnabledIsTrue
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   DeploymentRegistration:
     Type: AWS::CloudFormation::CustomResource

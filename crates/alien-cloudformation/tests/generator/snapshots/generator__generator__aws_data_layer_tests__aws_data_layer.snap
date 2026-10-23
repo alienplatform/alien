@@ -127,7 +127,7 @@ Resources:
         Value: assets
       - Key: resource-type
         Value: storage
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   AssetsBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -202,7 +202,7 @@ Resources:
         Value: metadata
       - Key: resource-type
         Value: kv
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
 Outputs:
   DeploymentSourceKind:

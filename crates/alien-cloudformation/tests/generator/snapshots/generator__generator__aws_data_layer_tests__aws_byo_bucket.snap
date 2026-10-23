@@ -77,7 +77,7 @@ Resources:
         Value: exports
       - Key: resource-type
         Value: storage
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   ExportsBucketPolicy:
     Type: AWS::S3::BucketPolicy

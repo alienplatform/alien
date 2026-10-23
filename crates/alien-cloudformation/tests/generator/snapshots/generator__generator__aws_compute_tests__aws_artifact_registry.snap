@@ -98,7 +98,7 @@ Resources:
         Value: registry
       - Key: resource-type
         Value: artifact-registry
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   RegistryPullRole:
     Type: AWS::IAM::Role

@@ -75,8 +75,7 @@ impl CfEmitter for AwsOpenSearchEmitter {
         group.properties.insert("Tags".to_string(), tags(ctx));
         // The collection is retained on stack deletion (durable search
         // state), so the group that contains it must be retained too.
-        group.deletion_policy = Some("Retain".to_string());
-        group.update_replace_policy = Some("Retain".to_string());
+        group.retain_data();
 
         let mut network = CfResource::new(
             format!("{logical_id}NetworkPolicy"),
@@ -113,8 +112,7 @@ impl CfEmitter for AwsOpenSearchEmitter {
         );
         collection.properties.insert("Tags".to_string(), tags(ctx));
         collection.depends_on.push(group_id);
-        collection.deletion_policy = Some("Retain".to_string());
-        collection.update_replace_policy = Some("Retain".to_string());
+        collection.retain_data();
 
         let mut resources = vec![group, network, collection];
 

@@ -115,7 +115,7 @@ Resources:
         Value: data
       - Key: resource-type
         Value: storage
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
   DataBucketPolicy:
     Type: AWS::S3::BucketPolicy
