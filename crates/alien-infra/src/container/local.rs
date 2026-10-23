@@ -3,7 +3,9 @@
 //! On the Local platform, containers run via Docker directly.
 //! The LocalContainerManager handles Docker API calls.
 
-use std::time::Duration;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::{path::PathBuf, time::Duration};
 use tracing::{debug, info};
 
 use crate::container::local_utils;
@@ -19,9 +21,57 @@ use alien_core::{
     WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
-use alien_local::{ContainerConfig, ContainerInfo, LocalPublicEndpoint};
+use alien_local::{ContainerConfig, ContainerInfo, LocalContainerManager, LocalPublicEndpoint};
 use alien_macros::controller;
 use chrono::Utc;
+
+/// Prepare the runtime-owned /tmp mount, including directories saved by older managers.
+async fn prepare_container_tmp_dir(
+    manager: &LocalContainerManager,
+    resource_id: &str,
+) -> Result<PathBuf> {
+    let path = manager.get_container_tmp_dir(resource_id);
+    tokio::fs::create_dir_all(&path)
+        .await
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create container tmp directory: {}",
+                path.display()
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+    #[cfg(unix)]
+    {
+        let mut permissions = tokio::fs::metadata(&path)
+            .await
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to inspect container tmp directory: {}",
+                    path.display()
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?
+            .permissions();
+        // The bind mount hides the image's /tmp. Preserve ordinary non-root
+        // writes and sticky-bit protection regardless of the host user's umask.
+        if permissions.mode() & 0o7777 != 0o1777 {
+            permissions.set_mode(0o1777);
+            tokio::fs::set_permissions(&path, permissions)
+                .await
+                .into_alien_error()
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to prepare container tmp permissions: {}",
+                        path.display()
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+        }
+    }
+    Ok(path)
+}
 
 /// Remove the vault-load secret pointers (`ALIEN_SECRETS` /
 /// `ALIEN_RUNTIME_SECRETS`) from a projected environment.
@@ -147,29 +197,13 @@ impl LocalContainerController {
         // We need to know the container paths before building env vars so we can rewrite bindings
         let mut bind_mounts = Vec::new();
 
-        // Add /tmp mount for all containers
-        // Docker on macOS doesn't have /tmp by default, but many tools (like tempfile) need it
-        if let Some(container_mgr) = ctx.service_provider.get_local_container_manager() {
-            let tmp_host_path = container_mgr.get_container_tmp_dir(&config.id);
-            // Create the directory if it doesn't exist
-            tokio::fs::create_dir_all(&tmp_host_path)
-                .await
-                .into_alien_error()
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create container tmp directory: {}",
-                        tmp_host_path.display()
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            bind_mounts.push(alien_local::BindMount {
-                host_path: tmp_host_path,
-                container_path: "/tmp".to_string(),
-                resource_id: "tmp".to_string(),
-                shared_with_host_workloads: false,
-            });
-        }
+        let tmp_host_path = prepare_container_tmp_dir(&container_mgr, &config.id).await?;
+        bind_mounts.push(alien_local::BindMount {
+            host_path: tmp_host_path,
+            container_path: "/tmp".to_string(),
+            resource_id: "tmp".to_string(),
+            shared_with_host_workloads: false,
+        });
 
         for link in &config.links {
             let linked_resource_id = link.id();
@@ -391,6 +425,9 @@ impl LocalContainerController {
                 })
             })?;
 
+        // Retry and refresh can resume here without passing through creation.
+        prepare_container_tmp_dir(&container_mgr, &config.id).await?;
+
         if container_mgr
             .container_needs_recreation(&config.id)
             .await
@@ -459,6 +496,9 @@ impl LocalContainerController {
                     service_name: "LocalContainerManager".to_string(),
                 })
             })?;
+
+        // Retry and refresh can resume here without passing through creation.
+        prepare_container_tmp_dir(&container_mgr, &config.id).await?;
 
         if container_mgr
             .container_needs_recreation(&config.id)
@@ -1015,7 +1055,10 @@ mod tests {
             let state = serde_json::from_slice(&saved).unwrap();
             let next = resumed.step(state).await.unwrap();
             let completion = resumed.run_until_synced(next.next_state).await;
-            assert!(completion.success, "recovered container must become healthy");
+            assert!(
+                completion.success,
+                "recovered container must become healthy"
+            );
             assert!(
                 manager.is_running(&id).await,
                 "convergence must restore the unchanged, stopped dependency"
@@ -1228,3 +1271,7 @@ mod tests {
         assert_eq!(env_vars.len(), 2);
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "local_tmp_tests.rs"]
+mod tmp_tests;
