@@ -6,6 +6,7 @@ ARG GATEWAY_CONFIG=""
 ENV ALIEN_CONFORMANCE_GATEWAY=${GATEWAY_CONFIG}
 ENV ALIEN_CONFORMANCE_METADATA=${METADATA_BACKEND}
 COPY supervisor.py inspect.py metadata.py gateway.py /opt/entrypoint-conformance/
+RUN printf '%s' "$GATEWAY_CONFIG" > /opt/entrypoint-conformance/gateway.json
 ENTRYPOINT ["python3", "/opt/entrypoint-conformance/supervisor.py"]
 
 FROM no-user AS root

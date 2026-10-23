@@ -3,6 +3,7 @@ import hashlib
 import http.client
 import json
 import os
+from pathlib import Path
 import socket
 import time
 import urllib.error
@@ -41,7 +42,12 @@ def udp_probe(host, port):
 
 
 def configuration():
-    return json.loads(os.environ["ALIEN_CONFORMANCE_GATEWAY"])
+    # Agent exec deliberately clears the image environment. Keep the same fixture
+    # configuration available to boot, its children, and the first exec.
+    encoded = os.environ.get("ALIEN_CONFORMANCE_GATEWAY")
+    if not encoded:
+        encoded = Path(__file__).with_name("gateway.json").read_text()
+    return json.loads(encoded)
 
 
 def collect(config):

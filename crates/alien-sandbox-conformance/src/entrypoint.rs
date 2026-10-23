@@ -37,6 +37,7 @@ pub struct Report {
     pub passed: bool,
     exit_code: Option<i32>,
     evidence: serde_json::Value,
+    checker_stderr: String,
     termination_calls_completed: bool,
 }
 
@@ -96,12 +97,13 @@ pub async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Resu
             env: BTreeMap::new(),
             timeout: Duration::from_secs(120),
         };
-        let (stdout, exit) = tokio::time::timeout(Duration::from_secs(135), async {
+        let (stdout, stderr, exit) = tokio::time::timeout(Duration::from_secs(135), async {
             let mut stream = command_provider
                 .run_command(&sessions[session].sandbox_id, request)
                 .await
                 .context(operation("start image identity checker"))?;
             let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
             let mut exit = None;
             while let Some(frame) = stream.next().await {
                 if exit.is_some() {
@@ -114,11 +116,16 @@ pub async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Resu
                         }
                         stdout.extend(data);
                     }
-                    CommandOutput::Stderr { .. } => {}
+                    CommandOutput::Stderr { data, .. } => {
+                        if stderr.len() + data.len() > 65536 {
+                            return Err(invalid("checker diagnostics exceed 64 KiB"));
+                        }
+                        stderr.extend(data);
+                    }
                     CommandOutput::Exit { code, truncated } => exit = Some((code, truncated)),
                 }
             }
-            Ok((stdout, exit))
+            Ok((stdout, stderr, exit))
         })
         .await
         .into_alien_error()
@@ -137,6 +144,7 @@ pub async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Resu
             passed: exit == Some((0, false)) && !evidence.is_null(),
             exit_code: exit.map(|value| value.0),
             evidence,
+            checker_stderr: String::from_utf8_lossy(&stderr).into_owned(),
             termination_calls_completed: false,
         })
     }
