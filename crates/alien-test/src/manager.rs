@@ -254,6 +254,7 @@ impl TestManager {
                 releases_url: None,
                 deployment_interval_secs: 2,
                 heartbeat_interval_secs: 60,
+                supported_aws_regions: Vec::new(),
             },
             database: alien_manager::standalone_config::DatabaseConfig {
                 path: Some(db_path),

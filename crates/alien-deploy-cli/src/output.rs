@@ -147,6 +147,10 @@ impl DeployProgress {
     }
 
     pub fn update(&mut self, progress: &StepProgress) {
+        if let Some(retry) = &progress.checkpoint_retry {
+            self.notice(&retry.notice());
+            return;
+        }
         let resources = progress
             .stack_state
             .map(|ss| extract_resources(ss))
@@ -162,6 +166,21 @@ impl DeployProgress {
             self.last_log_status = Some(progress.status);
             self.last_log_resources = resources;
         }
+    }
+
+    /// Print a line above the live progress, which is redrawn below it.
+    fn notice(&mut self, line: &str) {
+        if !self.is_tty {
+            warn(line);
+            return;
+        }
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if state.rendered_line_count > 0 {
+            eprint!("\x1b[{}A\x1b[J", state.rendered_line_count);
+            state.rendered_line_count = 0;
+        }
+        warn(line);
+        render_tty(&mut state);
     }
 
     pub fn finish(&mut self) {

@@ -13,12 +13,14 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, Network, NetworkSettings, PermissionSet, ResourceDefinition,
-    ResourceRef, ResourceType, Result, ServiceAccount, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    import::EmitContext, ErrorData, Network, NetworkSettings, PermissionSet,
+    PermissionSetReference, ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+pub(crate) use alien_permissions::generators::ensure_unique_statement_sids;
 use alien_permissions::{
+    aws_resource_policies::{aws_resource_policy_name, without_refs_the_stack_policy_grants},
     generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
 };
@@ -392,6 +394,85 @@ pub fn emit_iam_role_policy_for_target(
     )
 }
 
+/// Attaches the `<prefix>` sets each permission profile grants on this resource, by id or under
+/// `"*"`, to that profile's service-account role, scoped to the resource's
+/// `${local.resource_prefix}-<id>` name.
+///
+/// Setup owns these grants: after a Terraform handoff the runtime refuses to write them, so a
+/// set left out here is never granted. Policy names and the omission of `"*"` sets the
+/// stack-level policy already grants follow the runtime writer.
+pub fn emit_workload_resource_grants(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    permission_set_prefix: &str,
+) -> Result<()> {
+    let resource_label = required_label(ctx)?;
+    let context = aws_terraform_permission_context()
+        .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
+    let generator = AwsRuntimePermissionsGenerator::new();
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let service_account_id = format!("{profile_name}-sa");
+        let Some(role_label) = ctx.stack.resources().find_map(|(id, entry)| {
+            (id.as_str() == service_account_id
+                && entry.config.downcast_ref::<ServiceAccount>().is_some())
+            .then(|| ctx.name_for(id))
+            .flatten()
+        }) else {
+            continue;
+        };
+        let mut seen = HashSet::new();
+        let granted: Vec<PermissionSetReference> = [ctx.resource_id, "*"]
+            .into_iter()
+            .filter_map(|key| profile.0.get(key))
+            .flatten()
+            .filter(|reference| reference.id().starts_with(permission_set_prefix))
+            .filter(|reference| seen.insert(reference.id().to_string()))
+            .cloned()
+            .collect();
+        let granted = without_refs_the_stack_policy_grants(
+            ctx.stack,
+            profile_name,
+            profile,
+            ctx.resource_id,
+            granted,
+            &generator,
+            &context,
+        )
+        .context(ErrorData::GenericError {
+            message: format!(
+                "failed to select profile '{profile_name}' policies for '{}'",
+                ctx.resource_id
+            ),
+        })?;
+        for reference in granted {
+            let permission_set = reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "permission set '{}' granted on '{}' is not registered",
+                            reference.id(),
+                            ctx.resource_id
+                        ),
+                    })
+                })?;
+            emit_iam_role_policy_for_target_with_label(
+                fragment,
+                role_label,
+                &permission_set,
+                &format!(
+                    "{role_label}_{resource_label}_{}",
+                    permission_set.id.replace(['/', '-'], "_")
+                ),
+                &aws_resource_policy_name(ctx.resource_id, &permission_set.id),
+                &context,
+                BindingTarget::Resource,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 pub fn emit_iam_role_policy_for_target_with_label(
     fragment: &mut TfFragment,
     role_label: &str,
@@ -476,34 +557,6 @@ pub fn emit_iam_managed_policy_chunks(
     }
 
     Ok(())
-}
-
-pub(crate) fn ensure_unique_statement_sids(statements: &mut [AwsIamStatement]) {
-    let mut used = HashSet::new();
-
-    for statement in statements {
-        if used.insert(statement.sid.clone()) {
-            continue;
-        }
-
-        let base = statement.sid.clone();
-        let mut suffix = 2usize;
-        loop {
-            let candidate = suffixed_statement_sid(&base, suffix);
-            if used.insert(candidate.clone()) {
-                statement.sid = candidate;
-                break;
-            }
-            suffix += 1;
-        }
-    }
-}
-
-fn suffixed_statement_sid(base: &str, suffix: usize) -> String {
-    let suffix = suffix.to_string();
-    let max_base_len = 128usize.saturating_sub(suffix.len());
-    let trimmed = base.chars().take(max_base_len).collect::<String>();
-    format!("{trimmed}{suffix}")
 }
 
 fn chunk_iam_statements(
@@ -688,51 +741,4 @@ pub fn iam_role_managed_policy_attachment(
 /// directly so callers can pass into block bodies.
 pub fn nested_block(name: &str, body: Vec<Structure>) -> Structure {
     nested(block(name, body))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn statement(sid: &str) -> AwsIamStatement {
-        AwsIamStatement {
-            sid: sid.to_string(),
-            effect: "Allow".to_string(),
-            action: vec!["s3:GetObject".to_string()],
-            resource: vec!["*".to_string()],
-            not_resource: Vec::new(),
-            condition: None,
-        }
-    }
-
-    #[test]
-    fn emit_iam_managed_policy_chunks_uniquifies_duplicate_sids() {
-        let mut statements = vec![
-            statement("Duplicate"),
-            statement("Duplicate"),
-            statement("Other"),
-            statement("Duplicate"),
-        ];
-
-        ensure_unique_statement_sids(&mut statements);
-
-        let sids = statements
-            .into_iter()
-            .map(|statement| statement.sid)
-            .collect::<Vec<_>>();
-        assert_eq!(sids, ["Duplicate", "Duplicate2", "Other", "Duplicate3"]);
-    }
-
-    #[test]
-    fn emit_iam_managed_policy_chunks_trims_long_duplicate_sids() {
-        let long_sid = "A".repeat(128);
-        let mut statements = vec![statement(&long_sid), statement(&long_sid)];
-
-        ensure_unique_statement_sids(&mut statements);
-
-        assert_eq!(statements[0].sid.len(), 128);
-        assert_eq!(statements[1].sid.len(), 128);
-        assert!(statements[1].sid.ends_with('2'));
-        assert_eq!(statements[1].sid.chars().filter(|c| *c == 'A').count(), 127);
-    }
 }

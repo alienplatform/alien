@@ -749,6 +749,119 @@ mod tests {
         assert!(error.to_string().contains("No tracked deployment named"));
     }
 
+    /// A named deployment this machine doesn't track, such as one the deployment portal
+    /// created, resolves to the platform it was installed on, for a deployment group token and
+    /// for the deployment's own token. A name nobody has used stays a new deployment, which
+    /// needs a platform.
+    #[tokio::test]
+    async fn untracked_named_deployment_uses_its_platform_from_the_platform_api() {
+        let server = MockServer::start_async().await;
+        let name = format!("portal-created-{}", uuid::Uuid::new_v4());
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployment-info")
+                    .header("authorization", "Bearer ax_dg_setup");
+                then.status(200).json_body(serde_json::json!({
+                    "tokenType": "deployment-group",
+                    "deploymentGroup": { "id": "dg_demo", "name": "customers" }
+                }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments")
+                    .query_param("deploymentGroup", "dg_demo")
+                    .query_param("name", &name);
+                then.status(200).json_body(serde_json::json!({
+                    "items": [{ "name": name, "platform": "machines" }],
+                    "nextCursor": null
+                }));
+            })
+            .await;
+        let unknown = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployments")
+                    .query_param("name", "never-created");
+                then.status(200)
+                    .json_body(serde_json::json!({ "items": [], "nextCursor": null }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployment-info")
+                    .header("authorization", "Bearer ax_deployment_own");
+                then.status(200).json_body(serde_json::json!({
+                    "tokenType": "deployment",
+                    "deployment": { "name": name, "platform": "gcp" }
+                }));
+            })
+            .await;
+        let resolve = |token: &str, name: &str| {
+            let args = UpArgs::parse_from([
+                "alien-deploy",
+                "--name",
+                name,
+                "--token",
+                token,
+                "--base-url",
+                &server.base_url(),
+            ]);
+            async move { resolve_deployment_info(&args, None, None).await }
+        };
+
+        let by_group = resolve("ax_dg_setup", &name).await.expect("group token");
+        assert_eq!(by_group.platform, "machines");
+        let by_own_token = resolve("ax_deployment_own", &name)
+            .await
+            .expect("deployment token");
+        assert_eq!(by_own_token.platform, "gcp");
+
+        // A run against an explicit manager never asks the platform API, and keeps the
+        // CLI's default platform.
+        let lookups = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/deployment-info")
+                    .header("authorization", "Bearer standalone-manager-token");
+                then.status(401);
+            })
+            .await;
+        let branded: DeployCliConfig =
+            serde_json::from_value(serde_json::json!({ "defaultPlatform": "local" }))
+                .expect("branded config");
+        let direct = UpArgs::parse_from([
+            "alien-deploy",
+            "--name",
+            &name,
+            "--token",
+            "standalone-manager-token",
+            "--base-url",
+            &server.base_url(),
+            "--manager-url",
+            "http://127.0.0.1:1",
+        ]);
+        let direct = resolve_deployment_info(&direct, Some(&branded), None)
+            .await
+            .expect("direct manager run");
+        assert_eq!(direct.platform, "local");
+        lookups.assert_hits_async(0).await;
+
+        let new = resolve("ax_dg_setup", "never-created")
+            .await
+            .err()
+            .expect("a new deployment needs a platform");
+        unknown.assert_hits_async(1).await;
+        assert!(
+            new.to_string()
+                .contains("--platform is required for new deployments"),
+            "{new}"
+        );
+    }
+
     #[test]
     fn endpoint_access_can_be_selected_during_initial_setup() {
         for status in [
@@ -960,13 +1073,13 @@ mod tests {
             local: None,
             tracked_at: "2026-01-01T00:00:00Z".to_string(),
         };
-        let run = |args: UpArgs| {
+        let run_with = |args: UpArgs, embedded: Option<DeployCliConfig>| {
             let tracked = tracked.clone();
             let manager_url = server.base_url();
             async move {
                 run_tracked_setup_update(
                     &args,
-                    None,
+                    embedded.as_ref(),
                     &tracked,
                     &manager_url,
                     Platform::Machines,
@@ -975,6 +1088,8 @@ mod tests {
                 .await
             }
         };
+
+        let run = |args: UpArgs| run_with(args, None);
 
         let saved = run(UpArgs::parse_from([
             "alien-deploy",
@@ -998,6 +1113,25 @@ mod tests {
             "the manager's reason stays in the chain: {saved}"
         );
 
+        // A branded CLI names itself, the binary the user actually has.
+        let branded: DeployCliConfig =
+            serde_json::from_value(serde_json::json!({ "name": "acme-ctl" }))
+                .expect("branded config");
+        let branded_error = run_with(
+            UpArgs::parse_from(["alien-deploy", "--name", "smoke 1", "--setup-update"]),
+            Some(branded),
+        )
+        .await
+        .expect_err("the manager refused the saved key");
+        saved_key_acquire.assert_hits_async(2).await;
+        assert!(
+            branded_error.message.contains(
+                "acme-ctl deploy --name 'smoke 1' --setup-update --token-file <path-to-setup-token>"
+            ),
+            "{}",
+            branded_error.message
+        );
+
         let explicit = run(UpArgs::parse_from([
             "alien-deploy",
             "--name",
@@ -1009,7 +1143,7 @@ mod tests {
         .await
         .expect_err("the manager refused the explicit token too");
         explicit_acquire.assert_hits_async(1).await;
-        saved_key_acquire.assert_hits_async(1).await;
+        saved_key_acquire.assert_hits_async(2).await;
         assert_eq!(explicit.code, "DEPLOYMENT_FAILED");
         assert!(!explicit.to_string().contains("--token-file"), "{explicit}");
     }
@@ -3538,7 +3672,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         return setup_update::run(&args, embedded_config, deploy_config.as_ref()).await;
     }
     // Resolve token and platform from args, embedded config, or tracked deployment
-    let resolved = resolve_deployment_info(&args, embedded_config, deploy_config.as_ref())?;
+    let resolved = resolve_deployment_info(&args, embedded_config, deploy_config.as_ref()).await?;
     let token = resolved.token;
     let platform_str = resolved.platform;
     let base_platform_str = resolved.base_platform;
@@ -3575,7 +3709,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         let tracker = DeploymentTracker::new()?;
         let tracked = tracker.get(&name).ok_or_else(|| {
             AlienError::new(ErrorData::ConfigurationError {
-                message: format!("No tracked deployment named '{name}'. Use the machine and user account that originally tracked this deployment, and supply its setup token."),
+                message: format!("No tracked deployment named '{name}'. Use the machine and user account that originally tracked this deployment, and supply its setup token. A deployment created in the deployment portal is never tracked: copy the setup update command from the portal, which names the exact update."),
             })
         })?;
         if platform.as_str() != tracked.platform {
@@ -4106,9 +4240,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                     &deployment_id,
                 )
                 .await?;
-                let cli_name = embedded_config
-                    .and_then(|config| config.name.as_deref())
-                    .unwrap_or("alien-deploy");
+                let cli_name = cli_name(embedded_config);
                 let install_script_url =
                     embedded_config.and_then(|config| config.install_script_url.as_deref());
                 println!(
@@ -4364,6 +4496,13 @@ fn machines_join_command(
         "sudo {cli_name} join --token {}",
         shell_single_quote(join_token)
     )
+}
+
+/// The command name users run: the branded binary's name, or `alien-deploy`.
+fn cli_name(embedded_config: Option<&DeployCliConfig>) -> &str {
+    embedded_config
+        .and_then(|config| config.name.as_deref())
+        .unwrap_or("alien-deploy")
 }
 
 fn should_print_deploy_progress(platform: Platform) -> bool {
@@ -4723,7 +4862,14 @@ async fn run_tracked_setup_update(
         embedded_config.and_then(|config| config.setup_revision.as_deref()),
     )
     .await
-    .map_err(|error| explain_refused_saved_key(error, &tracked.name, uses_saved_key))
+    .map_err(|error| {
+        explain_refused_saved_key(
+            error,
+            cli_name(embedded_config),
+            &tracked.name,
+            uses_saved_key,
+        )
+    })
 }
 
 /// A setup update run with a deployment's saved key can be refused (HTTP 403): that key
@@ -4731,6 +4877,7 @@ async fn run_tracked_setup_update(
 /// infrastructure. Replace the nested 403 with the token to use and the command to rerun.
 fn explain_refused_saved_key(
     error: AlienError<ErrorData>,
+    cli_name: &str,
     name: &str,
     uses_saved_key: bool,
 ) -> AlienError<ErrorData> {
@@ -4748,13 +4895,13 @@ fn explain_refused_saved_key(
         message: format!(
             "The key saved for '{name}' can run the deployment but cannot approve setup changes. \
              Use the setup token from the deployment's setup link (the deployment group token, \
-             usually ax_dg_...): alien-deploy deploy --name {} --setup-update --token-file <path-to-setup-token>",
+             usually ax_dg_...): {cli_name} deploy --name {} --setup-update --token-file <path-to-setup-token>",
             shell_single_quote(name)
         ),
     })
 }
 
-fn resolve_deployment_info(
+async fn resolve_deployment_info(
     args: &UpArgs,
     embedded_config: Option<&DeployCliConfig>,
     deploy_config: Option<&DeployConfigFile>,
@@ -4798,11 +4945,20 @@ fn resolve_deployment_info(
 
     // Manager URL: explicit override only. If not set, will be discovered via platform API.
     let manager_url = args.manager_url.clone();
+    let base_url = resolve_base_url(args, embedded_config);
 
-    let platform = args
+    let mut platform = args
         .platform
         .clone()
-        .or_else(|| deploy_config.and_then(|c| c.platform.clone()))
+        .or_else(|| deploy_config.and_then(|c| c.platform.clone()));
+    // A named deployment this machine doesn't track may already exist, for example one the
+    // deployment portal created. It keeps the platform it was installed on, whatever this
+    // CLI's default is. Only the platform API knows it: a run against an explicit manager
+    // (a standalone one, whose token the platform API doesn't accept) keeps the default.
+    if let (None, Some(name), None) = (&platform, requested_name, &manager_url) {
+        platform = existing_deployment_platform(&base_url, &token, name).await?;
+    }
+    let platform = platform
         .or_else(|| embedded_config.and_then(|c| c.default_platform.clone()))
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
@@ -4838,11 +4994,102 @@ fn resolve_deployment_info(
     Ok(ResolvedInfo {
         token,
         manager_url,
-        base_url: resolve_base_url(args, embedded_config),
+        base_url,
         platform,
         base_platform,
         name,
     })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenScope {
+    /// Present for a deployment's own token.
+    deployment: Option<NamedDeployment>,
+    /// Present for a deployment group (setup) token.
+    deployment_group: Option<TokenDeploymentGroup>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NamedDeployment {
+    name: String,
+    platform: String,
+}
+
+#[derive(Deserialize)]
+struct TokenDeploymentGroup {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct DeploymentList {
+    items: Vec<NamedDeployment>,
+}
+
+/// The platform of the existing deployment named `name` that `token` can see, from the platform
+/// API: the token's own deployment, or one in the token's deployment group. `None` when there is
+/// no such deployment, so the name is for a new one.
+async fn existing_deployment_platform(
+    base_url: &str,
+    token: &str,
+    name: &str,
+) -> Result<Option<String>> {
+    let client = create_manager_http_client(token)?;
+    let base_url = base_url.trim_end_matches('/');
+    let scope: TokenScope = read_platform_api_response(
+        client
+            .get(format!("{base_url}/v1/deployment-info"))
+            .send()
+            .await,
+        "deployment info",
+    )
+    .await?;
+    if let Some(deployment) = scope.deployment {
+        return Ok((deployment.name == name).then_some(deployment.platform));
+    }
+    let Some(group) = scope.deployment_group else {
+        return Ok(None);
+    };
+    let deployments: DeploymentList = read_platform_api_response(
+        client
+            .get(format!("{base_url}/v1/deployments"))
+            .query(&[("deploymentGroup", group.id.as_str()), ("name", name)])
+            .send()
+            .await,
+        "deployments",
+    )
+    .await?;
+    Ok(deployments
+        .items
+        .into_iter()
+        .find(|deployment| deployment.name == name)
+        .map(|deployment| deployment.platform))
+}
+
+async fn read_platform_api_response<T: serde::de::DeserializeOwned>(
+    response: std::result::Result<reqwest::Response, reqwest::Error>,
+    what: &str,
+) -> Result<T> {
+    let response = response
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to fetch {what} from the platform API"),
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to fetch {what} (HTTP {status}): {body}"),
+        }));
+    }
+    response
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Invalid {what} response from the platform API"),
+        })
 }
 
 pub(crate) fn resolve_optional_token(

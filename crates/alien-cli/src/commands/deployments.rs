@@ -1601,16 +1601,7 @@ async fn observed_rollout_resources(
                         resource_id,
                         resource_type: resource.resource_type,
                         desired_image: detail.deployment.desired_image,
-                        observed_image: json_string(
-                            &value,
-                            &["heartbeat", "heartbeat", "data", "data", "observedImage"],
-                        )
-                        .or_else(|| {
-                            json_string(
-                                &value,
-                                &["heartbeat", "heartbeat", "data", "data", "image"],
-                            )
-                        }),
+                        observed_image: observed_image_from_detail(&value),
                         provider_updated_at: json_string(
                             &value,
                             &[
@@ -1644,6 +1635,15 @@ async fn observed_rollout_resources(
 
         Ok(observations)
     }
+}
+
+/// Image the provider heartbeat says is running, when the provider reports one.
+fn observed_image_from_detail(detail: &serde_json::Value) -> Option<String> {
+    json_string(
+        detail,
+        &["heartbeat", "heartbeat", "data", "data", "observedImage"],
+    )
+    .or_else(|| json_string(detail, &["heartbeat", "heartbeat", "data", "data", "image"]))
 }
 
 fn json_string(value: &serde_json::Value, path: &[&str]) -> Option<String> {
@@ -1702,7 +1702,10 @@ fn observed_rollout_state(resource: &ObservedRolloutResource) -> &'static str {
         match (&resource.desired_image, &resource.observed_image) {
             (Some(desired), Some(observed)) if desired == observed => "converged",
             (Some(_), Some(_)) => "rollout pending",
-            _ => "unavailable",
+            // The heartbeat was read, but this provider does not report the
+            // running image (Kubernetes workloads, for example).
+            (_, None) => "image not reported",
+            (None, Some(_)) => "unavailable",
         }
     }
 }
@@ -4396,7 +4399,7 @@ mod tests {
     }
 
     #[test]
-    fn observed_rollout_state_distinguishes_mismatch_stale_and_unavailable() {
+    fn observed_rollout_state_distinguishes_mismatch_stale_unreported_and_unavailable() {
         let mut resource = ObservedRolloutResource {
             resource_id: "api".to_string(),
             resource_type: "container".to_string(),
@@ -4412,14 +4415,18 @@ mod tests {
         resource.observed_image = resource.desired_image.clone();
         assert_eq!(observed_rollout_state(&resource), "converged");
 
-        for (desired_image, observed_image) in [
-            (Some("registry.example/api:desired"), None),
-            (None, Some("registry.example/api:desired")),
-            (None, None),
+        for (desired_image, observed_image, state) in [
+            (
+                Some("registry.example/api:desired"),
+                None,
+                "image not reported",
+            ),
+            (None, None, "image not reported"),
+            (None, Some("registry.example/api:desired"), "unavailable"),
         ] {
             resource.desired_image = desired_image.map(str::to_string);
             resource.observed_image = observed_image.map(str::to_string);
-            assert_eq!(observed_rollout_state(&resource), "unavailable");
+            assert_eq!(observed_rollout_state(&resource), state);
         }
 
         resource.desired_image = Some("registry.example/api:desired".to_string());
@@ -4429,6 +4436,45 @@ mod tests {
 
         resource.error = Some("heartbeat unavailable".to_string());
         assert_eq!(observed_rollout_state(&resource), "unavailable");
+    }
+
+    #[test]
+    fn kubernetes_container_heartbeat_reads_as_image_not_reported() {
+        // Shape of a Kubernetes container detail: healthy pods, no image field
+        // in the heartbeat data.
+        let detail = serde_json::json!({
+            "heartbeat": {
+                "observedAt": "2026-10-22T21:58:00Z",
+                "heartbeat": {
+                    "data": {
+                        "type": "container",
+                        "data": {
+                            "backend": "kubernetes",
+                            "name": "web",
+                            "namespace": "app",
+                            "workloadKind": "deployment",
+                            "replicas": { "desired": 3, "current": 3, "ready": 3, "available": 3 },
+                            "pods": [{ "name": "web-1", "ready": true, "containers": [
+                                { "name": "web", "image": "example/web:1" }
+                            ] }]
+                        }
+                    }
+                }
+            }
+        });
+        let resource = ObservedRolloutResource {
+            resource_id: "web".to_string(),
+            resource_type: "container".to_string(),
+            desired_image: Some("registry.example/app:web-1".to_string()),
+            observed_image: observed_image_from_detail(&detail),
+            provider_updated_at: None,
+            observed_at: json_string(&detail, &["heartbeat", "observedAt"]),
+            stale: false,
+            error: None,
+        };
+
+        assert_eq!(resource.observed_image, None);
+        assert_eq!(observed_rollout_state(&resource), "image not reported");
     }
 
     #[test]

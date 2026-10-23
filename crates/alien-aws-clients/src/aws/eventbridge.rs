@@ -2,7 +2,7 @@ use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 
-use alien_error::{Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use bon::Builder;
 use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
@@ -255,8 +255,10 @@ impl EventBridgeApi for EventBridgeClient {
             },
         )?;
 
-        self.send_json_no_response("AWSEvents.PutTargets", body, "PutTargets", &request.rule)
-            .await
+        let response: TargetsResponse = self
+            .send_json("AWSEvents.PutTargets", body, "PutTargets", &request.rule)
+            .await?;
+        response.into_result("PutTargets", &request.rule)
     }
 
     async fn remove_targets(&self, rule_name: &str, target_ids: Vec<String>) -> Result<()> {
@@ -270,8 +272,10 @@ impl EventBridgeApi for EventBridgeClient {
             field_name: None,
         })?;
 
-        self.send_json_no_response("AWSEvents.RemoveTargets", body, "RemoveTargets", rule_name)
-            .await
+        let response: TargetsResponse = self
+            .send_json("AWSEvents.RemoveTargets", body, "RemoveTargets", rule_name)
+            .await?;
+        response.into_result("RemoveTargets", rule_name)
     }
 
     async fn delete_rule(&self, rule_name: &str) -> Result<()> {
@@ -340,6 +344,58 @@ struct RemoveTargetsRequest {
     pub ids: Vec<String>,
 }
 
+/// The body of a PutTargets or RemoveTargets response. AWS answers HTTP 200 when some or all
+/// targets failed, and lists them here.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct TargetsResponse {
+    #[serde(default)]
+    failed_entries: Vec<FailedTargetEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct FailedTargetEntry {
+    target_id: Option<String>,
+    error_code: Option<String>,
+    error_message: Option<String>,
+}
+
+impl TargetsResponse {
+    /// An error for the first failed target, if any target failed. Its retryability follows
+    /// the entry's error code.
+    fn into_result(self, operation: &str, rule_name: &str) -> Result<()> {
+        let Some(entry) = self.failed_entries.into_iter().next() else {
+            return Ok(());
+        };
+        let code = entry.error_code.unwrap_or_else(|| "UnknownErrorCode".into());
+        let message = format!(
+            "{operation} failed for target '{}' of rule '{rule_name}': {}",
+            entry.target_id.as_deref().unwrap_or("unknown"),
+            entry.error_message.as_deref().unwrap_or("no message")
+        );
+        Err(AlienError::new(match code.as_str() {
+            "ConcurrentModificationException" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "Rule".into(),
+                resource_name: rule_name.into(),
+            },
+            "ThrottlingException" | "LimitExceededException" => {
+                ErrorData::RateLimitExceeded { message }
+            }
+            "InternalException" | "InternalFailure" | "ServiceUnavailableException" => {
+                ErrorData::RemoteServiceUnavailable { message }
+            }
+            _ => ErrorData::RemoteRequestRejected {
+                service: "EventBridge".into(),
+                http_status: 200,
+                provider_code: code,
+                message,
+            },
+        }))
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 struct DeleteRuleRequest {
@@ -360,4 +416,122 @@ struct EventBridgeErrorResponse {
     message: Option<String>,
     #[serde(rename = "Message")]
     message_capital: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+    use httpmock::{Method::POST, MockServer};
+    use std::collections::HashMap;
+
+    fn client(server: &MockServer) -> EventBridgeClient {
+        let credentials = AwsCredentialProvider::from_config_sync(AwsClientConfig {
+            account_id: "123456789012".into(),
+            region: "us-east-1".into(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "test-access".into(),
+                secret_access_key: "test-secret".into(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("events".into(), server.base_url())]),
+            }),
+        });
+        EventBridgeClient::new(Client::new(), credentials)
+    }
+
+    async fn answer(server: &MockServer, target: &str, body: &str) {
+        let target = target.to_string();
+        let body = body.to_string();
+        server
+            .mock_async(move |when, then| {
+                when.method(POST).header("X-Amz-Target", target);
+                then.status(200)
+                    .header("content-type", "application/x-amz-json-1.1")
+                    .body(body);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn remove_targets_with_a_concurrent_modification_entry_is_a_retryable_error() {
+        let server = MockServer::start_async().await;
+        answer(
+            &server,
+            "AWSEvents.RemoveTargets",
+            r#"{"FailedEntryCount":1,"FailedEntries":[{"TargetId":"1","ErrorCode":"ConcurrentModificationException","ErrorMessage":"Too many requests"}]}"#,
+        )
+        .await;
+
+        let error = client(&server)
+            .remove_targets("app-worker-cron-0", vec!["1".into()])
+            .await
+            .expect_err("a target AWS failed to remove must not be reported as removed");
+
+        assert_eq!(error.code, "REMOTE_RESOURCE_CONFLICT");
+        assert!(error.retryable);
+        assert!(error.message.contains("target '1'"), "{}", error.message);
+        assert!(error.message.contains("Too many requests"), "{}", error.message);
+    }
+
+    #[tokio::test]
+    async fn remove_targets_with_an_unknown_entry_error_is_not_retryable() {
+        let server = MockServer::start_async().await;
+        answer(
+            &server,
+            "AWSEvents.RemoveTargets",
+            r#"{"FailedEntryCount":1,"FailedEntries":[{"TargetId":"1","ErrorCode":"ValidationException","ErrorMessage":"bad target"}]}"#,
+        )
+        .await;
+
+        let error = client(&server)
+            .remove_targets("app-worker-cron-0", vec!["1".into()])
+            .await
+            .expect_err("a failed entry is an error");
+
+        assert_eq!(error.code, "REMOTE_REQUEST_REJECTED");
+        assert!(!error.retryable);
+    }
+
+    #[tokio::test]
+    async fn remove_targets_without_failed_entries_succeeds() {
+        let server = MockServer::start_async().await;
+        answer(
+            &server,
+            "AWSEvents.RemoveTargets",
+            r#"{"FailedEntryCount":0,"FailedEntries":[]}"#,
+        )
+        .await;
+
+        client(&server)
+            .remove_targets("app-worker-cron-0", vec!["1".into()])
+            .await
+            .expect("no failed entries means every target was removed");
+    }
+
+    #[tokio::test]
+    async fn put_targets_with_a_failed_entry_is_an_error() {
+        let server = MockServer::start_async().await;
+        answer(
+            &server,
+            "AWSEvents.PutTargets",
+            r#"{"FailedEntryCount":1,"FailedEntries":[{"TargetId":"1","ErrorCode":"InternalException","ErrorMessage":"internal"}]}"#,
+        )
+        .await;
+
+        let error = client(&server)
+            .put_targets(PutTargetsRequest {
+                rule: "app-worker-cron-0".into(),
+                targets: vec![EventBridgeTarget {
+                    id: "1".into(),
+                    arn: "arn:aws:lambda:us-east-1:123456789012:function:app-worker".into(),
+                }],
+            })
+            .await
+            .expect_err("a target AWS failed to add must not be reported as added");
+
+        assert_eq!(error.code, "REMOTE_SERVICE_UNAVAILABLE");
+        assert!(error.retryable);
+    }
 }

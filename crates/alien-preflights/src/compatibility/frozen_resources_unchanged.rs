@@ -2,10 +2,12 @@ use crate::error::{ErrorData, Result};
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::{find_instance_type, is_same_architecture_machine};
 use alien_core::{
-    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Platform,
-    Resource, ResourceLifecycle, Sandbox, SandboxCode, ServiceAccount, Stack,
+    permissions::PermissionSet, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
+    ComputePoolSelection, Platform, Resource, ResourceLifecycle, Sandbox, SandboxCode,
+    ServiceAccount, Stack,
 };
 use alien_error::Context;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 /// Validates that frozen resources haven't been added, modified or removed during stack updates.
@@ -159,6 +161,48 @@ fn runtime_managed_sandbox_image(platform: Platform, old: &Resource, new: &Resou
     normalized == *new_sandbox
 }
 
+/// Keeps only `platform`'s section of each permission set.
+fn permission_sets_on_platform(platform: Platform, sets: &mut [PermissionSet]) {
+    for set in sets {
+        let platforms = &mut set.platforms;
+        match platform {
+            Platform::Aws => {
+                platforms.gcp = None;
+                platforms.azure = None;
+            }
+            Platform::Gcp => {
+                platforms.aws = None;
+                platforms.azure = None;
+            }
+            Platform::Azure => {
+                platforms.aws = None;
+                platforms.gcp = None;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A service account as its identity on `platform` sees it.
+///
+/// Its permission sets keep every cloud's section, but setup renders only the installed cloud's,
+/// so a change to another cloud's section (a permission set edited for GCP only) leaves an AWS
+/// role as it was. Other platforms keep every section.
+fn on_platform(platform: Platform, resource: &Resource) -> Cow<'_, Resource> {
+    let Some(account) = resource.downcast_ref::<ServiceAccount>() else {
+        return Cow::Borrowed(resource);
+    };
+    if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        return Cow::Borrowed(resource);
+    }
+    let mut account = account.clone();
+    permission_sets_on_platform(platform, &mut account.stack_permission_sets);
+    for sets in account.resource_permission_sets.values_mut() {
+        permission_sets_on_platform(platform, sets);
+    }
+    Cow::Owned(Resource::new(account))
+}
+
 /// Older prepared stacks stored resource grants only in the explicit permission profile.
 /// Capturing those same grants is metadata migration, not a setup-owned IAM change.
 fn unchanged_legacy_service_account_grants(
@@ -204,7 +248,7 @@ fn unchanged_legacy_service_account_grants(
     })?;
     let mut normalized = old_account.clone();
     normalized.resource_permission_sets = captured.resource_permission_sets;
-    Ok(normalized == *new_account)
+    Ok(*on_platform(platform, &Resource::new(normalized)) == *on_platform(platform, new))
 }
 
 #[async_trait::async_trait]
@@ -286,23 +330,17 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                         old_stack.queue_visibility_timeout_seconds(id),
                     ));
                 }
-                if old_entry.config != new_entry.config
-                    && !runtime_managed_frozen_change(
-                        self.platform,
-                        &old_entry.config,
-                        &new_entry.config,
-                    )
-                    && !runtime_managed_sandbox_image(
-                        self.platform,
-                        &old_entry.config,
-                        &new_entry.config,
-                    )
+                let old_config = on_platform(self.platform, &old_entry.config);
+                let new_config = on_platform(self.platform, &new_entry.config);
+                if old_config != new_config
+                    && !runtime_managed_frozen_change(self.platform, &old_config, &new_config)
+                    && !runtime_managed_sandbox_image(self.platform, &old_config, &new_config)
                     && !unchanged_legacy_service_account_grants(
                         self.platform,
                         old_stack,
                         new_stack,
-                        &old_entry.config,
-                        &new_entry.config,
+                        &old_config,
+                        &new_config,
                     )?
                 {
                     let details = machine_changes_needing_setup(
@@ -341,7 +379,7 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::permissions::{PermissionProfile, PermissionsConfig};
+    use alien_core::permissions::{PermissionProfile, PermissionsConfig, PlatformPermissions};
     use alien_core::{
         CapacityGroup, ComputeCluster, Resource, ResourceEntry, ResourceLifecycle, Stack, Storage,
     };
@@ -360,6 +398,72 @@ mod tests {
             .permissions(PermissionsConfig::new().with_profile("reader", profile))
             .add(account, ResourceLifecycle::Frozen)
             .build()
+    }
+
+    /// Edits every permission set the stack's service account embeds.
+    fn edit_account_sets(stack: &mut Stack, edit: impl Fn(&mut PlatformPermissions)) {
+        let account = stack
+            .resources
+            .get_mut("reader-sa")
+            .unwrap()
+            .config
+            .downcast_mut::<ServiceAccount>()
+            .unwrap();
+        for set in account
+            .stack_permission_sets
+            .iter_mut()
+            .chain(account.resource_permission_sets.values_mut().flatten())
+        {
+            edit(&mut set.platforms);
+        }
+    }
+
+    /// A permission set edited for one cloud only, as when a release changes only the GCP
+    /// section of `postgres/data-access`, changes the installed identities on that cloud only.
+    #[tokio::test]
+    async fn a_permission_set_change_for_one_cloud_needs_setup_only_on_that_cloud() {
+        let profile = PermissionProfile::new()
+            .global(["vault/data-read"])
+            .resource("database", ["postgres/data-access"]);
+        let installed = account_stack(profile.clone(), true);
+        let mut gcp_edited = installed.clone();
+        edit_account_sets(&mut gcp_edited, |platforms| {
+            assert!(
+                platforms.gcp.is_some(),
+                "the fixture sets have a GCP section"
+            );
+            platforms.gcp = Some(Vec::new());
+        });
+
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let result = FrozenResourcesUnchangedCheck { platform }
+                .check(&installed, &gcp_edited)
+                .await
+                .unwrap();
+            assert_eq!(
+                result.success,
+                platform != Platform::Gcp,
+                "{platform:?}: {:?}",
+                result.errors
+            );
+        }
+
+        let mut aws_edited = installed.clone();
+        edit_account_sets(&mut aws_edited, |platforms| {
+            platforms.aws = Some(Vec::new())
+        });
+        let result = FrozenResourcesUnchangedCheck {
+            platform: Platform::Aws,
+        }
+        .check(&installed, &aws_edited)
+        .await
+        .unwrap();
+        assert!(!result.success);
+        assert!(
+            result.errors[0].contains("'reader-sa' was modified"),
+            "{:?}",
+            result.errors
+        );
     }
 
     /// Dropping an account's last resource-scoped grant changes its installed role, so it needs

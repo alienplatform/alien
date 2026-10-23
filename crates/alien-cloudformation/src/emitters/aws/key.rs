@@ -28,8 +28,7 @@ impl CfEmitter for AwsKeyEmitter {
         key.properties
             .insert("KeyPolicy".to_string(), root_key_policy());
         key.properties.insert("Tags".to_string(), tags(ctx));
-        key.deletion_policy = Some("Retain".to_string());
-        key.update_replace_policy = Some("Retain".to_string());
+        key.retain_data();
 
         let mut resources = vec![key];
         if management_has_key_permission(ctx) {

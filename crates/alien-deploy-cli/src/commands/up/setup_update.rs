@@ -414,11 +414,13 @@ pub(super) async fn run(
         .release_id
         .as_deref()
         .ok_or_else(|| invalid_target("--release-id is required."))?;
+    // The authorized target is checked to be the Machines deployment, so the platform may be
+    // left out; a different one is a mistake.
     if args
         .platform
         .as_deref()
         .or_else(|| config.and_then(|config| config.platform.as_deref()))
-        != Some("machines")
+        .is_some_and(|platform| platform != "machines")
     {
         return Err(invalid_target(
             "Explicit setup targeting currently requires --platform machines.",
@@ -977,6 +979,55 @@ storageSecret = "canary-secret"
         assert!(!format!("{error:?}").contains("response body must not be logged"));
         get.assert_hits_async(1).await;
         writes.assert_hits_async(0).await;
+    }
+
+    /// The exact target is checked to be a Machines deployment, so `--platform` may be left
+    /// out and the command still loads the target. Naming another platform fails first.
+    #[tokio::test]
+    async fn exact_target_runs_without_platform_and_refuses_another_platform() {
+        let server = MockServer::start_async().await;
+        let get = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployment-info");
+                then.status(409);
+            })
+            .await;
+        let base_url = server.base_url();
+        let flags = |platform: Option<&'static str>| {
+            let mut flags = vec![
+                "democtl",
+                "--setup-update",
+                "--deployment-id",
+                "dep_demo",
+                "--update-operation-id",
+                "op_blocked",
+                "--release-id",
+                "rel_target",
+                "--token",
+                "test-setup-token",
+                "--base-url",
+                &base_url,
+            ];
+            if let Some(platform) = platform {
+                flags.extend(["--platform", platform]);
+            }
+            UpArgs::parse_from(flags)
+        };
+
+        let error = super::super::up_command(flags(Some("aws")), None)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("requires --platform machines"),
+            "{error}"
+        );
+        get.assert_hits_async(0).await;
+
+        let error = super::super::up_command(flags(None), None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("409"), "{error}");
+        get.assert_hits_async(1).await;
     }
 
     #[tokio::test]

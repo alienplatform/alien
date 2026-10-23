@@ -7,135 +7,18 @@
 //! or copying a volume or snapshot. The live check of the same requests against AWS is described
 //! in the pull request that introduced this file.
 
+mod iam_policy;
+
 use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
 use alien_permissions::{
     generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
     get_permission_set, BindingTarget, PermissionContext,
 };
-use std::collections::HashMap;
+use iam_policy::{evaluate, wildcard_match, Decision, Request};
 
 const ACCOUNT: &str = "123456789012";
 const REGION: &str = "us-east-1";
 const PREFIX: &str = "app";
-
-#[derive(Debug, PartialEq, Eq)]
-enum Decision {
-    Allowed,
-    ExplicitlyDenied,
-    NotAllowed,
-}
-
-struct Request {
-    action: &'static str,
-    resource: String,
-    context: HashMap<String, String>,
-}
-
-impl Request {
-    fn new(action: &'static str, resource: impl Into<String>) -> Self {
-        Self {
-            action,
-            resource: resource.into(),
-            context: HashMap::new(),
-        }
-    }
-
-    fn with(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.context.insert(key.into(), value.into());
-        self
-    }
-
-    /// Adds the tags a resource already carries as `aws:ResourceTag/*` keys.
-    fn resource_tags(mut self, tags: &[(&str, &str)]) -> Self {
-        for (key, value) in tags {
-            self.context
-                .insert(format!("aws:ResourceTag/{key}"), value.to_string());
-        }
-        self
-    }
-
-    /// Adds the tags a request writes as `aws:RequestTag/*` keys.
-    fn request_tags(mut self, tags: &[(&str, &str)]) -> Self {
-        for (key, value) in tags {
-            self.context
-                .insert(format!("aws:RequestTag/{key}"), value.to_string());
-        }
-        self
-    }
-}
-
-/// IAM's ARN and action wildcard: `*` matches any run of characters, `?` one character.
-fn wildcard_match(pattern: &str, value: &str) -> bool {
-    let pattern: Vec<char> = pattern.chars().collect();
-    let value: Vec<char> = value.chars().collect();
-    let mut matches = vec![vec![false; value.len() + 1]; pattern.len() + 1];
-    matches[0][0] = true;
-    for p in 1..=pattern.len() {
-        if pattern[p - 1] == '*' {
-            matches[p][0] = matches[p - 1][0];
-        }
-        for v in 1..=value.len() {
-            matches[p][v] = match pattern[p - 1] {
-                '*' => matches[p - 1][v] || matches[p][v - 1],
-                '?' => matches[p - 1][v - 1],
-                c => matches[p - 1][v - 1] && c == value[v - 1],
-            };
-        }
-    }
-    matches[pattern.len()][value.len()]
-}
-
-fn conditions_hold(statement: &AwsIamStatement, request: &Request) -> bool {
-    let Some(conditions) = &statement.condition else {
-        return true;
-    };
-    conditions.iter().all(|(operator, entries)| {
-        entries.iter().all(|(key, expected)| {
-            let actual = request.context.get(key);
-            match operator.as_str() {
-                "StringEquals" | "Bool" => actual == Some(expected),
-                // A negated operator holds when the key is absent.
-                "StringNotEquals" => actual != Some(expected),
-                "StringLike" => actual.is_some_and(|actual| wildcard_match(expected, actual)),
-                "ForAllValues:StringEquals" => {
-                    panic!("the evaluator doesn't model {operator}; no request here sets tag keys")
-                }
-                other => panic!("the evaluator doesn't model condition operator {other}"),
-            }
-        })
-    })
-}
-
-fn statement_matches(statement: &AwsIamStatement, request: &Request) -> bool {
-    assert!(
-        statement.not_resource.is_empty(),
-        "the evaluator doesn't model NotResource ({})",
-        statement.sid
-    );
-    statement
-        .action
-        .iter()
-        .any(|action| wildcard_match(&action.to_lowercase(), &request.action.to_lowercase()))
-        && statement
-            .resource
-            .iter()
-            .any(|resource| wildcard_match(resource, &request.resource))
-        && conditions_hold(statement, request)
-}
-
-fn evaluate(statements: &[AwsIamStatement], request: &Request) -> Decision {
-    let matching: Vec<_> = statements
-        .iter()
-        .filter(|statement| statement_matches(statement, request))
-        .collect();
-    if matching.iter().any(|statement| statement.effect == "Deny") {
-        Decision::ExplicitlyDenied
-    } else if matching.iter().any(|statement| statement.effect == "Allow") {
-        Decision::Allowed
-    } else {
-        Decision::NotAllowed
-    }
-}
 
 fn context() -> PermissionContext {
     PermissionContext::new()

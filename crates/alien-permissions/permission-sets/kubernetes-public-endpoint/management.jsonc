@@ -48,6 +48,26 @@
         }
       },
       {
+        // The delete above is tag-scoped, and a gone certificate has no tags, so the tag-scoped
+        // describe is denied too. Granting it on certificates without the stack's tag lets a gone
+        // certificate answer NotFound. It returns certificate metadata, never the private key.
+        "label": "read-gone-tls-certificates",
+        "description": "Describe ACM certificates that carry no deployment tag, so a deleted certificate answers NotFound.",
+        "grant": {
+          "actions": ["acm:DescribeCertificate"]
+        },
+        "binding": {
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
+              }
+            }
+          }
+        }
+      },
+      {
         // ListCertificates supports no resource-level scoping or condition keys; AWS
         // evaluates it against `*` only. It returns certificate ARNs and domain names.
         // Used with ListTagsForCertificate to find a certificate whose import response

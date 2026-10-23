@@ -13,9 +13,11 @@ use crate::commands::{
     status_command, up_command, DownArgs, JoinArgs, LeaveArgs, ListArgs, OperatorArgs,
     RegisterArgs, StatusArgs, UpArgs,
 };
-use crate::error::Result;
-use alien_core::embedded_config::{load_embedded_config, DeployCliConfig};
+use crate::error::{ErrorData, Result};
+use alien_core::embedded_config::{load_embedded_config_from_path, DeployCliConfig};
+use alien_error::AlienError;
 use clap::{Command, CommandFactory, FromArgMatches, Parser, Subcommand};
+use std::path::Path;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
@@ -58,9 +60,39 @@ pub enum Commands {
     Rollback(commands::sync::RollbackArgs),
 }
 
+/// Loads the configuration embedded in this binary, if it carries one.
+///
+/// A packaged CLI finds its name, API URL and token in this configuration.
+/// When the file can't be read (for example a 0711 binary run by a user who
+/// doesn't own it), the error is returned rather than treated as "no
+/// configuration": running unbranded would send the token to the default API.
+pub fn embedded_config() -> Result<Option<DeployCliConfig>> {
+    let exe_path = std::env::current_exe().map_err(|error| {
+        AlienError::new(ErrorData::EmbeddedConfigUnreadable {
+            file_path: "<current executable>".to_string(),
+            reason: error.to_string(),
+        })
+    })?;
+    embedded_config_from_path(&exe_path)
+}
+
+fn embedded_config_from_path(path: &Path) -> Result<Option<DeployCliConfig>> {
+    load_embedded_config_from_path(path).map_err(|error| {
+        AlienError::new(ErrorData::EmbeddedConfigUnreadable {
+            file_path: path.display().to_string(),
+            reason: error.to_string(),
+        })
+    })
+}
+
 /// Parse command-line arguments using any branding embedded in this binary.
+///
+/// Exits with an error when the binary's embedded configuration can't be read.
 pub fn parse_cli() -> Cli {
-    let embedded_config: Option<DeployCliConfig> = load_embedded_config().ok().flatten();
+    let embedded_config = embedded_config().unwrap_or_else(|error| {
+        eprintln!("\x1b[31mError:\x1b[0m {error}");
+        std::process::exit(1);
+    });
     let command = command_with_branding(embedded_config.as_ref());
     let matches = command.get_matches();
     Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
@@ -139,7 +171,7 @@ pub fn setup_tracing(verbose: bool) {
 
 pub async fn run_cli(cli: Cli) -> Result<()> {
     // Load embedded config if present (for pre-configured / rebranded binaries)
-    let embedded_config: Option<DeployCliConfig> = load_embedded_config().ok().flatten();
+    let embedded_config = embedded_config()?;
 
     setup_tracing(cli.verbose);
 
@@ -161,6 +193,50 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn unreadable_embedded_config_is_an_error_not_an_unbranded_cli() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = DeployCliConfig {
+            token: Some("dg_example".to_string()),
+            deployment_group_id: None,
+            default_platform: None,
+            api_base_url: Some("https://api.example.com".to_string()),
+            agent_binary_url: None,
+            machine_bundle_url: None,
+            install_script_url: None,
+            setup_revision: None,
+            token_env_var: None,
+            name: Some("acmectl".to_string()),
+            display_name: Some("Acme Deployment CLI".to_string()),
+        };
+
+        let branded = dir.path().join("acmectl");
+        std::fs::write(
+            &branded,
+            alien_core::embedded_config::append_embedded_config(b"binary", &config)
+                .expect("append config"),
+        )
+        .expect("write branded binary");
+        let loaded = embedded_config_from_path(&branded)
+            .expect("readable branded binary")
+            .expect("embedded config");
+        assert_eq!(
+            loaded.api_base_url.as_deref(),
+            Some("https://api.example.com")
+        );
+
+        let plain = dir.path().join("alien-deploy");
+        std::fs::write(&plain, b"binary").expect("write plain binary");
+        assert!(embedded_config_from_path(&plain)
+            .expect("readable plain binary")
+            .is_none());
+
+        // A path the process can't read, as a 0711 binary is for other users.
+        let error = embedded_config_from_path(dir.path()).expect_err("unreadable binary");
+        assert_eq!(error.code, "EMBEDDED_CONFIG_UNREADABLE");
+        assert!(error.message.contains(&dir.path().display().to_string()));
+    }
 
     #[test]
     fn test_parse_up_command() {

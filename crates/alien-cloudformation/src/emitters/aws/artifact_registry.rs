@@ -45,8 +45,7 @@ impl CfEmitter for AwsArtifactRegistryEmitter {
             )]),
         );
         repository.properties.insert("Tags".to_string(), tags(ctx));
-        repository.deletion_policy = Some("Retain".to_string());
-        repository.update_replace_policy = Some("Retain".to_string());
+        repository.retain_data();
 
         let mut pull_role = ecr_access_role(ctx, &pull_role_id, "registry-pull", false)?;
         let mut push_role = ecr_access_role(ctx, &push_role_id, "registry-push", true)?;

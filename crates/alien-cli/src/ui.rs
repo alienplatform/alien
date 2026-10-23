@@ -1290,6 +1290,16 @@ impl FixedSteps {
         }
     }
 
+    /// Print a warning above the live steps, or to stderr when there are none, so it never
+    /// mixes into machine-readable stdout.
+    pub fn warn(&self, line: &str) {
+        if let Some(live) = &self.live {
+            live.println(line);
+        } else {
+            eprintln!("{line}");
+        }
+    }
+
     pub fn sync_deployment_resources(
         &self,
         resources: &std::collections::HashMap<String, StackResourceState>,
