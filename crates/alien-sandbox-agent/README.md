@@ -37,7 +37,10 @@ Local/Kubernetes and root refusal on AWS modes without a connector. Images witho
 USER retain the released Local/Kubernetes behavior: non-root uid 65534 and no new
 image boot contract. AWS images without USER also retain their released non-root
 contract when no connector is present (including unrestricted egress). With an AWS
-connector, on GCP, and on packaged Azure, absent USER selects root boot.
+connector, on GCP, and on packaged Azure, absent USER selects root boot. The AWS
+`internet` declaration plans a gateway even before deployment adds its resources;
+build selects root accordingly. Deployment refuses a target that cannot host the
+gateway. Unrestricted and legacy direct policies keep their connector-free behavior.
 Existing AWS S3 bundles keep
 their released startup behavior; rebuild from an OCI base to select the new image
 contract. Azure catalog builds keep their native path and emit a warning because the

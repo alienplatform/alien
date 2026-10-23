@@ -560,7 +560,7 @@ mod tests {
             .unwrap();
             for (platform, egress, gateway, legacy, root_supported) in [
                 (Platform::Aws, SandboxEgress::Allow, false, false, false),
-                (Platform::Aws, SandboxEgress::Internet, false, false, false),
+                (Platform::Aws, SandboxEgress::Internet, false, false, true),
                 (Platform::Aws, SandboxEgress::None, false, false, true),
                 (Platform::Aws, SandboxEgress::Internet, true, false, true),
                 (Platform::Aws, SandboxEgress::Allow, false, true, false),
@@ -635,7 +635,7 @@ mod tests {
                     directory.path(),
                     &targets,
                     platform,
-                    alien_core::sandbox_egress::sandbox_needs_connector(&stack, &sandbox),
+                    alien_core::sandbox_egress::sandbox_plans_connector(&sandbox),
                 )
                 .await
                 .unwrap();

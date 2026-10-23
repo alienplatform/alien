@@ -105,10 +105,18 @@ pub fn sandbox_egress_key_owner(stack: &Stack) -> Option<&str> {
 /// Closed sandboxes retain their denying connector. Only the new internet
 /// declaration opts into the gateway, including in stacks with legacy sandboxes.
 pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {
+    sandbox_plans_connector(sandbox)
+        && (sandbox.egress != SandboxEgress::Internet || has_sandbox_gateway(stack))
+}
+
+/// Whether deployment must prepare an external connector for this declaration.
+/// Build and compile-time checks run before the managed internet gateway is added.
+/// Deployment prerequisites still refuse a target that cannot host that gateway.
+pub fn sandbox_plans_connector(sandbox: &Sandbox) -> bool {
     matches!(
         sandbox.cloud_egress(),
         SandboxEgress::None | SandboxEgress::AllowDomains { .. }
-    ) || (matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack))
+    ) || sandbox.egress == SandboxEgress::Internet
 }
 
 /// Inspected builds opt into OCI USER startup after Run. Saved declarations without

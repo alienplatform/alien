@@ -29,10 +29,10 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             .resources()
             .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
             .filter_map(|sandbox| {
-                // AWS and Kubernetes deployments install and configure the gateway. Other
-                // deployment backends cannot yet create and publish one.
+                // Internet deployment prepares its gateway after these checks. Use the
+                // planned boundary here; deployment prerequisites require the actual gateway.
                 if platform == Platform::Aws && sandbox.image_user == Some(0)
-                    && !alien_core::sandbox_egress::sandbox_needs_connector(stack, sandbox)
+                    && !alien_core::sandbox_egress::sandbox_plans_connector(sandbox)
                 {
                     return Some(format!(
                         "Sandbox '{}': root image USER requires an AWS egress connector; this egress mode has no external boundary",
@@ -204,14 +204,14 @@ mod tests {
                     .await
                     .unwrap();
                 let requires_refusal =
-                    policy == SandboxEgress::Allow || policy == SandboxEgress::Internet || legacy;
+                    policy == SandboxEgress::Allow || (legacy && policy != SandboxEgress::Internet);
                 if requires_refusal {
                     assert!(!result.success);
                     assert!(result
                         .errors
                         .join(" ")
                         .contains("root image USER requires an AWS egress connector"));
-                } else if policy == SandboxEgress::None {
+                } else if matches!(policy, SandboxEgress::None | SandboxEgress::Internet) {
                     assert!(result.success, "{:?}", result.errors);
                 } else {
                     assert!(!result.success);

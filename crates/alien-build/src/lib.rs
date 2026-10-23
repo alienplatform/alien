@@ -327,7 +327,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     // Inspect before any build tasks are spawned: an invalid prebuilt image must not leave
     // other resource builds detached. New OCI bases take the same packaging path as source.
     for (resource_id, sandbox) in sandboxes_to_inspect {
-        let aws_connector = alien_core::sandbox_egress::sandbox_needs_connector(&stack, &sandbox);
+        let aws_connector = alien_core::sandbox_egress::sandbox_plans_connector(&sandbox);
         let sandbox =
             prepare_prebuilt_sandbox(sandbox, settings, &output_dir, aws_connector).await?;
         if let Some((_, entry)) = stack.resources_mut().find(|(id, _)| *id == &resource_id) {
@@ -724,8 +724,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         let build_tasks: Vec<_> = sandboxes_to_build
             .into_iter()
             .map(|(resource_id, mut sandbox, src, toolchain)| {
-                let aws_connector =
-                    alien_core::sandbox_egress::sandbox_needs_connector(&stack, &sandbox);
+                let aws_connector = alien_core::sandbox_egress::sandbox_plans_connector(&sandbox);
                 let sandbox_id = sandbox.id.clone();
                 let stack_id = stack_id.clone();
                 let settings = sandbox_settings.clone();
@@ -6953,7 +6952,7 @@ mod sandbox_build_tests {
                     .code(SandboxCode::Image {
                         image: reference.clone(),
                     })
-                    .egress(egress)
+                    .egress(egress.clone())
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -6967,11 +6966,60 @@ mod sandbox_build_tests {
                 )
                 .await
                 .unwrap();
+                // The normal release is built before deployment prepares its managed gateway.
+                assert!(!alien_core::sandbox_egress::has_sandbox_gateway(&built));
+                let built = if egress == SandboxEgress::Internet {
+                    let config = alien_core::DeploymentConfig::builder()
+                        .stack_settings(alien_core::StackSettings::default())
+                        .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                            variables: vec![],
+                            hash: String::new(),
+                            created_at: String::new(),
+                        })
+                        .allow_frozen_changes(false)
+                        .external_bindings(alien_core::ExternalBindings::default())
+                        .build();
+                    let gate = alien_preflights::CompileTimeCheck::check(
+                        &alien_preflights::compile_time::sandbox_platform_support::SandboxPlatformSupportCheck,
+                        &built, Platform::Aws,
+                    ).await.unwrap();
+                    assert!(
+                        gate.success,
+                        "the planned gateway supports root before preparation: {:?}",
+                        gate.errors
+                    );
+                    let unavailable = alien_preflights::DeploymentPrerequisiteCheck::check(
+                        &alien_preflights::deployment_prerequisites::SandboxEgressGatewayCheck,
+                        &built,
+                        &alien_core::StackState::new(Platform::Aws),
+                        &config,
+                    )
+                    .await
+                    .unwrap();
+                    assert!(
+                        !unavailable.success,
+                        "an unprepared deployment cannot run without a gateway"
+                    );
+                    alien_preflights::StackMutation::mutate(
+                        &alien_preflights::mutations::sandbox_gateway::SandboxGatewayMutation,
+                        built,
+                        &alien_core::StackState::new(Platform::Aws),
+                        &config,
+                    )
+                    .await
+                    .unwrap()
+                } else {
+                    built
+                };
                 let sandbox = built
                     .resources()
                     .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
                     .unwrap();
-                let legacy = user.is_empty() && sandbox.egress != SandboxEgress::None;
+                assert_eq!(
+                    alien_core::sandbox_egress::sandbox_needs_connector(&built, sandbox),
+                    egress != SandboxEgress::Allow
+                );
+                let legacy = user.is_empty() && sandbox.egress == SandboxEgress::Allow;
                 assert_eq!(sandbox.image_user, (!legacy).then_some(uid));
                 let environment =
                     alien_core::sandbox_egress::aws_sandbox_agent_environment(&built, sandbox);
@@ -6997,7 +7045,7 @@ mod sandbox_build_tests {
             ).await.unwrap();
                 assert_eq!(
                     result.success,
-                    uid != 0 || user.is_empty() || sandbox.egress == SandboxEgress::None,
+                    uid != 0 || user.is_empty() || sandbox.egress != SandboxEgress::Allow,
                     "USER={user:?} {:?}: {:?}",
                     sandbox.egress,
                     result.errors
