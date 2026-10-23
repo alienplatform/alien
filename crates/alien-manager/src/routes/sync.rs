@@ -675,7 +675,7 @@ async fn reconcile(
     };
 
     // 2. Persist the step result (including any registry access changes).
-    let _result = match state
+    let result = match state
         .deployment_store
         .reconcile(
             &subject,
@@ -722,7 +722,9 @@ async fn reconcile(
         return error.into_response();
     }
 
-    if let Some(error) = replica_pending {
+    if let Some(error) = replica_pending
+        .filter(|_| crate::registry_access::holds_step_for_missing_replica(&result.record.status))
+    {
         return error.into_response();
     }
 

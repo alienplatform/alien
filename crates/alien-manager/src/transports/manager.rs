@@ -114,7 +114,8 @@ impl DeploymentLoopTransport for ManagerTransport {
         // synthetic system subject (empty bearer signals to embedders that
         // no caller passthrough is available).
         let caller = Subject::system();
-        self.deployment_store
+        let outcome = self
+            .deployment_store
             .reconcile(
                 &caller,
                 ReconcileData {
@@ -144,7 +145,9 @@ impl DeploymentLoopTransport for ManagerTransport {
         .await
         .map_err(|error| error.into_generic())?;
 
-        if let Some(error) = replica_pending {
+        if let Some(error) = replica_pending.filter(|_| {
+            crate::registry_access::holds_step_for_missing_replica(&outcome.record.status)
+        }) {
             return Err(error.into_generic());
         }
 

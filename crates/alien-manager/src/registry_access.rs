@@ -296,7 +296,8 @@ pub async fn reconcile_registry_access(
 /// Returns `REGISTRY_REPLICA_PENDING` (retryable) when a repository has no replica in the
 /// deployment's region yet. `state` still records what was granted, so the caller persists it
 /// first and then answers the step with the error: the runner holds the step, and nothing that
-/// pulls the image starts, until the replica exists and a retry finishes the grant.
+/// pulls the image starts, until the replica exists and a retry finishes the grant. Once deletion
+/// is requested the caller lets the step through instead; see `holds_step_for_missing_replica`.
 #[bon::builder]
 pub async fn reconcile_registry_access_with_proxy(
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
@@ -474,6 +475,29 @@ fn unsupported_region(
         region: region.clone(),
         supported_regions: supported_aws_regions.join(", "),
     }))
+}
+
+/// Whether a step that found a replica missing is held, given the status the store kept.
+///
+/// Not once deletion was requested: the store keeps the request over the reported state, and
+/// holding the step would keep the deployment's actor retrying work nobody wants while no other
+/// worker can take the deployment.
+pub(crate) fn holds_step_for_missing_replica(persisted_status: &str) -> bool {
+    let deleting = serde_json::from_value::<DeploymentStatus>(serde_json::Value::String(
+        persisted_status.to_string(),
+    ))
+    .is_ok_and(|status| {
+        matches!(
+            status,
+            DeploymentStatus::DeletePending
+                | DeploymentStatus::Deleting
+                | DeploymentStatus::DeleteFailed
+                | DeploymentStatus::TeardownRequired
+                | DeploymentStatus::TeardownFailed
+                | DeploymentStatus::Deleted
+        )
+    });
+    !deleting
 }
 
 /// Whether the policy has to be written again.
@@ -3676,6 +3700,8 @@ mod tests {
             Revoke,
             Deny,
             Fail,
+            /// Grants find the regional replica missing.
+            ReplicaMissing,
         }
 
         /// A registry that records the deployment's persisted status at each revoke, which is what
@@ -3725,10 +3751,19 @@ mod tests {
 
             async fn add_cross_account_access(
                 &self,
-                _repo_id: &str,
+                repo_id: &str,
                 _access: CrossAccountAccess,
             ) -> BindingResult<()> {
-                unimplemented!("not needed for revoke tests")
+                match *self.answer.lock().expect("answer lock") {
+                    Answer::ReplicaMissing => {
+                        Err(AlienError::new(BindingErrorData::RegistryReplicaNotReady {
+                            repository: repo_id.to_string(),
+                            region: "us-east-2".to_string(),
+                            details: "not created within 20s".to_string(),
+                        }))
+                    }
+                    answer => unimplemented!("grants are not answered with {answer:?}"),
+                }
             }
 
             async fn remove_cross_account_access(
@@ -3760,6 +3795,7 @@ mod tests {
                     Answer::Fail => Err(AlienError::new(BindingErrorData::Other {
                         message: "simulated registry outage".to_string(),
                     })),
+                    Answer::ReplicaMissing => unimplemented!("not needed for revoke tests"),
                 }
             }
 
@@ -3797,6 +3833,21 @@ mod tests {
         }
 
         async fn deleting_deployment_on(platform: Platform, answer: Answer) -> Harness {
+            let harness = deployment_on(platform, answer).await;
+            harness
+                .store
+                .set_delete_pending(&Subject::system(), &harness.deployment_id)
+                .await
+                .expect("delete pending");
+            harness
+                .checkpoint(DeploymentStatus::Deleting)
+                .await
+                .expect("runtime cleanup checkpoint");
+            harness
+        }
+
+        /// A deployment the manager loop holds, before any delete.
+        async fn deployment_on(platform: Platform, answer: Answer) -> Harness {
             let dir = tempfile::tempdir().expect("tempdir");
             let path = dir.keep().join("manager.db");
             let db = Arc::new(
@@ -3838,10 +3889,6 @@ mod tests {
                 )
                 .await
                 .expect("deployment");
-            store
-                .set_delete_pending(&system, &deployment.id)
-                .await
-                .expect("delete pending");
 
             let registry = Arc::new(RecordingRegistry {
                 platform,
@@ -3863,17 +3910,12 @@ mod tests {
                 None,
                 Vec::new(),
             );
-            let harness = Harness {
+            Harness {
                 store,
                 registry,
                 transport,
                 deployment_id: deployment.id,
-            };
-            harness
-                .checkpoint(DeploymentStatus::Deleting)
-                .await
-                .expect("runtime cleanup checkpoint");
-            harness
+            }
         }
 
         impl Harness {
@@ -3903,10 +3945,17 @@ mod tests {
                 &self,
                 status: DeploymentStatus,
             ) -> std::result::Result<StepReconcileResult, AlienError> {
+                self.checkpoint_state(&self.state(status)).await
+            }
+
+            async fn checkpoint_state(
+                &self,
+                state: &DeploymentState,
+            ) -> std::result::Result<StepReconcileResult, AlienError> {
                 self.transport
                     .reconcile_step(
                         &self.deployment_id,
-                        &self.state(status),
+                        state,
                         &DeploymentConfig::builder()
                             .stack_settings(StackSettings::default())
                             .environment_variables(EnvironmentVariablesSnapshot {
@@ -3941,6 +3990,34 @@ mod tests {
                     .expect("statuses lock")
                     .clone()
             }
+        }
+
+        /// A step that finds its replica missing is held, with the step saved, until deletion is
+        /// requested. Holding it after that would keep the loop retrying a step nobody wants,
+        /// while no other worker can take the deployment to delete it.
+        #[tokio::test]
+        async fn a_missing_replica_holds_the_step_until_deletion_is_requested() {
+            let harness = deployment_on(Platform::Aws, Answer::ReplicaMissing).await;
+            let mut state = harness.state(DeploymentStatus::Provisioning);
+            state.stack_state = Some(registered_stack_state("test-management-role"));
+
+            let Err(error) = harness.checkpoint_state(&state).await else {
+                panic!("the step is held while the replica is missing");
+            };
+            assert_eq!(error.code, "REGISTRY_REPLICA_PENDING");
+            assert!(error.retryable, "{error}");
+            assert_eq!(harness.persisted_status().await, "provisioning");
+
+            harness
+                .store
+                .set_delete_pending(&Subject::system(), &harness.deployment_id)
+                .await
+                .expect("delete pending");
+            harness
+                .checkpoint_state(&state)
+                .await
+                .expect("a requested deletion lets the step through");
+            assert_eq!(harness.persisted_status().await, "delete-pending");
         }
 
         #[tokio::test]
