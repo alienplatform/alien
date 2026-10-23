@@ -19,6 +19,7 @@ use alien_core::{
     Platform, RegistryAccess, RemoteStackManagementOutputs, ResourceEntry, RuntimeMetadata,
     Sandbox, SandboxCode, Stack, StackState, Worker, WorkerCode,
 };
+use alien_deployment::runner::failed_status_for_deployment_error;
 use alien_error::{AlienError, Context};
 use tracing::{debug, info, warn};
 
@@ -29,10 +30,12 @@ use crate::traits::DeploymentStore;
 /// What one grant attempt left behind. `written` marks that a write was attempted, so cleanup
 /// still has something to revoke even from a partial failure. `complete` marks that the grant
 /// covers everything needed, which is what lets reconcile stop retrying.
-#[derive(Clone, Copy, PartialEq, Eq)]
 struct GrantOutcome {
     written: bool,
     complete: bool,
+    /// Set when the grant could not finish because a regional replica of the repository does not
+    /// exist yet.
+    replica_pending: Option<AlienError<alien_bindings::error::ErrorData>>,
 }
 
 /// Grants cross-account registry access on one repository for a deployment.
@@ -59,6 +62,7 @@ async fn ensure_registry_access(
             return GrantOutcome {
                 written: false,
                 complete: false,
+                replica_pending: None,
             }
         }
     };
@@ -81,6 +85,7 @@ async fn ensure_registry_access(
             GrantOutcome {
                 written: true,
                 complete: has_management_sa && names_compute_agents,
+                replica_pending: None,
             }
         }
         Err(e) => {
@@ -90,9 +95,14 @@ async fn ensure_registry_access(
                 error = %e,
                 "Failed to grant registry cross-account access"
             );
+            let replica_pending = matches!(
+                e.error,
+                Some(alien_bindings::error::ErrorData::RegistryReplicaNotReady { .. })
+            );
             GrantOutcome {
                 written: true,
                 complete: false,
+                replica_pending: replica_pending.then_some(e),
             }
         }
     }
@@ -256,14 +266,15 @@ async fn remove_registry_access(
 /// the record so the delete still revokes it. The caller persists the updated state.
 ///
 /// Returns without error if the bindings provider is unavailable or the
-/// artifact registry cannot be loaded — registry access is best-effort.
+/// artifact registry cannot be loaded — registry access is best-effort. The one error is
+/// `REGISTRY_REPLICA_PENDING`; see `reconcile_registry_access_with_proxy`.
 pub async fn reconcile_registry_access(
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
     target_bindings_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     deployment_id: &str,
     project_id: &str,
     state: &mut DeploymentState,
-) {
+) -> Result<()> {
     reconcile_registry_access_with_proxy()
         .bindings_provider(bindings_provider)
         .target_bindings_providers(target_bindings_providers)
@@ -271,11 +282,22 @@ pub async fn reconcile_registry_access(
         .project_id(project_id)
         .state(state)
         .call()
-        .await;
+        .await
 }
 
 /// Reconciles registry access, also recognizing worker images published through the configured
 /// manager proxy. The proxy URL must come from manager configuration, never from a release.
+///
+/// `supported_aws_regions` are the AWS regions the manager's registry has copies in. An AWS
+/// deployment elsewhere that needs a grant fails here with `REGISTRY_REGION_NOT_SUPPORTED`,
+/// before anything is written: its workers could never pull, and a region written into the
+/// repository's policy would be there for every later grant. Empty means no allowlist.
+///
+/// Returns `REGISTRY_REPLICA_PENDING` (retryable) when a repository has no replica in the
+/// deployment's region yet. `state` still records what was granted, so the caller persists it
+/// first and then answers the step with the error: the runner holds the step, and nothing that
+/// pulls the image starts, until the replica exists and a retry finishes the grant. Once deletion
+/// is requested the caller lets the step through instead; see `holds_step_for_missing_replica`.
 #[bon::builder]
 pub async fn reconcile_registry_access_with_proxy(
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
@@ -284,10 +306,11 @@ pub async fn reconcile_registry_access_with_proxy(
     project_id: &str,
     state: &mut DeploymentState,
     proxy_url: Option<&str>,
-) {
+    #[builder(default)] supported_aws_regions: &[String],
+) -> Result<()> {
     let environment_info = match &state.environment_info {
         Some(env_info) => env_info,
-        None => return,
+        None => return Ok(()),
     };
 
     let platform = environment_info.platform();
@@ -297,11 +320,11 @@ pub async fn reconcile_registry_access_with_proxy(
     // let two concurrent deletions both observe the other deployment as active,
     // leaving the shared project-level grant behind.
     if *status == DeploymentStatus::Deleted {
-        return;
+        return Ok(());
     }
 
     if !needs_registry_access(status) {
-        return;
+        return Ok(());
     }
 
     let recorded = state
@@ -322,7 +345,7 @@ pub async fn reconcile_registry_access_with_proxy(
                 deployment_id = %deployment_id,
                 "No artifact registry binding available, skipping registry access reconciliation"
             );
-            return;
+            return Ok(());
         }
     };
 
@@ -347,7 +370,7 @@ pub async fn reconcile_registry_access_with_proxy(
         if refused_any && metadata.registry_access.is_some() {
             metadata.registry_access_granted = false;
         }
-        return;
+        return Ok(());
     }
     let sandbox_declared = declares_sandbox(state);
     let needed = RegistryAccess {
@@ -363,13 +386,26 @@ pub async fn reconcile_registry_access_with_proxy(
         .as_ref()
         .is_some_and(|metadata| metadata.registry_access_granted);
     if !needs_regrant(recorded.as_ref(), &needed, complete) {
-        return;
+        return Ok(());
+    }
+
+    if let Some(error) = unsupported_region(environment_info, supported_aws_regions) {
+        warn!(
+            deployment_id = %deployment_id,
+            error = %error,
+            "Failing the deployment: its region has no copy of the artifact registry"
+        );
+        state.status = failed_status_for_deployment_error(state.status);
+        state.error = Some(error.into_generic());
+        state.retry_requested = false;
+        return Ok(());
     }
 
     // Each repository joins the record as it is proved, so a grant that fails halfway still names
     // what it opened. Assembling the whole list first would leave a live grant unrecorded.
     let mut opened: Vec<String> = Vec::new();
     let mut all_complete = true;
+    let mut replica_pending = None;
     for repo_id in &repo_ids {
         let outcome = ensure_registry_access(
             artifact_registry.as_ref(),
@@ -383,6 +419,12 @@ pub async fn reconcile_registry_access_with_proxy(
             opened.push(repo_id.clone());
         }
         all_complete &= outcome.complete;
+        // Each missing replica costs a bounded wait. Stopping at the first keeps this pass, and
+        // the request it runs in, to one such wait; the next pass grants the rest.
+        if outcome.replica_pending.is_some() {
+            replica_pending = outcome.replica_pending;
+            break;
+        }
     }
 
     // A repository the deployment stopped naming keeps its grant, recorded so the delete revokes
@@ -409,6 +451,53 @@ pub async fn reconcile_registry_access_with_proxy(
         service_types: needed.service_types,
     });
     rm.registry_access_granted = granted_everything;
+
+    match replica_pending {
+        Some(error) => Err(error).context(ErrorData::RegistryReplicaPending {
+            deployment_id: deployment_id.to_string(),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// The error for an AWS deployment in a region outside `supported_aws_regions`, if it is one.
+fn unsupported_region(
+    environment_info: &EnvironmentInfo,
+    supported_aws_regions: &[String],
+) -> Option<AlienError<ErrorData>> {
+    let EnvironmentInfo::Aws(AwsEnvironmentInfo { region, .. }) = environment_info else {
+        return None;
+    };
+    if supported_aws_regions.is_empty() || supported_aws_regions.contains(region) {
+        return None;
+    }
+    Some(AlienError::new(ErrorData::RegistryRegionNotSupported {
+        region: region.clone(),
+        supported_regions: supported_aws_regions.join(", "),
+    }))
+}
+
+/// Whether a step that found a replica missing is held, given the status the store kept.
+///
+/// Not once deletion was requested: the store keeps the request over the reported state, and
+/// holding the step would keep the deployment's actor retrying work nobody wants while no other
+/// worker can take the deployment.
+pub(crate) fn holds_step_for_missing_replica(persisted_status: &str) -> bool {
+    let deleting = serde_json::from_value::<DeploymentStatus>(serde_json::Value::String(
+        persisted_status.to_string(),
+    ))
+    .is_ok_and(|status| {
+        matches!(
+            status,
+            DeploymentStatus::DeletePending
+                | DeploymentStatus::Deleting
+                | DeploymentStatus::DeleteFailed
+                | DeploymentStatus::TeardownRequired
+                | DeploymentStatus::TeardownFailed
+                | DeploymentStatus::Deleted
+        )
+    });
+    !deleting
 }
 
 /// Whether the policy has to be written again.
@@ -1448,6 +1537,9 @@ mod tests {
     struct RecordingAwsRegistry {
         grants: Mutex<Vec<String>>,
         removals: Mutex<Vec<String>>,
+        /// Answer every grant the way ECR does while a regional replica does not exist yet:
+        /// the source policy is written, the replica's is not.
+        replica_missing: bool,
     }
 
     impl alien_bindings::traits::Binding for RecordingAwsRegistry {}
@@ -1493,6 +1585,15 @@ mod tests {
                 .lock()
                 .expect("grants lock")
                 .push(repository.to_string());
+            if self.replica_missing {
+                return Err(AlienError::new(
+                    alien_bindings::error::ErrorData::RegistryReplicaNotReady {
+                        repository: repository.to_string(),
+                        region: "eu-west-1".to_string(),
+                        details: "not created within 20s".to_string(),
+                    },
+                ));
+            }
             Ok(())
         }
 
@@ -1548,7 +1649,8 @@ mod tests {
                     .state(&mut state)
                     .proxy_url("https://manager.example.com/")
                     .call()
-                    .await;
+                    .await
+                    .expect("no replica is pending");
             }
             assert_eq!(
                 *registry.grants.lock().expect("grants lock"),
@@ -1560,6 +1662,117 @@ mod tests {
             assert_eq!(access.repositories, vec![repository]);
             assert_eq!(access.service_types, vec!["worker"]);
         }
+    }
+
+    /// A deployment in a region the registry has no copy in fails at once, with the reason, and
+    /// nothing is written to the repository's policy. A deployment in a served region is granted.
+    #[tokio::test]
+    async fn a_region_the_registry_does_not_serve_fails_the_deployment_before_any_grant() {
+        let supported = vec!["us-east-1".to_string(), "eu-west-1".to_string()];
+        let image = "manager.example.com/alien-artifacts-prj_test:latest";
+
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let mut state = worker_grant_state(image);
+        state.status = DeploymentStatus::Provisioning;
+        state.environment_info = Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: "123456789012".to_string(),
+            region: "eu-west-2".to_string(),
+        }));
+        reconcile_registry_access_with_proxy()
+            .bindings_provider(&recording_provider(registry.clone()))
+            .target_bindings_providers(&HashMap::new())
+            .deployment_id("deployment")
+            .project_id(PROJECT)
+            .state(&mut state)
+            .proxy_url("https://manager.example.com")
+            .supported_aws_regions(&supported)
+            .call()
+            .await
+            .expect("no replica is pending");
+
+        assert!(registry.grants.lock().expect("grants lock").is_empty());
+        assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
+        assert!(!state.retry_requested);
+        let error = state.error.expect("the deployment carries the reason");
+        assert_eq!(error.code, "REGISTRY_REGION_NOT_SUPPORTED");
+        assert!(!error.retryable);
+        assert!(error.message.contains("eu-west-2"), "{}", error.message);
+        assert!(
+            error.message.contains("us-east-1, eu-west-1"),
+            "{}",
+            error.message
+        );
+        let metadata = state.runtime_metadata.expect("metadata");
+        assert!(!metadata.registry_access_granted);
+        assert!(metadata.registry_access.is_none());
+
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let mut state = worker_grant_state(image);
+        state.environment_info = Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: "123456789012".to_string(),
+            region: "eu-west-1".to_string(),
+        }));
+        reconcile_registry_access_with_proxy()
+            .bindings_provider(&recording_provider(registry.clone()))
+            .target_bindings_providers(&HashMap::new())
+            .deployment_id("deployment")
+            .project_id(PROJECT)
+            .state(&mut state)
+            .proxy_url("https://manager.example.com")
+            .supported_aws_regions(&supported)
+            .call()
+            .await
+            .expect("no replica is pending");
+
+        assert_eq!(
+            *registry.grants.lock().expect("grants lock"),
+            vec!["alien-artifacts-prj_test"]
+        );
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        assert!(state.error.is_none());
+    }
+
+    /// A grant whose regional replica does not exist yet ends the pass with a retryable error,
+    /// so the caller can hold the step, while the state still records the repository whose policy
+    /// it wrote and stays incomplete, so the next pass grants again.
+    #[tokio::test]
+    async fn a_missing_replica_holds_the_step_and_keeps_the_grant_recorded() {
+        let registry = Arc::new(RecordingAwsRegistry {
+            replica_missing: true,
+            ..Default::default()
+        });
+        let mut state = worker_grant_state("manager.example.com/alien-artifacts-prj_test:latest");
+
+        let error = reconcile_registry_access_with_proxy()
+            .bindings_provider(&recording_provider(registry.clone()))
+            .target_bindings_providers(&HashMap::new())
+            .deployment_id("deployment")
+            .project_id(PROJECT)
+            .state(&mut state)
+            .proxy_url("https://manager.example.com")
+            .call()
+            .await
+            .expect_err("a missing replica holds the step");
+
+        assert_eq!(error.code, "REGISTRY_REPLICA_PENDING");
+        assert!(error.retryable, "the replica can still appear: {error}");
+        assert_eq!(
+            *registry.grants.lock().expect("grants lock"),
+            vec!["alien-artifacts-prj_test"]
+        );
+        assert!(
+            state.error.is_none(),
+            "the deployment itself has not failed"
+        );
+        let metadata = state.runtime_metadata.expect("metadata");
+        assert!(!metadata.registry_access_granted);
+        assert_eq!(
+            metadata
+                .registry_access
+                .expect("the written policy is recorded")
+                .repositories,
+            vec!["alien-artifacts-prj_test"]
+        );
     }
 
     #[tokio::test]
@@ -1579,7 +1792,8 @@ mod tests {
                 .state(&mut state)
                 .proxy_url("https://manager.example.com")
                 .call()
-                .await;
+                .await
+                .expect("no replica is pending");
             assert!(registry.grants.lock().expect("grants lock").is_empty());
             let metadata = state.runtime_metadata.expect("metadata");
             assert!(!metadata.registry_access_granted);
@@ -1617,7 +1831,8 @@ mod tests {
             PROJECT,
             &mut state,
         )
-        .await;
+        .await
+        .expect("no replica is pending");
         let grants = registry.grants.lock().expect("grants lock");
         assert_eq!(
             *grants,
@@ -1686,7 +1901,8 @@ mod tests {
                     PROJECT,
                     &mut state,
                 )
-                .await;
+                .await
+                .expect("no replica is pending");
             }
             assert_eq!(
                 *registry.grants.lock().expect("grants lock"),
@@ -1721,7 +1937,8 @@ mod tests {
             PROJECT,
             &mut state,
         )
-        .await;
+        .await
+        .expect("no replica is pending");
         assert!(registry.grants.lock().expect("grants lock").is_empty());
         let metadata = state.runtime_metadata.as_ref().expect("metadata");
         assert!(!metadata.registry_access_granted);
@@ -1784,7 +2001,7 @@ mod tests {
     async fn cleanup_of_a_proxy_published_worker_logs_no_refusal() {
         let registry = Arc::new(RecordingAwsRegistry::default());
         let mut state = worker_grant_state("manager.example.com/alien-artifacts-prj_test:latest");
-        let granted = warnings_during(
+        let granted = warnings_during(async {
             reconcile_registry_access_with_proxy()
                 .bindings_provider(&recording_provider(registry.clone()))
                 .target_bindings_providers(&HashMap::new())
@@ -1792,8 +2009,10 @@ mod tests {
                 .project_id(PROJECT)
                 .state(&mut state)
                 .proxy_url("https://manager.example.com/")
-                .call(),
-        )
+                .call()
+                .await
+                .expect("no replica is pending")
+        })
         .await;
         assert_eq!(
             *registry.grants.lock().expect("grants lock"),
@@ -1823,7 +2042,7 @@ mod tests {
 
         // Granting an image outside the project still logs its refusal, naming the deployment.
         let mut refused = worker_grant_state("manager.example.com/alien-artifacts-other:latest");
-        let logged = warnings_during(
+        let logged = warnings_during(async {
             reconcile_registry_access_with_proxy()
                 .bindings_provider(&recording_provider(registry.clone()))
                 .target_bindings_providers(&HashMap::new())
@@ -1831,8 +2050,10 @@ mod tests {
                 .project_id(PROJECT)
                 .state(&mut refused)
                 .proxy_url("https://manager.example.com/")
-                .call(),
-        )
+                .call()
+                .await
+                .expect("no replica is pending")
+        })
         .await;
         assert!(
             logged
@@ -3479,6 +3700,8 @@ mod tests {
             Revoke,
             Deny,
             Fail,
+            /// Grants find the regional replica missing.
+            ReplicaMissing,
         }
 
         /// A registry that records the deployment's persisted status at each revoke, which is what
@@ -3528,10 +3751,19 @@ mod tests {
 
             async fn add_cross_account_access(
                 &self,
-                _repo_id: &str,
+                repo_id: &str,
                 _access: CrossAccountAccess,
             ) -> BindingResult<()> {
-                unimplemented!("not needed for revoke tests")
+                match *self.answer.lock().expect("answer lock") {
+                    Answer::ReplicaMissing => {
+                        Err(AlienError::new(BindingErrorData::RegistryReplicaNotReady {
+                            repository: repo_id.to_string(),
+                            region: "us-east-2".to_string(),
+                            details: "not created within 20s".to_string(),
+                        }))
+                    }
+                    answer => unimplemented!("grants are not answered with {answer:?}"),
+                }
             }
 
             async fn remove_cross_account_access(
@@ -3563,6 +3795,7 @@ mod tests {
                     Answer::Fail => Err(AlienError::new(BindingErrorData::Other {
                         message: "simulated registry outage".to_string(),
                     })),
+                    Answer::ReplicaMissing => unimplemented!("not needed for revoke tests"),
                 }
             }
 
@@ -3600,6 +3833,21 @@ mod tests {
         }
 
         async fn deleting_deployment_on(platform: Platform, answer: Answer) -> Harness {
+            let harness = deployment_on(platform, answer).await;
+            harness
+                .store
+                .set_delete_pending(&Subject::system(), &harness.deployment_id)
+                .await
+                .expect("delete pending");
+            harness
+                .checkpoint(DeploymentStatus::Deleting)
+                .await
+                .expect("runtime cleanup checkpoint");
+            harness
+        }
+
+        /// A deployment the manager loop holds, before any delete.
+        async fn deployment_on(platform: Platform, answer: Answer) -> Harness {
             let dir = tempfile::tempdir().expect("tempdir");
             let path = dir.keep().join("manager.db");
             let db = Arc::new(
@@ -3641,10 +3889,6 @@ mod tests {
                 )
                 .await
                 .expect("deployment");
-            store
-                .set_delete_pending(&system, &deployment.id)
-                .await
-                .expect("delete pending");
 
             let registry = Arc::new(RecordingRegistry {
                 platform,
@@ -3664,18 +3908,14 @@ mod tests {
                 "prj_test".to_string(),
                 "manager-loop".to_string(),
                 None,
+                Vec::new(),
             );
-            let harness = Harness {
+            Harness {
                 store,
                 registry,
                 transport,
                 deployment_id: deployment.id,
-            };
-            harness
-                .checkpoint(DeploymentStatus::Deleting)
-                .await
-                .expect("runtime cleanup checkpoint");
-            harness
+            }
         }
 
         impl Harness {
@@ -3705,10 +3945,17 @@ mod tests {
                 &self,
                 status: DeploymentStatus,
             ) -> std::result::Result<StepReconcileResult, AlienError> {
+                self.checkpoint_state(&self.state(status)).await
+            }
+
+            async fn checkpoint_state(
+                &self,
+                state: &DeploymentState,
+            ) -> std::result::Result<StepReconcileResult, AlienError> {
                 self.transport
                     .reconcile_step(
                         &self.deployment_id,
-                        &self.state(status),
+                        state,
                         &DeploymentConfig::builder()
                             .stack_settings(StackSettings::default())
                             .environment_variables(EnvironmentVariablesSnapshot {
@@ -3743,6 +3990,34 @@ mod tests {
                     .expect("statuses lock")
                     .clone()
             }
+        }
+
+        /// A step that finds its replica missing is held, with the step saved, until deletion is
+        /// requested. Holding it after that would keep the loop retrying a step nobody wants,
+        /// while no other worker can take the deployment to delete it.
+        #[tokio::test]
+        async fn a_missing_replica_holds_the_step_until_deletion_is_requested() {
+            let harness = deployment_on(Platform::Aws, Answer::ReplicaMissing).await;
+            let mut state = harness.state(DeploymentStatus::Provisioning);
+            state.stack_state = Some(registered_stack_state("test-management-role"));
+
+            let Err(error) = harness.checkpoint_state(&state).await else {
+                panic!("the step is held while the replica is missing");
+            };
+            assert_eq!(error.code, "REGISTRY_REPLICA_PENDING");
+            assert!(error.retryable, "{error}");
+            assert_eq!(harness.persisted_status().await, "provisioning");
+
+            harness
+                .store
+                .set_delete_pending(&Subject::system(), &harness.deployment_id)
+                .await
+                .expect("delete pending");
+            harness
+                .checkpoint_state(&state)
+                .await
+                .expect("a requested deletion lets the step through");
+            assert_eq!(harness.persisted_status().await, "delete-pending");
         }
 
         #[tokio::test]
@@ -4034,7 +4309,9 @@ mod tests {
                 ..Default::default()
             });
 
-            reconcile_registry_access(&providers, &targets, "dep_old", PROJECT, &mut state).await;
+            reconcile_registry_access(&providers, &targets, "dep_old", PROJECT, &mut state)
+                .await
+                .expect("no replica is pending");
             let metadata = state.runtime_metadata.clone().unwrap();
             assert!(
                 metadata.registry_access_granted,

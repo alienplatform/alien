@@ -20,8 +20,17 @@ use async_trait::async_trait;
 use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::DateTime;
 use serde_json::{json, Value};
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{sleep, Duration};
 use tracing::{info, warn};
+
+/// How long a grant waits for ECR to create a replicated repository in a target region.
+///
+/// The grant runs inside a manager request, and a load balancer in front of the manager may close
+/// an idle request after 60 s. Waiting longer turns a slow replica into a gateway timeout the
+/// caller retries without ever seeing why, so the wait ends well before that and reports the
+/// replica as not ready, which is retryable.
+const REPLICA_WAIT: Duration = Duration::from_secs(20);
+const REPLICA_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 /// AWS ECR implementation of the ArtifactRegistry binding.
 #[derive(Debug)]
@@ -600,53 +609,57 @@ impl EcrArtifactRegistry {
         Ok(())
     }
 
+    /// Waits for ECR to create the replicated repository in `region`, for at most `REPLICA_WAIT`
+    /// in total, however long each describe takes.
     async fn wait_for_repository_with_client(
         &self,
         ecr_client: &EcrClient,
         repo_name: &str,
         region: &str,
     ) -> Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(300);
-
-        loop {
-            let request = DescribeRepositoriesRequest::builder()
-                .repository_names(vec![repo_name.to_string()])
-                .build();
-
-            let current_status = match ecr_client.describe_repositories(request).await {
-                Ok(response) => {
-                    if response
-                        .repositories
-                        .iter()
-                        .any(|repository| repository.repository_name == repo_name)
+        let mut last_status = "no DescribeRepositories call finished".to_string();
+        let poll = async {
+            loop {
+                let request = DescribeRepositoriesRequest::builder()
+                    .repository_names(vec![repo_name.to_string()])
+                    .build();
+                last_status = match ecr_client.describe_repositories(request).await {
+                    Ok(response)
+                        if response
+                            .repositories
+                            .iter()
+                            .any(|repository| repository.repository_name == repo_name) =>
                     {
-                        info!(
-                            repo_name = %repo_name,
-                            region = %region,
-                            "Replicated ECR repository is ready"
-                        );
-                        return Ok(());
+                        return;
                     }
-                    "DescribeRepositories response did not include the repository".to_string()
-                }
-                Err(error) => error.to_string(),
-            };
-
-            if Instant::now() >= deadline {
-                return Err(AlienError::new(ErrorData::Timeout {
-                    operation_context: format!(
-                        "Waiting for replicated ECR repository '{}' in {}",
-                        repo_name, region
-                    ),
-                    details: format!(
-                        "ECR did not make the replicated repository available within 300s; last status: {}",
-                        current_status
-                    ),
-                }));
+                    Ok(_) => {
+                        "DescribeRepositories response did not include the repository".to_string()
+                    }
+                    // The top error alone: the full chain spans several lines and ends up in a
+                    // one-line status.
+                    Err(error) => format!("{}: {}", error.code, error.message),
+                };
+                sleep(REPLICA_POLL_INTERVAL).await;
             }
+        };
 
-            sleep(Duration::from_secs(5)).await;
+        if tokio::time::timeout(REPLICA_WAIT, poll).await.is_ok() {
+            info!(
+                repo_name = %repo_name,
+                region = %region,
+                "Replicated ECR repository is ready"
+            );
+            return Ok(());
         }
+        Err(AlienError::new(ErrorData::RegistryReplicaNotReady {
+            repository: repo_name.to_string(),
+            region: region.to_string(),
+            details: format!(
+                "not created within {}s; last status: {}",
+                REPLICA_WAIT.as_secs(),
+                last_status
+            ),
+        }))
     }
 }
 
@@ -858,6 +871,10 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             },
         };
 
+        // The regions this grant is for. Regions already in the policy came from earlier grants,
+        // which waited for and wrote their own replicas.
+        let requested_regions = aws_access.regions.clone();
+
         // Merge new permissions with existing ones
         let mut merged_account_ids = current_aws_access.account_ids;
         let mut merged_regions = current_aws_access.regions;
@@ -899,12 +916,17 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         self.set_full_policy(&full_repo_name, &merged_access)
             .await?;
 
-        // Also set the policy on replicated repos in target regions.
+        // Also set the policy on the replicated repos in the requested regions.
         // ECR replication copies images cross-region but NOT repo policies.
         // Lambda in us-east-2 pulls from the us-east-2 replica, which needs
         // its own cross-account policy.
+        //
+        // Only the requested regions: a region already in the policy got its replica's policy
+        // from the grant that added it, and the principals this grant adds pull only in their own
+        // region. Visiting every merged region would also make one region without a replica stall
+        // every later grant on this repository, whatever region it is for.
         let source_region = self.credentials.region().to_string();
-        for region in &merged_access.regions {
+        for region in &requested_regions {
             if *region == source_region {
                 continue; // Already set on source region above.
             }
@@ -1457,6 +1479,7 @@ fn parse_cross_account_repository_policy(policy: &Value) -> AwsCrossAccountAcces
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn removing_one_deployment_preserves_its_siblings_lambda_pull_access() {
@@ -1712,5 +1735,227 @@ mod tests {
             normal["Statement"][1], cache["Statement"][1],
             "classic Lambda service access must not acquire cache import permissions"
         );
+    }
+
+    /// A fake ECR endpoint for every region: requests are told apart by the region in their
+    /// SigV4 credential scope, which is the region the client calls.
+    mod fake_ecr {
+        use super::*;
+        use alien_core::{
+            bindings::EcrArtifactRegistryBinding, AwsClientConfig, AwsCredentials,
+            AwsServiceOverrides,
+        };
+        use httpmock::prelude::*;
+        use std::collections::HashMap;
+
+        pub(super) const ACCOUNT: &str = "111111111111";
+        pub(super) const REPOSITORY: &str = "artifacts-prj_test";
+
+        fn signed_in(request: &HttpMockRequest, region: &str) -> bool {
+            let scope = format!("/{region}/ecr/aws4_request");
+            request.headers.iter().flatten().any(|(name, value)| {
+                name.eq_ignore_ascii_case("authorization") && value.contains(&scope)
+            })
+        }
+
+        /// Matches a request signed for `region`. httpmock takes a plain function, so each
+        /// region the tests use has its own.
+        pub(super) fn signed_for(region: &str) -> fn(&HttpMockRequest) -> bool {
+            match region {
+                "us-east-1" => |request| signed_in(request, "us-east-1"),
+                "eu-west-1" => |request| signed_in(request, "eu-west-1"),
+                "eu-west-2" => |request| signed_in(request, "eu-west-2"),
+                other => panic!("no request matcher for region {other}"),
+            }
+        }
+
+        fn target(operation: &str) -> String {
+            format!("AmazonEC2ContainerRegistry_V20150921.{operation}")
+        }
+
+        pub(super) async fn registry(server: &MockServer) -> EcrArtifactRegistry {
+            let config = AwsClientConfig {
+                account_id: ACCOUNT.to_string(),
+                region: "us-east-1".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test-access-key".to_string(),
+                    secret_access_key: "test-secret-key".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(AwsServiceOverrides {
+                    endpoints: HashMap::from([("ecr".to_string(), server.base_url())]),
+                }),
+            };
+            let binding = ArtifactRegistryBinding::Ecr(EcrArtifactRegistryBinding {
+                repository_prefix: "artifacts".into(),
+                sandbox_repository_prefix: None,
+                legacy_repository_prefixes: Vec::new(),
+                legacy_sandbox_repository_prefixes: Vec::new(),
+                pull_role_arn: None,
+                push_role_arn: None,
+            });
+            EcrArtifactRegistry::new(
+                "artifacts".to_string(),
+                binding,
+                &AwsCredentialProvider::from_config_sync(config),
+            )
+            .await
+            .expect("the ECR binding builds")
+        }
+
+        /// The source repository's policy, granting Lambda pulls in `regions`.
+        pub(super) async fn source_policy(server: &MockServer, regions: &[&str]) {
+            let access = AwsCrossAccountAccess {
+                account_ids: vec!["222222222222".to_string()],
+                regions: regions.iter().map(|region| region.to_string()).collect(),
+                allowed_service_types: vec![ComputeServiceType::Worker],
+                role_arns: Vec::new(),
+            };
+            let policy = cross_account_repository_policy(&access).to_string();
+            server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .matches(signed_for("us-east-1"))
+                        .header("x-amz-target", target("GetRepositoryPolicy"));
+                    then.status(200)
+                        .header("content-type", "application/x-amz-json-1.1")
+                        .json_body(json!({
+                            "registryId": ACCOUNT,
+                            "repositoryName": REPOSITORY,
+                            "policyText": policy,
+                        }));
+                })
+                .await;
+        }
+
+        pub(super) async fn set_policy<'a>(
+            server: &'a MockServer,
+            region: &str,
+        ) -> httpmock::Mock<'a> {
+            server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .matches(signed_for(region))
+                        .header("x-amz-target", target("SetRepositoryPolicy"));
+                    then.status(200)
+                        .header("content-type", "application/x-amz-json-1.1")
+                        .json_body(json!({
+                            "registryId": ACCOUNT,
+                            "repositoryName": REPOSITORY,
+                            "policyText": "{}",
+                        }));
+                })
+                .await
+        }
+
+        /// `DescribeRepositories` in `region`, answering with the replica or without it.
+        pub(super) async fn replica<'a>(
+            server: &'a MockServer,
+            region: &str,
+            exists: bool,
+        ) -> httpmock::Mock<'a> {
+            let region = region.to_string();
+            server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .matches(signed_for(&region))
+                        .header("x-amz-target", target("DescribeRepositories"));
+                    if exists {
+                        then.status(200)
+                            .header("content-type", "application/x-amz-json-1.1")
+                            .json_body(json!({
+                                "repositories": [{
+                                    "repositoryArn": format!("arn:aws:ecr:{region}:{ACCOUNT}:repository/{REPOSITORY}"),
+                                    "registryId": ACCOUNT,
+                                    "repositoryName": REPOSITORY,
+                                    "repositoryUri": format!("{ACCOUNT}.dkr.ecr.{region}.amazonaws.com/{REPOSITORY}"),
+                                    "createdAt": 1_700_000_000.0,
+                                }]
+                            }));
+                    } else {
+                        then.status(400)
+                            .header("content-type", "application/x-amz-json-1.1")
+                            .json_body(json!({
+                                "__type": "RepositoryNotFoundException",
+                                "message": format!("The repository with name '{REPOSITORY}' does not exist in the registry with id '{ACCOUNT}'"),
+                            }));
+                    }
+                })
+                .await
+        }
+
+        pub(super) fn grant(region: &str) -> CrossAccountAccess {
+            CrossAccountAccess::Aws(AwsCrossAccountAccess {
+                account_ids: vec!["333333333333".to_string()],
+                regions: vec![region.to_string()],
+                allowed_service_types: vec![ComputeServiceType::Worker],
+                role_arns: Vec::new(),
+            })
+        }
+    }
+
+    /// A region an earlier grant wrote into the policy, but that has no replica, must not hold up
+    /// a grant for another region. It used to: every grant waited for a replica in every region of
+    /// the policy, so one deployment to an unreplicated region stalled the whole project.
+    #[tokio::test]
+    async fn a_policy_region_without_a_replica_does_not_hold_up_a_grant_for_another_region() {
+        let server = httpmock::MockServer::start_async().await;
+        fake_ecr::source_policy(&server, &["eu-west-2"]).await;
+        let source_set = fake_ecr::set_policy(&server, "us-east-1").await;
+        let replica_set = fake_ecr::set_policy(&server, "eu-west-1").await;
+        let ready = fake_ecr::replica(&server, "eu-west-1", true).await;
+        let missing = fake_ecr::replica(&server, "eu-west-2", false).await;
+        let missing_set = fake_ecr::set_policy(&server, "eu-west-2").await;
+        let registry = fake_ecr::registry(&server).await;
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            registry.add_cross_account_access(fake_ecr::REPOSITORY, fake_ecr::grant("eu-west-1")),
+        )
+        .await
+        .expect("the grant must not wait on a region it was not asked for")
+        .expect("the grant for eu-west-1 succeeds");
+
+        assert_eq!(source_set.hits_async().await, 1);
+        assert_eq!(ready.hits_async().await, 1);
+        assert_eq!(replica_set.hits_async().await, 1);
+        assert_eq!(missing.hits_async().await, 0);
+        assert_eq!(missing_set.hits_async().await, 0);
+    }
+
+    /// A replica ECR has not created yet ends the grant with a retryable timeout well inside a
+    /// load balancer's 60 s idle limit, instead of holding the manager request until the gateway
+    /// gives up.
+    #[tokio::test]
+    async fn a_replica_that_is_not_ready_ends_the_grant_retryably_before_a_gateway_timeout() {
+        let server = httpmock::MockServer::start_async().await;
+        fake_ecr::source_policy(&server, &[]).await;
+        fake_ecr::set_policy(&server, "us-east-1").await;
+        let pending = fake_ecr::replica(&server, "eu-west-1", false).await;
+        let replica_set = fake_ecr::set_policy(&server, "eu-west-1").await;
+        let registry = fake_ecr::registry(&server).await;
+
+        let started = Instant::now();
+        let error = tokio::time::timeout(
+            Duration::from_secs(55),
+            registry.add_cross_account_access(fake_ecr::REPOSITORY, fake_ecr::grant("eu-west-1")),
+        )
+        .await
+        .expect("the grant must return before a 60 s gateway timeout")
+        .expect_err("a replica that never appears cannot be granted");
+
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(error.code, "REGISTRY_REPLICA_NOT_READY", "{error}");
+        assert!(error.retryable, "a replica can still appear: {error}");
+        assert!(error.to_string().contains("eu-west-1"), "{error}");
+        assert!(
+            pending.hits_async().await >= 2,
+            "the replica is polled until the bound"
+        );
+        assert_eq!(replica_set.hits_async().await, 0);
     }
 }

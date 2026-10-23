@@ -2455,6 +2455,10 @@ async fn deploy_task_with_environment(
     steps.activate(2, Some(tracked_deployment.deployment_id.clone()));
     let progress_steps = steps.clone();
     let on_progress: alien_deployment::runner::ProgressCallback = Box::new(move |progress| {
+        if let Some(retry) = &progress.checkpoint_retry {
+            progress_steps.warn(&retry.notice());
+            return;
+        }
         if let Some(stack_state) = progress.stack_state {
             progress_steps.sync_deployment_resources(&stack_state.resources, progress.status);
         }

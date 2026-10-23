@@ -38,6 +38,9 @@ use tracing::{debug, info, warn};
 
 const CHECKPOINT_RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const CHECKPOINT_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+/// Failed checkpoints in a row after which the runner reports each retry to `on_progress`, so a
+/// CLI that hides logs still shows that the deployment is stuck, and why.
+const CHECKPOINT_RETRIES_BEFORE_NOTICE: usize = 3;
 const LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(60);
 const LEASE_RENEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const LEASE_RENEW_FAILURE_DEADLINE: Duration = Duration::from_secs(3 * 60 + 30);
@@ -134,6 +137,56 @@ pub struct StepProgress<'a> {
     pub step_number: usize,
     pub status: DeploymentStatus,
     pub stack_state: Option<&'a StackState>,
+    /// Set while the step's result keeps failing to checkpoint: the runner retries without
+    /// making further progress until the manager accepts it.
+    pub checkpoint_retry: Option<CheckpointRetry<'a>>,
+}
+
+/// A checkpoint that failed again and will be retried.
+pub struct CheckpointRetry<'a> {
+    /// Failed attempts so far.
+    pub attempt: usize,
+    /// How long the runner waits before the next attempt.
+    pub retry_after: Duration,
+    /// Why the last attempt failed.
+    pub error: &'a AlienError,
+}
+
+impl CheckpointRetry<'_> {
+    /// One line for a person watching the deployment.
+    pub fn notice(&self) -> String {
+        format!(
+            "Warning: the manager has not accepted this deployment step after {} attempts; retrying in {}s. Last error: {}",
+            self.attempt,
+            self.retry_after.as_secs().max(1),
+            self.error
+        )
+    }
+}
+
+fn notify_checkpoint_retry(
+    on_progress: Option<&ProgressCallback>,
+    step_number: usize,
+    state: &DeploymentState,
+    attempt: usize,
+    retry_after: Duration,
+    error: &AlienError,
+) {
+    if attempt < CHECKPOINT_RETRIES_BEFORE_NOTICE {
+        return;
+    }
+    if let Some(cb) = on_progress {
+        cb(&StepProgress {
+            step_number,
+            status: state.status,
+            stack_state: state.stack_state.as_ref(),
+            checkpoint_retry: Some(CheckpointRetry {
+                attempt,
+                retry_after,
+                error,
+            }),
+        });
+    }
 }
 
 /// Callback invoked after each deployment step with the current progress.
@@ -450,6 +503,14 @@ async fn run_step_loop_body(
                                 error = %e,
                                 "Failed to checkpoint deployment error; retrying before returning failure"
                             );
+                            notify_checkpoint_retry(
+                                on_progress,
+                                step_count,
+                                state,
+                                checkpoint_attempt,
+                                checkpoint_delay,
+                                &e,
+                            );
                             tokio::time::sleep(checkpoint_delay).await;
                             checkpoint_attempt += 1;
                             checkpoint_delay =
@@ -523,6 +584,14 @@ async fn run_step_loop_body(
                         error = %e,
                         "Failed to checkpoint deployment step; retrying before any further progress"
                     );
+                    notify_checkpoint_retry(
+                        on_progress,
+                        step_count,
+                        state,
+                        checkpoint_attempt,
+                        checkpoint_delay,
+                        &e,
+                    );
                     tokio::time::sleep(checkpoint_delay).await;
                     checkpoint_attempt += 1;
                     checkpoint_delay = (checkpoint_delay * 2).min(CHECKPOINT_RETRY_MAX_DELAY);
@@ -536,6 +605,7 @@ async fn run_step_loop_body(
                 step_number: step_count,
                 status: state.status,
                 stack_state: state.stack_state.as_ref(),
+                checkpoint_retry: None,
             });
         }
 
@@ -1186,6 +1256,88 @@ mod tests {
             ],
             "checkpoint retry must persist the same produced state, not run another step"
         );
+    }
+
+    /// Answers the first `failures` checkpoints the way a manager behind a load balancer does
+    /// when the request outlives the balancer's idle timeout.
+    #[derive(Debug)]
+    struct GatewayTimeoutTransport {
+        failures: usize,
+        attempts: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl DeploymentLoopTransport for GatewayTimeoutTransport {
+        async fn reconcile_step(
+            &self,
+            _deployment_id: &str,
+            _state: &DeploymentState,
+            _config: &DeploymentConfig,
+            _update_heartbeat: bool,
+            _suggested_delay_ms: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> std::result::Result<StepReconcileResult, alien_error::AlienError> {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) < self.failures {
+                let mut error = alien_error::AlienError::new(alien_error::GenericError {
+                    message: "reconcile step: 504 Gateway Timeout".to_string(),
+                });
+                error.retryable = true;
+                return Err(error);
+            }
+            Ok(StepReconcileResult {
+                state: None,
+                config: None,
+            })
+        }
+    }
+
+    /// The caller hears about a checkpoint the manager keeps refusing, with the reason, once the
+    /// retries stop looking like a blip. A CLI hides runner logs by default, so without this a
+    /// stuck checkpoint looks like a deployment that is still working.
+    #[tokio::test(start_paused = true)]
+    async fn repeated_checkpoint_failures_reach_the_progress_callback() {
+        let transport = GatewayTimeoutTransport {
+            failures: 4,
+            attempts: AtomicUsize::new(0),
+        };
+        let mut state = test_state();
+        let mut config = test_config();
+        let policy = RunnerPolicy {
+            max_steps: 1,
+            operation: LoopOperation::Deploy,
+            delay_strategy: DelayStrategy::Inline,
+        };
+        let notices = Arc::new(Mutex::new(Vec::new()));
+        let seen = notices.clone();
+        let on_progress: ProgressCallback = Box::new(move |progress| {
+            if let Some(retry) = &progress.checkpoint_retry {
+                seen.lock()
+                    .expect("notices lock poisoned")
+                    .push((retry.attempt, retry.notice()));
+            }
+        });
+
+        run_step_loop(
+            &mut state,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_test",
+            &policy,
+            &transport,
+            None,
+            Some(&on_progress),
+        )
+        .await
+        .expect("the checkpoint is accepted on the fifth attempt");
+
+        assert_eq!(transport.attempts.load(Ordering::SeqCst), 5);
+        let notices = notices.lock().expect("notices lock poisoned");
+        let attempts: Vec<usize> = notices.iter().map(|(attempt, _)| *attempt).collect();
+        assert_eq!(attempts, vec![3, 4], "the first two failures stay quiet");
+        for (_, notice) in notices.iter() {
+            assert!(notice.contains("504 Gateway Timeout"), "{notice}");
+        }
     }
 
     #[tokio::test(start_paused = true)]

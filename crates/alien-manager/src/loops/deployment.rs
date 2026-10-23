@@ -1178,6 +1178,7 @@ impl DeploymentLoop {
             deployment.project_id.clone(),
             session.to_string(),
             execution_claim.clone(),
+            self.config.supported_aws_regions.clone(),
         );
 
         let mut config = config;

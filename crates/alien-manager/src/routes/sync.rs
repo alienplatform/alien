@@ -626,15 +626,19 @@ async fn reconcile(
     if legacy_cli {
         preserve_legacy_key_observations(&mut final_state, &deployment);
     }
-    crate::registry_access::reconcile_registry_access_with_proxy()
+    // A pending replica still persists below — the state records what was granted — and then
+    // answers the step with a retryable error, so the runner holds it until the replica exists.
+    let replica_pending = crate::registry_access::reconcile_registry_access_with_proxy()
         .bindings_provider(&state.bindings_provider)
         .target_bindings_providers(&state.target_bindings_providers)
         .deployment_id(&req.deployment_id)
         .project_id(&deployment.project_id)
         .state(&mut final_state)
         .proxy_url(&state.config.base_url())
+        .supported_aws_regions(&state.config.supported_aws_regions)
         .call()
-        .await;
+        .await
+        .err();
 
     // 1a. Inject target_release from the deployment record's
     //     desired_release_id. The CLI's deploy command initializes state with
@@ -671,7 +675,7 @@ async fn reconcile(
     };
 
     // 2. Persist the step result (including any registry access changes).
-    let _result = match state
+    let result = match state
         .deployment_store
         .reconcile(
             &subject,
@@ -715,6 +719,12 @@ async fn reconcile(
             error = %error,
             "Registry access cleanup failed after the deployment state was persisted"
         );
+        return error.into_response();
+    }
+
+    if let Some(error) = replica_pending
+        .filter(|_| crate::registry_access::holds_step_for_missing_replica(&result.record.status))
+    {
         return error.into_response();
     }
 
@@ -2339,15 +2349,27 @@ async fn agent_sync(
                     preserve_recorded_gate_answers(&mut agent_state, &deployment);
                     // Reconcile registry access before persisting so the flag
                     // is saved in the same DB write.
-                    crate::registry_access::reconcile_registry_access_with_proxy()
-                        .bindings_provider(&state.bindings_provider)
-                        .target_bindings_providers(&state.target_bindings_providers)
-                        .deployment_id(&req.deployment_id)
-                        .project_id(&deployment.project_id)
-                        .state(&mut agent_state)
-                        .proxy_url(&state.config.base_url())
-                        .call()
-                        .await;
+                    // Pull sync is the agent's only channel to the manager, so a pending
+                    // replica does not refuse it. The record stays incomplete, and the next
+                    // sync grants again.
+                    if let Err(error) =
+                        crate::registry_access::reconcile_registry_access_with_proxy()
+                            .bindings_provider(&state.bindings_provider)
+                            .target_bindings_providers(&state.target_bindings_providers)
+                            .deployment_id(&req.deployment_id)
+                            .project_id(&deployment.project_id)
+                            .state(&mut agent_state)
+                            .proxy_url(&state.config.base_url())
+                            .supported_aws_regions(&state.config.supported_aws_regions)
+                            .call()
+                            .await
+                    {
+                        tracing::warn!(
+                            deployment_id = %req.deployment_id,
+                            error = %error,
+                            "Registry replica not ready; the next sync grants again"
+                        );
+                    }
 
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
