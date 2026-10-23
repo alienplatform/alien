@@ -19,6 +19,7 @@ use alien_core::{
     Platform, RegistryAccess, RemoteStackManagementOutputs, ResourceEntry, RuntimeMetadata,
     Sandbox, SandboxCode, Stack, StackState, Worker, WorkerCode,
 };
+use alien_deployment::runner::failed_status_for_deployment_error;
 use alien_error::{AlienError, Context};
 use tracing::{debug, info, warn};
 
@@ -276,6 +277,11 @@ pub async fn reconcile_registry_access(
 
 /// Reconciles registry access, also recognizing worker images published through the configured
 /// manager proxy. The proxy URL must come from manager configuration, never from a release.
+///
+/// `supported_aws_regions` are the AWS regions the manager's registry has copies in. An AWS
+/// deployment elsewhere that needs a grant fails here with `REGISTRY_REGION_NOT_SUPPORTED`,
+/// before anything is written: its workers could never pull, and a region written into the
+/// repository's policy would be there for every later grant. Empty means no allowlist.
 #[bon::builder]
 pub async fn reconcile_registry_access_with_proxy(
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
@@ -284,6 +290,7 @@ pub async fn reconcile_registry_access_with_proxy(
     project_id: &str,
     state: &mut DeploymentState,
     proxy_url: Option<&str>,
+    #[builder(default)] supported_aws_regions: &[String],
 ) {
     let environment_info = match &state.environment_info {
         Some(env_info) => env_info,
@@ -366,6 +373,18 @@ pub async fn reconcile_registry_access_with_proxy(
         return;
     }
 
+    if let Some(error) = unsupported_region(environment_info, supported_aws_regions) {
+        warn!(
+            deployment_id = %deployment_id,
+            error = %error,
+            "Failing the deployment: its region has no copy of the artifact registry"
+        );
+        state.status = failed_status_for_deployment_error(state.status);
+        state.error = Some(error.into_generic());
+        state.retry_requested = false;
+        return;
+    }
+
     // Each repository joins the record as it is proved, so a grant that fails halfway still names
     // what it opened. Assembling the whole list first would leave a live grant unrecorded.
     let mut opened: Vec<String> = Vec::new();
@@ -409,6 +428,23 @@ pub async fn reconcile_registry_access_with_proxy(
         service_types: needed.service_types,
     });
     rm.registry_access_granted = granted_everything;
+}
+
+/// The error for an AWS deployment in a region outside `supported_aws_regions`, if it is one.
+fn unsupported_region(
+    environment_info: &EnvironmentInfo,
+    supported_aws_regions: &[String],
+) -> Option<AlienError<ErrorData>> {
+    let EnvironmentInfo::Aws(AwsEnvironmentInfo { region, .. }) = environment_info else {
+        return None;
+    };
+    if supported_aws_regions.is_empty() || supported_aws_regions.contains(region) {
+        return None;
+    }
+    Some(AlienError::new(ErrorData::RegistryRegionNotSupported {
+        region: region.clone(),
+        supported_regions: supported_aws_regions.join(", "),
+    }))
 }
 
 /// Whether the policy has to be written again.
@@ -1560,6 +1596,72 @@ mod tests {
             assert_eq!(access.repositories, vec![repository]);
             assert_eq!(access.service_types, vec!["worker"]);
         }
+    }
+
+    /// A deployment in a region the registry has no copy in fails at once, with the reason, and
+    /// nothing is written to the repository's policy. A deployment in a served region is granted.
+    #[tokio::test]
+    async fn a_region_the_registry_does_not_serve_fails_the_deployment_before_any_grant() {
+        let supported = vec!["us-east-1".to_string(), "eu-west-1".to_string()];
+        let image = "manager.example.com/alien-artifacts-prj_test:latest";
+
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let mut state = worker_grant_state(image);
+        state.status = DeploymentStatus::Provisioning;
+        state.environment_info = Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: "123456789012".to_string(),
+            region: "eu-west-2".to_string(),
+        }));
+        reconcile_registry_access_with_proxy()
+            .bindings_provider(&recording_provider(registry.clone()))
+            .target_bindings_providers(&HashMap::new())
+            .deployment_id("deployment")
+            .project_id(PROJECT)
+            .state(&mut state)
+            .proxy_url("https://manager.example.com")
+            .supported_aws_regions(&supported)
+            .call()
+            .await;
+
+        assert!(registry.grants.lock().expect("grants lock").is_empty());
+        assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
+        assert!(!state.retry_requested);
+        let error = state.error.expect("the deployment carries the reason");
+        assert_eq!(error.code, "REGISTRY_REGION_NOT_SUPPORTED");
+        assert!(!error.retryable);
+        assert!(error.message.contains("eu-west-2"), "{}", error.message);
+        assert!(
+            error.message.contains("us-east-1, eu-west-1"),
+            "{}",
+            error.message
+        );
+        let metadata = state.runtime_metadata.expect("metadata");
+        assert!(!metadata.registry_access_granted);
+        assert!(metadata.registry_access.is_none());
+
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let mut state = worker_grant_state(image);
+        state.environment_info = Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: "123456789012".to_string(),
+            region: "eu-west-1".to_string(),
+        }));
+        reconcile_registry_access_with_proxy()
+            .bindings_provider(&recording_provider(registry.clone()))
+            .target_bindings_providers(&HashMap::new())
+            .deployment_id("deployment")
+            .project_id(PROJECT)
+            .state(&mut state)
+            .proxy_url("https://manager.example.com")
+            .supported_aws_regions(&supported)
+            .call()
+            .await;
+
+        assert_eq!(
+            *registry.grants.lock().expect("grants lock"),
+            vec!["alien-artifacts-prj_test"]
+        );
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        assert!(state.error.is_none());
     }
 
     #[tokio::test]
@@ -3664,6 +3766,7 @@ mod tests {
                 "prj_test".to_string(),
                 "manager-loop".to_string(),
                 None,
+                Vec::new(),
             );
             let harness = Harness {
                 store,

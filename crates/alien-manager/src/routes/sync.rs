@@ -633,6 +633,7 @@ async fn reconcile(
         .project_id(&deployment.project_id)
         .state(&mut final_state)
         .proxy_url(&state.config.base_url())
+        .supported_aws_regions(&state.config.supported_aws_regions)
         .call()
         .await;
 
@@ -2346,6 +2347,7 @@ async fn agent_sync(
                         .project_id(&deployment.project_id)
                         .state(&mut agent_state)
                         .proxy_url(&state.config.base_url())
+                        .supported_aws_regions(&state.config.supported_aws_regions)
                         .call()
                         .await;
 

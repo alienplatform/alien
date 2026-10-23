@@ -90,6 +90,11 @@ pub struct ServerConfig {
     pub deployment_interval_secs: u64,
     #[serde(default = "default_heartbeat_interval")]
     pub heartbeat_interval_secs: u64,
+    /// The AWS regions this manager serves. List the regions the AWS artifact registry has
+    /// copies in: a setup import or a worker deployment in any other region is refused, since
+    /// its workers could not pull their images. Empty means no restriction.
+    #[serde(default)]
+    pub supported_aws_regions: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -101,6 +106,7 @@ impl Default for ServerConfig {
             releases_url: None,
             deployment_interval_secs: default_deployment_interval(),
             heartbeat_interval_secs: default_heartbeat_interval(),
+            supported_aws_regions: Vec::new(),
         }
     }
 }
@@ -368,7 +374,7 @@ impl ManagerTomlConfig {
             base_url: self.server.base_url.clone(),
             releases_url: self.server.releases_url.clone(),
             targets: Vec::new(),
-            supported_aws_regions: Vec::new(),
+            supported_aws_regions: self.server.supported_aws_regions.clone(),
             disable_deployment_loop: false,
             disable_heartbeat_loop: false,
             enable_local_log_ingest: false,
@@ -398,6 +404,8 @@ impl ManagerTomlConfig {
 # base-url = "https://alien.example.com"
 # deployment-interval-secs = 3
 # heartbeat-interval-secs = 60
+# AWS regions the AWS artifact registry has copies in. Deployments elsewhere are refused.
+# supported-aws-regions = ["us-east-1", "eu-west-1"]
 
 [database]
 # state-dir = "alien-data"

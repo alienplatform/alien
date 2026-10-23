@@ -333,6 +333,7 @@ dependencies = [
  "futures",
  "hex",
  "hickory-resolver",
+ "httpmock",
  "k8s-openapi",
  "object_store",
  "oci-client",

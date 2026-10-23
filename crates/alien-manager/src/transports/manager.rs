@@ -27,6 +27,8 @@ pub struct ManagerTransport {
     project_id: String,
     session: String,
     execution_claim: Option<ExecutionClaim>,
+    /// AWS regions the artifact registry serves; see `reconcile_registry_access_with_proxy`.
+    supported_aws_regions: Vec<String>,
 }
 
 impl ManagerTransport {
@@ -37,6 +39,7 @@ impl ManagerTransport {
         project_id: String,
         session: String,
         execution_claim: Option<ExecutionClaim>,
+        supported_aws_regions: Vec<String>,
     ) -> Self {
         Self {
             deployment_store,
@@ -45,6 +48,7 @@ impl ManagerTransport {
             project_id,
             session,
             execution_claim,
+            supported_aws_regions,
         }
     }
 }
@@ -85,6 +89,7 @@ impl DeploymentLoopTransport for ManagerTransport {
             .project_id(&self.project_id)
             .state(&mut granted_state)
             .maybe_proxy_url(config.manager_url.as_deref())
+            .supported_aws_regions(&self.supported_aws_regions)
             .call()
             .await;
 
