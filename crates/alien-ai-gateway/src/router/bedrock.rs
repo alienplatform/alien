@@ -130,9 +130,11 @@ pub(crate) async fn proxy_bedrock_anthropic(
     // visible in the logs and leave the body coherent: Bedrock rejects a `tool_choice`
     // that forces a tool that is no longer declared, and an emptied `tools` array.
     // A kept beta-gated family still needs its `anthropic_beta` entry, which
-    // merge_beta_headers has already bridged from the header above. Also strip
-    // `defer_loading`, a client-tool field Claude Code's on-demand tool loading adds
-    // that the pinned schema rejects as an extra input.
+    // merge_beta_headers has already bridged from the header above. Also strip the
+    // per-tool fields newer than the pinned schema, which it rejects as extra inputs:
+    // `defer_loading` (Claude Code's on-demand tool loading) and
+    // `eager_input_streaming` (the AI SDK's Anthropic provider adds it to function tools
+    // on streamed requests).
     //
     // Residue blocks a *previous* server-tool turn left in `messages` (e.g.
     // `web_search_tool_result` from a conversation started on Anthropic's API) are
@@ -164,6 +166,7 @@ pub(crate) async fn proxy_bedrock_anthropic(
         for tool in tools.iter_mut() {
             if let Some(obj) = tool.as_object_mut() {
                 obj.remove("defer_loading");
+                obj.remove("eager_input_streaming");
             }
         }
         tools_remaining = !tools.is_empty();
