@@ -67,15 +67,21 @@ async fn not_found_response(
     operation: &str,
 ) -> Result<(AlienError<ErrorData>, bool)> {
     let status = response.status();
-    let body = response
-        .text()
+    let body = tokio::time::timeout(agent_protocol::AGENT_RESPONSE_TIMEOUT, response.text())
         .await
+        .map_err(|_| {
+            AlienError::new(agent_protocol::unanswered(
+                operation,
+                "the 404 response body exceeded the response deadline",
+            ))
+        })?
         .into_alien_error()
         .context(agent_protocol::unanswered(
             operation,
             "the 404 response body could not be read",
         ))?;
-    let from_agent = serde_json::from_str::<agent_protocol::JobErrorResponse>(&body).is_ok();
+    // ApiError sends coded plain text for these errors, not the jobs JSON envelope.
+    let from_agent = body.starts_with("PATH_NOT_FOUND:") || body.starts_with("JOB_NOT_FOUND:");
     Ok((
         AlienError::new(ErrorData::SandboxCommandFailed {
             failure: "agentRefused".into(),
@@ -404,7 +410,7 @@ mod tests {
     use futures::StreamExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{collections::BTreeMap, sync::Arc};
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn reconnect_activates_a_fresh_boot_and_does_not_retry_authorization_refusal() {
@@ -1067,11 +1073,32 @@ mod tests {
                 let calls = Arc::new(AtomicUsize::new(0));
                 let observed = calls.clone();
                 let router = Router::new()
-                    .route("/v1/activate", post(|| async { axum::http::StatusCode::NO_CONTENT }))
-                    .route("/v1/missing", axum::routing::get(move || {
-                        observed.fetch_add(1, Ordering::SeqCst);
-                        async move { (axum::http::StatusCode::NOT_FOUND, Json(serde_json::json!({"code":code,"message":"missing resource"}))) }
-                    }));
+                    .route(
+                        "/v1/activate",
+                        post(|| async { axum::http::StatusCode::NO_CONTENT }),
+                    )
+                    .route(
+                        "/v1/missing",
+                        axum::routing::get(move || {
+                            observed.fetch_add(1, Ordering::SeqCst);
+                            async move {
+                                let error = match code {
+                                    "PATH_NOT_FOUND" => {
+                                        alien_sandbox_agent::error::ErrorData::PathNotFound {
+                                            path: "missing".into(),
+                                        }
+                                    }
+                                    "JOB_NOT_FOUND" => {
+                                        alien_sandbox_agent::error::ErrorData::JobNotFound {
+                                            job_id: "missing".into(),
+                                        }
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                alien_sandbox_agent::server::ApiError::from(AlienError::new(error))
+                            }
+                        }),
+                    );
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let url = format!("http://{}/", listener.local_addr().unwrap());
                 let server = tokio::spawn(async move {
@@ -1150,6 +1177,64 @@ mod tests {
                 server.abort();
                 stale_server.abort();
             }
+        }
+    }
+    #[tokio::test]
+    async fn unfinished_not_found_body_is_bounded_and_never_replayed() {
+        for disconnect in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                socket
+                    .write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 100\r\n\r\nPATH_NOT_FOUND:",
+                    )
+                    .await
+                    .unwrap();
+                if !disconnect {
+                    tokio::time::sleep(agent_protocol::AGENT_RESPONSE_TIMEOUT * 10).await;
+                }
+            });
+            let mut native = MockSandboxDataPlaneApi::new();
+            native.expect_agent_port_url().never();
+            let provider = AzureSandbox::new(
+                Arc::new(native),
+                "group".into(),
+                "image".into(),
+                SandboxEgress::None,
+                None,
+                "1000m".into(),
+                "2048Mi".into(),
+                None,
+            );
+            *provider.connection_slot("session").await.lock().await = Some(Connection {
+                client: reqwest::Client::builder().no_proxy().build().unwrap(),
+                url: url.parse().unwrap(),
+                token: STANDARD.encode([7u8; 32]),
+            });
+            let request = provider
+                .request("session", reqwest::Method::GET, "/v1/missing")
+                .await
+                .unwrap();
+            let result = tokio::time::timeout(
+                agent_protocol::AGENT_RESPONSE_TIMEOUT * 3,
+                provider.send("session", request, "sandbox.runCommand"),
+            )
+            .await
+            .expect("an unfinished 404 must not hang the operation");
+            let error = result.unwrap_err();
+            assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN");
+            assert!(!error.retryable);
+            assert!(provider
+                .connection_slot("session")
+                .await
+                .lock()
+                .await
+                .is_none());
+            server.abort();
         }
     }
 }

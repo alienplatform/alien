@@ -88,6 +88,7 @@ strip-ansi-escapes = "0.2"
 lognorm = "0.2.0"
 alien-commands = { path = "crates/alien-commands", version = "3.3.40", default-features = false }
 alien-commands-client = { path = "crates/alien-commands-client" }
+alien-sandbox-agent = { path = "crates/alien-sandbox-agent", version = "3.3.40" }
 alien-bindings = { path = "crates/alien-bindings", version = "3.3.40", default-features = false }
 alien-ai-gateway = { path = "crates/alien-ai-gateway", version = "3.3.40" }
 alien-worker-protocol = { path = "crates/alien-worker-protocol", version = "3.3.40" }
