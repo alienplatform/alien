@@ -309,7 +309,10 @@ Boot commands receive HOME from their passwd entry (or `/`) and the container
 HOSTNAME unless the image or create-time environment overrides them. Each boot
 command owns a process group. On SIGTERM or SIGINT the agent stops serving,
 sends SIGTERM to that group, allows two seconds, then sends SIGKILL and collects
-the leader. The agent never restarts it. Descendants that deliberately leave the
+the leader. If the leader exits earlier, health reports its exit immediately,
+but the agent retains that one exited child until shutdown to reserve the process
+group ID. Surviving workers still receive TERM, and a reused group ID can never
+receive a stale signal. The agent never restarts it. Descendants that deliberately leave the
 process group are outside this forwarding contract; container shutdown ends
 those processes too.
 

@@ -24,6 +24,7 @@ pub struct ImageProcess {
     status: Arc<Mutex<ImageStatus>>,
     image_user: bool,
     shutdown: tokio::sync::watch::Sender<bool>,
+    monitor: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl Default for ImageProcess {
@@ -32,6 +33,7 @@ impl Default for ImageProcess {
             status: Arc::new(Mutex::new(ImageStatus::Pending)),
             image_user: false,
             shutdown: tokio::sync::watch::channel(false).0,
+            monitor: Mutex::new(None),
         }
     }
 }
@@ -119,8 +121,15 @@ impl ImageProcess {
             let _status = self.status.lock().map_err(|_| monitor_failed())?;
             self.shutdown.send_replace(true);
         }
-        while self.status()? == ImageStatus::Running {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let monitor = self.monitor.lock().map_err(|_| monitor_failed())?.take();
+        if let Some(monitor) = monitor {
+            monitor
+                .await
+                .into_alien_error()
+                .context(ErrorData::OperationFailed {
+                    operation: "stop image process group".into(),
+                    reason: "image monitor task did not complete".into(),
+                })?;
         }
         if self.status()? == ImageStatus::Failed {
             return Err(monitor_failed());
@@ -166,21 +175,30 @@ impl ImageProcess {
         *status = ImageStatus::Running;
         let shared = Arc::clone(&self.status);
         let mut shutdown = self.shutdown.subscribe();
-        tokio::spawn(async move {
+        let monitor = tokio::spawn(async move {
             let _registration = registration;
             let outcome = async {
-                tokio::select! {
-                    result = child.wait() => result,
-                    _ = shutdown.changed() => {
-                        let pid = child.id().ok_or_else(|| std::io::Error::other("image PID missing"))?;
-                        signal_group(pid, libc::SIGTERM)?;
-                        // Keep the leader unreaped during the grace period so its PID
-                        // cannot be reused for an unrelated process group.
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        signal_group(pid, libc::SIGKILL)?;
-                        child.wait().await
+                let pid = child.id().ok_or_else(|| std::io::Error::other("image PID missing"))?;
+                let mut observed_exit = false;
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+                loop {
+                    tokio::select! {
+                        _ = shutdown.changed() => break,
+                        _ = interval.tick(), if !observed_exit => {
+                            if let Some(exit) = observe_exit(pid)? {
+                                tracing::info!(?exit, "image command exited; it will not be restarted");
+                                *shared.lock().map_err(|_| std::io::Error::other("image state poisoned"))? = exit;
+                                observed_exit = true;
+                            }
+                        }
                     }
                 }
+                signal_group(pid, libc::SIGTERM)?;
+                // Keep the leader unreaped even if it exited before shutdown. This
+                // reserves the process-group ID while surviving workers clean up.
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                signal_group(pid, libc::SIGKILL)?;
+                child.wait().await
             }.await;
             let outcome = match outcome {
                 Ok(exit) => {
@@ -200,8 +218,41 @@ impl ImageProcess {
                 Err(_) => tracing::error!("image process state lock is poisoned; health will fail"),
             }
         });
+        *self.monitor.lock().map_err(|_| monitor_failed())? = Some(monitor);
         Ok(())
     }
+}
+
+/// Observe the direct child's exit without releasing the PID used by its group.
+/// At most one exited leader per boot is retained; adopted children are still reaped.
+fn observe_exit(pid: u32) -> std::io::Result<Option<ImageStatus>> {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    if unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    } != 0
+    {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            return Ok(None);
+        }
+        return Err(error);
+    }
+    #[cfg(target_os = "linux")]
+    let (pid, status) = unsafe { (info.si_pid(), info.si_status()) };
+    #[cfg(not(target_os = "linux"))]
+    let (pid, status) = (info.si_pid, info.si_status);
+    if pid == 0 {
+        return Ok(None);
+    }
+    Ok(Some(ImageStatus::Exited {
+        code: (info.si_code == libc::CLD_EXITED).then_some(status),
+        signal: (info.si_code != libc::CLD_EXITED).then_some(status),
+    }))
 }
 
 fn signal_group(pid: u32, signal: i32) -> std::io::Result<()> {
@@ -776,12 +827,17 @@ while True:
                     "received"
                 );
                 let pid = fs::read_to_string(temp.path().join(format!("{role}-ready"))).unwrap();
-                if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
-                    assert!(
-                        stat.split_once(") ").unwrap().1.starts_with('Z'),
-                        "group member still alive: {stat}"
-                    );
-                }
+                // SIGKILL delivery to a group is asynchronous for each member.
+                tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                    while let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
+                        if stat.split_once(") ").unwrap().1.starts_with('Z') {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("every group member must stop after KILL");
             }
             assert_eq!(
                 process.status().unwrap(),
@@ -794,5 +850,67 @@ while True:
                 .start_once_from(&path, identity, &Default::default())
                 .is_err());
         }
+    }
+    #[tokio::test]
+    async fn exited_boot_leader_keeps_worker_shutdown_available() {
+        let script = r#"
+import os,signal,time
+from pathlib import Path
+Path('leader').write_text(str(os.getpid()))
+if os.fork() == 0:
+ def term(sig,frame):
+  Path('worker-term').write_text('received')
+  os._exit(0)
+ signal.signal(signal.SIGTERM,term)
+ Path('worker-ready').write_text('ready')
+ while True: time.sleep(.01)
+while not Path('worker-ready').exists(): time.sleep(.01)
+os._exit(23)
+"#;
+        let (temp, path, identity) =
+            process_fixture(vec!["/usr/bin/python3".into(), "-c".into(), script.into()]);
+        let process = ImageProcess::default();
+        process
+            .start_once_from(&path, identity, &Default::default())
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while process.status().unwrap()
+                != (ImageStatus::Exited {
+                    code: Some(23),
+                    signal: None,
+                })
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let leader: u32 = fs::read_to_string(temp.path().join("leader"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let reserved = std::path::Path::new(&format!("/proc/{leader}")).exists();
+        let shutdown = process.shutdown().await;
+        let received = temp.path().join("worker-term").exists();
+        // Clean up even on the broken implementation so the regression never leaks
+        // its worker when it demonstrates the failure.
+        signal_group(leader, libc::SIGKILL).unwrap();
+        shutdown.unwrap();
+        assert!(
+            received,
+            "an orphaned boot worker must receive TERM after its leader exits"
+        );
+        assert!(
+            reserved,
+            "retain the exited leader until group cleanup to prevent ID reuse"
+        );
+        assert!(!std::path::Path::new(&format!("/proc/{leader}")).exists());
+        assert_eq!(
+            process.status().unwrap(),
+            ImageStatus::Exited {
+                code: Some(23),
+                signal: None
+            }
+        );
     }
 }
