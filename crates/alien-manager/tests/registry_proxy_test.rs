@@ -10,7 +10,7 @@
 //! cloud registries too (cloud bindings are tested separately).
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, TcpListener};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -169,14 +169,6 @@ async fn build_and_push_image(registry_url: &str, repo_path: &str, tag: &str) ->
     image_name
 }
 
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 async fn wait_for_health(url: &str) {
     let client = reqwest::Client::new();
     for _ in 0..50 {
@@ -229,7 +221,12 @@ async fn setup_with_repository(repository: &str, configure_routing: bool) -> Tes
     let image_uri = build_and_push_image(&registry_url, repository, "v1").await;
 
     // Start manager
-    let port = free_port();
+    // Keep the listener reserved while stores and routing are initialized.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let competing = TcpListener::bind(("127.0.0.1", port))
+        .expect_err("the fixture must reserve its port throughout manager setup");
+    assert_eq!(competing.kind(), std::io::ErrorKind::AddrInUse);
     let manager_url = format!("http://127.0.0.1:{}", port);
     let state_dir = tempfile::tempdir().unwrap();
     let state_path = state_dir.path().to_path_buf();
@@ -442,9 +439,8 @@ async fn setup_with_repository(repository: &str, configure_routing: bool) -> Tes
         .unwrap();
 
     // Start server
-    let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
     let server_handle = tokio::spawn(async move {
-        manager.start(addr).await.unwrap();
+        manager.start_with_listener(listener).await.unwrap();
     });
     wait_for_health(&manager_url).await;
 
