@@ -25,3 +25,6 @@ mod netfilter;
 
 #[cfg(unix)]
 pub mod native_token;
+
+#[cfg(target_os = "linux")]
+pub mod protected_files;

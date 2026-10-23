@@ -220,7 +220,8 @@ for platform in "${platform_list[@]}"; do
   # the root agent verified its non-root exec identity and the bind took. A dead
   # container's log reads the same, so the inspect is what makes the line mean it still.
   status=0
-  container=$(timeout -k 5 60 docker run -d --platform "$platform" "$image") || status=$?
+  # Bootstrap needs mount administration; the agent drops it before image code.
+  container=$(timeout -k 5 60 docker run -d --cap-add SYS_ADMIN --platform "$platform" "$image") || status=$?
   case "$status" in
     0) ;;
     124|137)

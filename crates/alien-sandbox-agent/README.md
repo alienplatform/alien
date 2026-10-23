@@ -268,3 +268,27 @@ requires restoring a native image and its binding together; never point an old
 native client at an agent image. Session transport labels keep agent-aware
 clients on the transport chosen when each session was created, including when a
 newer client reconnects through an older native declaration.
+
+## Bootstrap file protection
+
+Before any image code starts, the agent creates a private mount namespace and
+bind-mounts its executable and `/opt/alien` read-only. Ancestor directories are
+mount points too, preventing replacement by renaming a containing directory.
+Writes fail with EROFS; renaming a mounted path fails with EBUSY. The root image
+has no SYS_ADMIN and cannot remove these mounts. The released executable is
+statically linked, so replacing a guest dynamic loader cannot replace its next
+boot. The agent disables dumpability so guest root cannot recover its original
+mount namespace or writable descriptors through `/proc`.
+
+AWS and Azure provide SYS_ADMIN during bootstrap. GCP does not: a short-lived
+helper writes identity UID/GID maps for the agent's private user/mount namespace,
+then exits before the runtime starts. The image retains its original numeric
+identities and bounded capabilities. Failure to establish either protection
+stops startup. The gateway opens its CA bundle before protection and retains that
+single writable descriptor for authenticated trust updates; image processes do
+not inherit it.
+
+GCP pause/resume retains the process, boot ID and disk contents in the live
+qualification, including these mounts. A fresh container must repeat protection
+before image startup. Azure persists the custom session disk, so protecting the
+next boot's executable is required independently of the current process.
