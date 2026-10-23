@@ -10,7 +10,8 @@ import { ensureSeeded } from "../../seed"
 // translating, so Claude needs the Anthropic client and everything else OpenAI.
 // The catalog (alien-core's ai_catalog.rs) owns which is which.
 function modelFor(modelId: string, connection: AiConnection) {
-  if (modelId.startsWith("claude")) {
+  // Model ids from a cloud binding carry a byo/ prefix.
+  if (modelId.replace(/^byo\//, "").startsWith("claude")) {
     const anthropic = createAnthropic({
       baseURL: connection.baseURL,
       // An ambient binding has no client key — the gateway signs with the workload's
@@ -71,6 +72,10 @@ export async function POST(req: Request) {
     // Without a stop condition the model never streams the answer after the tool result.
     stopWhen: stepCountIs(6),
     tools: { queryDatabase },
+    // Tool streaming adds eager_input_streaming to each function tool in a streamed request.
+    // Bedrock InvokeModel rejects it, and the gateway in @alienplatform/sdk 3.3.39 and earlier
+    // passes it through.
+    providerOptions: { anthropic: { toolStreaming: false } },
   })
 
   return result.toUIMessageStreamResponse()

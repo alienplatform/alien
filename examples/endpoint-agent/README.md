@@ -53,7 +53,7 @@ endpoint-agent/
 ### Prerequisites
 
 - Rust 1.70+
-- Node.js 18+
+- Node.js 20.19+, 22.12+, or 24+
 - Alien CLI (`alien` binary available on your `PATH`)
 
 ### Build

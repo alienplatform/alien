@@ -7,12 +7,12 @@
     "build": "next build"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^2.0.0",
-    "@ai-sdk/openai-compatible": "^1.0.0",
-    "@ai-sdk/react": "^2.0.0",
+    "@ai-sdk/anthropic": "^3.0.111",
+    "@ai-sdk/openai-compatible": "^2.0.68",
+    "@ai-sdk/react": "^3.0.259",
     "@alienplatform/sdk": "^3.3.0",
     "@paper-design/shaders-react": "^0.0.72",
-    "ai": "^5.0.0",
+    "ai": "^6.0.256",
     "geist": "^1.7.0",
     "next": "^16.4.1",
     "pg": "^8.13.0",
