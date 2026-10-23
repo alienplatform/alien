@@ -301,14 +301,8 @@ fn write_bundle_inner(
             path = alien_core::sandbox_image::IMAGE_COMMAND_PATH,
         ));
     }
-    // Inspected packages require privileged bootstrap even for non-root image USER.
-    // The release preserves imageUser so deployment grants the capabilities this
-    // startup path needs; older readers must reject it before deploying.
-    if image_command.is_some_and(|command| command.user.is_some()) || command_image.is_some() {
-        dockerfile.push_str(
-            "\nENV ALIEN_SANDBOX_IMAGE_COMMAND=true ALIEN_SANDBOX_EGRESS_RUN_HOOK=true\n",
-        );
-    }
+    // Deployment alone selects privileged startup together with its capability grant.
+    // Older releases can use this bundle without inspected imageUser metadata.
     let agent_bytes = match agent {
         AgentSource::Binary(agent_binary) => Some(
             std::fs::read(agent_binary)
@@ -383,6 +377,66 @@ mod tests {
     ) -> super::Result<()> {
         super::write_bundle(destination, base, agent, &root_identity())
     }
+    #[test]
+    fn inspected_bundle_leaves_privileged_activation_to_release_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let agent = AgentSource::Image("example.com/agent:v1".into());
+        for user in ["", "0", "2001:2001"] {
+            let identity = BaseIdentity {
+                user: user.into(),
+                passwd: None,
+                group: None,
+                image_command: None,
+            };
+            let command = SandboxImageCommand {
+                user: Some(user.into()),
+                command: vec!["/start".into()],
+                env: Default::default(),
+                working_directory: "/".into(),
+            };
+            for copy_from_image in [false, true] {
+                let bundle = directory.path().join("bundle.zip");
+                if copy_from_image {
+                    write_supervised_bundle_with_command_image(
+                        &bundle,
+                        "example.com/base:v1",
+                        &agent,
+                        &format!("example.com/command@sha256:{}", "a".repeat(64)),
+                        &identity,
+                    )
+                    .unwrap();
+                } else {
+                    write_supervised_bundle(
+                        &bundle,
+                        "example.com/base:v1",
+                        &agent,
+                        &command,
+                        &identity,
+                        None,
+                    )
+                    .unwrap();
+                }
+                let mut archive = zip::ZipArchive::new(File::open(bundle).unwrap()).unwrap();
+                let mut dockerfile = String::new();
+                std::io::Read::read_to_string(
+                    &mut archive.by_name("Dockerfile").unwrap(),
+                    &mut dockerfile,
+                )
+                .unwrap();
+                // The same archive serves old and new release readers. Only deployment
+                // can pair these settings with the capability grant from imageUser.
+                assert!(
+                    !dockerfile.contains("ALIEN_SANDBOX_IMAGE_COMMAND="),
+                    "bundle activates privileged startup without release metadata"
+                );
+                assert!(
+                    !dockerfile.contains("ALIEN_SANDBOX_EGRESS_RUN_HOOK="),
+                    "bundle activates privileged hooks without release metadata"
+                );
+            }
+        }
+    }
+
     #[test]
     fn internet_packaging_refuses_missing_or_malformed_image_configuration() {
         let directory = tempfile::tempdir().unwrap();
