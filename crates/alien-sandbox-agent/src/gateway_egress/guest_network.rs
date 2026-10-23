@@ -18,31 +18,17 @@ const CGROUP: &str = "/sys/fs/cgroup/alien-guest";
 
 /// Runs once during privileged bootstrap, before capabilities are reduced.
 /// A missing cgroup/BPF facility is fatal; UID exemptions cannot contain a root image.
-pub(super) fn install() -> io::Result<()> {
+pub(super) fn install(mark_sockets: bool) -> io::Result<()> {
     fs::create_dir(CGROUP)?;
     let cgroup = File::open(CGROUP)?;
-    let program = load_socket_marker()?;
-    // Linux UAPI: BPF_PROG_ATTACH and BPF_CGROUP_INET_SOCK_CREATE. A non-override
-    // attachment also applies to every descendant cgroup the guest might create.
-    #[repr(C)]
-    struct Attach {
-        target_fd: u32,
-        program_fd: u32,
-        attach_type: u32,
-        flags: u32,
-        replace_fd: u32,
+    if mark_sockets {
+        attach(&cgroup, &load_socket_marker()?, 2)?; // BPF_CGROUP_INET_SOCK_CREATE
     }
-    let attach = Attach {
-        target_fd: cgroup.as_raw_fd() as u32,
-        program_fd: program.as_raw_fd() as u32,
-        attach_type: 2,
-        flags: 0,
-        replace_fd: 0,
-    };
-    // SAFETY: attach is the initialized UAPI layout, and both descriptors are live.
-    if unsafe { libc::syscall(libc::SYS_bpf, 8, &attach, size_of::<Attach>()) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
+    // Provider VMs can expose raw disks without Docker's device controller. A
+    // read-only bind mount does not protect its backing device. Deny block-device
+    // access at the cgroup boundary, covering existing nodes and newly created ones
+    // at every path, without altering provider device access or snapshot restore.
+    attach(&cgroup, &load_block_device_filter()?, 6)?; // BPF_CGROUP_DEVICE
     fs::write(
         format!("{CGROUP}/cgroup.procs"),
         std::process::id().to_string(),
@@ -72,14 +58,85 @@ pub(super) fn install() -> io::Result<()> {
     Ok(())
 }
 
-fn load_socket_marker() -> io::Result<OwnedFd> {
+fn attach(cgroup: &File, program: &OwnedFd, attach_type: u32) -> io::Result<()> {
     #[repr(C)]
-    struct Instruction {
-        opcode: u8,
-        registers: u8,
-        offset: i16,
-        immediate: i32,
+    struct Attach {
+        target_fd: u32,
+        program_fd: u32,
+        attach_type: u32,
+        flags: u32,
+        replace_fd: u32,
     }
+    let attach = Attach {
+        target_fd: cgroup.as_raw_fd() as u32,
+        program_fd: program.as_raw_fd() as u32,
+        attach_type,
+        flags: 0,
+        replace_fd: 0,
+    };
+    // A non-override attachment applies to every descendant cgroup as well.
+    if unsafe { libc::syscall(libc::SYS_bpf, 8, &attach, size_of::<Attach>()) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[repr(C)]
+struct Instruction {
+    opcode: u8,
+    registers: u8,
+    offset: i16,
+    immediate: i32,
+}
+
+fn load_block_device_filter() -> io::Result<OwnedFd> {
+    // bpf_cgroup_dev_ctx.access_type's low 16 bits identify the device type.
+    // Deny every block device (1), for read, write and mknod. Character devices
+    // retain the provider's restrictions, including terminals and /dev/null.
+    load_program(
+        15,
+        &[
+            Instruction {
+                opcode: 0x61,
+                registers: 0x12,
+                offset: 0,
+                immediate: 0,
+            },
+            Instruction {
+                opcode: 0x54,
+                registers: 2,
+                offset: 0,
+                immediate: 0xffff,
+            },
+            Instruction {
+                opcode: 0xb7,
+                registers: 0,
+                offset: 0,
+                immediate: 0,
+            },
+            Instruction {
+                opcode: 0x15,
+                registers: 2,
+                offset: 1,
+                immediate: 1,
+            },
+            Instruction {
+                opcode: 0xb7,
+                registers: 0,
+                offset: 0,
+                immediate: 1,
+            },
+            Instruction {
+                opcode: 0x95,
+                registers: 0,
+                offset: 0,
+                immediate: 0,
+            },
+        ],
+    )
+}
+
+fn load_socket_marker() -> io::Result<OwnedFd> {
     // Linux UAPI bpf_sock.mark is at byte 16. Four fixed instructions, no maps,
     // helpers, compiler, userspace daemon or external BPF artifact required.
     let instructions = [
@@ -108,6 +165,10 @@ fn load_socket_marker() -> io::Result<OwnedFd> {
             immediate: 0,
         }, // exit
     ];
+    load_program(9, &instructions)
+}
+
+fn load_program(program_type: u32, instructions: &[Instruction]) -> io::Result<OwnedFd> {
     #[repr(C)]
     struct Load {
         program_type: u32,
@@ -121,7 +182,7 @@ fn load_socket_marker() -> io::Result<OwnedFd> {
         flags: u32,
     }
     let load = Load {
-        program_type: 9, // BPF_PROG_TYPE_CGROUP_SOCK
+        program_type,
         instruction_count: instructions.len() as u32,
         instructions: instructions.as_ptr() as u64,
         license: c"GPL".as_ptr() as u64,

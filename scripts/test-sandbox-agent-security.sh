@@ -43,7 +43,10 @@ docker create --name "$container" --privileged --cgroupns=private \
       gateway_egress::guest_network_tests::root_and_child_uids_keep_redirects_and_cannot_escape
     do
       /agent-tests --list --ignored --exact "$name" | grep -Fx "$name: test"
-      /agent-tests --ignored --exact "$name" --nocapture
+      unshare --mount /agent-tests --ignored --exact "$name" --nocapture
+      if test "$name" = privilege::tests::cgroup_attribution_filters_bpf_without_disabling_ipv6; then
+        rmdir /sys/fs/cgroup/alien-guest
+      fi
     done
   ' >/dev/null
 trap cleanup EXIT

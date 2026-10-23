@@ -80,6 +80,10 @@ fn main() -> Result<()> {
     if aws_image_transport && state.gateway_egress.is_none() {
         alien_sandbox_agent::gateway_egress::isolate_control_callers()?;
     }
+    #[cfg(target_os = "linux")]
+    if image_command_enabled()? && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file") {
+        alien_sandbox_agent::gateway_egress::isolate_image_devices()?;
+    }
     if network_admin || image_command_enabled()? {
         #[cfg(target_os = "linux")]
         if let Some(policy) = alien_sandbox_agent::egress::legacy_from_env()? {

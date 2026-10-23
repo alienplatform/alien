@@ -328,3 +328,18 @@ The CI privileged job also runs seven ignored library security checks through
 namespace isolation before cgroup or firewall changes, checks that each exact
 test exists, and removes its container/image on exit. No test mutates the runner
 network or cgroup mounts.
+
+## Raw device protection
+
+AWS and Azure place the agent and every image/exec descendant in a guest cgroup
+before accepting operations. Its device filter denies reading, writing and
+creating block devices, including provider-supplied nodes and nodes anywhere in
+the image filesystem. The provider remains outside this cgroup for restore and
+native control operations. The guest cgroup mount is read-only and an inherited
+seccomp filter denies BPF operations, so guest root cannot remove the device
+filter. Missing cgroup device support stops startup. Character devices remain
+available and the root capability grant is unchanged.
+
+GCP's sandbox kernel exposes no block devices and rejects block-node creation in
+live qualification; its provider device boundary remains required. The agent's
+private user namespace does not grant control over provider devices.

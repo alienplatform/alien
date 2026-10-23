@@ -13,7 +13,7 @@ use crate::{exec::ExecIdentity, privilege};
 #[test]
 #[ignore = "requires isolated network/mount/cgroup namespaces, ALL capabilities, cgroup2 and Python 3"]
 fn root_and_child_uids_keep_redirects_and_cannot_escape() {
-    super::guest_network::install().expect("install guest socket classification");
+    super::guest_network::install(true).expect("install guest socket classification");
     privilege::block_command_ipv6();
     super::redirect::install().expect("install real gateway redirects");
     let tcp = TcpListener::bind("127.0.0.1:15001").expect("transparent TCP listener");

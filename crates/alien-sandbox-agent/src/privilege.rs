@@ -288,9 +288,21 @@ unsafe fn deny_network_bypass(block_ipv6: bool) -> io::Result<()> {
         stmt(0x06, 0x80000000), // kill foreign ABI
         stmt(0x20, 0),
         jump(libc::SYS_bpf as u32, 8, 0),
-        jump(libc::SYS_io_uring_setup as u32, if block_ipv6 { 7 } else { 8 }, 0),
-        jump(libc::SYS_io_uring_enter as u32, if block_ipv6 { 6 } else { 7 }, 0),
-        jump(libc::SYS_io_uring_register as u32, if block_ipv6 { 5 } else { 6 }, 0),
+        jump(
+            libc::SYS_io_uring_setup as u32,
+            if block_ipv6 { 7 } else { 8 },
+            0,
+        ),
+        jump(
+            libc::SYS_io_uring_enter as u32,
+            if block_ipv6 { 6 } else { 7 },
+            0,
+        ),
+        jump(
+            libc::SYS_io_uring_register as u32,
+            if block_ipv6 { 5 } else { 6 },
+            0,
+        ),
         // x32 uses a different syscall number under AUDIT_ARCH_X86_64. Kill that ABI too.
         libc::sock_filter {
             code: 0x45,
@@ -393,13 +405,35 @@ mod tests {
         );
     }
 
-
     #[test]
     #[ignore = "requires an isolated writable cgroup2 mount and privileged bootstrap"]
     fn cgroup_attribution_filters_bpf_without_disabling_ipv6() {
+        let temp = tempfile::tempdir().unwrap();
+        let existing =
+            std::ffi::CString::new(temp.path().join("block").as_os_str().as_encoded_bytes())
+                .unwrap();
+        let fresh = std::ffi::CString::new(
+            temp.path()
+                .join("fresh-block")
+                .as_os_str()
+                .as_encoded_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe {
+                libc::mknod(
+                    existing.as_ptr(),
+                    libc::S_IFBLK | 0o600,
+                    libc::makedev(1, 0),
+                )
+            },
+            0
+        );
         crate::gateway_egress::isolate_control_callers().unwrap();
         for uid in [0, 60000] {
             let mut child = Command::new("/bin/true");
+            let existing = existing.clone();
+            let fresh = fresh.clone();
             unsafe {
                 child.pre_exec(move || {
                     restrict_supervisor(true)?;
@@ -414,6 +448,19 @@ mod tests {
                     {
                         return Err(io::Error::from_raw_os_error(libc::EINVAL));
                     }
+                    if uid == 0 {
+                        if libc::open(existing.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) != -1
+                            || *libc::__errno_location() != libc::EPERM
+                            || libc::mknod(
+                                fresh.as_ptr(),
+                                libc::S_IFBLK | 0o600,
+                                libc::makedev(1, 0),
+                            ) != -1
+                            || *libc::__errno_location() != libc::EPERM
+                        {
+                            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                        }
+                    }
                     let socket = libc::socket(libc::AF_INET6, libc::SOCK_STREAM, 0);
                     if socket < 0 {
                         return Err(io::Error::last_os_error());
@@ -422,7 +469,10 @@ mod tests {
                     Ok(())
                 });
             }
-            assert!(child.status().expect("BPF filter with working IPv6").success());
+            assert!(child
+                .status()
+                .expect("BPF filter with working IPv6")
+                .success());
         }
     }
     fn unprivileged_identity() -> ExecIdentity {

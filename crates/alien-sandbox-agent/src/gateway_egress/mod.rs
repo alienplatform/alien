@@ -81,9 +81,17 @@ pub struct GatewayEgress {
 /// sockets from every image and exec process. Install only the cgroup marker;
 /// unrestricted packages keep their existing network routing.
 pub fn isolate_control_callers() -> Result<()> {
-    guest_network::install()
+    guest_network::install(true)
         .into_alien_error()
         .context(failed("isolate guest sockets before starting image code"))
+}
+
+/// Azure's VM supplies privileged bootstrap but no device controller. Keep guest
+/// block-device access out of the provider cgroup without changing socket marks.
+pub fn isolate_image_devices() -> Result<()> {
+    guest_network::install(false)
+        .into_alien_error()
+        .context(failed("isolate guest block devices before starting image code"))
 }
 
 impl GatewayEgress {
