@@ -7,4 +7,4 @@ idiomatic_version_file_enable_tools = ["pnpm", "rust"]
 
 [tools]
 node = "24.21.0"
-bun = "1.4.2"
+bun = "1.4.4"
