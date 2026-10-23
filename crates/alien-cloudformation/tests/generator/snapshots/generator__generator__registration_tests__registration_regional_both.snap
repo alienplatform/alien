@@ -154,6 +154,18 @@ Resources:
       CallbackUrl: https://api.dev.example.com
     DependsOn:
     - LogsBucket
+  DeploymentSetupStarted:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken:
+        Fn::FindInMap:
+        - RegionalCustomResourceServiceTokens
+        - Ref: AWS::Region
+        - ServiceToken
+      Operation: setup-started
+      Token:
+        Ref: Token
+      CallbackUrl: https://api.dev.example.com
 Outputs:
   DeploymentSourceKind:
     Value: cloudformation

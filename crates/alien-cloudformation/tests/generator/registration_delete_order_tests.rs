@@ -15,6 +15,10 @@ use alien_core::{
 use std::collections::BTreeSet;
 
 const REGISTRATION: &str = "DeploymentRegistration";
+/// The start signal is the one resource deliberately outside the registration's
+/// dependency set: it must be created before anything else and is only a
+/// progress report, so nothing it does outlives the stack.
+const SETUP_STARTED: &str = "DeploymentSetupStarted";
 
 /// The resources a resource depends on, as CloudFormation computes it:
 /// `DependsOn` plus every `Ref`, `Fn::GetAtt` and `Fn::Sub` target in its
@@ -145,8 +149,12 @@ fn registration_is_deleted_before_every_setup_resource() {
         .resources
         .keys()
         .map(String::as_str)
-        .filter(|id| *id != REGISTRATION && !depended_on.contains(id))
+        .filter(|id| *id != REGISTRATION && *id != SETUP_STARTED && !depended_on.contains(id))
         .collect();
+    assert!(
+        !depended_on.contains(SETUP_STARTED),
+        "the registration must not wait for the start signal"
+    );
     assert!(
         deleted_alongside.is_empty(),
         "CloudFormation would delete these while the registration's delete callback still \

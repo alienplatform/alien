@@ -621,7 +621,7 @@ pub fn generate_cloudformation_template_with_profile(
     if let Some(service_token) = options.registration.service_token(&mut template)? {
         add_custom_resource(
             &mut template,
-            service_token,
+            service_token.clone(),
             management_config.clone(),
             stack_settings.clone(),
             &options,
@@ -631,6 +631,13 @@ pub fn generate_cloudformation_template_with_profile(
                     .map(RegistrationEntry::custom_resource_element),
             ),
             stack_input_values_expression(&stack_inputs),
+            options.registration.callback_url(),
+        );
+        // After the registration, so the registration's DependsOn (every
+        // resource present when it was added) does not include this one.
+        add_setup_started_resource(
+            &mut template,
+            service_token,
             options.registration.callback_url(),
         );
     }
@@ -2756,6 +2763,38 @@ fn add_custom_resource(
             CfExpression::from(base_platform.as_str()),
         );
     }
+    if let Some(callback_url) = callback_url.filter(|value| !value.is_empty()) {
+        resource.properties.insert(
+            "CallbackUrl".to_string(),
+            CfExpression::from(callback_url.to_string()),
+        );
+    }
+    template
+        .resources
+        .insert(resource.logical_id.clone(), resource);
+}
+
+/// Reports that the stack started, so the setup owner can show progress
+/// before the registration runs.
+///
+/// The resource has no dependencies and nothing depends on it, so
+/// CloudFormation creates it as soon as the stack starts and deletes it when
+/// the stack rolls back. It shares the registration's service token,
+/// `Token` and callback URL so the same endpoint handles it.
+fn add_setup_started_resource(
+    template: &mut CfTemplate,
+    service_token: CfExpression,
+    callback_url: Option<&str>,
+) {
+    let mut resource = CfResource::new(
+        "DeploymentSetupStarted".to_string(),
+        "AWS::CloudFormation::CustomResource".to_string(),
+    );
+    resource.properties = indexmap! {
+        "ServiceToken".to_string() => service_token,
+        "Operation".to_string() => CfExpression::from("setup-started"),
+        "Token".to_string() => CfExpression::ref_(PARAM_TOKEN),
+    };
     if let Some(callback_url) = callback_url.filter(|value| !value.is_empty()) {
         resource.properties.insert(
             "CallbackUrl".to_string(),
