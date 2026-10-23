@@ -91,6 +91,9 @@ pub struct BaseIdentity {
     pub user: String,
     pub passwd: Option<String>,
     pub group: Option<String>,
+    /// Original startup configuration from the same inspected image. Absent only
+    /// for callers constructing a released identity contract without inspection.
+    pub image_command: Option<SandboxImageCommand>,
 }
 
 impl BaseIdentity {
@@ -98,13 +101,14 @@ impl BaseIdentity {
     pub async fn read(image: &Image, resource_name: &str) -> Result<Self> {
         let command = image_command(image).await?;
         Ok(Self {
-            user: command.user.ok_or_else(|| {
+            user: command.user.clone().ok_or_else(|| {
                 AlienError::new(ErrorData::BuildConfigInvalid {
                     message: "The sandbox image has no original USER metadata".into(),
                 })
             })?,
             passwd: read_identity_file(image, "/etc/passwd", resource_name).await?,
             group: read_identity_file(image, "/etc/group", resource_name).await?,
+            image_command: Some(command),
         })
     }
 

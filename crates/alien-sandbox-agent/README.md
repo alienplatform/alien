@@ -1,6 +1,6 @@
 # Image startup
 
-New GCP images assembled by Alien save the original OCI ENTRYPOINT, CMD, USER,
+New AWS, GCP and Azure images assembled by Alien save the original OCI ENTRYPOINT, CMD, USER,
 environment and working directory in root-owned metadata. The agent runs as
 root with uid-split isolation and starts that command before serving session
 operations. Root and absent USER get Docker's default capabilities without
@@ -11,8 +11,17 @@ never trigger a restart.
 The internal ALIEN_SANDBOX_IMAGE_COMMAND=true package marker enables this
 contract. A package carrying it must have saved USER metadata and a root agent;
 invalid configuration fails startup. Released packages without the marker retain
-their previous startup and identity semantics. AWS packaging has not yet enabled
-this marker; its released modes are described below.
+their previous startup and identity semantics. AWS selects the marker only for
+declarations with inspected USER metadata. New bundles save startup metadata in
+every egress mode; saved S3 declarations do not opt into the new contract.
+
+New AWS image code waits for Run, so it is never part of the build snapshot.
+`none` installs the guest-wide guard and verifies the denying network path before
+boot. `internet` additionally waits for its gateway identity. Non-root `allow`
+images wait for Run without a guest firewall; root `allow` images are refused at
+plan time because they have no connector. Released supervisor declarations keep
+their existing egress rules; rebuilding a root image in those direct-cloud modes
+is also refused.
 
 Repackaging an agent image preserves its saved original command and USER, rather
 than nesting another agent as the image command. An unchanged final agent layer
@@ -87,7 +96,7 @@ traffic while preserving the root traffic AWS needs to initialize its internal
 transport after image restore. The iptables owner extension is unavailable on
 the guest kernel. This mode creates no egress connector, proxy, or
 firewall resources. AWS's extra capability grant is an implementation detail;
-the declaration exposes only the opt-in supervisor setting and the command uid.
+released declarations retain their serialized supervisor setting and command uid.
 AWS accepts only `ALL` in `AdditionalOsCapabilities`; named capabilities such
 as `NET_ADMIN` are rejected by the image API. Omitting the grant leaves out
 `NET_ADMIN`, so the agent cannot install its firewall. See the
@@ -102,8 +111,8 @@ the common root set. It clears ambient and inheritable capabilities and sets
 `no_new_privs`. Missing required capabilities fail startup. Seccomp installation after
 `no_new_privs` needs no extra capability. The legacy `allowDomains` mode also uses
 `SYS_ADMIN` during bootstrap to replace AWS's read-only `/etc/hosts` mount; that
-capability is removed before worker threads or guest code start. Every image
-command, exec, and detached job receives zero capabilities in all five sets.
+capability is removed before worker threads or guest code start. Legacy image
+commands, exec, and detached jobs receive zero capabilities in all five sets.
 
 `deny` grants commands no routed egress or DNS. `allowDomains` resolves the declared
 names before starting commands, pins public IPv4 addresses in `/etc/hosts`, and
@@ -172,15 +181,17 @@ Pull the intended ARM64 base image, then package it with the inspected command:
 ```sh
 docker pull --platform linux/arm64 example/sandbox:1
 cargo run -p alien-build --example sandbox-bundle -- \
-  --privileged-supervisor --agent-binary ./alien-sandbox-agent-arm64 \
+  --agent-binary ./alien-sandbox-agent-arm64 \
   example/sandbox:1 ./bundle.zip
 ```
 
 The binary must be built for ARM64 Linux. `--agent-image <reference>` can replace
 `--agent-binary <path>`. The bundle copies the inspected image command, environment,
 and working directory to `/opt/alien/image-command.json`, owned by root and outside
-the command-writable session directory. It never starts the base image command as
-root. Upload the bundle to the S3 location declared in `code.image`.
+the command-writable session directory. Keep bundles containing image environment
+metadata private; the command-image writer can instead copy metadata from an
+access-controlled image. An S3 declaration retains legacy startup. Build from the
+OCI base through the normal build path to inspect USER and select the new contract.
 
 ## Validation
 

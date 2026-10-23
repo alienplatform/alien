@@ -111,14 +111,20 @@ pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {
     ) || (matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack))
 }
 
-/// Activate the automatic agent guard only for the gateway opt-in. Existing
-/// declarations retain their startup environment and supervisor behavior.
-/// Command identity is resolved independently from the image.
+/// Inspected builds opt into OCI USER startup after Run. Saved declarations without
+/// image metadata retain their released startup behavior and command identity.
 pub fn aws_sandbox_agent_environment(
     stack: &Stack,
     sandbox: &Sandbox,
 ) -> std::collections::BTreeMap<String, String> {
     let mut environment = sandbox.supervisor_environment();
+    if sandbox.image_user.is_some() {
+        environment.insert("ALIEN_SANDBOX_IMAGE_COMMAND".into(), "true".into());
+        environment.insert("ALIEN_SANDBOX_EGRESS_RUN_HOOK".into(), "true".into());
+        if sandbox.privileged_supervisor.is_none() && sandbox.egress == SandboxEgress::None {
+            environment.insert("ALIEN_SANDBOX_EGRESS".into(), "\"none\"".into());
+        }
+    }
     if matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack) {
         environment.insert(
             "ALIEN_SANDBOX_EGRESS".into(),

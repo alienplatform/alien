@@ -124,6 +124,9 @@ RUN for path in / /usr /usr/local /usr/local/bin /opt /opt/alien /etc; do \
 
 /// Writes the bundle AWS builds a MicroVM image from: the rendered Dockerfile, plus the agent
 /// binary beside it when the agent is a local build rather than a published image.
+/// An inspected identity also carries the original command and environment into the ZIP.
+/// Keep that artifact private, or use `write_supervised_bundle_with_command_image` to copy
+/// metadata from an access-controlled image without including its contents in the ZIP.
 ///
 /// The archive is flat on purpose — `CreateMicrovmImage` looks for the Dockerfile at the root,
 /// and a nested directory produces a build failure minutes in rather than a rejected request.
@@ -137,17 +140,16 @@ pub fn write_bundle(
         destination,
         base_image,
         agent,
-        None,
+        identity.image_command.as_ref(),
         None,
         &identity.contract(AWS_MICROVM, None)?,
     )
 }
 
-/// Packages the declared sandbox, preserving the released layout for legacy egress modes.
+/// Packages an inspected image's original startup in every declared network mode.
 ///
-/// Internet sandboxes need the inspected base image command because the root agent starts that
-/// command only after installing the egress boundary. Both source-built and published images
-/// use their final OCI configuration here; callers must not infer it from a Dockerfile.
+/// Identity inspection retains the original command even when the base is an already packaged
+/// image. Older callers without that metadata retain the released layout for legacy modes.
 pub fn write_declared_bundle(
     destination: &Path,
     base_image: &str,
@@ -156,7 +158,7 @@ pub fn write_declared_bundle(
     image_config: Option<&Config>,
     identity: &BaseIdentity,
 ) -> Result<()> {
-    if !matches!(egress, SandboxEgress::Internet) {
+    if identity.image_command.is_some() || !matches!(egress, SandboxEgress::Internet) {
         return write_bundle(destination, base_image, agent, identity);
     }
     let config = image_config.ok_or_else(|| {
@@ -215,7 +217,8 @@ pub fn image_command_from_config(config: &Config) -> Result<SandboxImageCommand>
     Ok(command)
 }
 
-/// Writes a bundle preserving the base image's OCI command for unprivileged startup.
+/// Writes a bundle preserving the base image's OCI command. The deployment's inspected
+/// image metadata selects OCI USER startup; released declarations retain non-root startup.
 /// `image_command` must come from inspecting the declared base image, not an exec request.
 pub fn write_supervised_bundle(
     destination: &Path,
@@ -362,6 +365,7 @@ mod tests {
             user: String::new(),
             passwd: None,
             group: None,
+            image_command: None,
         }
     }
     fn write_bundle(

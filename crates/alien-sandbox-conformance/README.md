@@ -126,3 +126,22 @@ than fail session creation. Root, absent-USER and non-root variants are all requ
 The metadata-enabled fixture checks boot, child and exec identities without
 printing response bodies. Preserve each report and session journal, then verify
 absence through the provider inventory before removing the disk images and group.
+
+AWS qualification builds the three ARM64 fixtures with `METADATA_BACKEND=aws`,
+passes each inspected image through `sandbox_bundle::write_bundle`, and uses
+`aws_sandbox_agent_environment` from its built declaration for the image build.
+The image's Run, Resume, Ready and Validate hooks must be enabled. Run the entrypoint
+suite against the resulting image version through the ordinary AWS binding.
+Use a gateway connector for `internet`, a denying connector for `none`, and a
+non-root image for legacy `allow`; root images without a connector must fail planning.
+Do not attach an execution role to any test MicroVM.
+
+Gateway fixtures also need `GATEWAY_CONFIG` at build time and `gateway: true` in
+the suite. The fixture's [gateway instructions](entrypoint/README.md) describe its
+HTTP/UDP controls. Correlate each boot, child and exec observation window with the
+gateway's session ID, allowed response, denied hostname and numeric-IP decisions,
+and the controlled origin's requests. A connection reset alone is not proof.
+Record the synthetic DNS answers separately from direct VPC-resolver controls;
+the external DNS firewall must close the resolver path that security groups allow.
+Parent root and absent-USER fixtures must reach the checker and fail the identity
+contract. A passing parent non-root fixture demonstrates preserved behavior.
