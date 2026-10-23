@@ -6,7 +6,7 @@
 
 use super::BindingValue;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Represents a container binding for container-to-container or external communication
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +35,7 @@ pub struct HorizonContainerBinding {
     #[serde(
         default,
         skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "serialize_internal_urls",
         deserialize_with = "deserialize_internal_urls"
     )]
     pub internal_urls: HashMap<u16, BindingValue<String>>,
@@ -59,6 +60,7 @@ pub struct KubernetesContainerBinding {
     #[serde(
         default,
         skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "serialize_internal_urls",
         deserialize_with = "deserialize_internal_urls"
     )]
     pub internal_urls: HashMap<u16, BindingValue<String>>,
@@ -79,9 +81,24 @@ pub struct LocalContainerBinding {
     #[serde(
         default,
         skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "serialize_internal_urls",
         deserialize_with = "deserialize_internal_urls"
     )]
     pub internal_urls: HashMap<u16, BindingValue<String>>,
+}
+
+// A binding is rendered into an environment variable, and Kubernetes rolls every pod when a pod
+// template's env changes. Sort by port so the same URLs always render the same JSON.
+fn serialize_internal_urls<S>(
+    urls: &HashMap<u16, BindingValue<String>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    urls.iter()
+        .collect::<BTreeMap<_, _>>()
+        .serialize(serializer)
 }
 
 // Internally tagged bindings buffer map keys as strings; parse ports explicitly.

@@ -3421,7 +3421,9 @@ mod tests {
     }
 
     /// Renders the Deployment the controller would submit for a fresh copy of
-    /// the same container config, as a reconcile after a new release does.
+    /// the same container config, as a reconcile after a new release does. The
+    /// container serves several ports, so its own binding carries several
+    /// internal URLs.
     async fn render_deployment_for_replicas(replicas: u32) -> Deployment {
         let names = (0..24)
             .map(|index| (format!("APP_VAR_{index:02}"), format!("value-{index}")))
@@ -3433,7 +3435,9 @@ mod tests {
         let mut config = manifest_test_container(&environment, false);
         config.replicas = Some(replicas);
         let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
-        manifest_test_controller()
+        let mut controller = manifest_test_controller();
+        controller.service_ports = vec![8080, 3000, 9090, 3129, 8443, 5000, 7000, 6000];
+        controller
             .build_deployment(
                 &config,
                 "web",
@@ -3473,6 +3477,24 @@ mod tests {
             .map(|index| format!("APP_VAR_{index:02}"))
             .collect::<Vec<_>>();
         assert_eq!(app_vars, expected, "plain env vars render sorted by name");
+
+        let binding = pod_template_env(&after.template)
+            .into_iter()
+            .find(|variable| variable.name == "ALIEN_WEB_BINDING")
+            .and_then(|variable| variable.value)
+            .expect("the container's own binding");
+        let binding: serde_json::Value = serde_json::from_str(&binding).expect("binding JSON");
+        let ports = binding["internalUrls"]
+            .as_object()
+            .expect("internal URLs")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ports,
+            ["3000", "3129", "5000", "6000", "7000", "8080", "8443", "9090"],
+            "internal URLs render sorted by port"
+        );
     }
 
     #[tokio::test]
