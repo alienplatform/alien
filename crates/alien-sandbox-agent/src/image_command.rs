@@ -88,6 +88,11 @@ impl ImageProcess {
         }
     }
 
+    /// Whether this package may start an image under a UID distinct from exec.
+    pub fn uses_image_user(&self) -> bool {
+        self.image_user
+    }
+
     pub fn status(&self) -> Result<ImageStatus> {
         self.status
             .lock()

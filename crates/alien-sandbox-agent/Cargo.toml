@@ -30,7 +30,7 @@ path = "src/main.rs"
 libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nlink = "0.32"
+nlink = { version = "0.32", features = ["sockdiag"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

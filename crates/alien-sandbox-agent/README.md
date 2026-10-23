@@ -227,3 +227,21 @@ is logged without restarting the image process. Once network checks pass, spawn
 must complete before a session operation proceeds, but the agent does not wait
 for application readiness. Released images that never configured command startup
 retain `notConfigured` until rebuilt with startup support.
+
+## Control callers
+
+New packages distinguish all image descendants from the provider, independently
+of UID. AWS endpoint requests (including egress delivery) and build/lifecycle
+hooks are legitimate callers. Remote requests are scoped by the provider's
+endpoint authentication; local AWS provider sockets must be established, owned
+by root, and have a kernel-reported mark of zero. The agent's cgroup assigns a
+nonzero mark to every guest socket and guest code cannot change it. A missing
+socket/mark or failed diagnostic refuses the request. The existing netlink
+library reads the mark without needing access to provider process descriptors.
+
+GCP uses the external authenticated `:execute` proxy and has no legitimate
+in-container control caller. New packages without the AWS guest cgroup refuse
+all local transport callers. Released packages that can only run the non-root
+exec identity retain their UID check. Azure uses the per-boot native-file
+credential; Local/Kubernetes use signed capabilities. Health/readiness expose
+no session operation and remain unauthenticated.

@@ -6,6 +6,8 @@
 //! rather than a body it might mistake for a result.
 
 use std::net::SocketAddr;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -1239,4 +1241,68 @@ async fn native_file_credential_authorizes_only_its_own_boot() {
         test_identity().uid.to_string()
     );
     assert!(agent.root.join("accepted").exists());
+}
+
+/// Exercise the same root spawn restriction as an OCI supervisor, over real TCP.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires root with Docker default capabilities and Python 3"]
+async fn root_image_cannot_call_control_routes() {
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    let dir = TempDir::new().unwrap();
+    let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::awaiting_activation(),
+        gateway_egress: None,
+        session_root: dir.path().to_owned(),
+        authorization: AgentAuthorization::Transport,
+        exec_identity: ExecIdentity {
+            uid: 60000,
+            gid: 60000,
+        },
+        output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
+        agent_binary: agent_binary(),
+    });
+    let base = serve(state).await;
+    let mut command = std::process::Command::new("python3");
+    command.args(["-c", r#"
+import json, sys, urllib.request, urllib.error
+routes = [
+ ('POST', '/aws/lambda-microvms/runtime/v1/resume', {}),
+ ('POST', '/aws/lambda-microvms/runtime/v1/run', {}),
+ ('GET', '/aws/lambda-microvms/runtime/v1/validate', None),
+ ('PUT', '/v1/egress', {'policy':'forged','caCert':'forged'}),
+ ('POST', '/v1/exec', {'command':['/bin/true'],'timeoutMs':1000}),
+ ('PUT', '/v1/files', {'path':'forged','contentsBase64':'eA=='}),
+ ('GET', '/v1/files?path=forged', None),
+ ('POST', '/v1/jobs/start', {'command':['/bin/true'],'timeoutMs':1000}),
+ ('POST', '/', {'v':1,'op':'exec','command':['/bin/true'],'timeoutMs':1000}),
+]
+failures=[]
+for method,path,body in routes:
+ request=urllib.request.Request(sys.argv[1]+path, method=method,
+   data=None if body is None else json.dumps(body).encode(), headers={'Content-Type':'application/json'})
+ try:
+  with urllib.request.urlopen(request, timeout=5) as response: code=response.status
+ except urllib.error.HTTPError as error: code=error.code
+ print(method, path, code, flush=True)
+ if code != 403: failures.append((path,code))
+assert not failures, failures
+"#, &base]);
+    unsafe {
+        command.pre_exec(|| {
+            alien_sandbox_agent::privilege::drop_image_to(ExecIdentity { uid: 0, gid: 0 })
+        });
+    }
+    let output = tokio::process::Command::from(command)
+        .output()
+        .await
+        .unwrap();
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!dir.path().join("forged").exists());
 }

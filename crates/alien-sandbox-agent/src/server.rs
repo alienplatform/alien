@@ -392,7 +392,7 @@ async fn activate_boot(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> std::result::Result<StatusCode, ApiError> {
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     if !state.authorization.requires_activation() {
         return Err(AlienError::new(ErrorData::RequestInvalid {
             reason: "this backend does not use native-file boot activation".into(),
@@ -447,7 +447,7 @@ async fn hook_validate(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> std::result::Result<StatusCode, ApiError> {
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     validate::run(&state).await.map_err(|error| {
         tracing::error!(%error, "image validation failed");
         ApiError::from(error)
@@ -470,9 +470,12 @@ async fn resume_egress_hook(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> std::result::Result<StatusCode, ApiError> {
+    if state.image_process.uses_image_user() {
+        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    }
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
-        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
         egress.resume().await?;
     }
     #[cfg(not(target_os = "linux"))]
@@ -786,7 +789,7 @@ async fn authorize(
     headers: &HeaderMap,
     required: SandboxOperationClass,
 ) -> std::result::Result<(), ApiError> {
-    authorize_control(state, peer, headers, required)?;
+    authorize_control(state, peer, headers, required).await?;
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
         egress.wait_ready().await?;
@@ -795,14 +798,19 @@ async fn authorize(
     Ok(())
 }
 
-fn authorize_control(
+async fn authorize_control(
     state: &AgentState,
     peer: SocketAddr,
     headers: &HeaderMap,
     required: SandboxOperationClass,
 ) -> std::result::Result<(), ApiError> {
     if matches!(&state.authorization, AgentAuthorization::Transport) {
-        if !crate::peer::transport_may_serve(peer, state.exec_identity.uid) {
+        let permitted = if state.image_process.uses_image_user() {
+            crate::peer::image_transport_may_serve(peer).await
+        } else {
+            crate::peer::transport_may_serve(peer, state.exec_identity.uid)
+        };
+        if !permitted {
             return Err(ApiError {
                 status: StatusCode::FORBIDDEN,
                 message: "the agent does not serve the code it is running".to_string(),
@@ -840,7 +848,10 @@ fn authorize_control(
             }
         }
         AgentAuthorization::Transport => {
-            unreachable!("transport handled before credential parsing")
+            return Err(AlienError::new(ErrorData::RequestInvalid {
+                reason: "transport authorization reached credential verification".into(),
+            })
+            .into());
         }
     }
 
@@ -900,7 +911,7 @@ async fn update_egress(
     headers: HeaderMap,
     Json(update): Json<EgressUpdate>,
 ) -> std::result::Result<StatusCode, ApiError> {
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     let egress = state
         .gateway_egress
         .as_ref()
@@ -923,15 +934,18 @@ async fn run_egress_hook(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> std::result::Result<StatusCode, ApiError> {
+    if state.image_process.uses_image_user() {
+        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    }
     let Some(egress) = &state.gateway_egress else {
         if state.image_process.waiting_for_activation()? {
-            authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+            authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
             state.image_process.activate()?;
         }
         state.start_image_once()?;
         return Ok(StatusCode::OK);
     };
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     if !egress.requires_token() {
         egress.activate_declared_none().await?;
         state.start_image_once()?;
