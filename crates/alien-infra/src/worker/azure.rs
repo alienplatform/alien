@@ -461,6 +461,23 @@ fn pem_to_pkcs12(private_key_pem: &str, certificate_chain_pem: &str) -> Result<V
 }
 
 // ≡ Controller definition =======================================================
+/// Ok when a delete succeeded or found the object already gone; any other error is returned
+/// with context, so the caller keeps the object's identifier for the retry.
+fn gone_unless_failed<T>(
+    result: std::result::Result<T, AlienError<CloudClientErrorData>>,
+    ctx: &ResourceControllerContext<'_>,
+    message: impl FnOnce() -> String,
+) -> Result<()> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) if matches!(error.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => Ok(()),
+        Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+            message: message(),
+            resource_id: Some(ctx.desired_config.id().to_string()),
+        })),
+    }
+}
+
 #[controller]
 pub struct AzureWorkerController {
     // ─────────── Persisted fields ───────────
@@ -3196,7 +3213,7 @@ impl AzureWorkerController {
 
         self.delete_storage_trigger_infrastructure(ctx).await?;
 
-        // Delete all Dapr components using best-effort approach (ignore NotFound)
+        // Delete all Dapr components (a missing one counts as deleted)
         self.delete_all_dapr_components(ctx).await?;
 
         // Continue to commands infrastructure cleanup
@@ -3217,88 +3234,76 @@ impl AzureWorkerController {
     ) -> Result<HandlerAction> {
         let azure_config = ctx.get_azure_config()?;
 
-        // Delete commands Dapr component (best-effort)
-        if let Some(component_name) = self.commands_dapr_component.take() {
+        // Each item is cleared only once it is gone, so a retry resumes with what is left.
+        if let Some(component_name) = self.commands_dapr_component.clone() {
             let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
             let client = ctx
                 .service_provider
                 .get_azure_container_apps_client(azure_config)?;
-
-            match client
+            let result = client
                 .delete_dapr_component(
                     &env_outputs.resource_group_name,
                     &env_outputs.environment_name,
                     &component_name,
                 )
-                .await
-            {
-                Ok(_) => {
-                    info!(component=%component_name, "Commands Dapr component delete requested");
-                }
-                Err(e)
+                .await;
+            // An accepted delete is not a finished one. Keep the name and issue the idempotent
+            // delete again until Azure reports the component gone; a delete that keeps failing
+            // ends the resource DeleteFailed.
+            let in_progress = match &result {
+                Ok(OperationResult::LongRunning(operation)) => Some(operation.retry_after),
+                // A delete issued while the previous one still runs.
+                Err(error)
                     if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceConflict { .. })
                     ) =>
                 {
-                    info!(component=%component_name, "Commands Dapr component was already deleted");
+                    Some(None)
                 }
-                Err(e) => {
-                    warn!(
-                        component=%component_name,
-                        error=%e,
-                        "Failed to delete commands Dapr component"
-                    );
-                }
+                _ => None,
+            };
+            if let Some(retry_after) = in_progress {
+                info!(component=%component_name, "Commands Dapr component delete is in progress");
+                return Ok(HandlerAction::Stay {
+                    max_times: Some(60),
+                    suggested_delay: Some(retry_after.unwrap_or(Duration::from_secs(15))),
+                });
             }
+            gone_unless_failed(result, ctx, || {
+                format!("Failed to delete commands Dapr component '{component_name}'")
+            })?;
+            info!(component=%component_name, "Commands Dapr component removed");
+            self.commands_dapr_component = None;
         }
 
-        // Delete commands role assignments (best-effort)
         let authorization_client = ctx
             .service_provider
             .get_azure_authorization_client(azure_config)?;
-
-        if let Some(assignment_id) = self.commands_sender_role_assignment_id.take() {
-            match authorization_client
+        if let Some(assignment_id) = self.commands_sender_role_assignment_id.clone() {
+            let result = authorization_client
                 .delete_role_assignment_by_id(assignment_id.clone())
-                .await
-            {
-                Ok(_) => {
-                    info!(assignment_id=%assignment_id, "Commands sender role assignment deleted");
-                }
-                Err(e) => {
-                    warn!(
-                        assignment_id=%assignment_id,
-                        error=%e,
-                        "Failed to delete commands sender role assignment (may already be deleted)"
-                    );
-                }
-            }
+                .await;
+            gone_unless_failed(result, ctx, || {
+                format!("Failed to delete commands sender role assignment '{assignment_id}'")
+            })?;
+            info!(assignment_id=%assignment_id, "Commands sender role assignment removed");
+            self.commands_sender_role_assignment_id = None;
+        }
+        if let Some(assignment_id) = self.commands_receiver_role_assignment_id.clone() {
+            let result = authorization_client
+                .delete_role_assignment_by_id(assignment_id.clone())
+                .await;
+            gone_unless_failed(result, ctx, || {
+                format!("Failed to delete commands receiver role assignment '{assignment_id}'")
+            })?;
+            info!(assignment_id=%assignment_id, "Commands receiver role assignment removed");
+            self.commands_receiver_role_assignment_id = None;
         }
 
-        // Delete commands receiver role assignment (best-effort)
-        if let Some(assignment_id) = self.commands_receiver_role_assignment_id.take() {
-            match authorization_client
-                .delete_role_assignment_by_id(assignment_id.clone())
-                .await
-            {
-                Ok(_) => {
-                    info!(assignment_id=%assignment_id, "Commands receiver role assignment deleted");
-                }
-                Err(e) => {
-                    warn!(
-                        assignment_id=%assignment_id,
-                        error=%e,
-                        "Failed to delete commands receiver role assignment (may already be deleted)"
-                    );
-                }
-            }
-        }
-
-        // Delete commands Service Bus queue (best-effort)
         if let (Some(namespace_name), Some(queue_name)) = (
-            self.commands_namespace_name.take(),
-            self.commands_queue_name.take(),
+            self.commands_namespace_name.clone(),
+            self.commands_queue_name.clone(),
         ) {
             let namespace_ref = ResourceRef::new(
                 alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
@@ -3314,25 +3319,19 @@ impl AzureWorkerController {
             let mgmt = ctx
                 .service_provider
                 .get_azure_service_bus_management_client(azure_config)?;
-            match mgmt
+            let result = mgmt
                 .delete_queue(
                     resource_group_name,
                     namespace_name.clone(),
                     queue_name.clone(),
                 )
-                .await
-            {
-                Ok(_) => {
-                    info!(queue=%queue_name, "Commands Service Bus queue deleted");
-                }
-                Err(e) => {
-                    warn!(
-                        queue=%queue_name,
-                        error=%e,
-                        "Failed to delete commands Service Bus queue (may already be deleted)"
-                    );
-                }
-            }
+                .await;
+            gone_unless_failed(result, ctx, || {
+                format!("Failed to delete commands Service Bus queue '{queue_name}'")
+            })?;
+            info!(queue=%queue_name, "Commands Service Bus queue removed");
+            self.commands_namespace_name = None;
+            self.commands_queue_name = None;
         }
 
         Ok(HandlerAction::Continue {
@@ -5404,7 +5403,7 @@ impl AzureWorkerController {
         Ok(())
     }
 
-    /// Deletes all Dapr components using best-effort approach
+    /// Deletes all Dapr components (a missing one counts as deleted)
     async fn delete_all_dapr_components(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -6470,6 +6469,54 @@ mod tests {
             });
 
         Arc::new(mock_container_apps)
+    }
+
+    /// An accepted but unfinished Dapr component delete is not success: the worker keeps the
+    /// component name and checks again, and clears it only once Azure reports it gone.
+    #[tokio::test]
+    async fn commands_dapr_component_is_kept_until_its_delete_finishes() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut apps = MockContainerAppsApi::new();
+        let seen = calls.clone();
+        apps.expect_delete_dapr_component().returning(move |_, _, name| {
+            if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                Ok(OperationResult::LongRunning(LongRunningOperation {
+                    url: "https://management.azure.com/operations/dapr-delete".to_string(),
+                    retry_after: None,
+                    location_url: None,
+                }))
+            } else {
+                Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "Dapr component".to_string(),
+                    resource_name: name.to_string(),
+                }))
+            }
+        });
+        let provider = setup_mock_service_provider(Arc::new(apps), None);
+        let controller = AzureWorkerController {
+            state: AzureWorkerState::DeletingCommandsInfrastructure,
+            commands_dapr_component: Some("commands-dapr".to_string()),
+            ..AzureWorkerController::mock_ready("test-func")
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Azure)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.expect("an unfinished delete waits");
+        let state = executor.internal_state::<AzureWorkerController>().unwrap();
+        assert_eq!(state.state, AzureWorkerState::DeletingCommandsInfrastructure);
+        assert_eq!(state.commands_dapr_component.as_deref(), Some("commands-dapr"));
+
+        executor.step().await.expect("a gone component finishes the step");
+        let state = executor.internal_state::<AzureWorkerController>().unwrap();
+        assert_eq!(state.commands_dapr_component, None);
+        assert_ne!(state.state, AzureWorkerState::DeletingCommandsInfrastructure);
     }
 
     fn setup_mock_service_provider(

@@ -4,7 +4,7 @@
 //! Each controller handles one resource type on one platform (e.g., `AwsWorkerController`, `GcpRoleController`).
 //!
 //! **Key Principles:**
-//! - **Fail Fast on Conflict for Create/Update**: Issue the cloud API call directly and propagate all errors (including `RemoteResourceConflict`). The executor handles retries automatically. Deletion flows still tolerate `RemoteResourceNotFound` and `RemoteAccessDenied`.
+//! - **Fail Fast on Conflict for Create/Update**: Issue the cloud API call directly and propagate all errors (including `RemoteResourceConflict`). The executor handles retries automatically. Deletion flows tolerate `RemoteResourceNotFound` only.
 //! - **Retry-Safe Handler Boundaries**: A handler should perform at most one externally durable mutating operation unless the phase is explicitly idempotent, progress-tracked, or best-effort cleanup.
 //! - **Retry Failed State**: The executor retries the failed handler state, stores `last_failed_state`, and manual retry resumes from that state.
 //! - **Stable Phase Order**: Flows should follow predictable phases. No-op phases are fine when they keep update/delete paths easier to reason about.
@@ -255,8 +255,12 @@
 //! }
 //! ```
 //!
-//! ### Delete Operations – Best-Effort Cleanup
-//! Delete states should treat `RemoteResourceNotFound` and `RemoteAccessDenied` as success, making cleanup idempotent even when an imported resource has already been removed or is no longer accessible.
+//! ### Delete Operations – Gone Means Confirmed Gone
+//! Delete states treat `RemoteResourceNotFound` as success, making cleanup idempotent when an
+//! object has already been removed. Access denied is not evidence of absence: return it, and keep
+//! the object's identifiers until it is confirmed gone, so the resource ends `DeleteFailed` and an
+//! explicit retry can finish it. Behind a tag-conditioned AWS grant, use `aws_tag_scoped`, which
+//! confirms absence with a lookup that is not tag-scoped.
 //! Provider dependency-drain errors during delete, such as GCP `resourceInUseByAnotherResource`,
 //! AWS `DependencyViolation`/`ResourceInUse`, and Azure `InUse`/`Conflict`, should usually be
 //! handled as wait conditions. Keep the referenced remote ID in state and return `Stay` or a
@@ -265,7 +269,7 @@
 //! ```ignore
 //! match client.delete_service_account(&name).await {
 //!     Ok(_) => next_state_deleting_role(),
-//!     Err(e) if matches!(e.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. } | CloudClientErrorData::RemoteAccessDenied { .. })) => next_state_deleting_role(),
+//!     Err(e) if matches!(e.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. })) => next_state_deleting_role(),
 //!     Err(e) => return Err(e),
 //! }
 //! ```

@@ -839,6 +839,24 @@ Resources:
           - '*'
           Sid: ProvisionEventSourceMappings
         - Action:
+          - lambda:GetFunctionConcurrency
+          Condition:
+            'Null':
+              aws:ResourceTag/deployment: 'true'
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+          Sid: ReadGoneLambdaFunctions
+        - Action:
+          - lambda:GetEventSourceMapping
+          Condition:
+            'Null':
+              lambda:FunctionArn: 'true'
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: ReadGoneEventSourceMappings
+        - Action:
           - lambda:ListEventSourceMappings
           Effect: Allow
           Resource:
@@ -922,11 +940,31 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
           Sid: ManageTlsCertificates
         - Action:
+          - acm:DescribeCertificate
+          Condition:
+            'Null':
+              aws:ResourceTag/deployment: 'true'
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
+          Sid: ReadGoneTlsCertificates
+        - Action:
           - acm:ListCertificates
           Effect: Allow
           Resource:
           - '*'
           Sid: ListTlsCertificates
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
+  ManagementRoleManagementPolicy2:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Application management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
         - Action:
           - apigateway:POST
           - apigateway:PUT
@@ -957,17 +995,6 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/basepathmappings
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           Sid: CreateHttpApiRoutes
-      Roles:
-      - Ref: ManagementRole
-    DependsOn:
-    - ManagementRole
-  ManagementRoleManagementPolicy2:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      Description: Application management permissions
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
         - Action:
           - apigateway:PUT
           - apigateway:TagResource
@@ -1005,6 +1032,26 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/basepathmappings/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           Sid: ManageHttpApiEndpoints
+        - Action:
+          - apigateway:GET
+          Condition:
+            'Null':
+              aws:ResourceTag/deployment: 'true'
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/??????????
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/??????????
+          Sid: ReadGoneHttpApis
+        - Action:
+          - apigateway:GET
+          Condition:
+            'Null':
+              aws:ResourceTag/deployment: 'true'
+          Effect: Deny
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/*
+          Sid: DenyUntaggedDomainMappingReads
         - Action:
           - events:PutRule
           - events:TagResource

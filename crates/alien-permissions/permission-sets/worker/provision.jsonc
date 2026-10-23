@@ -151,6 +151,64 @@
         }
       },
       {
+        // A gone function has no tags, so the tag-scoped grants answer AccessDenied for it,
+        // not NotFound. This read on functions without the stack's tag lets a gone function
+        // answer NotFound, which tells it from a real denial. GetFunctionConcurrency returns only
+        // the reserved concurrency: GetFunctionConfiguration would return environment variables
+        // and GetFunction a code download URL of other functions under the prefix.
+        "label": "read-gone-lambda-functions",
+        "description": "Read the reserved concurrency of functions under this application's name prefix that carry no deployment tag, so a deleted function answers NotFound.",
+        "grant": {
+          "actions": ["lambda:GetFunctionConcurrency"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"],
+            "condition": {
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"],
+            "condition": {
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
+              }
+            }
+          }
+        }
+      },
+      {
+        // A mapping that is gone has no function, so the lambda:FunctionArn condition above
+        // fails and AWS answers AccessDenied. A Null lambda:FunctionArn matches only mappings
+        // that no longer exist, which then answer NotFound.
+        "label": "read-gone-event-source-mappings",
+        "description": "Read event source mappings that no longer belong to any function, so a deleted mapping answers NotFound.",
+        "grant": {
+          "actions": ["lambda:GetEventSourceMapping"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "Null": {
+                "lambda:FunctionArn": "true"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "Null": {
+                "lambda:FunctionArn": "true"
+              }
+            }
+          }
+        }
+      },
+      {
         // ListEventSourceMappings supports neither resource-level scoping nor
         // lambda condition keys — AWS evaluates it against `*` only.
         "label": "list-event-source-mappings",
@@ -343,6 +401,34 @@
         }
       },
       {
+        // Like the Lambda read above: a gone certificate has no tags, so the tag-scoped
+        // describe is denied. Granting it on certificates without the stack's tag lets a gone
+        // certificate answer NotFound. It returns certificate metadata, never the private key.
+        "label": "read-gone-tls-certificates",
+        "description": "Describe ACM certificates that carry no deployment tag, so a deleted certificate answers NotFound.",
+        "grant": {
+          "actions": ["acm:DescribeCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
+              }
+            }
+          }
+        }
+      },
+      {
         // ListCertificates supports no resource-level scoping or condition keys; AWS
         // evaluates it against `*` only. It returns certificate ARNs and domain names.
         // Used with ListTagsForCertificate to find a certificate whose import response
@@ -524,6 +610,71 @@
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceId}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        // Like the Lambda read above, for APIs and custom domains: a gone object has no tags,
+        // so the tag-scoped GET is denied. This GET on untagged objects lets a gone one answer
+        // NotFound. `??????????` is a 10-character API id, so it reaches the API object only,
+        // not its stages, routes or integrations.
+        "label": "read-gone-http-apis",
+        "description": "Read API Gateway APIs and custom domain names that carry no deployment tag, so a deleted one answers NotFound.",
+        "grant": {
+          "actions": ["apigateway:GET"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/??????????",
+              "arn:aws:apigateway:${awsRegion}::/restapis/??????????",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/??????????",
+              "arn:aws:apigateway:${awsRegion}::/restapis/??????????",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*"
+            ],
+            "condition": {
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
+              }
+            }
+          }
+        }
+      },
+      {
+        // `/domainnames/*` above also matches the paths under a domain. Its API mappings stay
+        // readable only through the tag-scoped grant.
+        "label": "deny-untagged-domain-mapping-reads",
+        "description": "Do not read API mappings of custom domain names that carry no deployment tag.",
+        "effect": "Deny",
+        "grant": {
+          "actions": ["apigateway:GET"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:apigateway:${awsRegion}::/domainnames/*/*"],
+            "condition": {
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:apigateway:${awsRegion}::/domainnames/*/*"],
+            "condition": {
+              "Null": {
+                "aws:ResourceTag/${stackTag}": "true"
               }
             }
           }
