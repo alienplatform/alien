@@ -79,3 +79,17 @@ path. Identical fixtures assembled with the parent builder and agent reached the
 checker and failed all three cases. This establishes the startup regression
 without relying on a deployment or health-probe failure. All six sessions and
 all six templates were deleted and their absence verified.
+
+AWS gateway qualification additionally builds with `GATEWAY_CONFIG` containing
+`allowed`, `denied`, `direct` HTTP URLs, `udpHost`, `udpPort`, and the known
+`bodySha256` for the allowed origin. Set `gateway: true` in the entrypoint suite.
+Boot, its uid2000 child, and exec each make real HTTP/UDP requests with explicit
+proxy settings disabled, so UID changes exercise transparent routing. The report
+includes DNS results and bounded response hashes, never response bodies.
+
+Before interpreting the guest report, verify the same public HTTP and UDP origin
+from a reachable control host. A transparent denial closes the socket; that alone
+is inconclusive. Correlate each denied-host and numeric-IP attempt with gateway
+decision logs for this sandbox and verify the controlled origin saw no matching
+request. An origin HTTP403 is reachability, not a network denial. Preserve those
+controls and logs alongside the entrypoint report before claiming a pass.

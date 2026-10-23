@@ -7,6 +7,7 @@ import time
 
 from supervisor import ROOT, identity
 from metadata import collect, verify
+import gateway
 
 
 def main():
@@ -14,6 +15,7 @@ def main():
     parser.add_argument("--image-uid", type=int, required=True)
     parser.add_argument("--exec-uid", type=int, required=True)
     parser.add_argument("--metadata-backend", choices=("aws", "gcp", "azure"))
+    parser.add_argument("--gateway", action="store_true")
     args = parser.parse_args()
     command = identity()
     # A spawned interpreter may still be loading modules. Observe the boot process
@@ -39,7 +41,12 @@ def main():
     evidence = {"image": image, "exec": command, "supervisorPresentAtFirstExec": True}
     if args.metadata_backend:
         command["metadata"] = collect(args.metadata_backend)
+    if args.gateway:
+        command["gateway"] = gateway.collect(gateway.configuration())
     print(json.dumps(evidence), flush=True)
+    if args.gateway:
+        for process in [image, command] + ([image["child"]] if args.image_uid == 0 else []):
+            gateway.verify(process["gateway"], gateway.configuration())
     if args.metadata_backend:
         identities = [image, command] + ([image["child"]] if args.image_uid == 0 else [])
         for process in identities:

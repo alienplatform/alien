@@ -33,5 +33,5 @@ fn cni_probe_listener() {
 
 #[test]
 fn metadata_credential_response_controls() {
-    unittest("entrypoint", &["test_metadata"]);
+    unittest("entrypoint", &["test_metadata", "test_gateway"]);
 }

@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 from metadata import collect
+import gateway
 
 ROOT = Path("/tmp/alien-entrypoint")
 
@@ -79,11 +80,15 @@ def main():
         report = identity()
         if os.environ.get("ALIEN_CONFORMANCE_METADATA"):
             report["metadata"] = collect(os.environ["ALIEN_CONFORMANCE_METADATA"])
+        if os.environ.get("ALIEN_CONFORMANCE_GATEWAY"):
+            report["gateway"] = gateway.collect(gateway.configuration())
         print(json.dumps(report))
         return
     report = identity()
     if os.environ.get("ALIEN_CONFORMANCE_METADATA"):
         report["metadata"] = collect(os.environ["ALIEN_CONFORMANCE_METADATA"])
+    if os.environ.get("ALIEN_CONFORMANCE_GATEWAY"):
+        report["gateway"] = gateway.collect(gateway.configuration())
     report["mount"] = mount_probe()
     report["netAdmin"] = net_admin_probe()
     report["child"] = None

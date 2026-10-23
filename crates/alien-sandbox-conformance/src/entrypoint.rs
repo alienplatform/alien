@@ -23,6 +23,9 @@ pub struct Suite {
     exec_uid: u32,
     /// Probe cloud metadata in all fixture identities when supplied.
     metadata_backend: Option<String>,
+    /// Observe transparent gateway access from boot, child and exec identities.
+    #[serde(default)]
+    gateway: bool,
 }
 
 #[derive(Serialize)]
@@ -53,6 +56,9 @@ pub async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Resu
             return Err(invalid("unknown metadata backend"));
         }
         args.extend(["--metadata-backend".into(), backend.clone()]);
+    }
+    if suite.gateway {
+        args.push("--gateway".into());
     }
     let mut journal = OpenOptions::new()
         .write(true)
