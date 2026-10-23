@@ -499,8 +499,12 @@ class Sandbox:
         self._handle = _LazyHandle[Any]("sandbox", name)
 
     @translate_errors
-    async def capabilities(self) -> frozenset[str]:
-        return frozenset((await self._handle.get()).capabilities())
+    async def capabilities(self, sandbox_id: str | None = None) -> frozenset[str]:
+        """Operations supported by new sessions, or by an existing session's transport."""
+        handle = await self._handle.get()
+        if sandbox_id is None:
+            return frozenset(handle.capabilities())
+        return frozenset(await handle.session_capabilities(sandbox_id))
 
     @translate_errors
     async def create(

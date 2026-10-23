@@ -242,28 +242,46 @@ fn command_request(
     }
 }
 
+fn capability_names(value: alien_core::SandboxCapabilities) -> Vec<String> {
+    [
+        (value.files, "files"),
+        (value.reconnect, "reconnect"),
+        (value.jobs, "jobs"),
+        (value.pause_resume, "pauseResume"),
+        (value.preview, "preview"),
+        (value.domain_egress_rules, "domainEgressRules"),
+        (value.egress_deny, "egressDeny"),
+        (value.enforced_limits, "enforcedLimits"),
+        (value.process_limit, "processLimit"),
+        (value.sandbox_lifetime, "sandboxLifetime"),
+        (value.supervisor_pid_namespace, "supervisorPidNamespace"),
+        (value.supervisor_isolation, "supervisorIsolation"),
+    ]
+    .into_iter()
+    .filter(|(supported, _)| *supported)
+    .map(|(_, name)| name.to_string())
+    .collect()
+}
+
 #[pymethods]
 impl SandboxHandle {
     fn capabilities(&self) -> Vec<String> {
-        let value = self.inner.capabilities();
-        [
-            (value.files, "files"),
-            (value.reconnect, "reconnect"),
-            (value.jobs, "jobs"),
-            (value.pause_resume, "pauseResume"),
-            (value.preview, "preview"),
-            (value.domain_egress_rules, "domainEgressRules"),
-            (value.egress_deny, "egressDeny"),
-            (value.enforced_limits, "enforcedLimits"),
-            (value.process_limit, "processLimit"),
-            (value.sandbox_lifetime, "sandboxLifetime"),
-            (value.supervisor_pid_namespace, "supervisorPidNamespace"),
-            (value.supervisor_isolation, "supervisorIsolation"),
-        ]
-        .into_iter()
-        .filter(|(supported, _)| *supported)
-        .map(|(_, name)| name.to_string())
-        .collect()
+        capability_names(self.inner.capabilities())
+    }
+
+    fn session_capabilities<'py>(
+        &self,
+        py: Python<'py>,
+        sandbox_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner
+                .session_capabilities(&sandbox_id)
+                .await
+                .map(capability_names)
+                .map_err(map_alien_error)
+        })
     }
 
     #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None))]

@@ -35,9 +35,9 @@ Azure bases then use the normal agent assembler; Local keeps an immutable Docker
 image ID. The resolved original USER drives planning, including root refusal on
 Local/Kubernetes and AWS modes without a connector. Existing AWS S3 bundles keep
 their released startup behavior; rebuild from an OCI base to select the new image
-contract. New Azure catalog builds require a registry base or Dockerfile because
-the catalog does not expose the original USER/command for inspection. Saved native
-releases remain deployable unchanged.
+contract. Azure catalog builds keep their native path and emit a warning because the
+catalog does not expose the original USER/command for inspection. Native exec
+may run as root there. Saved native releases remain deployable unchanged.
 
 # Azure native-file transport
 
@@ -292,3 +292,12 @@ GCP pause/resume retains the process, boot ID and disk contents in the live
 qualification, including these mounts. A fresh container must repeat protection
 before image startup. Azure persists the custom session disk, so protecting the
 next boot's executable is required independently of the current process.
+
+Azure clients cache the HTTPS client and boot credential per session. The first
+operation activates the boot after checking provider policy. A definitive 401
+refreshes the native-file credential; only a changed credential permits one
+activation and replay. Transport failures and 5xx responses never replay a
+command. Ordinary commands retain the provider policy check without fetching
+the route or credential again. Query `session_capabilities(id)` in Rust, or
+`capabilities(id)` in TypeScript/Python, when reusing a session across upgrades;
+no-argument capabilities describe new sessions from the current binding.

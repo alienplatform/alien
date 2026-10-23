@@ -72,6 +72,17 @@ pub trait AgentTransport: Send + Sync + std::fmt::Debug {
         path: &str,
     ) -> Result<reqwest::RequestBuilder>;
 
+    /// Send an authorized request. A transport may renew an expired boot credential
+    /// after a definite authorization refusal, before any command can start.
+    async fn send(
+        &self,
+        _sandbox_id: &str,
+        request: reqwest::RequestBuilder,
+        operation: &str,
+    ) -> Result<reqwest::Response> {
+        send(request, operation).await
+    }
+
     /// Name used in errors, so a failure says which backend refused.
     fn provider(&self) -> &'static str;
 }
@@ -140,14 +151,16 @@ pub async fn run_command<T: AgentTransport + ?Sized>(
 ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
     let body = exec_body(&request)?;
 
-    let response = send(
-        transport
-            .request(sandbox_id, reqwest::Method::POST, "/v1/exec")
-            .await?
-            .json(&body),
-        RUN_COMMAND,
-    )
-    .await?;
+    let response = transport
+        .send(
+            sandbox_id,
+            transport
+                .request(sandbox_id, reqwest::Method::POST, "/v1/exec")
+                .await?
+                .json(&body),
+            RUN_COMMAND,
+        )
+        .await?;
 
     Ok(frame_stream(
         response,
@@ -164,14 +177,16 @@ pub async fn start_job<T: AgentTransport + ?Sized>(
 ) -> Result<JobStart> {
     let body = exec_body(&request)?;
 
-    let response = send(
-        transport
-            .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/start")
-            .await?
-            .json(&body),
-        JOB_START,
-    )
-    .await?;
+    let response = transport
+        .send(
+            sandbox_id,
+            transport
+                .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/start")
+                .await?
+                .json(&body),
+            JOB_START,
+        )
+        .await?;
 
     let started: JobStartResponse = response
         .json()
@@ -202,14 +217,16 @@ pub async fn poll_job<T: AgentTransport + ?Sized>(
     job_id: &str,
     since_seq: Option<u64>,
 ) -> Result<JobPoll> {
-    let response = send(
-        transport
-            .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/poll")
-            .await?
-            .json(&json!({ "jobId": job_id, "sinceSeq": since_seq })),
-        JOB_POLL,
-    )
-    .await?;
+    let response = transport
+        .send(
+            sandbox_id,
+            transport
+                .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/poll")
+                .await?
+                .json(&json!({ "jobId": job_id, "sinceSeq": since_seq })),
+            JOB_POLL,
+        )
+        .await?;
 
     let JobPollResponse {
         running,
@@ -246,14 +263,16 @@ pub async fn cancel_job<T: AgentTransport + ?Sized>(
     sandbox_id: &str,
     job_id: &str,
 ) -> Result<()> {
-    send(
-        transport
-            .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/cancel")
-            .await?
-            .json(&json!({ "jobId": job_id })),
-        JOB_CANCEL,
-    )
-    .await?;
+    transport
+        .send(
+            sandbox_id,
+            transport
+                .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/cancel")
+                .await?
+                .json(&json!({ "jobId": job_id })),
+            JOB_CANCEL,
+        )
+        .await?;
 
     Ok(())
 }
@@ -283,14 +302,16 @@ pub async fn read_file<T: AgentTransport + ?Sized>(
     sandbox_id: &str,
     path: &str,
 ) -> Result<Vec<u8>> {
-    let response = send(
-        transport
-            .request(sandbox_id, reqwest::Method::GET, "/v1/files")
-            .await?
-            .query(&[("path", path)]),
-        "sandbox.readFile",
-    )
-    .await?;
+    let response = transport
+        .send(
+            sandbox_id,
+            transport
+                .request(sandbox_id, reqwest::Method::GET, "/v1/files")
+                .await?
+                .query(&[("path", path)]),
+            "sandbox.readFile",
+        )
+        .await?;
 
     let body: ReadFileResponse =
         response
@@ -319,17 +340,19 @@ pub async fn write_files<T: AgentTransport + ?Sized>(
     files: BTreeMap<String, Vec<u8>>,
 ) -> Result<()> {
     for (path, contents) in files {
-        send(
-            transport
-                .request(sandbox_id, reqwest::Method::PUT, "/v1/files")
-                .await?
-                .json(&json!({
-                    "path": path,
-                    "contentsBase64": BASE64.encode(contents),
-                })),
-            "sandbox.writeFiles",
-        )
-        .await?;
+        transport
+            .send(
+                sandbox_id,
+                transport
+                    .request(sandbox_id, reqwest::Method::PUT, "/v1/files")
+                    .await?
+                    .json(&json!({
+                        "path": path,
+                        "contentsBase64": BASE64.encode(contents),
+                    })),
+                "sandbox.writeFiles",
+            )
+            .await?;
     }
 
     Ok(())
@@ -370,10 +393,17 @@ fn unanswered(operation: &str, reason: &str) -> ErrorData {
 /// `run_command` — that request may have already started the command. Nothing retries on this
 /// path today; whoever adds a retry layer has to treat `run_command` as the exception.
 pub async fn send(request: reqwest::RequestBuilder, operation: &str) -> Result<reqwest::Response> {
-    let response = match tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, request.send()).await {
+    check_response(send_raw(request, operation).await?, operation).await
+}
+
+pub(super) async fn send_raw(
+    request: reqwest::RequestBuilder,
+    operation: &str,
+) -> Result<reqwest::Response> {
+    match tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, request.send()).await {
         Ok(sent) => sent
             .into_alien_error()
-            .context(unanswered(operation, "the request never reached the agent"))?,
+            .context(unanswered(operation, "the request never reached the agent")),
         Err(_) => {
             return Err(AlienError::new(unanswered(
                 operation,
@@ -383,8 +413,13 @@ pub async fn send(request: reqwest::RequestBuilder, operation: &str) -> Result<r
                 ),
             )));
         }
-    };
+    }
+}
 
+pub(super) async fn check_response(
+    response: reqwest::Response,
+    operation: &str,
+) -> Result<reqwest::Response> {
     if response.status().is_success() {
         return Ok(response);
     }

@@ -88,7 +88,7 @@ finally:
     await stream.close()
 ```
 
-Long-running commands can use `start_job`, `poll_job`, and `cancel_job`. Call `capabilities()` before optional file, job, pause/resume, or isolation behavior because support differs by platform.
+Long-running commands can use `start_job`, `poll_job`, and `cancel_job`. Call `capabilities()` for new sessions, or `capabilities(sandbox_id)` for an existing session, before optional file, job, pause/resume, or isolation behavior. Azure sessions retain the transport they were created with across image upgrades and rollbacks.
 
 ## PostgreSQL TLS
 

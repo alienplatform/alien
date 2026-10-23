@@ -72,6 +72,10 @@ function fakeRemoteAddon() {
   const sandbox: RawSandboxHandle = {
     updateEgress: async () => {},
     capabilities: () => ["files", "reconnect"],
+    sessionCapabilities: async sandboxId => {
+      expect(sandboxId).toBe("agent-session")
+      return ["files", "reconnect", "jobs"]
+    },
     create: async sandboxId => instance(sandboxId),
     get: async () => null,
     getOrCreate: async sandboxId => ({ sandbox: instance(sandboxId), created: false }),
@@ -328,6 +332,11 @@ describe("Bindings.forRemoteDeployment", () => {
     expect(bindings.sandbox("agent")).toBe(agent)
 
     await expect(agent.capabilities()).resolves.toEqual(["files", "reconnect"])
+    await expect(agent.capabilities("agent-session")).resolves.toEqual([
+      "files",
+      "reconnect",
+      "jobs",
+    ])
     await agent.updateEgress("session_1", { allow: [] })
     await agent.terminate("session_1")
     await build.capabilities()

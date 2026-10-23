@@ -387,6 +387,7 @@ const sandboxMembers: Record<keyof RawSandboxHandle, true> = {
   updateEgress: true,
   cancelJob: true,
   capabilities: true,
+  sessionCapabilities: true,
   create: true,
   get: true,
   getOrCreate: true,

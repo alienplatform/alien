@@ -239,3 +239,8 @@ cloud permissions also deny receiving, acknowledging, and purging. Credentials
 refresh before operations as their leases expire. SQS, Pub/Sub, and Service Bus
 use resource-scoped publisher grants. Batch results have the same partial-failure
 semantics as local queue handles.
+
+Sandbox capabilities for a new session come from `await sandbox.capabilities()`.
+After reconnecting, use `await sandbox.capabilities(sandboxId)` to query that
+session. Azure sessions retain their original native or agent transport across
+image upgrades and rollbacks, so jobs support can differ from a new session.

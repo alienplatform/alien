@@ -35,6 +35,7 @@ use tracing::warn;
 #[derive(Debug)]
 pub struct AzureSandbox {
     agent: bool,
+    agent_connections: agent::Connections,
     client: std::sync::Arc<dyn SandboxDataPlaneApi>,
     sandbox_group: String,
     /// Catalog name or registry image every sandbox is created from, from the declaration.
@@ -70,6 +71,7 @@ impl AzureSandbox {
     ) -> Self {
         Self {
             agent: false,
+            agent_connections: Default::default(),
             client,
             sandbox_group,
             disk_image,
@@ -325,6 +327,16 @@ impl Sandbox for AzureSandbox {
         capabilities.jobs = self.agent;
         capabilities.supervisor_isolation = self.agent;
         capabilities
+    }
+
+    async fn session_capabilities(&self, sandbox_id: &str) -> Result<SandboxCapabilities> {
+        let agent = self
+            .session_uses_agent("sandbox.capabilities", sandbox_id)
+            .await?;
+        let mut capabilities = SandboxCapabilities::azure();
+        capabilities.jobs = agent;
+        capabilities.supervisor_isolation = agent;
+        Ok(capabilities)
     }
 
     async fn create(&self, mut request: CreateSandboxRequest) -> Result<SandboxInstance> {
@@ -850,6 +862,7 @@ impl Sandbox for AzureSandbox {
                 .await
             {
                 if is_not_found(&error) {
+                    self.agent_connections.lock().await.remove(sandbox_id);
                     return revocation;
                 }
                 warn!(sandbox = %sandbox_id, %error, "could not confirm a sandbox is gone");
