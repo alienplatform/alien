@@ -839,7 +839,7 @@ Resources:
           - '*'
           Sid: ProvisionEventSourceMappings
         - Action:
-          - lambda:GetFunctionConfiguration
+          - lambda:GetFunctionConcurrency
           Condition:
             'Null':
               aws:ResourceTag/deployment: 'true'

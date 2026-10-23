@@ -666,10 +666,10 @@ fn is_tag_absent_binding(binding: &AwsBindingSpec) -> bool {
 }
 
 /// The reads a gone tag-scoped object answers with NotFound once they are granted on objects
-/// without the stack's tag. Each returns metadata only: GetFunctionConfiguration, unlike
-/// GetFunction, returns no code download URL.
+/// without the stack's tag. Each returns metadata only. For Lambda that is the reserved
+/// concurrency: GetFunctionConfiguration and GetFunction return environment variables.
 const GONE_OBJECT_READS: &[&str] = &[
-    "lambda:GetFunctionConfiguration",
+    "lambda:GetFunctionConcurrency",
     "lambda:GetEventSourceMapping",
     "acm:DescribeCertificate",
     "apigateway:GET",

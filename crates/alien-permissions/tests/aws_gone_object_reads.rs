@@ -6,7 +6,8 @@
 //! answers its delete and its tag-scoped read with AccessDenied, not NotFound. The permission
 //! sets also grant one read on objects without the stack's tag, so a gone object answers it
 //! NotFound. These tests check that this read reaches gone objects, and nothing more: no write,
-//! no code, no sub-resource of an untagged object, and nothing of another stack.
+//! no code or environment variables, no sub-resource of an untagged object, and nothing of
+//! another stack.
 //!
 //! The same requests were run against AWS with a role holding these statements: gone objects
 //! answered NotFound, the untagged sub-resources and every delete stayed denied, and another
@@ -104,7 +105,7 @@ fn api_gateway_arn(path: &str) -> String {
 /// that is gone: no resource tags, and no function behind a mapping.
 fn probes_of_gone_objects() -> Vec<Request> {
     vec![
-        Request::new("lambda:GetFunctionConfiguration", function_arn(FUNCTION)),
+        Request::new("lambda:GetFunctionConcurrency", function_arn(FUNCTION)),
         Request::new("lambda:GetEventSourceMapping", mapping_arn()),
         Request::new("acm:DescribeCertificate", certificate_arn()),
         Request::new(
@@ -154,22 +155,21 @@ fn a_gone_object_is_readable_so_it_answers_not_found() {
 }
 
 /// The tag-absent reads widen nothing a delete needs: an object without the stack's tags still
-/// cannot be changed, and the read returns no code and no sub-resource of an untagged API.
+/// cannot be changed, and the reads return no code, no environment variables and no
+/// sub-resource of an untagged API.
 #[test]
 fn the_tag_absent_reads_grant_no_writes_code_or_sub_resources() {
     let untagged_api = |path: &str| api_gateway_arn(&format!("/apis/{API_ID}{path}"));
     let untagged_rest_api = |path: &str| api_gateway_arn(&format!("/restapis/{API_ID}{path}"));
     let not_allowed = [
-        // GetFunction returns a code download URL.
+        // GetFunction returns a code download URL, and both return environment variables.
         Request::new("lambda:GetFunction", function_arn(FUNCTION)),
+        Request::new("lambda:GetFunctionConfiguration", function_arn(FUNCTION)),
         Request::new("lambda:DeleteFunction", function_arn(FUNCTION)),
         Request::new("lambda:UpdateFunctionConfiguration", function_arn(FUNCTION)),
         Request::new("lambda:UpdateFunctionCode", function_arn(FUNCTION)),
         // Outside the stack's name prefix.
-        Request::new(
-            "lambda:GetFunctionConfiguration",
-            function_arn("billing-api"),
-        ),
+        Request::new("lambda:GetFunctionConcurrency", function_arn("billing-api")),
         Request::new("lambda:DeleteEventSourceMapping", mapping_arn()),
         Request::new("lambda:UpdateEventSourceMapping", mapping_arn()),
         // A mapping that exists belongs to a function; another stack's stays unreadable.
@@ -252,6 +252,10 @@ fn this_stacks_objects_keep_their_tag_scoped_reads() {
     let requests = [
         own(Request::new(
             "lambda:GetFunctionConfiguration",
+            function_arn(FUNCTION),
+        )),
+        own(Request::new(
+            "lambda:GetFunctionConcurrency",
             function_arn(FUNCTION),
         )),
         Request::new("lambda:GetEventSourceMapping", mapping_arn())

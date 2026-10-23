@@ -4674,7 +4674,7 @@ impl AwsWorkerController {
                 .await,
             || async {
                 client
-                    .get_function_configuration(function_identifier, None)
+                    .get_function_concurrency(function_identifier)
                     .await
                     .map(|_| ())
             },
@@ -4779,7 +4779,7 @@ impl AwsWorkerController {
             client.delete_function(&aws_worker_name, None).await,
             || async {
                 client
-                    .get_function_configuration(&aws_worker_name, None)
+                    .get_function_concurrency(&aws_worker_name)
                     .await
                     .map(|_| ())
             },
@@ -4818,9 +4818,9 @@ impl AwsWorkerController {
             .await
         {
             // The delete above succeeded or confirmed the function gone, so this read only
-            // waits for it to disappear. A deleted function has no tags: a role set up before
-            // the read was granted on untagged functions gets AccessDenied, not NotFound, and
-            // both mean it is gone.
+            // waits for it to disappear. GetFunctionConfiguration is granted only on functions
+            // with the stack's tags and a deleted function has none, so AccessDenied means gone
+            // here just as NotFound does.
             Err(e)
                 if matches!(
                     e.error,
@@ -5808,8 +5808,8 @@ mod tests {
     use alien_aws_clients::ec2::{DescribeNetworkInterfacesResponse, Ec2Client, MockEc2Api};
     use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::lambda::{
-        AddPermissionResponse, EventSourceMapping, FunctionConfiguration, GetFunctionResponse,
-        ListEventSourceMappingsResponse, MockLambdaApi,
+        AddPermissionResponse, EventSourceMapping, FunctionConcurrency, FunctionConfiguration,
+        GetFunctionResponse, ListEventSourceMappingsResponse, MockLambdaApi,
     };
     use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _, AwsCredentialProvider};
     use alien_client_core::ErrorData as CloudClientErrorData;
@@ -7509,7 +7509,7 @@ mod tests {
         })
     }
 
-    /// Lambda's answer to a read of a function that is gone, once the read is granted on
+    /// Lambda's answer to the concurrency read of a function that is gone, which is granted on
     /// functions without the stack's tag.
     fn function_gone() -> AlienError<CloudClientErrorData> {
         AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
@@ -7635,10 +7635,18 @@ mod tests {
         });
         let recorded = calls.clone();
         mock_lambda
+            .expect_get_function_concurrency()
+            .returning(move |_| {
+                recorded.lock().unwrap().push("GetFunctionConcurrency");
+                Err(function_gone())
+            });
+        // Tag-scoped, so a gone function answers it AccessDenied.
+        let recorded = calls.clone();
+        mock_lambda
             .expect_get_function_configuration()
             .returning(move |_, _| {
                 recorded.lock().unwrap().push("GetFunctionConfiguration");
-                Err(function_gone())
+                Err(access_denied())
             });
 
         let mut mock_ec2 = MockEc2Api::new();
@@ -7694,9 +7702,9 @@ mod tests {
 
         // Detach probe, delete and its probe, then the wait for the function to be gone.
         let mut expected_calls = vec![
-            "GetFunctionConfiguration",
+            "GetFunctionConcurrency",
             "DeleteFunction",
-            "GetFunctionConfiguration",
+            "GetFunctionConcurrency",
             "GetFunctionConfiguration",
             "DescribeNetworkInterfaces",
         ];
@@ -7722,10 +7730,18 @@ mod tests {
         });
         let recorded = calls.clone();
         mock_lambda
+            .expect_get_function_concurrency()
+            .returning(move |_| {
+                recorded.lock().unwrap().push("GetFunctionConcurrency");
+                Err(function_gone())
+            });
+        // Tag-scoped, so a gone function answers it AccessDenied.
+        let recorded = calls.clone();
+        mock_lambda
             .expect_get_function_configuration()
             .returning(move |_, _| {
                 recorded.lock().unwrap().push("GetFunctionConfiguration");
-                Err(function_gone())
+                Err(access_denied())
             });
 
         let mut mock_ec2 = MockEc2Api::new();
@@ -7749,9 +7765,9 @@ mod tests {
         assert_eq!(
             calls[..4],
             [
-                "GetFunctionConfiguration",
+                "GetFunctionConcurrency",
                 "DeleteFunction",
-                "GetFunctionConfiguration",
+                "GetFunctionConcurrency",
                 "GetFunctionConfiguration"
             ]
         );
@@ -7777,17 +7793,21 @@ mod tests {
         false
     }
 
-    /// The function still exists: the tag-scoped detach is denied but the read succeeds, so
-    /// the denial is real. The delete ends `DeleteFailed` with the denial, without deleting
-    /// anything, and the worker keeps its ARN.
+    /// The function still exists: the tag-scoped detach is denied but the concurrency read
+    /// succeeds, so the denial is real. The delete ends `DeleteFailed` with the denial, without
+    /// deleting anything, and the worker keeps its ARN.
     #[tokio::test]
     async fn test_delete_of_a_function_that_still_exists_behind_a_denial_fails() {
         let mut mock_lambda = MockLambdaApi::new();
         mock_lambda.expect_delete_function().times(0);
         mock_lambda
-            .expect_get_function_configuration()
+            .expect_get_function_concurrency()
             .times(1)
-            .returning(|_, _| Ok(create_successful_function_response("test-public-func")));
+            .returning(|_| {
+                Ok(FunctionConcurrency {
+                    reserved_concurrent_executions: None,
+                })
+            });
 
         let worker = delete_public_worker_in_created_vpc()
             .mock_lambda(mock_lambda)
@@ -7821,8 +7841,8 @@ mod tests {
         let mut mock_lambda = MockLambdaApi::new();
         mock_lambda.expect_delete_function().times(0);
         mock_lambda
-            .expect_get_function_configuration()
-            .returning(|_, _| Err(access_denied()));
+            .expect_get_function_concurrency()
+            .returning(|_| Err(access_denied()));
 
         let worker = delete_public_worker_in_created_vpc()
             .mock_lambda(mock_lambda)

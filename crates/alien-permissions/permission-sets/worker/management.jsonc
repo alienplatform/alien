@@ -91,12 +91,13 @@
       {
         // A gone function has no tags, so the tag-scoped grants answer AccessDenied for it,
         // not NotFound. This read on functions without the stack's tag lets a gone function
-        // answer NotFound, which tells it from a real denial. GetFunctionConfiguration, not
-        // GetFunction, so no code download URL is exposed.
+        // answer NotFound, which tells it from a real denial. GetFunctionConcurrency returns only
+        // the reserved concurrency: GetFunctionConfiguration would return environment variables
+        // and GetFunction a code download URL of other functions under the prefix.
         "label": "read-gone-lambda-functions",
-        "description": "Read the configuration of functions under this application's name prefix that carry no deployment tag, so a deleted function answers NotFound.",
+        "description": "Read the reserved concurrency of functions under this application's name prefix that carry no deployment tag, so a deleted function answers NotFound.",
         "grant": {
-          "actions": ["lambda:GetFunctionConfiguration"]
+          "actions": ["lambda:GetFunctionConcurrency"]
         },
         "binding": {
           "stack": {
@@ -535,9 +536,7 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*/*"
-            ],
+            "resources": ["arn:aws:apigateway:${awsRegion}::/domainnames/*/*"],
             "condition": {
               "Null": {
                 "aws:ResourceTag/${stackTag}": "true"
@@ -545,9 +544,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*/*"
-            ],
+            "resources": ["arn:aws:apigateway:${awsRegion}::/domainnames/*/*"],
             "condition": {
               "Null": {
                 "aws:ResourceTag/${stackTag}": "true"

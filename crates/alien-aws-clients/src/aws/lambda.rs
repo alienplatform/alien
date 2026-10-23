@@ -887,10 +887,12 @@ impl LambdaApi for LambdaClient {
         .await
     }
 
+    // GetFunctionConcurrency is served under the 2019-09-30 API version. The 2017-10-31 path
+    // (used by Put/DeleteFunctionConcurrency) answers a GET with AccessDenied.
     async fn get_function_concurrency(&self, function_name: &str) -> Result<FunctionConcurrency> {
         self.send_json(
             Method::GET,
-            &format!("/2017-10-31/functions/{function_name}/concurrency"),
+            &format!("/2019-09-30/functions/{function_name}/concurrency"),
             None,
             None,
             "GetFunctionConcurrency",
