@@ -2,7 +2,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use alien_error::{Context, IntoAlienError};
-use bollard::network::InspectNetworkOptions;
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, info, warn};
@@ -17,10 +16,7 @@ pub(crate) async fn bindable_docker_bridge_gateway() -> Result<Option<Ipv4Addr>>
     };
     // A bridge may be absent on a remote engine or unavailable for host binding
     // on Docker Desktop. Unexpected API failures must still be visible.
-    let network = match docker
-        .inspect_network("bridge", None::<InspectNetworkOptions<String>>)
-        .await
-    {
+    let network = match docker.inspect_network("bridge", None).await {
         Ok(network) => network,
         Err(bollard::errors::Error::DockerResponseServerError {
             status_code: 404, ..

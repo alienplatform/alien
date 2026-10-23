@@ -13,13 +13,15 @@
 use crate::error::{ErrorData, Result};
 use alien_core::{ExposeProtocol, ENV_ALIEN_COMMANDS_URL};
 use alien_error::{AlienError, Context, IntoAlienError};
-use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
-    RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
+use bollard::container::LogOutput;
+use bollard::models::{
+    ContainerCreateBody, EndpointSettings, HostConfig, NetworkCreateRequest, NetworkingConfig,
+    PortBinding, VolumeCreateRequest,
 };
-use bollard::models::{EndpointSettings, HostConfig, PortBinding};
-use bollard::network::{CreateNetworkOptions, InspectNetworkOptions};
-use bollard::volume::{CreateVolumeOptions, RemoveVolumeOptions};
+use bollard::query_parameters::{
+    CreateContainerOptions, CreateImageOptions, ListContainersOptions, LogsOptions,
+    RemoveContainerOptions, RemoveVolumeOptions, StopContainerOptions,
+};
 use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -58,7 +60,6 @@ fn endpoint_scheme(protocol: ExposeProtocol) -> &'static str {
     }
 }
 
-type ExposedPorts = HashMap<String, HashMap<(), ()>>;
 type PortBindings = HashMap<String, Option<Vec<PortBinding>>>;
 
 fn loopback_port_bindings(
@@ -66,18 +67,17 @@ fn loopback_port_bindings(
     host_port: Option<u16>,
     health_check_port: Option<u16>,
     health_host_port: Option<u16>,
-) -> (Option<ExposedPorts>, Option<PortBindings>) {
-    let mut exposed = HashMap::new();
+) -> (Option<Vec<String>>, Option<PortBindings>) {
     let mut bindings = HashMap::new();
     let mut insert = |container_port: u16, host_port: u16| {
-        let key = format!("{container_port}/tcp");
-        exposed.entry(key.clone()).or_insert_with(HashMap::new);
-        bindings.entry(key).or_insert_with(|| {
-            Some(vec![PortBinding {
-                host_ip: Some("127.0.0.1".to_string()),
-                host_port: Some(host_port.to_string()),
-            }])
-        });
+        bindings
+            .entry(format!("{container_port}/tcp"))
+            .or_insert_with(|| {
+                Some(vec![PortBinding {
+                    host_ip: Some("127.0.0.1".to_string()),
+                    host_port: Some(host_port.to_string()),
+                }])
+            });
     };
     if let (Some(endpoint), Some(host_port)) = (public_endpoint, host_port) {
         insert(endpoint.port, host_port);
@@ -85,10 +85,10 @@ fn loopback_port_bindings(
     if let (Some(container_port), Some(host_port)) = (health_check_port, health_host_port) {
         insert(container_port, host_port);
     }
-    if exposed.is_empty() {
+    if bindings.is_empty() {
         (None, None)
     } else {
-        (Some(exposed), Some(bindings))
+        (Some(bindings.keys().cloned().collect()), Some(bindings))
     }
 }
 
@@ -430,11 +430,10 @@ impl LocalContainerManager {
         }
 
         self.docker
-            .create_volume(CreateVolumeOptions::<String> {
-                name: volume_name.clone(),
-                driver: "local".to_string(),
-                driver_opts: HashMap::new(),
-                labels: HashMap::new(),
+            .create_volume(VolumeCreateRequest {
+                name: Some(volume_name.clone()),
+                driver: Some("local".to_string()),
+                ..Default::default()
             })
             .await
             .into_alien_error()
@@ -492,11 +491,7 @@ impl LocalContainerManager {
     /// for DNS-based service discovery between containers.
     pub async fn ensure_network(&self) -> Result<()> {
         // Check if network exists
-        match self
-            .docker
-            .inspect_network(NETWORK_NAME, None::<InspectNetworkOptions<String>>)
-            .await
-        {
+        match self.docker.inspect_network(NETWORK_NAME, None).await {
             Ok(_) => {
                 debug!("Docker network '{}' already exists", NETWORK_NAME);
                 return Ok(());
@@ -519,14 +514,13 @@ impl LocalContainerManager {
 
         info!("Creating Docker network '{}'", NETWORK_NAME);
 
-        let create_opts = CreateNetworkOptions {
-            name: NETWORK_NAME,
-            check_duplicate: true,
-            driver: "bridge",
-            internal: false,
-            attachable: true,
-            ingress: false,
-            enable_ipv6: false,
+        let create_opts = NetworkCreateRequest {
+            name: NETWORK_NAME.to_string(),
+            driver: Some("bridge".to_string()),
+            internal: Some(false),
+            attachable: Some(true),
+            ingress: Some(false),
+            enable_ipv6: Some(false),
             ..Default::default()
         };
 
@@ -763,8 +757,8 @@ impl LocalContainerManager {
     ) -> Result<String> {
         use futures_util::TryStreamExt;
 
-        let options = Some(bollard::image::CreateImageOptions {
-            from_image: image.to_string(),
+        let options = Some(CreateImageOptions {
+            from_image: Some(image.to_string()),
             ..Default::default()
         });
 
@@ -1126,7 +1120,7 @@ impl LocalContainerManager {
         let process_override = oci_process_override(config.command.as_deref());
 
         // Build container config
-        let container_config = Config {
+        let container_config = ContainerCreateBody {
             image: Some(image.clone()),
             labels: Some(HashMap::from([
                 ("alien.dev/resource".to_string(), container_id.to_string()),
@@ -1158,7 +1152,9 @@ impl LocalContainerManager {
                 }),
                 ..Default::default()
             }),
-            networking_config: Some(bollard::container::NetworkingConfig { endpoints_config }),
+            networking_config: Some(NetworkingConfig {
+                endpoints_config: Some(endpoints_config),
+            }),
             ..Default::default()
         };
 
@@ -1182,8 +1178,8 @@ impl LocalContainerManager {
             .docker
             .create_container(
                 Some(CreateContainerOptions {
-                    name: docker_name.clone(),
-                    platform: None,
+                    name: Some(docker_name.clone()),
+                    ..Default::default()
                 }),
                 container_config,
             )
@@ -1197,7 +1193,7 @@ impl LocalContainerManager {
 
         // Start container
         self.docker
-            .start_container(&response.id, None::<StartContainerOptions<String>>)
+            .start_container(&response.id, None)
             .await
             .into_alien_error()
             .context(ErrorData::DockerContainerError {
@@ -1251,7 +1247,13 @@ impl LocalContainerManager {
         let docker_name = format!("alien-{}", container_id);
 
         self.docker
-            .stop_container(&docker_name, Some(StopContainerOptions { t: 10 }))
+            .stop_container(
+                &docker_name,
+                Some(StopContainerOptions {
+                    t: Some(10),
+                    ..Default::default()
+                }),
+            )
             .await
             .into_alien_error()
             .context(ErrorData::DockerContainerError {
@@ -1387,7 +1389,7 @@ impl LocalContainerManager {
         match self
             .docker
             .list_containers(Some(ListContainersOptions {
-                filters,
+                filters: Some(filters),
                 ..Default::default()
             }))
             .await
@@ -1471,7 +1473,10 @@ impl LocalContainerManager {
                 .docker
                 .stop_container(
                     &container.docker_container_id,
-                    Some(StopContainerOptions { t: 10 }),
+                    Some(StopContainerOptions {
+                        t: Some(10),
+                        ..Default::default()
+                    }),
                 )
                 .await
             {
@@ -1637,7 +1642,7 @@ impl LocalContainerManager {
         // Clone the docker client so the stream doesn't borrow self
         let docker = self.docker.clone();
 
-        let log_options = LogsOptions::<String> {
+        let log_options = LogsOptions {
             follow: true,
             stdout: true,
             stderr: true,

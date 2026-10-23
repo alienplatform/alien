@@ -5,8 +5,9 @@ use std::{collections::HashMap, io::Read};
 use alien_core::sandbox_identity::{ExecIdentity, ImageUser};
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::{
-    container::{
-        Config, CreateContainerOptions, DownloadFromContainerOptions, ListContainersOptions,
+    models::ContainerCreateBody,
+    query_parameters::{
+        CreateContainerOptions, DownloadFromContainerOptions, ListContainersOptions,
         RemoveContainerOptions,
     },
     Docker,
@@ -58,8 +59,8 @@ async fn inspect_and_remove(docker: &Docker, image: &str, sandbox: &str) -> Resu
     // Pin its image id so tag changes cannot race identity selection.
     let container = docker
         .create_container(
-            None::<CreateContainerOptions<String>>,
-            Config {
+            None::<CreateContainerOptions>,
+            ContainerCreateBody {
                 image: Some(id.clone()),
                 entrypoint: Some(vec!["/alien-identity-inspection-only".to_string()]),
                 labels: Some(HashMap::from([(
@@ -111,10 +112,10 @@ pub(crate) async fn reap(docker: &Docker, sandbox: &str) -> Result<usize> {
     let containers = docker
         .list_containers(Some(ListContainersOptions {
             all: true,
-            filters: HashMap::from([(
+            filters: Some(HashMap::from([(
                 "label".to_string(),
                 vec![format!("{LABEL_INSPECTION}={sandbox}")],
-            )]),
+            )])),
             ..Default::default()
         }))
         .await
@@ -148,8 +149,12 @@ async fn account_file(docker: &Docker, container: &str, path: &str) -> Result<St
         session_id: container.to_string(),
         operation: format!("read image account file {path}"),
     };
-    let mut stream =
-        docker.download_from_container(container, Some(DownloadFromContainerOptions { path }));
+    let mut stream = docker.download_from_container(
+        container,
+        Some(DownloadFromContainerOptions {
+            path: path.to_string(),
+        }),
+    );
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {

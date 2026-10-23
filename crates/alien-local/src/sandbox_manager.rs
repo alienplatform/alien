@@ -12,13 +12,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
-};
 use bollard::exec::{CreateExecOptions, StartExecResults};
-use bollard::image::CreateImageOptions;
-use bollard::models::{HostConfig, PortBinding};
-use bollard::network::CreateNetworkOptions;
+use bollard::models::{ContainerCreateBody, HostConfig, NetworkCreateRequest, PortBinding};
+use bollard::query_parameters::{
+    CreateContainerOptions, CreateImageOptions, ListContainersOptions, RemoveContainerOptions,
+};
 use bollard::Docker;
 use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
@@ -195,10 +193,10 @@ impl LocalSandboxManager {
             })
             .collect();
 
-        let exposed_ports: HashMap<String, HashMap<(), ()>> = config
+        let exposed_ports: Vec<String> = config
             .preview_ports
             .iter()
-            .map(|port| (format!("{port}/tcp"), HashMap::new()))
+            .map(|port| format!("{port}/tcp"))
             .collect();
 
         let host_config = HostConfig {
@@ -229,7 +227,7 @@ impl LocalSandboxManager {
             ..Default::default()
         };
 
-        let container_config = Config {
+        let container_config = ContainerCreateBody {
             image: Some(image.id),
             user: Some(format!("{}:{}", image.identity.uid, image.identity.gid)),
             // Docker can create/chmod WorkingDir after mounting tmpfs, resetting its owner.
@@ -256,8 +254,8 @@ impl LocalSandboxManager {
             .docker
             .create_container(
                 Some(CreateContainerOptions {
-                    name: name.clone(),
-                    platform: None,
+                    name: Some(name.clone()),
+                    ..Default::default()
                 }),
                 container_config,
             )
@@ -269,7 +267,7 @@ impl LocalSandboxManager {
             })?;
 
         self.docker
-            .start_container::<String>(&created.id, None)
+            .start_container(&created.id, None)
             .await
             .into_alien_error()
             .context(ErrorData::SandboxSessionFailed {
@@ -294,7 +292,7 @@ impl LocalSandboxManager {
 
         let mut pull = self.docker.create_image(
             Some(CreateImageOptions {
-                from_image: image.to_string(),
+                from_image: Some(image.to_string()),
                 ..Default::default()
             }),
             None,
@@ -314,17 +312,18 @@ impl LocalSandboxManager {
     }
 
     async fn ensure_egress_network(&self, name: &str) -> Result<()> {
-        match self.docker.inspect_network::<String>(name, None).await {
+        match self.docker.inspect_network(name, None).await {
             Ok(_) => Ok(()),
             Err(_) => {
                 self.docker
-                    .create_network(CreateNetworkOptions {
+                    .create_network(NetworkCreateRequest {
                         name: name.to_string(),
-                        driver: "bridge".to_string(),
-                        options: HashMap::from([(
+                        driver: Some("bridge".to_string()),
+                        enable_ipv6: Some(false),
+                        options: Some(HashMap::from([(
                             "com.docker.network.bridge.enable_icc".to_string(),
                             "false".to_string(),
-                        )]),
+                        )])),
                         ..Default::default()
                     })
                     .await
@@ -583,7 +582,7 @@ impl LocalSandboxManager {
             .docker
             .list_containers(Some(ListContainersOptions {
                 all: true,
-                filters,
+                filters: Some(filters),
                 ..Default::default()
             }))
             .await

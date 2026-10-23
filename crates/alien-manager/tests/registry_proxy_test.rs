@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use bollard::image::CreateImageOptions;
+use bollard::query_parameters::{CreateImageOptions, RemoveImageOptions};
 use container_registry::ContainerRegistry;
 use futures_util::StreamExt;
 
@@ -710,8 +710,8 @@ async fn test_proxy_pull_with_bollard() {
     // Pull the image through the proxy
     let mut pull_stream = docker.create_image(
         Some(CreateImageOptions {
-            from_image: image_ref.clone(),
-            tag: image_tag.to_string(),
+            from_image: Some(image_ref.clone()),
+            tag: Some(image_tag.to_string()),
             ..Default::default()
         }),
         None,
@@ -735,7 +735,9 @@ async fn test_proxy_pull_with_bollard() {
 
     // Clean up: remove the pulled image from Docker
     let full_image = format!("{}:{}", image_ref, image_tag);
-    let _ = docker.remove_image(&full_image, None, None).await;
+    let _ = docker
+        .remove_image(&full_image, None::<RemoveImageOptions>, None)
+        .await;
 }
 
 /// Push auth: deployment tokens should be REJECTED (403), admin tokens should succeed.
