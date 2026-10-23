@@ -672,6 +672,12 @@ impl LocalContainerController {
 
     // ─────────────── HELPER METHODS ──────────────────────────────────────
 
+    fn requires_convergence_reconciliation(&self) -> bool {
+        // A resumed local session must restore stopped, unchanged dependencies
+        // while an accepted create or update is still converging.
+        true
+    }
+
     fn build_outputs(&self) -> Option<CoreResourceOutputs> {
         self.container_info.as_ref().map(|info| {
             CoreResourceOutputs::new(ContainerOutputs {
@@ -958,7 +964,7 @@ mod tests {
                 .resource(config.clone())
                 .controller(controller)
                 .platform(Platform::Local)
-                .client_config(client)
+                .client_config(client.clone())
                 .service_provider(services.clone())
                 .real_delays()
                 .build()
@@ -984,11 +990,35 @@ mod tests {
                 "session shutdown must stop its containers"
             );
             assert!(manager.container_exists(&id).await.unwrap());
-            executor.step().await.unwrap();
-            executor.run_until_terminal().await.unwrap();
+            let stack = alien_core::Stack::new("local-resume".to_string())
+                .add(config, alien_core::ResourceLifecycle::Live)
+                .permission("default-profile", Default::default())
+                .build();
+            let deployment_config = alien_core::DeploymentConfig::builder()
+                .stack_settings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(Default::default())
+                .allow_frozen_changes(false)
+                .build();
+            let resumed = crate::core::StackExecutor::builder(&stack, client)
+                .deployment_config(&deployment_config)
+                .running_resource_policy(crate::core::RunningResourcePolicy::OptIn)
+                .service_provider(services)
+                .build()
+                .unwrap();
+            // Persist and reload the Ready checkpoint, as a new CLI session does.
+            let saved = serde_json::to_vec(executor.stack_state()).unwrap();
+            let state = serde_json::from_slice(&saved).unwrap();
+            let next = resumed.step(state).await.unwrap();
+            let completion = resumed.run_until_synced(next.next_state).await;
+            assert!(completion.success, "recovered container must become healthy");
             assert!(
                 manager.is_running(&id).await,
-                "a new session must recover its stopped workload"
+                "convergence must restore the unchanged, stopped dependency"
             );
         })
         .catch_unwind()
