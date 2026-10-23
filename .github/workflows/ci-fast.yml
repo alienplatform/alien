@@ -367,6 +367,12 @@ jobs:
             | sed -n 's/.*"executable":"\([^"]*privileged-[^"]*\)".*/\1/p' | head -1)
           test -x "$binary"
           sudo "$binary" --ignored
+          library=$(cargo test --locked -p alien-sandbox-agent --lib --no-run --message-format=json \
+            | python3 -c 'import json,sys; print(next(item["executable"] for line in sys.stdin if (item := json.loads(line)).get("executable") and item.get("target", {}).get("kind") == ["lib"]))')
+          test -x "$library"
+          # The routing check remounts cgroups and changes nftables. The script
+          # requires private network/mount/cgroup namespaces before executing it.
+          sudo ./scripts/test-sandbox-agent-security.sh "$library"
 
       - name: Sandbox agent image contract
         if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_core == 'true'

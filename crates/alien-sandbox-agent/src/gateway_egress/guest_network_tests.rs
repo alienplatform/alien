@@ -1,4 +1,4 @@
-//! Run only in a disposable AWS MicroVM: these checks change its cgroup mounts and firewall.
+//! Run only in a disposable VM or isolated privileged container: changes cgroups and firewall.
 use std::{
     fs,
     io::Write,
@@ -11,7 +11,7 @@ use std::{
 use crate::{exec::ExecIdentity, privilege};
 
 #[test]
-#[ignore = "requires a disposable root MicroVM with ALL capabilities, cgroup2 and Python 3"]
+#[ignore = "requires isolated network/mount/cgroup namespaces, ALL capabilities, cgroup2 and Python 3"]
 fn root_and_child_uids_keep_redirects_and_cannot_escape() {
     super::guest_network::install().expect("install guest socket classification");
     privilege::block_command_ipv6();

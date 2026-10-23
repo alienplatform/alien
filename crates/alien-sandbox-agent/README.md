@@ -212,7 +212,8 @@ resources afterward.
 
 The ignored agent unit test
 `gateway_egress::guest_network_tests::root_and_child_uids_keep_redirects_and_cannot_escape`
-runs the native cgroup and nftables code in a disposable root MicroVM. It proves
+runs the native cgroup and nftables code in a disposable root MicroVM or
+a privileged container with private network, mount and cgroup namespaces. It proves
 TCP and DNS redirection for root, uid 2000 and uid 60000, and refusal of mark changes
 and cgroup escape. It changes the VM's firewall and cgroup mounts; never run it on
 a shared host. Set `ALIEN_ROUTING_RESUME_BARRIER=/tmp/routing-go` to run two rounds:
@@ -315,3 +316,9 @@ those processes too.
 When the agent is PID 1 it also collects adopted children. Direct commands are
 registered atomically with spawn, so this collector cannot consume exit statuses
 that exec, jobs, boot monitoring or network checks are still waiting for.
+
+The CI privileged job also runs seven ignored library security checks through
+`scripts/test-sandbox-agent-security.sh <library-test-binary>`. The script verifies
+namespace isolation before cgroup or firewall changes, checks that each exact
+test exists, and removes its container/image on exit. No test mutates the runner
+network or cgroup mounts.
