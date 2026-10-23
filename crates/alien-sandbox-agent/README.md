@@ -14,6 +14,13 @@ invalid configuration fails startup. Released packages without the marker retain
 their previous startup and identity semantics. AWS packaging has not yet enabled
 this marker; its released modes are described below.
 
+Repackaging an agent image preserves its saved original command and USER, rather
+than nesting another agent as the image command. An unchanged final agent layer
+is kept once. Legacy packages without original USER metadata remain deployable
+unchanged; rebuilding them requires the original base image. Repackaging also
+refuses an identical agent layer beneath later overrides, because the image
+builder cannot represent that repeated layer correctly.
+
 # Azure native-file transport
 
 Azure packages use `ALIEN_SANDBOX_AUTHORIZATION=native-file`. Before boot code

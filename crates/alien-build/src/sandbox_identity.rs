@@ -4,7 +4,7 @@ use std::{fs::File, io::Read};
 
 use alien_core::{
     sandbox_identity::ImageUser,
-    sandbox_image::{SandboxImage, SandboxImageCommand},
+    sandbox_image::{SandboxImage, SandboxImageCommand, AGENT_PATH, IMAGE_COMMAND_PATH},
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use dockdash::Image;
@@ -96,9 +96,13 @@ pub struct BaseIdentity {
 impl BaseIdentity {
     /// Read the image configuration and account files before packaging it.
     pub async fn read(image: &Image, resource_name: &str) -> Result<Self> {
-        let config = image_config(image)?;
+        let command = image_command(image).await?;
         Ok(Self {
-            user: config.user,
+            user: command.user.ok_or_else(|| {
+                AlienError::new(ErrorData::BuildConfigInvalid {
+                    message: "The sandbox image has no original USER metadata".into(),
+                })
+            })?,
             passwd: read_identity_file(image, "/etc/passwd", resource_name).await?,
             group: read_identity_file(image, "/etc/group", resource_name).await?,
         })
@@ -137,8 +141,36 @@ struct ProcessConfig {
 }
 
 /// Preserve the base image command from the same archive used to resolve its identity.
-pub fn image_command(image: &Image) -> Result<SandboxImageCommand> {
-    let config = image_config(image)?;
+pub async fn image_command(image: &Image) -> Result<SandboxImageCommand> {
+    let config = image_config(image)?.config;
+    if config
+        .entrypoint
+        .as_ref()
+        .and_then(|argv| argv.first())
+        .map(String::as_str)
+        == Some(AGENT_PATH)
+    {
+        // Repackaging must preserve the user's command, never start a second agent as it.
+        // Old packages without the original USER can still deploy unchanged, but rebuilding
+        // one requires the original base image; guessing would silently change its identity.
+        let invalid = || ErrorData::BuildConfigInvalid {
+            message: concat!(
+                "Cannot repackage this agent image without saved original command and USER ",
+                "metadata; rebuild from the original base image"
+            )
+            .into(),
+        };
+        let saved = read_identity_file(image, IMAGE_COMMAND_PATH, "sandbox")
+            .await?
+            .ok_or_else(|| AlienError::new(invalid()))?;
+        let command: SandboxImageCommand = serde_json::from_str(&saved)
+            .into_alien_error()
+            .context(invalid())?;
+        if command.user.is_none() {
+            return Err(AlienError::new(invalid()));
+        }
+        return Ok(command);
+    }
     let mut env = std::collections::BTreeMap::new();
     for entry in config.env.unwrap_or_default() {
         let (key, value) = entry.split_once('=').ok_or_else(|| {
@@ -168,9 +200,20 @@ pub fn image_command(image: &Image) -> Result<SandboxImageCommand> {
 struct ImageConfig {
     #[serde(default)]
     config: ProcessConfig,
+    rootfs: RootFs,
 }
 
-fn image_config(image: &Image) -> Result<ProcessConfig> {
+#[derive(Deserialize)]
+struct RootFs {
+    diff_ids: Vec<String>,
+}
+
+/// Ordered uncompressed layer identities, used to avoid reapplying an unchanged final layer.
+pub(crate) fn image_layers(image: &Image) -> Result<Vec<String>> {
+    Ok(image_config(image)?.rootfs.diff_ids)
+}
+
+fn image_config(image: &Image) -> Result<ImageConfig> {
     let failed = || ErrorData::BuildConfigInvalid {
         message: "Cannot read the sandbox base image's OCI configuration".to_string(),
     };
@@ -198,7 +241,7 @@ fn image_config(image: &Image) -> Result<ProcessConfig> {
             let config: ImageConfig = serde_json::from_slice(&bytes)
                 .into_alien_error()
                 .context(failed())?;
-            return Ok(config.config);
+            return Ok(config);
         }
     }
     Err(AlienError::new(failed()))
@@ -286,6 +329,71 @@ mod tests {
             .await
             .unwrap()
             .0
+    }
+
+    async fn packaged(saved: Option<&str>) -> Image {
+        let mut layer = Layer::builder()
+            .unwrap()
+            .data_with_owner(
+                "/etc/passwd",
+                b"root:x:0:0::/root:/bin/sh\napp:x:2001:2001::/home/app:/bin/sh\n",
+                0o644,
+                0,
+                0,
+            )
+            .unwrap()
+            .data_with_owner("/etc/group", b"root:x:0:\napp:x:2001:\n", 0o644, 0, 0)
+            .unwrap();
+        if let Some(saved) = saved {
+            layer = layer
+                .data_with_owner(IMAGE_COMMAND_PATH, saved.as_bytes(), 0o600, 0, 0)
+                .unwrap();
+        }
+        Image::builder()
+            .platform("linux", &Arch::Amd64)
+            .user("0:0")
+            .entrypoint(vec![AGENT_PATH.to_string()])
+            .layer(layer.build().await.unwrap())
+            .build()
+            .await
+            .unwrap()
+            .0
+    }
+
+    #[tokio::test]
+    async fn repackaging_preserves_original_command_and_user_instead_of_the_agent() {
+        for (user, uid) in [("", 0), ("root", 0), ("app", 2001)] {
+            let saved = serde_json::json!({
+                "user": user, "command": ["/app/supervisor", "--serve"],
+                "env": {"ORIGINAL": "kept"}, "workingDirectory": "/app"
+            });
+            let image = packaged(Some(&saved.to_string())).await;
+            let command = image_command(&image).await.unwrap();
+            assert_eq!(serde_json::to_value(command).unwrap(), saved);
+            let identity = BaseIdentity::read(&image, "repackaged").await.unwrap();
+            assert_eq!(identity.user, user);
+            assert_eq!(
+                ImageUser {
+                    user: &identity.user,
+                    passwd: identity.passwd.as_deref().unwrap(),
+                    group: identity.group.as_deref().unwrap(),
+                }
+                .image_identity()
+                .unwrap()
+                .uid,
+                uid
+            );
+        }
+        for saved in [
+            None,
+            Some("invalid"),
+            Some(r#"{"command":[],"env":{},"workingDirectory":"/"}"#),
+        ] {
+            let image = packaged(saved).await;
+            let error = image_command(&image).await.unwrap_err();
+            assert_eq!(error.code, "PACKAGE_CONFIG_INVALID");
+            assert!(!error.retryable);
+        }
     }
 
     #[tokio::test]

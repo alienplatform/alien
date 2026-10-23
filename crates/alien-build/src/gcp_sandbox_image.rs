@@ -4,7 +4,7 @@
 
 use crate::error::{ErrorData, Result};
 use crate::registry::{registry_failure, RegistryFailure};
-use crate::sandbox_identity::{image_command, unreadable_file, BaseIdentity};
+use crate::sandbox_identity::{image_command, image_layers, unreadable_file, BaseIdentity};
 use crate::{
     base_image_build_retry_delay, is_retryable_dockdash_image_pull_error,
     BASE_IMAGE_BUILD_MAX_ATTEMPTS,
@@ -124,10 +124,11 @@ pub(crate) async fn build_sandbox_agent_image(
     };
     let identity = BaseIdentity::read(&base, resource_name).await?;
     let contract = identity.contract(default_contract, None)?;
-    let command = serde_json::to_vec(&image_command(&base)?)
+    let command = serde_json::to_vec(&image_command(&base).await?)
         .into_alien_error()
         .context(failed("Cannot preserve the image command".into()))?;
     // Only the identity files and command were needed, and a pulled base is a full archive on disk.
+    let base_layers = image_layers(&base)?;
     drop(base);
 
     // The agent image is public, so no registry credential is sent to its registry.
@@ -225,11 +226,22 @@ pub(crate) async fn build_sandbox_agent_image(
                 .protocol(protocol.clone())
                 .auth(base_auth.clone())
                 .blob_cache(cache.clone())
-                .layer(layer)
                 .user("0:0")
                 .expose_port(&contract.exposed_port())
                 .entrypoint(vec![AGENT_PATH.to_string()])
                 .cmd(Vec::new());
+            // Reapplying the exact final layer changes no files. Keep it once: the image
+            // builder deduplicates manifest descriptors but appends configuration diff IDs.
+            // If another layer follows it, skipping would lose overrides, so refuse instead
+            // of publishing a corrupt image or silently retaining the wrong files.
+            if base_layers.last().map(String::as_str) != Some(layer.diff_id()) {
+                if base_layers.iter().any(|digest| digest == layer.diff_id()) {
+                    return Err(AlienError::new(rejected(
+                        "The same agent layer occurs below other image layers; rebuild from the original base image".into(),
+                    )));
+                }
+                builder = builder.layer(layer);
+            }
             builder = builder
                 .env("RUST_LOG", GCP_AGENT_LOG_FILTER)
                 .env("ALIEN_SANDBOX_IMAGE_COMMAND", "true");
