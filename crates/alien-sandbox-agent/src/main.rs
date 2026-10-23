@@ -340,6 +340,14 @@ fn load_state() -> Result<AgentState> {
     ))?;
 
     let authorization = load_authorization()?;
+    let wait_for_run_hook = alien_sandbox_agent::image_command::defer_to_run_hook()?;
+    #[cfg(target_os = "linux")]
+    let gateway_egress =
+        alien_sandbox_agent::gateway_egress::GatewayEgress::from_env(exec_identity)?;
+    // Gateway readiness already waits for Run and its network checks. Only modes
+    // without that state machine need a separate image activation gate.
+    #[cfg(target_os = "linux")]
+    let wait_for_run_hook = wait_for_run_hook && gateway_egress.is_none();
     Ok(AgentState {
         image_process: if image_command_enabled()? {
             if agent_uid != 0 || isolation != Isolation::UidSplit {
@@ -348,7 +356,7 @@ fn load_state() -> Result<AgentState> {
                     "requires a root agent with uid-split isolation",
                 ));
             }
-            if authorization.requires_activation() {
+            if authorization.requires_activation() || wait_for_run_hook {
                 alien_sandbox_agent::image_command::ImageProcess::awaiting_activation()
             } else {
                 alien_sandbox_agent::image_command::ImageProcess::with_image_user()
@@ -364,9 +372,7 @@ fn load_state() -> Result<AgentState> {
         output_cap,
         jobs: JobRegistry::new(),
         #[cfg(target_os = "linux")]
-        gateway_egress: alien_sandbox_agent::gateway_egress::GatewayEgress::from_env(
-            exec_identity,
-        )?,
+        gateway_egress,
         agent_binary,
     })
 }

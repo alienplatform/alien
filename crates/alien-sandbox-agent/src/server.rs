@@ -924,6 +924,11 @@ async fn run_egress_hook(
     body: bytes::Bytes,
 ) -> std::result::Result<StatusCode, ApiError> {
     let Some(egress) = &state.gateway_egress else {
+        if state.image_process.waiting_for_activation()? {
+            authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+            state.image_process.activate()?;
+        }
+        state.start_image_once()?;
         return Ok(StatusCode::OK);
     };
     authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;

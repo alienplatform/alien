@@ -116,16 +116,7 @@ impl GatewayEgress {
             .ok()
             .zip(std::env::var("ALIEN_SANDBOX_SESSION_ID").ok());
         let privileged = unsafe { libc::geteuid() } == 0;
-        let defer_routing = match std::env::var("ALIEN_SANDBOX_EGRESS_RUN_HOOK") {
-            Ok(value) if value == "true" => true,
-            Ok(value) if value == "false" => false,
-            Err(std::env::VarError::NotPresent) => false,
-            _ => {
-                return Err(invalid(
-                    "ALIEN_SANDBOX_EGRESS_RUN_HOOK must be true or false",
-                ))
-            }
-        };
+        let defer_routing = crate::image_command::defer_to_run_hook()?;
         if defer_routing && !privileged {
             return Err(invalid("Run-hook firewall installation requires root"));
         }

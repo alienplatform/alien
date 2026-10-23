@@ -32,7 +32,7 @@ pub struct ImageProcess {
 pub enum ImageStatus {
     /// Released images without a saved startup command retain their old behavior.
     NotConfigured,
-    /// The native-file binding has not yet verified the provider's network policy.
+    /// The provider lifecycle hook or native-file binding has not activated this boot.
     AwaitingActivation,
     /// Waiting for network checks and, when required, gateway identity delivery.
     #[default]
@@ -60,7 +60,7 @@ impl ImageProcess {
         }
     }
 
-    /// Defer native-file boot until the authenticated binding verifies the provider policy.
+    /// Defer boot until the provider hook or authenticated binding activates it.
     pub fn awaiting_activation() -> Self {
         Self {
             status: Arc::new(Mutex::new(ImageStatus::AwaitingActivation)),
@@ -149,6 +149,21 @@ impl ImageProcess {
             }
         });
         Ok(())
+    }
+}
+
+/// AWS snapshots the listening agent before Run. Image code must wait for that hook,
+/// including packages whose declared network mode does not need transparent forwarding.
+pub fn defer_to_run_hook() -> Result<bool> {
+    const SETTING: &str = "ALIEN_SANDBOX_EGRESS_RUN_HOOK";
+    match std::env::var(SETTING) {
+        Ok(value) if value == "true" => Ok(true),
+        Ok(value) if value == "false" => Ok(false),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        _ => Err(AlienError::new(ErrorData::ConfigInvalid {
+            setting: SETTING.into(),
+            reason: "must be true or false".into(),
+        })),
     }
 }
 
