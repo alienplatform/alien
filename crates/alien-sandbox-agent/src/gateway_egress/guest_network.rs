@@ -4,7 +4,8 @@
 //! enter it before worker threads start; only trusted agent sockets override the
 //! inherited mark. Guest root has neither NET_ADMIN nor NET_RAW to change marks,
 //! nor SYS_ADMIN to make the original cgroup mount writable again. The inherited
-//! gateway seccomp filter denies BPF, including detach through a new user namespace.
+//! seccomp filter denies BPF in every egress mode, including detach through a new
+//! user namespace. IPv6 filtering is a separate gateway-only policy.
 
 use std::{
     fs::{self, File},
@@ -67,6 +68,7 @@ pub(super) fn install() -> io::Result<()> {
     {
         return Err(io::Error::last_os_error());
     }
+    crate::privilege::block_command_bpf();
     Ok(())
 }
 

@@ -12,12 +12,19 @@ use std::{
 
 use crate::exec::ExecIdentity;
 
+static BLOCK_BPF: AtomicBool = AtomicBool::new(false);
 static BLOCK_IPV6: AtomicBool = AtomicBool::new(false);
 
 /// Set once before any image command or exec request can run. AWS transport may need IPv6,
 /// so retain it for the agent while denying it irreversibly to every command.
 pub fn block_command_ipv6() {
     BLOCK_IPV6.store(true, Ordering::Relaxed);
+}
+
+/// Prevent image descendants from changing the AWS cgroup socket marker, even
+/// when unrestricted egress does not need the IPv6 filter.
+pub fn block_command_bpf() {
+    BLOCK_BPF.store(true, Ordering::Relaxed);
 }
 
 /// Drops to `identity` and makes the drop irreversible.
@@ -57,8 +64,8 @@ pub unsafe fn drop_image_to(identity: ExecIdentity) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     restrict_capabilities(IMAGE_ROOT_CAPABILITIES)?;
-    if BLOCK_IPV6.load(Ordering::Relaxed) {
-        deny_ipv6_sockets()?;
+    if BLOCK_IPV6.load(Ordering::Relaxed) || BLOCK_BPF.load(Ordering::Relaxed) {
+        deny_network_bypass(BLOCK_IPV6.load(Ordering::Relaxed))?;
     }
     Ok(())
 }
@@ -155,8 +162,8 @@ unsafe fn drop_unprivileged_to(identity: ExecIdentity, allow_root_group: bool) -
     }
 
     #[cfg(target_os = "linux")]
-    if BLOCK_IPV6.load(Ordering::Relaxed) {
-        deny_ipv6_sockets()?;
+    if BLOCK_IPV6.load(Ordering::Relaxed) || BLOCK_BPF.load(Ordering::Relaxed) {
+        deny_network_bypass(BLOCK_IPV6.load(Ordering::Relaxed))?;
     }
     Ok(())
 }
@@ -252,12 +259,12 @@ fn restrict_capabilities(keep: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// Kernel-enforced even if the guest later acquires a new IPv6 route. Blocking io_uring prevents
-/// IORING_OP_SOCKET from creating a socket without passing through the socket syscall filter.
-/// BPF is denied too: a new user/cgroup namespace can otherwise expose a writable
-/// cgroup mount and detach the socket marker despite the original capability drop.
+/// Always deny BPF when cgroup socket attribution is installed: a new user/cgroup
+/// namespace could otherwise expose a writable mount and detach the marker.
+/// Gateway mode also denies IPv6 sockets and io_uring (whose socket operation
+/// bypasses the socket syscall filter), even if the guest acquires a new route.
 #[cfg(target_os = "linux")]
-unsafe fn deny_ipv6_sockets() -> io::Result<()> {
+unsafe fn deny_network_bypass(block_ipv6: bool) -> io::Result<()> {
     #[cfg(target_arch = "x86_64")]
     const ARCH: u32 = 0xc000003e;
     #[cfg(target_arch = "aarch64")]
@@ -281,9 +288,9 @@ unsafe fn deny_ipv6_sockets() -> io::Result<()> {
         stmt(0x06, 0x80000000), // kill foreign ABI
         stmt(0x20, 0),
         jump(libc::SYS_bpf as u32, 8, 0),
-        jump(libc::SYS_io_uring_setup as u32, 7, 0),
-        jump(libc::SYS_io_uring_enter as u32, 6, 0),
-        jump(libc::SYS_io_uring_register as u32, 5, 0),
+        jump(libc::SYS_io_uring_setup as u32, if block_ipv6 { 7 } else { 8 }, 0),
+        jump(libc::SYS_io_uring_enter as u32, if block_ipv6 { 6 } else { 7 }, 0),
+        jump(libc::SYS_io_uring_register as u32, if block_ipv6 { 5 } else { 6 }, 0),
         // x32 uses a different syscall number under AUDIT_ARCH_X86_64. Kill that ABI too.
         libc::sock_filter {
             code: 0x45,
@@ -294,7 +301,7 @@ unsafe fn deny_ipv6_sockets() -> io::Result<()> {
         stmt(0x06, 0x80000000),
         jump(libc::SYS_socket as u32, 0, 4),
         stmt(0x20, 16),
-        jump(libc::AF_INET6 as u32, 0, 2),
+        jump(libc::AF_INET6 as u32, if block_ipv6 { 0 } else { 1 }, 2),
         stmt(0x06, 0x00050000 | libc::EPERM as u32),
         stmt(0x06, 0x7fff0000),
         stmt(0x06, 0x7fff0000),
@@ -386,6 +393,38 @@ mod tests {
         );
     }
 
+
+    #[test]
+    #[ignore = "requires an isolated writable cgroup2 mount and privileged bootstrap"]
+    fn cgroup_attribution_filters_bpf_without_disabling_ipv6() {
+        crate::gateway_egress::isolate_control_callers().unwrap();
+        for uid in [0, 60000] {
+            let mut child = Command::new("/bin/true");
+            unsafe {
+                child.pre_exec(move || {
+                    restrict_supervisor(true)?;
+                    drop_image_to(ExecIdentity { uid, gid: uid })?;
+                    // Privileged test containers begin without a seccomp filter. Every
+                    // guest path must install one even when IPv6 remains unrestricted.
+                    if libc::prctl(libc::PR_GET_SECCOMP, 0, 0, 0, 0) != 2 {
+                        return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                    }
+                    if libc::syscall(libc::SYS_bpf, -1, std::ptr::null::<u8>(), 0) != -1
+                        || *libc::__errno_location() != libc::EPERM
+                    {
+                        return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                    }
+                    let socket = libc::socket(libc::AF_INET6, libc::SOCK_STREAM, 0);
+                    if socket < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    libc::close(socket);
+                    Ok(())
+                });
+            }
+            assert!(child.status().expect("BPF filter with working IPv6").success());
+        }
+    }
     fn unprivileged_identity() -> ExecIdentity {
         unsafe {
             let uid = if libc::geteuid() == 0 {

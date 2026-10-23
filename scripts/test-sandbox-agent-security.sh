@@ -35,6 +35,7 @@ docker create --name "$container" --privileged --cgroupns=private \
     for name in \
       privilege::tests::root_image_capabilities_survive_exec_without_network_administration \
       privilege::tests::root_image_does_not_inherit_supervisor_network_administration \
+      privilege::tests::cgroup_attribution_filters_bpf_without_disabling_ipv6 \
       image_command::tests::saved_image_user_controls_boot_without_changing_exec_identity \
       image_command::tests::legacy_egress_refuses_root_image_before_spawn \
       peer::tests::socket_mark_separates_provider_from_every_guest_uid \
