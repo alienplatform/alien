@@ -41,10 +41,10 @@ const JOB_CANCEL: &str = "sandbox.jobCancel";
 /// cancelling a command waits for this request to settle before it can close the stream, so an
 /// unbounded one would leave that cancel unable to complete.
 #[cfg(not(test))]
-const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(super) const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Short in tests so a stalled agent is exercised in milliseconds rather than waited out.
 #[cfg(test)]
-const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_millis(200);
+pub(super) const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// How long past a command's own timeout the agent may still take to write a terminal frame.
 ///
@@ -372,7 +372,7 @@ fn timeout_millis(timeout: Duration) -> u64 {
 /// For a file operation every one of those is safe to repeat. For `run_command` the agent may
 /// have started the command — and past the headers it certainly did — so a repeat could run it
 /// twice, and the refusal must not carry the retry signal.
-fn unanswered(operation: &str, reason: &str) -> ErrorData {
+pub(super) fn unanswered(operation: &str, reason: &str) -> ErrorData {
     // Both take a command the agent may already be running, so an unanswered one leaves the
     // outcome unestablished. Every other operation is idempotent and safe to send again.
     if operation == RUN_COMMAND || operation == JOB_START {
