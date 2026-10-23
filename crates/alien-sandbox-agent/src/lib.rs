@@ -1,3 +1,4 @@
+pub mod children;
 pub mod confine;
 pub mod error;
 pub mod exec;

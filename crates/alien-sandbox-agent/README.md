@@ -301,3 +301,17 @@ command. Ordinary commands retain the provider policy check without fetching
 the route or credential again. Query `session_capabilities(id)` in Rust, or
 `capabilities(id)` in TypeScript/Python, when reusing a session across upgrades;
 no-argument capabilities describe new sessions from the current binding.
+
+## Process lifecycle
+
+Boot commands receive HOME from their passwd entry (or `/`) and the container
+HOSTNAME unless the image or create-time environment overrides them. Each boot
+command owns a process group. On SIGTERM or SIGINT the agent stops serving,
+sends SIGTERM to that group, allows two seconds, then sends SIGKILL and collects
+the leader. The agent never restarts it. Descendants that deliberately leave the
+process group are outside this forwarding contract; container shutdown ends
+those processes too.
+
+When the agent is PID 1 it also collects adopted children. Direct commands are
+registered atomically with spawn, so this collector cannot consume exit statuses
+that exec, jobs, boot monitoring or network checks are still waiting for.

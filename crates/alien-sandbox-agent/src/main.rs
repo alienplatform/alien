@@ -157,7 +157,11 @@ fn main() -> Result<()> {
             "start agent runtime",
             "could not create the runtime".to_string(),
         ))?;
-    runtime.block_on(async move {
+    let result = runtime.block_on(async move {
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .into_alien_error().context(failed("listen for shutdown", "cannot install SIGTERM handler".into()))?;
+        let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .into_alien_error().context(failed("listen for shutdown", "cannot install SIGINT handler".into()))?;
         #[cfg(target_os = "linux")]
         if let Some(egress) = &state.gateway_egress {
             match egress.start().await {
@@ -175,20 +179,28 @@ fn main() -> Result<()> {
         }
         tracing::info!("sandbox agent listening on {address}");
 
-        axum::serve(
+        let server = axum::serve(
             // tap_io is a no-op that wraps the listener in axum's TapIo, which is what makes the
             // SocketAddr connect-info available for a custom listener (the orphan rule blocks impls
             // straight onto SocketAddr).
             BlockingListener::new(std_listener, address).tap_io(|_| {}),
-            router(state).into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .into_alien_error()
-        .context(failed(
-            "serve the agent protocol",
-            "the agent stopped serving".to_string(),
-        ))
-    })
+            router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>(),
+        );
+        let outcome = tokio::select! {
+            result = std::future::IntoFuture::into_future(server) => result
+                .into_alien_error().context(failed("serve the agent protocol", "the agent stopped serving".into())),
+            result = alien_sandbox_agent::children::reap_orphans() => result
+                .into_alien_error().context(failed("reap orphaned children", "cannot collect abandoned processes".into())),
+            _ = terminate.recv() => Ok(()),
+            _ = interrupt.recv() => Ok(()),
+        };
+        state.image_process.shutdown().await?;
+        outcome
+    });
+    // A blocking accept may still own a listener clone. It must not keep shutdown
+    // waiting for another network connection after the boot group has stopped.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    result
 }
 
 /// A listener whose accept blocks in the `accept(2)` syscall instead of waiting on an epoll edge.

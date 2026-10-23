@@ -217,7 +217,7 @@ pub async fn stream(
         }
     }
 
-    let child = match command.spawn() {
+    let (child, _registration) = match crate::children::spawn(&mut command) {
         Ok(child) => child,
         Err(error) => {
             let _ = frames
