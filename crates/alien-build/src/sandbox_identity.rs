@@ -48,6 +48,7 @@ pub(crate) async fn built_image_user(
     directory: &std::path::Path,
     targets: &[alien_core::BinaryTarget],
     platform: Platform,
+    aws_connector: bool,
 ) -> Result<Option<u32>> {
     let failed = |message: String| ErrorData::BuildConfigInvalid { message };
     let mut uid = None;
@@ -72,10 +73,11 @@ pub(crate) async fn built_image_user(
             sandbox.id
         )))?
         .uid;
-        // Local and Kubernetes keep their released non-root runtime for images that did
-        // not request a USER. Explicit root must still reach planning as Some(0).
-        let legacy_default =
-            base.user.is_empty() && matches!(platform, Platform::Local | Platform::Kubernetes);
+        // Preserve released startup where root cannot be bounded. Explicit root still
+        // reaches planning as Some(0), so an unsupported request fails before deployment.
+        let legacy_default = base.user.is_empty()
+            && (matches!(platform, Platform::Local | Platform::Kubernetes)
+                || (platform == Platform::Aws && !aws_connector));
         let current = (current, legacy_default);
         if uid.is_some_and(|previous| previous != current) {
             return Err(AlienError::new(failed(format!(
@@ -311,7 +313,13 @@ pub(crate) fn unreadable_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::sandbox_image::{AWS_MICROVM, GCP_AGENT_PLATFORM};
+    use alien_core::{
+        sandbox_image::{AWS_MICROVM, GCP_AGENT_PLATFORM},
+        ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
+    };
+    use alien_preflights::{
+        compile_time::sandbox_platform_support::SandboxPlatformSupportCheck, CompileTimeCheck,
+    };
     use dockdash::{Arch, Layer};
 
     async fn base(user: &str) -> Image {
@@ -456,7 +464,7 @@ mod tests {
             ] {
                 let legacy_default =
                     user.is_empty() && matches!(platform, Platform::Local | Platform::Kubernetes);
-                let marker = built_image_user(&sandbox, directory.path(), &targets, platform)
+                let marker = built_image_user(&sandbox, directory.path(), &targets, platform, true)
                     .await
                     .unwrap();
                 assert_eq!(
@@ -488,7 +496,7 @@ mod tests {
                 .join(format!("{}.oci.tar", targets[0].runtime_platform_id())),
         )
         .unwrap();
-        let error = built_image_user(&sandbox, directory.path(), &targets, Platform::Aws)
+        let error = built_image_user(&sandbox, directory.path(), &targets, Platform::Aws, true)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("differs across architectures"));
@@ -500,9 +508,13 @@ mod tests {
                 .join(format!("{}.oci.tar", targets[1].runtime_platform_id())),
         )
         .unwrap();
-        for platform in [Platform::Local, Platform::Kubernetes] {
+        for (platform, connector) in [
+            (Platform::Local, false),
+            (Platform::Kubernetes, false),
+            (Platform::Aws, false),
+        ] {
             assert!(
-                built_image_user(&sandbox, directory.path(), &targets, platform)
+                built_image_user(&sandbox, directory.path(), &targets, platform, connector)
                     .await
                     .unwrap_err()
                     .to_string()
@@ -510,7 +522,7 @@ mod tests {
             );
         }
         assert_eq!(
-            built_image_user(&sandbox, directory.path(), &targets, Platform::Aws)
+            built_image_user(&sandbox, directory.path(), &targets, Platform::Aws, true)
                 .await
                 .unwrap(),
             Some(0)
@@ -522,15 +534,155 @@ mod tests {
         )
         .unwrap();
         assert!(
-            built_image_user(&sandbox, directory.path(), &targets, Platform::Aws)
+            built_image_user(&sandbox, directory.path(), &targets, Platform::Aws, true)
                 .await
                 .is_err()
         );
         assert!(
-            built_image_user(&sandbox, directory.path(), &[], Platform::Aws)
+            built_image_user(&sandbox, directory.path(), &[], Platform::Aws, true)
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn absent_user_preserves_legacy_modes_through_planning_and_preflight() {
+        let directory = tempfile::tempdir().unwrap();
+        let targets = [alien_core::BinaryTarget::LinuxArm64];
+        for user in ["", "root", "app"] {
+            let image = base(user).await;
+            std::fs::copy(
+                image.path(),
+                directory
+                    .path()
+                    .join(format!("{}.oci.tar", targets[0].runtime_platform_id())),
+            )
+            .unwrap();
+            for (platform, egress, gateway, legacy, root_supported) in [
+                (Platform::Aws, SandboxEgress::Allow, false, false, false),
+                (Platform::Aws, SandboxEgress::Internet, false, false, false),
+                (Platform::Aws, SandboxEgress::None, false, false, true),
+                (Platform::Aws, SandboxEgress::Internet, true, false, true),
+                (Platform::Aws, SandboxEgress::Allow, false, true, false),
+                (Platform::Aws, SandboxEgress::None, false, true, false),
+                (
+                    Platform::Aws,
+                    SandboxEgress::AllowDomains {
+                        domains: vec!["example.com".into()],
+                    },
+                    false,
+                    true,
+                    false,
+                ),
+                (Platform::Gcp, SandboxEgress::None, false, false, true),
+                (Platform::Azure, SandboxEgress::None, false, false, true),
+                (Platform::Local, SandboxEgress::Allow, false, false, false),
+                (
+                    Platform::Kubernetes,
+                    SandboxEgress::Allow,
+                    false,
+                    false,
+                    false,
+                ),
+            ] {
+                let mut sandbox = Sandbox::new("identity".into())
+                    .code(SandboxCode::Image {
+                        image: "docker.io/library/ubuntu:24.04".into(),
+                    })
+                    .egress(egress)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build();
+                if legacy {
+                    sandbox.privileged_supervisor = Some(alien_core::SandboxPrivilegedSupervisor {
+                        command_uid: if user == "app" { 1001 } else { 60000 },
+                    });
+                }
+                let mut stack = Stack::new("identity".into()).build();
+                if gateway {
+                    let id = alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
+                    let gateway = alien_core::Container::new(id.into())
+                        .code(alien_core::ContainerCode::Image {
+                            image: "example/gateway:1".into(),
+                        })
+                        .cpu(alien_core::ResourceSpec {
+                            min: "0.25".into(),
+                            desired: "0.25".into(),
+                        })
+                        .memory(alien_core::ResourceSpec {
+                            min: "512Mi".into(),
+                            desired: "512Mi".into(),
+                        })
+                        .replicas(1)
+                        .permissions(id.into())
+                        .port(3128)
+                        .build();
+                    stack.resources.insert(
+                        id.into(),
+                        alien_core::ResourceEntry {
+                            config: alien_core::Resource::new(gateway),
+                            lifecycle: ResourceLifecycle::Live,
+                            dependencies: vec![],
+                            remote_access: false,
+                            enabled_when: None,
+                        },
+                    );
+                }
+                sandbox.image_user = built_image_user(
+                    &sandbox,
+                    directory.path(),
+                    &targets,
+                    platform,
+                    alien_core::sandbox_egress::sandbox_needs_connector(&stack, &sandbox),
+                )
+                .await
+                .unwrap();
+                let expected = match user {
+                    "" if !root_supported => None,
+                    "" | "root" => Some(0),
+                    _ if matches!(platform, Platform::Aws | Platform::Azure) => Some(1001),
+                    _ => None,
+                };
+                assert_eq!(
+                    sandbox.image_user, expected,
+                    "{platform} {:?} gateway={gateway} USER={user:?}",
+                    sandbox.egress
+                );
+                let admitted = user != "root" || root_supported;
+                if !matches!(platform, Platform::Aws) {
+                    assert_eq!(sandbox.validate_for_platform(platform).is_ok(), admitted);
+                }
+                if platform == Platform::Aws {
+                    let env =
+                        alien_core::sandbox_egress::aws_sandbox_agent_environment(&stack, &sandbox);
+                    assert_eq!(
+                        env.contains_key("ALIEN_SANDBOX_IMAGE_COMMAND"),
+                        expected.is_some()
+                    );
+                }
+                stack.resources.insert(
+                    sandbox.id.clone(),
+                    alien_core::ResourceEntry {
+                        config: alien_core::Resource::new(sandbox),
+                        lifecycle: ResourceLifecycle::Frozen,
+                        dependencies: vec![],
+                        remote_access: false,
+                        enabled_when: None,
+                    },
+                );
+                let result = SandboxPlatformSupportCheck
+                    .check(&stack, platform)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    result.success, admitted,
+                    "{platform} USER={user:?}: {:?}",
+                    result.errors
+                );
+            }
+        }
     }
 
     #[tokio::test]

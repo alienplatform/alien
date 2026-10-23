@@ -327,7 +327,9 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     // Inspect before any build tasks are spawned: an invalid prebuilt image must not leave
     // other resource builds detached. New OCI bases take the same packaging path as source.
     for (resource_id, sandbox) in sandboxes_to_inspect {
-        let sandbox = prepare_prebuilt_sandbox(sandbox, settings, &output_dir).await?;
+        let aws_connector = alien_core::sandbox_egress::sandbox_needs_connector(&stack, &sandbox);
+        let sandbox =
+            prepare_prebuilt_sandbox(sandbox, settings, &output_dir, aws_connector).await?;
         if let Some((_, entry)) = stack.resources_mut().find(|(id, _)| *id == &resource_id) {
             entry.config = alien_core::Resource::new(sandbox);
         }
@@ -722,6 +724,8 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         let build_tasks: Vec<_> = sandboxes_to_build
             .into_iter()
             .map(|(resource_id, mut sandbox, src, toolchain)| {
+                let aws_connector =
+                    alien_core::sandbox_egress::sandbox_needs_connector(&stack, &sandbox);
                 let sandbox_id = sandbox.id.clone();
                 let stack_id = stack_id.clone();
                 let settings = sandbox_settings.clone();
@@ -777,6 +781,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                         Path::new(&image_uri),
                                         &settings.get_targets(),
                                         settings.platform.runtime_platform(),
+                                        aws_connector,
                                     )
                                     .await?;
                                     Ok(image_uri)
@@ -2494,6 +2499,7 @@ async fn prepare_prebuilt_sandbox(
     mut sandbox: Sandbox,
     settings: &BuildSettings,
     output_dir: &Path,
+    aws_connector: bool,
 ) -> Result<Sandbox> {
     let SandboxCode::Image { image } = &sandbox.code else {
         return Ok(sandbox);
@@ -2530,9 +2536,14 @@ async fn prepare_prebuilt_sandbox(
     };
     let targets = settings.get_targets();
     sandbox_identity::validate_declared_uid(&sandbox, Path::new(&directory)).await?;
-    sandbox.image_user =
-        sandbox_identity::built_image_user(&sandbox, Path::new(&directory), &targets, platform)
-            .await?;
+    sandbox.image_user = sandbox_identity::built_image_user(
+        &sandbox,
+        Path::new(&directory),
+        &targets,
+        platform,
+        aws_connector,
+    )
+    .await?;
     let image = if platform == Platform::Local {
         // The local sandbox manager consumes Docker references, not archive directories.
         // Export used this daemon; its configuration digest pins the already-pulled image.
@@ -6883,7 +6894,7 @@ mod sandbox_build_tests {
                 // Reinspection preserves both local IDs and exported Azure archives. Full
                 // planning separately refuses explicit Local/Kubernetes root, as asserted above.
                 let reinspected =
-                    prepare_prebuilt_sandbox(sandbox.clone(), &settings, output.path())
+                    prepare_prebuilt_sandbox(sandbox.clone(), &settings, output.path(), false)
                         .await
                         .unwrap();
                 assert_eq!(reinspected.image_user, requires_new_reader.then_some(uid));
@@ -6892,89 +6903,106 @@ mod sandbox_build_tests {
     }
 
     #[tokio::test]
-    async fn aws_nonroot_release_retains_inspected_boot_requirements() {
+    async fn aws_release_selects_boot_contract_from_user_and_connector() {
         let (_registry, host) = dockdash::test_utils::setup_local_registry().await.unwrap();
         let output = tempfile::tempdir().unwrap();
-        let reference = format!("{host}/project/sandbox:app");
-        let layer = dockdash::Layer::builder()
-            .unwrap()
-            .compression(dockdash::LayerCompression::Gzip)
-            .data_with_owner(
-                "/etc/passwd",
-                b"app:x:2001:2001::/home/app:/bin/sh\n",
-                0o644,
-                0,
-                0,
-            )
-            .unwrap()
-            .data_with_owner("/etc/group", b"app:x:2001:\n", 0o644, 0, 0)
-            .unwrap()
-            .build()
-            .await
-            .unwrap();
-        let (image, _) = DockDashImage::builder()
-            .platform("linux", &dockdash::Arch::ARM64)
-            .user("app")
-            .entrypoint(vec!["/start".into()])
-            .layer(layer)
-            .build()
-            .await
-            .unwrap();
-        image
-            .push(
-                &reference,
-                &dockdash::PushOptions {
-                    protocol: dockdash::ClientProtocol::Http,
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        for egress in [
-            SandboxEgress::Allow,
-            SandboxEgress::None,
-            SandboxEgress::Internet,
-        ] {
-            let mut settings = settings();
-            settings.output_directory = output.path().to_string_lossy().into_owned();
-            let sandbox = Sandbox::new("sbx".into())
-                .code(SandboxCode::Image {
-                    image: reference.clone(),
-                })
-                .egress(egress)
-                .lifecycle(SandboxLifecyclePolicy {
-                    max_lifetime_seconds: None,
-                    idle_pause_seconds: None,
-                })
-                .build();
-            let built = build_stack(
-                Stack::new("metadata".into())
-                    .add(sandbox, ResourceLifecycle::Frozen)
-                    .build(),
-                &settings,
-            )
-            .await
-            .unwrap();
-            let sandbox = built
-                .resources()
-                .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+        for (user, uid) in [("", 0), ("0:0", 0), ("app", 2001)] {
+            let reference = format!("{host}/project/sandbox:user-{uid}-{}", user.is_empty());
+            let layer = dockdash::Layer::builder()
+                .unwrap()
+                .compression(dockdash::LayerCompression::Gzip)
+                .data_with_owner(
+                    "/etc/passwd",
+                    b"app:x:2001:2001::/home/app:/bin/sh\n",
+                    0o644,
+                    0,
+                    0,
+                )
+                .unwrap()
+                .data_with_owner("/etc/group", b"app:x:2001:\n", 0o644, 0, 0)
+                .unwrap()
+                .build()
+                .await
                 .unwrap();
-            assert_eq!(
-                sandbox.image_user,
-                Some(2001),
-                "deployment must retain the inspected package's privileged startup requirement"
-            );
-            let environment =
-                alien_core::sandbox_egress::aws_sandbox_agent_environment(&built, sandbox);
-            assert_eq!(environment["ALIEN_SANDBOX_IMAGE_COMMAND"], "true");
-            assert_eq!(environment["ALIEN_SANDBOX_EGRESS_RUN_HOOK"], "true");
-            let old = serde_json::from_value::<PreviousSandboxReader>(
-                serde_json::to_value(sandbox).unwrap(),
-            );
-            assert!(
-                old.unwrap_err().to_string().contains("imageUser"),
-                "old managers must refuse the package rather than omit its capability grant"
-            );
+            let (image, _) = DockDashImage::builder()
+                .platform("linux", &dockdash::Arch::ARM64)
+                .user(user)
+                .entrypoint(vec!["/start".into()])
+                .layer(layer)
+                .build()
+                .await
+                .unwrap();
+            image
+                .push(
+                    &reference,
+                    &dockdash::PushOptions {
+                        protocol: dockdash::ClientProtocol::Http,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            for egress in [
+                SandboxEgress::Allow,
+                SandboxEgress::None,
+                SandboxEgress::Internet,
+            ] {
+                let mut settings = settings();
+                settings.output_directory = output.path().to_string_lossy().into_owned();
+                let sandbox = Sandbox::new("sbx".into())
+                    .code(SandboxCode::Image {
+                        image: reference.clone(),
+                    })
+                    .egress(egress)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build();
+                let built = build_stack(
+                    Stack::new("metadata".into())
+                        .add(sandbox, ResourceLifecycle::Frozen)
+                        .build(),
+                    &settings,
+                )
+                .await
+                .unwrap();
+                let sandbox = built
+                    .resources()
+                    .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+                    .unwrap();
+                let legacy = user.is_empty() && sandbox.egress != SandboxEgress::None;
+                assert_eq!(sandbox.image_user, (!legacy).then_some(uid));
+                let environment =
+                    alien_core::sandbox_egress::aws_sandbox_agent_environment(&built, sandbox);
+                assert_eq!(
+                    environment.contains_key("ALIEN_SANDBOX_IMAGE_COMMAND"),
+                    !legacy
+                );
+                assert_eq!(
+                    environment.contains_key("ALIEN_SANDBOX_EGRESS_RUN_HOOK"),
+                    !legacy
+                );
+                let old = serde_json::from_value::<PreviousSandboxReader>(
+                    serde_json::to_value(sandbox).unwrap(),
+                );
+                if legacy {
+                    old.expect("legacy no-USER mode must remain readable");
+                } else {
+                    assert!(old.unwrap_err().to_string().contains("imageUser"));
+                }
+                let result = alien_preflights::CompileTimeCheck::check(
+                &alien_preflights::compile_time::sandbox_platform_support::SandboxPlatformSupportCheck,
+                &built, Platform::Aws,
+            ).await.unwrap();
+                assert_eq!(
+                    result.success,
+                    uid != 0 || user.is_empty() || sandbox.egress == SandboxEgress::None,
+                    "USER={user:?} {:?}: {:?}",
+                    sandbox.egress,
+                    result.errors
+                );
+            }
         }
     }
     #[tokio::test]

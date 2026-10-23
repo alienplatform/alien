@@ -3,8 +3,8 @@
 New AWS, GCP and Azure images assembled by Alien save the original OCI ENTRYPOINT, CMD, USER,
 environment and working directory in root-owned metadata. The agent runs as
 root with uid-split isolation and starts that command before serving session
-operations. Root and absent USER get Docker's default capabilities without
-NET_RAW; non-root image processes get none. Exec and jobs retain their non-root
+operations. Root and absent USER, where bounded root is supported, get Docker's
+default capabilities without NET_RAW; non-root image processes get none. Exec and jobs retain their non-root
 identity, zero capabilities and no_new_privs. Image exits appear in health and
 never trigger a restart.
 
@@ -35,7 +35,10 @@ Azure bases then use the normal agent assembler; Local keeps an immutable Docker
 image ID. The resolved original USER drives planning, including explicit root refusal on
 Local/Kubernetes and root refusal on AWS modes without a connector. Images without
 USER retain the released Local/Kubernetes behavior: non-root uid 65534 and no new
-image boot contract. Absent USER still selects root boot on AWS, GCP and packaged Azure. Existing AWS S3 bundles keep
+image boot contract. AWS images without USER also retain their released non-root
+contract when no connector is present (including unrestricted egress). With an AWS
+connector, on GCP, and on packaged Azure, absent USER selects root boot.
+Existing AWS S3 bundles keep
 their released startup behavior; rebuild from an OCI base to select the new image
 contract. Azure catalog builds keep their native path and emit a warning because the
 catalog does not expose the original USER/command for inspection. Native exec
@@ -252,17 +255,20 @@ no session operation and remain unauthenticated.
 
 ## Upgrade order
 
-Ordinary non-root GCP/Local images whose boot UID already matches exec omit
-`imageUser` from new releases. All newly inspected AWS images retain `imageUser`,
+Explicit non-root GCP images whose boot UID already matches exec, and ordinary
+Local/Kubernetes images, omit `imageUser` from new releases. GCP images without
+USER boot as root and retain `imageUser: 0`: old strict readers reject them.
+Newly inspected AWS images retain `imageUser` when they select the new contract,
 including non-root images: their agent needs privileged bootstrap to distinguish
 provider control callers from guest code. Deployment derives the capability grant
-from this inspected metadata. Root and absent-USER releases retain `imageUser: 0`.
-Upgrade managers/deployment agents before publishing any rebuilt AWS image or root
-image. An old strict reader rejects these releases before it can deploy a bundle
+from this inspected metadata. Root and supported absent-USER releases retain
+`imageUser: 0`. AWS images without USER and without a connector omit the marker
+and keep legacy startup and capabilities. Upgrade managers/deployment agents
+before publishing any AWS image selecting the new contract or any root image. An old strict reader rejects these releases before it can deploy a bundle
 without the required startup privileges. Saved AWS S3 releases remain unchanged.
 
-In the reverse upgrade direction, older CLIs (including v3.3.39 and the v3.3.40
-candidate) omit `imageUser`. A new packages builder preserves the command metadata
+In the reverse upgrade direction, older CLIs (including released v3.3.39 and
+v3.3.40) omit `imageUser`. A new packages builder preserves the command metadata
 but does not bake privileged activation into the AWS bundle. Deployment injects
 activation and grants capabilities together, so old releases keep the released
 legacy startup path. This also applies to declarations generated directly from
@@ -364,7 +370,8 @@ and device mapper no longer work for guest root.
 
 Only these character devices remain available: null (1:3), zero (1:5), full
 (1:7), random (1:8), urandom (1:9), tty (5:0), console (5:1), ptmx (5:2), and
-pts (136:*). FUSE is not required by the agent and is not allowed. Raw SCSI sg,
+pts (136:*). Devices outside this list, including `/dev/fuse`, `/dev/net/tun`,
+`/dev/kmsg` and `/dev/ttyS*`, are denied for read, write and creation. Raw SCSI sg,
 bsg, NVMe generic ng, and every other character device are denied for reads,
 writes and mknod, including nodes the image already contains. Ordinary terminal
 I/O and PTY allocation remain supported.

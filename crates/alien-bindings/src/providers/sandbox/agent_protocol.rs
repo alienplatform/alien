@@ -417,6 +417,46 @@ pub(super) async fn send_raw(
     }
 }
 
+/// Read an error without letting a proxy's response consume unbounded memory or time.
+/// An incomplete body cannot establish whether a command was executed.
+pub(super) async fn error_body(mut response: reqwest::Response, operation: &str) -> Result<String> {
+    const MAX_ERROR_BODY: usize = 4096;
+    let status = response.status();
+    let read = async {
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .into_alien_error()
+            .context(unanswered(
+                operation,
+                &format!("{operation} returned {status} and its body could not be read"),
+            ))?
+        {
+            if chunk.len() > MAX_ERROR_BODY - body.len() {
+                return Err(AlienError::new(unanswered(
+                    operation,
+                    &format!(
+                        "{operation} returned {status} and its body exceeded {MAX_ERROR_BODY} bytes"
+                    ),
+                )));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(String::from_utf8_lossy(&body).into_owned())
+    };
+    tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, read)
+        .await
+        .map_err(|_| {
+            AlienError::new(unanswered(
+                operation,
+                &format!(
+                    "{operation} returned {status} and its body exceeded the response deadline"
+                ),
+            ))
+        })?
+}
+
 pub(super) async fn check_response(
     response: reqwest::Response,
     operation: &str,
@@ -426,24 +466,7 @@ pub(super) async fn check_response(
     }
 
     let status = response.status();
-    // Read the body first: the agent puts the actual cause there, and a bare status turns a
-    // specific refusal into a guess. A read that *fails* is not an empty body — collapsing the
-    // two would let a dropped connection claim the request never arrived.
-    let body = match tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, response.text()).await {
-        Ok(Ok(body)) => body,
-        Err(_) => {
-            return Err(AlienError::new(unanswered(
-                operation,
-                &format!("{operation} returned {status} and its body exceeded the response deadline"),
-            )))
-        }
-        Ok(Err(error)) => {
-            return Err(error).into_alien_error().context(unanswered(
-                operation,
-                &format!("{operation} returned {status} and its body could not be read"),
-            ))
-        }
-    };
+    let body = error_body(response, operation).await?;
 
     // A 5xx never proves the agent answered, with or without a body: the cloud's proxy emits them
     // too, and a 504 means the request reached the guest and no answer came back in time. A body

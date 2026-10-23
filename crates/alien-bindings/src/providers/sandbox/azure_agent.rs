@@ -67,19 +67,7 @@ async fn not_found_response(
     operation: &str,
 ) -> Result<(AlienError<ErrorData>, bool)> {
     let status = response.status();
-    let body = tokio::time::timeout(agent_protocol::AGENT_RESPONSE_TIMEOUT, response.text())
-        .await
-        .map_err(|_| {
-            AlienError::new(agent_protocol::unanswered(
-                operation,
-                "the 404 response body exceeded the response deadline",
-            ))
-        })?
-        .into_alien_error()
-        .context(agent_protocol::unanswered(
-            operation,
-            "the 404 response body could not be read",
-        ))?;
+    let body = agent_protocol::error_body(response, operation).await?;
     // ApiError sends coded plain text for these errors, not the jobs JSON envelope.
     let from_agent = body.starts_with("PATH_NOT_FOUND:") || body.starts_with("JOB_NOT_FOUND:");
     Ok((
@@ -1180,6 +1168,81 @@ mod tests {
             }
         }
     }
+    #[tokio::test]
+    async fn oversized_error_bodies_are_bounded_without_replay() {
+        for status in [
+            "401 Unauthorized",
+            "403 Forbidden",
+            "404 Not Found",
+            "500 Internal Server Error",
+        ] {
+            for operation in ["sandbox.runCommand", "sandbox.jobStart", "sandbox.readFile"] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}/", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = [0; 4096];
+                    assert!(socket.read(&mut request).await.unwrap() > 0);
+                    let headers = format!("HTTP/1.1 {status}\r\nContent-Length: 100000\r\n\r\n");
+                    socket.write_all(headers.as_bytes()).await.unwrap();
+                    socket.write_all(&[b'x'; 4097]).await.unwrap();
+                    tokio::time::sleep(agent_protocol::AGENT_RESPONSE_TIMEOUT * 10).await;
+                });
+                let mut native = MockSandboxDataPlaneApi::new();
+                // A 401 may check the credential, but no failure may replay the operation.
+                native
+                    .expect_read_file()
+                    .returning(|_, _, _| Ok(STANDARD.encode([7u8; 32]).into_bytes()));
+                let fetched_url = url.clone();
+                native
+                    .expect_agent_port_url()
+                    .returning(move |_, _, _| Ok(fetched_url.clone()));
+                let provider = AzureSandbox::new(
+                    Arc::new(native),
+                    "group".into(),
+                    "image".into(),
+                    SandboxEgress::None,
+                    None,
+                    "1000m".into(),
+                    "2048Mi".into(),
+                    None,
+                );
+                *provider.connection_slot("session").await.lock().await = Some(Connection {
+                    client: reqwest::Client::builder().no_proxy().build().unwrap(),
+                    url: url.parse().unwrap(),
+                    token: STANDARD.encode([7u8; 32]),
+                });
+                let request = provider
+                    .request("session", reqwest::Method::GET, "/v1/missing")
+                    .await
+                    .unwrap();
+                let error = provider
+                    .send("session", request, operation)
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("4096"), "{status}: {error}");
+                assert_eq!(
+                    error.code,
+                    if operation == "sandbox.readFile" {
+                        "SANDBOX_UNREACHABLE"
+                    } else {
+                        "SANDBOX_OUTCOME_UNKNOWN"
+                    }
+                );
+                assert_eq!(error.retryable, operation == "sandbox.readFile");
+                if !status.starts_with("401") {
+                    assert!(provider
+                        .connection_slot("session")
+                        .await
+                        .lock()
+                        .await
+                        .is_none());
+                }
+                server.abort();
+            }
+        }
+    }
+
     #[tokio::test]
     async fn unfinished_not_found_body_is_bounded_and_never_replayed() {
         for disconnect in [false, true] {
