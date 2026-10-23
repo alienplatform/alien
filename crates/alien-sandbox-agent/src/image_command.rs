@@ -234,6 +234,30 @@ fn start_from_with_env(
             reason: "root image USER cannot run with legacy UID-scoped egress; rebuild with a gateway-backed policy".into(),
         }));
     }
+    // Docker supplies these defaults even when the image config omits them.
+    // Explicit image or create-time variables retain precedence.
+    let passwd = fs::read_to_string("/etc/passwd")
+        .into_alien_error()
+        .context(failed())?;
+    let home = passwd
+        .lines()
+        .find_map(|line| {
+            let fields: Vec<_> = line.split(':').collect();
+            (fields.len() >= 6 && fields[2].parse::<u32>() == Ok(image_identity.uid))
+                .then(|| fields[5])
+        })
+        .filter(|home| !home.is_empty())
+        .unwrap_or("/");
+    let mut hostname = [0u8; 256];
+    if unsafe { libc::gethostname(hostname.as_mut_ptr().cast(), hostname.len()) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .into_alien_error()
+            .context(failed());
+    }
+    let hostname = std::ffi::CStr::from_bytes_until_nul(&hostname)
+        .into_alien_error()
+        .context(failed())?
+        .to_string_lossy();
     // Allocate before fork; enter the directory only after dropping privileges.
     let directory = CString::new(image.working_directory)
         .into_alien_error()
@@ -242,6 +266,8 @@ fn start_from_with_env(
     command
         .args(&image.command[1..])
         .env_clear()
+        .env("HOME", home)
+        .env("HOSTNAME", hostname.as_ref())
         .envs(image.env)
         .envs(env)
         .env_remove("ALIEN_SANDBOX_EGRESS_TOKEN")
@@ -602,5 +628,44 @@ mod tests {
                 assert!(legacy.wait().await.unwrap().success());
             }
         });
+    }
+    #[tokio::test]
+    async fn boot_environment_has_account_home_and_hostname_with_explicit_overrides() {
+        for explicit in [false, true] {
+            let (temp, path, identity) = process_fixture(vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf '%s\\n%s' \"$HOME\" \"$HOSTNAME\" > environment".into(),
+            ]);
+            let mut metadata: SandboxImageCommand =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            if explicit {
+                metadata.env.insert("HOME".into(), "/image-home".into());
+                metadata.env.insert("HOSTNAME".into(), "image-host".into());
+            }
+            fs::write(&path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+            let mut child = start_from(&path, identity).unwrap().unwrap();
+            assert!(child.wait().await.unwrap().success());
+            let observed = fs::read_to_string(temp.path().join("environment")).unwrap();
+            let expected_home = fs::read_to_string("/etc/passwd")
+                .unwrap()
+                .lines()
+                .find_map(|line| {
+                    let fields: Vec<_> = line.split(':').collect();
+                    (fields.len() >= 6 && fields[2].parse::<u32>() == Ok(identity.uid))
+                        .then(|| fields[5].to_owned())
+                })
+                .unwrap_or_else(|| "/".into());
+            let host = std::process::Command::new("hostname").output().unwrap();
+            let expected = if explicit {
+                "/image-home\nimage-host".into()
+            } else {
+                format!(
+                    "{expected_home}\n{}",
+                    String::from_utf8(host.stdout).unwrap().trim()
+                )
+            };
+            assert_eq!(observed, expected);
+        }
     }
 }
