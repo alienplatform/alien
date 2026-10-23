@@ -251,7 +251,7 @@ impl ExecutionMode {
             } => self.resolve_api_key_workspace_name().await,
             #[cfg(feature = "platform")]
             Self::Platform { workspace, .. } => {
-                if let Some(workspace) = user_workspace(workspace) {
+                if let Some(workspace) = user_workspace(workspace)? {
                     return Ok(workspace);
                 }
 
@@ -385,15 +385,15 @@ impl ExecutionMode {
 
     /// Workspace for user credentials (see `user_workspace`), if any.
     /// `None` in single-tenant modes (dev, standalone) — they don't need one.
-    pub fn configured_workspace(&self) -> Option<String> {
+    pub fn configured_workspace(&self) -> Result<Option<String>> {
         match self {
             #[cfg(feature = "platform")]
             Self::Platform {
                 api_key: Some(_), ..
-            } => None,
+            } => Ok(None),
             #[cfg(feature = "platform")]
             Self::Platform { workspace, .. } => user_workspace(workspace),
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -870,15 +870,14 @@ impl ExecutionMode {
 /// The link comes before the saved default so a directory linked to one
 /// workspace keeps working when the default is another one.
 #[cfg(feature = "platform")]
-fn user_workspace(flag: &Option<String>) -> Option<String> {
-    flag.clone()
-        .or_else(|| {
-            crate::get_current_dir()
-                .ok()
-                .and_then(crate::project_link::linked_workspace)
-                .and_then(normalize_workspace_name)
-        })
-        .or_else(load_workspace)
+fn user_workspace(flag: &Option<String>) -> Result<Option<String>> {
+    if let Some(workspace) = flag {
+        return Ok(Some(workspace.clone()));
+    }
+
+    let linked_workspace = crate::project_link::linked_workspace(crate::get_current_dir()?)?
+        .and_then(normalize_workspace_name);
+    Ok(linked_workspace.or_else(load_workspace))
 }
 
 /// Check if dev server is healthy
@@ -1226,7 +1225,7 @@ mod tests {
             project: None,
         };
 
-        assert_eq!(mode.configured_workspace(), None);
+        assert_eq!(mode.configured_workspace().unwrap(), None);
     }
 
     #[cfg(feature = "platform")]

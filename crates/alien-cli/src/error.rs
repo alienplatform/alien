@@ -267,7 +267,7 @@ pub enum ErrorData {
     #[error(
         code = "PROJECT_LINK_INVALID",
         message = "Project link invalid: {message}",
-        hint = "Run `alien link` to recreate the local project link for this directory.",
+        hint = "Run `alien link --workspace <workspace> --project <project>` to recreate the local project link for this directory.",
         retryable = "false",
         internal = "false"
     )]

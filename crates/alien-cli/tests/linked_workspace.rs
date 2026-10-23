@@ -155,3 +155,115 @@ fn commands_in_a_directory_linked_to_another_workspace_use_the_linked_workspace(
     releases.assert_hits(1);
     default_workspace.assert_hits(0);
 }
+
+#[test]
+fn workspace_commands_reject_invalid_links_before_requesting_the_saved_workspace() {
+    let api = MockServer::start();
+    let requests = api.mock(|_, then| {
+        then.status(500);
+    });
+    let user = SignedInUser::new();
+    let checkout = TempDir::new().unwrap();
+    let link = checkout.path().join(".alien/project.json");
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+
+    for unreadable in [false, true] {
+        if unreadable {
+            fs::remove_file(&link).unwrap();
+            fs::create_dir(&link).unwrap();
+        } else {
+            fs::write(&link, "{invalid json").unwrap();
+        }
+        for args in [vec!["whoami", "--json"], vec!["usage", "ai", "--json"]] {
+            let command = args[0];
+            let output = user.run(&api, checkout.path(), &args);
+            assert!(!output.status.success(), "{command} should reject the link");
+            let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(error["code"], "PROJECT_LINK_INVALID", "{error}");
+        }
+    }
+    requests.assert_hits(0);
+}
+
+#[test]
+fn whoami_uses_the_saved_default_until_a_link_or_flag_overrides_it() {
+    let api = MockServer::start();
+    let user = SignedInUser::new();
+    let checkout = TempDir::new().unwrap();
+    let mut requests = Vec::new();
+    for workspace in ["personal", "acme", "explicit"] {
+        requests.push(api.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/whoami")
+                .query_param("workspace", workspace);
+            then.status(200).json_body(json!({
+                "kind": "user",
+                "id": "usr_000000000000000000000001",
+                "email": "user@example.com",
+                "role": "workspace.admin",
+                "workspaceId": "ws_000000000000000000000001",
+                "workspaceName": workspace
+            }));
+        }));
+    }
+    let relink_project = api.mock(|when, then| {
+        when.method(GET)
+            .path("/v1/projects/my-worker")
+            .query_param("workspace", "explicit");
+        then.status(200).json_body(project_body());
+    });
+
+    let output = user.run(&api, checkout.path(), &["whoami", "--json"]);
+    assert_success(&output, "whoami with saved default");
+    let identity: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(identity["workspaceName"], "personal");
+
+    let link = checkout.path().join(".alien/project.json");
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    fs::write(
+        &link,
+        json!({
+            "workspace": "acme", "projectId": PROJECT_ID, "projectName": "my-worker"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = user.run(&api, checkout.path(), &["whoami", "--json"]);
+    assert_success(&output, "whoami with linked workspace");
+    let identity: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(identity["workspaceName"], "acme");
+
+    fs::write(&link, "{invalid json").unwrap();
+    let output = user.run(
+        &api,
+        checkout.path(),
+        &["whoami", "--workspace", "explicit", "--json"],
+    );
+    assert_success(&output, "whoami with explicit workspace and invalid link");
+    let identity: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(identity["workspaceName"], "explicit");
+
+    let output = user.run(
+        &api,
+        checkout.path(),
+        &[
+            "link",
+            "--workspace",
+            "explicit",
+            "--project",
+            "my-worker",
+            "--json",
+        ],
+    );
+    assert_success(
+        &output,
+        "recreate malformed link with an explicit workspace",
+    );
+    let repaired_link: Value = serde_json::from_slice(&fs::read(&link).unwrap()).unwrap();
+    assert_eq!(repaired_link["workspace"], "explicit");
+    assert_eq!(repaired_link["projectId"], PROJECT_ID);
+    relink_project.assert_hits(1);
+    for request in requests {
+        request.assert_hits(1);
+    }
+}

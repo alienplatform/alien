@@ -65,11 +65,14 @@ pub fn get_project_link_status<P: AsRef<Path>>(dir: P) -> ProjectLinkStatus {
     }
 }
 
-/// Workspace of the project linked to `dir`, if `dir` has a readable link.
-pub fn linked_workspace<P: AsRef<Path>>(dir: P) -> Option<String> {
+/// Workspace of the project linked to `dir`, or an error if the link is invalid.
+pub fn linked_workspace<P: AsRef<Path>>(dir: P) -> Result<Option<String>> {
     match get_project_link_status(dir) {
-        ProjectLinkStatus::Linked(link) => Some(link.workspace),
-        ProjectLinkStatus::NotLinked | ProjectLinkStatus::Error(_) => None,
+        ProjectLinkStatus::Linked(link) => Ok(Some(link.workspace)),
+        ProjectLinkStatus::NotLinked => Ok(None),
+        ProjectLinkStatus::Error(message) => {
+            Err(AlienError::new(ErrorData::ProjectLinkInvalid { message }))
+        }
     }
 }
 
