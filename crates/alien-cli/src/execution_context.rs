@@ -21,7 +21,9 @@ use tokio::time::Duration;
 use tracing::{info, warn};
 
 #[cfg(feature = "platform")]
-use crate::auth::{get_auth_http, load_workspace, save_workspace, AuthOpts};
+use crate::auth::{
+    get_auth_http, load_workspace, normalize_workspace_name, save_workspace, AuthOpts,
+};
 #[cfg(feature = "platform")]
 use crate::commands::platform::workspace::prompt_workspace;
 
@@ -225,7 +227,8 @@ impl ExecutionMode {
         }
     }
 
-    /// Resolve workspace from flags/profile and optionally prompt in a real TTY.
+    /// Resolve the workspace (see `user_workspace`) and optionally prompt in a
+    /// real TTY.
     pub async fn resolve_workspace_with_bootstrap(&self, allow_prompt: bool) -> Result<String> {
         match self {
             Self::Dev { .. } => Ok("local-dev".to_string()),
@@ -248,7 +251,7 @@ impl ExecutionMode {
             } => self.resolve_api_key_workspace_name().await,
             #[cfg(feature = "platform")]
             Self::Platform { workspace, .. } => {
-                if let Some(workspace) = workspace.clone().or_else(load_workspace) {
+                if let Some(workspace) = user_workspace(workspace) {
                     return Ok(workspace);
                 }
 
@@ -380,7 +383,7 @@ impl ExecutionMode {
         })
     }
 
-    /// Workspace from the `--workspace` flag or the saved profile, if any.
+    /// Workspace for user credentials (see `user_workspace`), if any.
     /// `None` in single-tenant modes (dev, standalone) — they don't need one.
     pub fn configured_workspace(&self) -> Option<String> {
         match self {
@@ -389,7 +392,7 @@ impl ExecutionMode {
                 api_key: Some(_), ..
             } => None,
             #[cfg(feature = "platform")]
-            Self::Platform { workspace, .. } => workspace.clone().or_else(load_workspace),
+            Self::Platform { workspace, .. } => user_workspace(workspace),
             _ => None,
         }
     }
@@ -410,26 +413,6 @@ impl ExecutionMode {
             #[cfg(feature = "platform")]
             Self::Platform { no_browser, .. } => *no_browser,
             Self::Standalone { .. } | Self::Dev { .. } => true,
-        }
-    }
-
-    /// Get workspace and project for this mode (non-interactive, fails if not set).
-    pub fn get_workspace_project(&self) -> Result<(String, Option<String>)> {
-        match self {
-            Self::Dev { .. } => Ok(("local-dev".to_string(), Some("local-dev".to_string()))),
-            Self::Standalone { .. } => Ok(("default".to_string(), Some("default".to_string()))),
-            #[cfg(feature = "platform")]
-            Self::Platform {
-                workspace, project, ..
-            } => {
-                let ws = workspace.clone().or_else(load_workspace).ok_or_else(|| {
-                    AlienError::new(ErrorData::ConfigurationError {
-                        message: "No workspace set. Run 'alien login' or use --workspace"
-                            .to_string(),
-                    })
-                })?;
-                Ok((ws, project.clone()))
-            }
         }
     }
 
@@ -879,6 +862,23 @@ impl ExecutionMode {
             },
         }
     }
+}
+
+/// Workspace for user credentials: the `--workspace` flag, then the workspace
+/// of the project linked to the current directory, then the saved default.
+///
+/// The link comes before the saved default so a directory linked to one
+/// workspace keeps working when the default is another one.
+#[cfg(feature = "platform")]
+fn user_workspace(flag: &Option<String>) -> Option<String> {
+    flag.clone()
+        .or_else(|| {
+            crate::get_current_dir()
+                .ok()
+                .and_then(crate::project_link::linked_workspace)
+                .and_then(normalize_workspace_name)
+        })
+        .or_else(load_workspace)
 }
 
 /// Check if dev server is healthy
