@@ -273,6 +273,11 @@ native client at an agent image. Session transport labels keep agent-aware
 clients on the transport chosen when each session was created, including when a
 newer client reconnects through an older native declaration.
 
+Remove calls to the former TypeScript `privilegedSupervisor()` method or Rust
+`privileged_supervisor` builder field. Use OCI USER to choose the boot identity.
+Saved declarations retain their serialized compatibility field and existing
+command-identity/egress behavior; rebuilding adopts the new image contract.
+
 ## Bootstrap file protection
 
 Before any image code starts, the agent creates a private mount namespace and
@@ -300,8 +305,10 @@ next boot's executable is required independently of the current process.
 Azure clients cache the HTTPS client and boot credential per session. The first
 operation activates the boot after checking provider policy. A definitive 401
 refreshes the native-file credential; only a changed credential permits one
-activation and replay. Transport failures and 5xx responses never replay a
-command. Ordinary commands retain the provider policy check without fetching
+activation and replay. A connection failure before delivery, or a 404 from a stale
+port route, discards the cached route and permits one retry. Timeouts, response
+resets and other ambiguous failures discard the cache for the next call but never
+replay a command. Server errors also never replay commands. Ordinary commands retain the provider policy check without fetching
 the route or credential again. Query `session_capabilities(id)` in Rust, or
 `capabilities(id)` in TypeScript/Python, when reusing a session across upgrades;
 no-argument capabilities describe new sessions from the current binding.
@@ -323,7 +330,7 @@ When the agent is PID 1 it also collects adopted children. Direct commands are
 registered atomically with spawn, so this collector cannot consume exit statuses
 that exec, jobs, boot monitoring or network checks are still waiting for.
 
-The CI privileged job also runs seven ignored library security checks through
+The CI privileged job also runs the required ignored library security checks through
 `scripts/test-sandbox-agent-security.sh <library-test-binary>`. The script verifies
 namespace isolation before cgroup or firewall changes, checks that each exact
 test exists, and removes its container/image on exit. No test mutates the runner
