@@ -7,7 +7,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Sandbox, SandboxEgress, Stack};
+use alien_core::{AzureSandboxImage, Platform, Sandbox, SandboxEgress, Stack};
 
 /// Ensures every Sandbox can be delivered by the platform it targets.
 pub struct SandboxPlatformSupportCheck;
@@ -58,10 +58,17 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             })
             .collect();
 
-        if errors.is_empty() {
-            Ok(CheckResult::success())
+        let warnings = stack.resources()
+            .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+            .filter(|sandbox| platform == Platform::Azure && matches!(sandbox.azure_image(), Ok(AzureSandboxImage::Catalog(_))))
+            .map(|sandbox| format!("Sandbox '{}': Azure catalog USER and command cannot be inspected. Native exec may run as root; use an OCI registry image or Dockerfile for non-root agent exec and the image USER/boot-process contract.", sandbox.id()))
+            .collect::<Vec<_>>();
+        if !errors.is_empty() {
+            Ok(CheckResult::failed_with_warnings(errors, warnings))
+        } else if !warnings.is_empty() {
+            Ok(CheckResult::with_warnings(warnings))
         } else {
-            Ok(CheckResult::failed(errors))
+            Ok(CheckResult::success())
         }
     }
 }

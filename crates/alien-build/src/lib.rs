@@ -2519,8 +2519,6 @@ async fn prepare_prebuilt_sandbox(
             alien_core::AzureSandboxImage::Catalog(_)
         )
     {
-        warn!(sandbox = %sandbox.id,
-            "Azure catalog USER and command cannot be inspected; preserving native execution without the image USER/boot-process contract. Native exec may run as root; use an OCI registry image or Dockerfile for non-root agent exec.");
         return Ok(sandbox);
     }
     let settings = sandbox_base_settings(settings);
@@ -6910,14 +6908,43 @@ mod sandbox_build_tests {
                 idle_pause_seconds: None,
             })
             .build();
-        let built = build_stack(
-            Stack::new("catalog".into())
-                .add(sandbox, ResourceLifecycle::Frozen)
-                .build(),
-            &settings,
-        )
-        .await
-        .expect("catalog images retain their native build path");
+        #[derive(Default)]
+        struct Warnings(std::sync::Mutex<Vec<String>>);
+        #[async_trait::async_trait]
+        impl alien_core::events::EventHandler for Warnings {
+            async fn on_event_change(
+                &self,
+                change: alien_core::events::EventChange,
+            ) -> alien_core::Result<()> {
+                if let alien_core::events::EventChange::Updated {
+                    event: AlienEvent::RunningPreflights { warnings, .. },
+                    ..
+                } = change
+                {
+                    self.0.lock().unwrap().extend(warnings);
+                }
+                Ok(())
+            }
+        }
+        let warnings = std::sync::Arc::new(Warnings::default());
+        let bus = alien_core::EventBus::with_handlers(vec![warnings.clone()]);
+        let built = bus
+            .run(|| {
+                build_stack(
+                    Stack::new("catalog".into())
+                        .add(sandbox, ResourceLifecycle::Frozen)
+                        .build(),
+                    &settings,
+                )
+            })
+            .await
+            .expect("catalog images retain their native build path");
+        let warnings = warnings.0.lock().unwrap();
+        assert!(
+            warnings.iter().any(|warning| warning.contains("catalog")
+                && warning.contains("Native exec may run as root")),
+            "CLI must receive the catalog warning: {warnings:?}"
+        );
         let sandbox = built
             .resources()
             .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
