@@ -1,5 +1,5 @@
 use super::*;
-use std::{panic::AssertUnwindSafe, sync::Arc};
+use std::{os::unix::fs::MetadataExt, panic::AssertUnwindSafe, sync::Arc};
 
 use crate::{core::controller_test::SingleControllerExecutor, ResourceController};
 use futures::FutureExt;
@@ -9,11 +9,17 @@ use tokio::process::Command;
 #[ignore = "requires Docker CLI, OCI-capable Buildx, and registry access"]
 async fn non_root_tmp_writes_survive_saved_health_and_ready_checkpoints() {
     let directory = tempfile::tempdir().unwrap();
+    let host_uid = directory.path().metadata().unwrap().uid();
+    let mut other_uids = [1001, 1002, 1003]
+        .into_iter()
+        .filter(|uid| *uid != host_uid);
+    let image_uid = other_uids.next().unwrap();
+    let peer = format!("{0}:{0}", other_uids.next().unwrap());
     let id = format!("tmp-write-{}", std::process::id());
     let image = format!("alien-local-tmp-test:{}", std::process::id());
     tokio::fs::write(
         directory.path().join("Dockerfile"),
-        "FROM busybox:1.37.0\nUSER 1001:1001\n",
+        format!("FROM busybox:1.37.0\nUSER {image_uid}:{image_uid}\n"),
     )
     .await
     .unwrap();
@@ -56,7 +62,7 @@ async fn non_root_tmp_writes_survive_saved_health_and_ready_checkpoints() {
         .memory(alien_core::ResourceSpec { min: "64Mi".to_string(), desired: "64Mi".to_string() })
         .code(ContainerCode::Image { image: artifact.to_string_lossy().into_owned() })
         .command(vec!["sh".to_string(), "-c".to_string(),
-            "set -eu; test $(id -u) = 1001; mkdir -p /tmp/web; chmod 777 /tmp/web; echo owned >/tmp/owned; echo ready >/tmp/web/health; exec busybox httpd -f -p 8080 -h /tmp/web".to_string()])
+            format!("set -eu; test $(id -u) = {image_uid}; mkdir -p /tmp/web; chmod 777 /tmp/web; echo owned >/tmp/owned; echo ready >/tmp/web/health; exec busybox httpd -f -p 8080 -h /tmp/web")])
         .health_check(alien_core::HealthCheck { path: "/health".to_string(), port: Some(8080), method: "GET".to_string(), timeout_seconds: 1, failure_threshold: 20 })
         .build();
     let client = alien_core::ClientConfig::Local {
@@ -129,14 +135,7 @@ async fn non_root_tmp_writes_survive_saved_health_and_ready_checkpoints() {
         );
 
         let peer_delete = Command::new("docker")
-            .args([
-                "exec",
-                "--user",
-                "1002:1002",
-                &docker_id,
-                "rm",
-                "/tmp/owned",
-            ])
+            .args(["exec", "--user", &peer, &docker_id, "rm", "/tmp/owned"])
             .output()
             .await
             .unwrap();
