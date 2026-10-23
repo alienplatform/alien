@@ -2513,12 +2513,9 @@ async fn prepare_prebuilt_sandbox(
             alien_core::AzureSandboxImage::Catalog(_)
         )
     {
-        return Err(AlienError::new(ErrorData::BuildConfigInvalid {
-            message: format!(
-                "Sandbox '{}' uses an Azure catalog image whose USER and command cannot be inspected; use a registry base image or Dockerfile. Saved native releases remain deployable unchanged.",
-                sandbox.id
-            ),
-        }));
+        warn!(sandbox = %sandbox.id,
+            "Azure catalog USER and command cannot be inspected; preserving native execution without the image USER/boot-process contract. Native exec may run as root; use an OCI registry image or Dockerfile for non-root agent exec.");
+        return Ok(sandbox);
     }
     let settings = sandbox_base_settings(settings);
     let directory = if Path::new(image).is_dir() {
@@ -6848,7 +6845,7 @@ mod sandbox_build_tests {
     }
 
     #[tokio::test]
-    async fn a_new_catalog_build_requires_an_inspectable_base() {
+    async fn a_catalog_build_preserves_native_execution() {
         let output = tempfile::tempdir().unwrap();
         let mut settings = settings();
         settings.platform = PlatformBuildSettings::Azure {};
@@ -6863,21 +6860,18 @@ mod sandbox_build_tests {
                 idle_pause_seconds: None,
             })
             .build();
-        let error = build_stack(
+        let built = build_stack(
             Stack::new("catalog".into())
                 .add(sandbox, ResourceLifecycle::Frozen)
                 .build(),
             &settings,
         )
         .await
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("registry base image or Dockerfile"),
-            "{error:?}"
-        );
-        assert!(!error.retryable);
+        .expect("catalog images retain their native build path");
+        let sandbox = built.resources().find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>()).unwrap();
+        assert_eq!(sandbox.image_user, None);
+        assert_eq!(sandbox.code, SandboxCode::Image { image: "ubuntu".into() });
+        assert!(matches!(sandbox.azure_image().unwrap(), alien_core::AzureSandboxImage::Catalog(_)));
     }
 
     /// Released AWS bundles retain their old startup contract without executing a rebuild.
