@@ -4139,10 +4139,37 @@ async fn pull_and_export_image(
 
         info!("Pulling image '{}' for platform {}", image, platform_str);
 
-        // A local build may already carry this daemon's immutable configuration ID.
-        // Docker cannot pull an ID from a registry; save it directly on repeated builds.
+        // Local sandbox tags may exist only in this daemon. Pin their immutable ID under
+        // the export lock so inspection and save do not depend on registry availability.
+        let mut export_image = image.to_owned();
+        if settings.platform.runtime_platform() == Platform::Local
+            && workload == toolchain::WorkloadKind::SandboxBase
+        {
+            let inspected = Command::new("docker")
+                .args(["image", "inspect", "--format", "{{.Id}}", image])
+                .output()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ImageBuildFailed {
+                    resource_name: container_name.to_string(),
+                    reason: "Failed to inspect the local Docker image".into(),
+                    build_output: None,
+                })?;
+            if inspected.status.success() {
+                export_image = String::from_utf8(inspected.stdout)
+                    .into_alien_error()
+                    .context(ErrorData::ImageBuildFailed {
+                        resource_name: container_name.to_string(),
+                        reason: "Docker returned an invalid image ID".into(),
+                        build_output: None,
+                    })?
+                    .trim()
+                    .to_owned();
+            }
+        }
+        // Docker cannot pull an immutable daemon ID from a registry.
         if !(settings.platform.runtime_platform() == Platform::Local
-            && image.starts_with("sha256:"))
+            && export_image.starts_with("sha256:"))
         {
             // Pull the image with specific platform
             let pull_output = Command::new("docker")
@@ -4176,7 +4203,12 @@ async fn pull_and_export_image(
         info!("Exporting to OCI tarball: {}", output_tarball.display());
 
         let save_output = Command::new("docker")
-            .args(&["save", "-o", &output_tarball.to_string_lossy(), image])
+            .args(&[
+                "save",
+                "-o",
+                &output_tarball.to_string_lossy(),
+                &export_image,
+            ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
@@ -7053,6 +7085,68 @@ mod sandbox_build_tests {
             }
         }
     }
+    #[tokio::test]
+    async fn local_daemon_image_build_does_not_require_a_registry() {
+        let output = tempfile::tempdir().unwrap();
+        let tag = format!("127.0.0.1:1/local-only/sandbox:{}", rand::random::<u64>());
+        std::fs::write(
+            output.path().join("Dockerfile"),
+            "FROM scratch\nCOPY marker /marker\nENTRYPOINT [\"/start\"]\n",
+        )
+        .unwrap();
+        std::fs::write(output.path().join("marker"), &tag).unwrap();
+        let built_image = Command::new("docker")
+            .args(["build", "-t", &tag, output.path().to_str().unwrap()])
+            .output()
+            .await
+            .unwrap();
+        assert!(built_image.status.success(), "{:?}", built_image);
+        let inspected = Command::new("docker")
+            .args(["image", "inspect", "--format", "{{.Id}}", &tag])
+            .output()
+            .await
+            .unwrap();
+        assert!(inspected.status.success());
+        let image_id = String::from_utf8(inspected.stdout)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let mut settings = settings();
+        settings.platform = PlatformBuildSettings::Local {};
+        settings.targets = Some(vec![BinaryTarget::LinuxX64]);
+        settings.output_directory = output.path().to_string_lossy().into_owned();
+        let sandbox = Sandbox::new("local-only".into())
+            .code(SandboxCode::Image { image: tag.clone() })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let built = build_stack(
+            Stack::new("local-only".into())
+                .add(sandbox, ResourceLifecycle::Frozen)
+                .build(),
+            &settings,
+        )
+        .await;
+        // Always remove the fixture tag, including when the regression fails before the fix.
+        let removed = Command::new("docker")
+            .args(["image", "rm", &tag])
+            .output()
+            .await
+            .unwrap();
+        assert!(removed.status.success());
+        let built = built.expect("a daemon-local image must not require a registry pull");
+        let sandbox = built
+            .resources()
+            .find_map(|(_, e)| e.config.downcast_ref::<Sandbox>())
+            .unwrap();
+        assert_eq!(sandbox.code, SandboxCode::Image { image: image_id });
+        assert_eq!(sandbox.image_user, None);
+        sandbox.validate_for_platform(Platform::Local).unwrap();
+    }
+
     #[tokio::test]
     async fn a_catalog_build_preserves_native_execution() {
         let output = tempfile::tempdir().unwrap();

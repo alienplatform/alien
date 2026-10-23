@@ -120,14 +120,16 @@ impl AzureSandbox {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
         loop {
             let ready = async {
-                let response = self
-                    .send(
-                        sandbox_id,
-                        self.request(sandbox_id, reqwest::Method::GET, "/v1/health?version=1")
-                            .await?,
-                        "sandbox.health",
-                    )
+                let request = self
+                    .request(sandbox_id, reqwest::Method::GET, "/v1/health?version=1")
                     .await?;
+                let sent = request
+                    .try_clone()
+                    .ok_or_else(invalid_route)?
+                    .build()
+                    .into_alien_error()
+                    .context(unreachable())?;
+                let response = self.send(sandbox_id, request, "sandbox.health").await?;
                 let body: serde_json::Value = response
                     .json()
                     .await
@@ -138,6 +140,12 @@ impl AzureSandbox {
                     && body["imageCommand"]["status"] != "failed"
                 {
                     return Ok(());
+                }
+                if body["protocolVersion"] == 1 && body["status"] == "awaiting-network-verification"
+                {
+                    // Health is public and cannot reject a previous boot's token. A fresh
+                    // boot at the same URL needs a new credential and policy-checked activation.
+                    self.invalidate_connection(sandbox_id, &sent).await;
                 }
                 Err(AlienError::new(unreachable()))
             };
@@ -403,25 +411,35 @@ mod tests {
 
     #[tokio::test]
     async fn reconnect_activates_a_fresh_boot_and_does_not_retry_authorization_refusal() {
-        for refused in [false, true] {
+        for (cached_boot, refused, resume) in [
+            (false, false, false),
+            (false, true, false),
+            (true, false, false),
+            (true, true, false),
+            (true, false, true),
+            (true, true, true),
+        ] {
             let token = STANDARD.encode([4u8; 32]);
             let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let activation_calls = calls.clone();
             let health_calls = calls.clone();
             let router = Router::new()
-                .route("/v1/activate", post(move || async move {
+                .route("/v1/activate", post(move |headers: HeaderMap| async move {
+                    assert_eq!(headers["authorization"], format!("Bearer {}", STANDARD.encode([4u8; 32])));
                     activation_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     if refused { axum::http::StatusCode::UNAUTHORIZED } else { axum::http::StatusCode::NO_CONTENT }
                 }))
                 .route("/v1/health", axum::routing::get(move || async move {
-                    assert_eq!(health_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-                    Json(serde_json::json!({ "protocolVersion": 1, "status": "ready", "imageCommand": { "status": "running" } }))
+                    // Health is public: an old bearer token still receives HTTP 200.
+                    let status = if health_calls.load(std::sync::atomic::Ordering::SeqCst) == 0 { "awaiting-network-verification" } else { "ready" };
+                    Json(serde_json::json!({ "protocolVersion": 1, "status": status, "imageCommand": { "status": "running" } }))
                 }));
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let url = format!("http://{}", listener.local_addr().unwrap());
             let server = tokio::spawn(async move {
                 axum::serve(listener, router).await.unwrap();
             });
+            let cached_url = url.clone();
             let count = 1;
             let mut native = MockSandboxDataPlaneApi::new();
             native.expect_get_sandbox().times(3).returning(|_, id| {
@@ -456,14 +474,31 @@ mod tests {
                 None,
             )
             .with_agent(false);
+            if cached_boot {
+                *provider.connection_slot("session").await.lock().await = Some(Connection {
+                    client: reqwest::Client::builder().no_proxy().build().unwrap(),
+                    url: cached_url.parse().unwrap(),
+                    token: STANDARD.encode([3u8; 32]),
+                });
+            }
             // A fresh process is awaiting activation even though the provider is Running.
             // Session metadata must also select it through a rollback binding.
-            let result = provider
-                .get_or_create(CreateSandboxRequest {
-                    sandbox_id: Some("session".into()),
-                    ..Default::default()
-                })
-                .await;
+            let ready = async {
+                if resume {
+                    provider.resume("session").await
+                } else {
+                    provider
+                        .get_or_create(CreateSandboxRequest {
+                            sandbox_id: Some("session".into()),
+                            ..Default::default()
+                        })
+                        .await
+                        .map(|_| ())
+                }
+            };
+            let result = tokio::time::timeout(Duration::from_secs(5), ready)
+                .await
+                .expect("cached health must refresh and activate a fresh boot");
             if refused {
                 let error = result.unwrap_err();
                 assert_eq!(error.code, "SANDBOX_COMMAND_FAILED");
