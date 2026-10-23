@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { Sandbox, type SandboxEgress } from "../sandbox.js"
+import { Sandbox, SandboxConfigSchema, type SandboxEgress } from "../sandbox.js"
 
 const limits = { cpu: "1", memory: "2Gi", disk: "20Gi", maxProcesses: 256 }
 const lifecycle = { maxLifetimeSeconds: 3600 }
@@ -80,9 +80,12 @@ it("preserves deprecated declarations and supervisor settings without gateway mi
     { mode: "allowDomains", domains: ["api.example.com"] },
   ]
   for (const egress of policies) {
-    const resource = complete().egress(egress).privilegedSupervisor({ commandUid: 60000 }).build()
-    expect(resource.config.egress).toEqual(egress)
-    expect(resource.config.privilegedSupervisor).toEqual({ commandUid: 60000 })
-    expect(resource.config.defaultPolicy).toBeUndefined()
+    const config = SandboxConfigSchema.parse({
+      ...complete().egress(egress).build().config,
+      privilegedSupervisor: { commandUid: 60000 },
+    })
+    expect(config.egress).toEqual(egress)
+    expect(config.privilegedSupervisor).toEqual({ commandUid: 60000 })
+    expect(config.defaultPolicy).toBeUndefined()
   }
 })

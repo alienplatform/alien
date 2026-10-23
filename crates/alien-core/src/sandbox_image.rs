@@ -69,6 +69,8 @@ pub enum Authorization {
     Transport,
     /// The caller presents a signed token, which is what a network anything can reach requires.
     Capability,
+    /// A per-boot credential is read through the cloud's authenticated native file API.
+    NativeFile,
 }
 
 impl Authorization {
@@ -77,6 +79,7 @@ impl Authorization {
         match self {
             Self::Transport => "transport",
             Self::Capability => "capability",
+            Self::NativeFile => "native-file",
         }
     }
 }
@@ -165,31 +168,37 @@ pub const AWS_MICROVM: SandboxImage = SandboxImage {
     isolation: Isolation::UidSplit,
 };
 
-/// The GCP Agent Platform image, built once in CI and run with nothing layered on top.
-///
-/// 1000 is the conventional first non-root uid, chosen over the 60000 [`AWS_MICROVM`] uses because
-/// that value was never tried against Agent Platform. One uid covers the agent and the commands it
-/// supervises: Agent Platform refuses an image that requires root, so there is no second uid to
-/// drop to.
-///
-/// Agent Platform is only known to serve 8080, on the image and on the declared template port
-/// alike, and whether it honours a declared port or assumes 8080 has never been established.
-/// 8080 is right under either answer; any other number is right under only one.
+/// GCP keeps a root supervisor separate from the non-root command identity.
+/// Live conformance must verify root execution and capability bounds because the
+/// provider's published custom-image requirements do not promise root support.
+/// Agent Platform serves the declared container port 8080.
 pub const GCP_AGENT_PLATFORM: SandboxImage = SandboxImage {
     exec_uid: 1000,
     exec_gid: 1000,
     session_root: "/sandbox",
     port: 8080,
     authorization: Authorization::Transport,
-    isolation: Isolation::Platform,
+    isolation: Isolation::UidSplit,
 };
 
 /// Every variable a GCP Agent Platform image sets: the contract, then `RUST_LOG`.
 pub fn gcp_agent_platform_env() -> Vec<(&'static str, String)> {
     let mut env = GCP_AGENT_PLATFORM.contract_env_vars().to_vec();
     env.push(("RUST_LOG", GCP_AGENT_LOG_FILTER.to_string()));
+    env.push(("ALIEN_SANDBOX_IMAGE_COMMAND", "true".into()));
     env
 }
+
+/// Azure serves the agent through a published port and an authenticated native file read.
+/// Its native exec path is never used for packaged images because it grants excess capabilities.
+pub const AZURE_SANDBOX: SandboxImage = SandboxImage {
+    exec_uid: 1000,
+    exec_gid: 1000,
+    session_root: "/sandbox",
+    port: AGENT_PORT,
+    authorization: Authorization::NativeFile,
+    isolation: Isolation::UidSplit,
+};
 
 /// The image every default sandbox builds on, by index digest so both architectures are pinned.
 ///
@@ -483,10 +492,24 @@ COPY --from=binary-selector --chown=0:0 --chmod={AGENT_MODE:04o} \
 # The release build resolves tracing-subscriber once across every package it names, and five of
 # them ask for env-filter, so the agent's fmt::init() has an EnvFilter under it. Unset, that
 # filter discards the startup warning saying this image serves requests without a capability.
-ENV RUST_LOG={GCP_AGENT_LOG_FILTER}
+ENV RUST_LOG={GCP_AGENT_LOG_FILTER} \
+    ALIEN_SANDBOX_IMAGE_COMMAND=true
+
+# These published agent images have no application startup command. Declare that explicitly so
+# inherited base CMD values cannot become agent arguments or a second shell process.
+RUN mkdir -p /opt/alien \
+ && printf '%s\n' '{empty_image_command}' > {IMAGE_COMMAND_PATH} \
+ && chmod 0600 {IMAGE_COMMAND_PATH}
 
 {entrypoint}
+CMD []
 "#,
+        empty_image_command = serde_json::to_string(&SandboxImageCommand {
+            user: Some(String::new()),
+            working_directory: "/".into(),
+            ..Default::default()
+        })
+        .expect("static default image command must serialize"),
         exec_uid = image.exec_uid,
         identity = identity_setup(image),
         env = contract_env(image),
@@ -600,8 +623,8 @@ mod tests {
     fn the_ending_an_image_declares_follows_its_isolation() {
         assert!(!entrypoint(&AWS_MICROVM).contains("USER "));
         assert!(contract_env(&AWS_MICROVM).contains("ALIEN_SANDBOX_ISOLATION=uid-split"));
-        assert!(entrypoint(&GCP_AGENT_PLATFORM).contains("\nUSER 1000:1000\n"));
-        assert!(contract_env(&GCP_AGENT_PLATFORM).contains("ALIEN_SANDBOX_ISOLATION=platform"));
+        assert_eq!(GCP_AGENT_PLATFORM.isolation, Isolation::UidSplit);
+        assert!(contract_env(&GCP_AGENT_PLATFORM).contains("ALIEN_SANDBOX_ISOLATION=uid-split"));
     }
 }
 
@@ -609,6 +632,10 @@ mod tests {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxImageCommand {
+    /// Original OCI USER, including an empty string for Docker's root default.
+    /// Absent only in released metadata whose boot command used the exec identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
     /// OCI Entrypoint followed by Cmd; empty means there is no image command.
     pub command: Vec<String>,
     /// Image environment only, before runtime authorization and provider variables are added.
@@ -619,3 +646,6 @@ pub struct SandboxImageCommand {
 
 /// Installed outside the command-writable session directory.
 pub const IMAGE_COMMAND_PATH: &str = "/opt/alien/image-command.json";
+
+/// Per-boot agent credential read only through an authenticated native file API.
+pub const NATIVE_TOKEN_PATH: &str = "/opt/alien/native-token";

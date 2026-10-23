@@ -117,7 +117,7 @@ async fn main() -> ExitCode {
         .as_ref()
         .is_some_and(|sandbox| matches!(sandbox.egress, alien_core::SandboxEgress::Internet));
     let result = if supervised || internet {
-        match alien_build::sandbox_identity::image_command(&image) {
+        match alien_build::sandbox_identity::image_command(&image).await {
             Ok(command) => write_supervised_bundle(
                 Path::new(destination),
                 &pinned,

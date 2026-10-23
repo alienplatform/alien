@@ -229,13 +229,14 @@ impl CfEmitter for AwsSandboxEmitter {
                 CfExpression::Integer(tier.baseline_memory_mib),
             )])]),
         );
-        // AWS rejects named capabilities: only ALL is accepted. The agent drops to eight
-        // before creating worker threads; every image command and exec receives none.
+        // AWS accepts only ALL. The agent reduces its grant before creating threads;
+        // root image startup gets the bounded image grant and exec receives none.
         properties.insert(
             "AdditionalOsCapabilities".to_string(),
             CfExpression::list(
-                if alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.stack, sandbox)
-                    .contains_key("ALIEN_SANDBOX_EGRESS")
+                if sandbox.image_user.is_some()
+                    || alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.stack, sandbox)
+                        .contains_key("ALIEN_SANDBOX_EGRESS")
                 {
                     vec![CfExpression::from("ALL")]
                 } else {

@@ -105,20 +105,34 @@ pub fn sandbox_egress_key_owner(stack: &Stack) -> Option<&str> {
 /// Closed sandboxes retain their denying connector. Only the new internet
 /// declaration opts into the gateway, including in stacks with legacy sandboxes.
 pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {
+    sandbox_plans_connector(sandbox)
+        && (sandbox.egress != SandboxEgress::Internet || has_sandbox_gateway(stack))
+}
+
+/// Whether deployment must prepare an external connector for this declaration.
+/// Build and compile-time checks run before the managed internet gateway is added.
+/// Deployment prerequisites still refuse a target that cannot host that gateway.
+pub fn sandbox_plans_connector(sandbox: &Sandbox) -> bool {
     matches!(
         sandbox.cloud_egress(),
         SandboxEgress::None | SandboxEgress::AllowDomains { .. }
-    ) || (matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack))
+    ) || sandbox.egress == SandboxEgress::Internet
 }
 
-/// Activate the automatic agent guard only for the gateway opt-in. Existing
-/// declarations retain their startup environment and supervisor behavior.
-/// Command identity is resolved independently from the image.
+/// Inspected builds opt into OCI USER startup after Run. Saved declarations without
+/// image metadata retain their released startup behavior and command identity.
 pub fn aws_sandbox_agent_environment(
     stack: &Stack,
     sandbox: &Sandbox,
 ) -> std::collections::BTreeMap<String, String> {
     let mut environment = sandbox.supervisor_environment();
+    if sandbox.image_user.is_some() {
+        environment.insert("ALIEN_SANDBOX_IMAGE_COMMAND".into(), "true".into());
+        environment.insert("ALIEN_SANDBOX_EGRESS_RUN_HOOK".into(), "true".into());
+        if sandbox.privileged_supervisor.is_none() && sandbox.egress == SandboxEgress::None {
+            environment.insert("ALIEN_SANDBOX_EGRESS".into(), "\"none\"".into());
+        }
+    }
     if matches!(sandbox.egress, SandboxEgress::Internet) && has_sandbox_gateway(stack) {
         environment.insert(
             "ALIEN_SANDBOX_EGRESS".into(),

@@ -18,6 +18,10 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
  */
 export type RemoteAzureSandboxBinding = {
   /**
+   * Uses the packaged agent HTTP transport; absent in released native images.
+   */
+  agent?: boolean | null | undefined;
+  /**
    * Whether the declaration asked for open egress. Always true here, sent explicitly because
    *
    * @remarks
@@ -65,6 +69,7 @@ export const RemoteAzureSandboxBinding$inboundSchema: z.ZodType<
   RemoteAzureSandboxBinding,
   unknown
 > = z.object({
+  agent: z.nullable(z.boolean()).optional(),
   allowEgress: z.boolean(),
   cpu: z.nullable(z.string()).optional(),
   dataPlaneEndpoint: z.string(),

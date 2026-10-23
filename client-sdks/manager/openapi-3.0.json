@@ -14853,6 +14853,11 @@
           "allowEgress"
         ],
         "properties": {
+          "agent": {
+            "type": "boolean",
+            "description": "Uses the packaged agent HTTP transport; absent in released native images.",
+            "nullable": true
+          },
           "allowEgress": {
             "type": "boolean",
             "description": "Whether the declaration asked for open egress. Always true here, sent explicitly because\nthe remote grant lets its holder create sandboxes the declared policy never reaches — a\nclient must read this rather than assume it from an absent field."

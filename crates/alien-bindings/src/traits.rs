@@ -480,10 +480,12 @@ pub trait Vault: Binding {
     /// already in the vault is left unchanged and answered with `VaultSecretAlreadyExists`.
     /// Vaults that cannot write create-only answer `OperationNotSupported`.
     async fn create_secret(&self, secret_name: &str, _value: &str) -> Result<()> {
-        Err(alien_error::AlienError::new(crate::error::ErrorData::OperationNotSupported {
-            operation: format!("create-only write of secret '{secret_name}'"),
-            reason: "this vault cannot write a secret only if it is absent".to_string(),
-        }))
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::OperationNotSupported {
+                operation: format!("create-only write of secret '{secret_name}'"),
+                reason: "this vault cannot write a secret only if it is absent".to_string(),
+            },
+        ))
     }
 
     /// Deletes a secret by name.
@@ -1391,6 +1393,15 @@ pub trait Sandbox: Binding {
 
     /// What this platform's backend supports.
     fn capabilities(&self) -> alien_core::SandboxCapabilities;
+
+    /// What an existing session supports. Use this after reconnecting across image
+    /// upgrades: its transport can differ from the binding used to create new sessions.
+    async fn session_capabilities(
+        &self,
+        _sandbox_id: &str,
+    ) -> Result<alien_core::SandboxCapabilities> {
+        Ok(self.capabilities())
+    }
 
     /// Creates a sandbox that can already take work.
     ///

@@ -462,13 +462,14 @@ impl TfEmitter for AwsSandboxEmitter {
                     Expression::Number(tier.baseline_memory_mib.into()),
                 )])]),
             ),
-            // The schema's enum is exactly ["ALL"], which grants mount, netns and eBPF. There is
-            // no subset to ask for, so the answer is none — and the key has to be present.
+            // AWS accepts only ALL. Inspected packages reduce the agent's grant before
+            // starting threads, bound root image capabilities, and give exec none.
             (
                 "AdditionalOsCapabilities",
                 Expression::from(
-                    if alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.stack, sandbox)
-                        .contains_key("ALIEN_SANDBOX_EGRESS")
+                    if sandbox.image_user.is_some()
+                        || alien_core::sandbox_egress::aws_sandbox_agent_environment(ctx.stack, sandbox)
+                            .contains_key("ALIEN_SANDBOX_EGRESS")
                     {
                         vec![Expression::String("ALL".to_string())]
                     } else {

@@ -182,7 +182,10 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
         }
 
   return {
-    capabilities: () => guard(handle, async raw => raw.capabilities()),
+    capabilities: sandboxId =>
+      guard(handle, async raw =>
+        sandboxId === undefined ? raw.capabilities() : raw.sessionCapabilities(sandboxId),
+      ),
     create: options =>
       guard(handle, async raw =>
         instance(

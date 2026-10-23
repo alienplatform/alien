@@ -2821,8 +2821,9 @@ mod tests {
                         // read_file + text_editor + computer survive; advisor + web_search drop.
                         tools.len() == 3
                             && tools[0]["name"] == "read_file"
-                            // `defer_loading` stripped from the surviving client tool.
+                            // Fields newer than the pinned schema stripped from the surviving client tool.
                             && tools[0].get("defer_loading").is_none()
+                            && tools[0].get("eager_input_streaming").is_none()
                             && tools[1]["type"] == "text_editor_20250728"
                             && tools[2]["type"] == "computer_20250124"
                     });
@@ -2840,7 +2841,7 @@ mod tests {
                 "stream": true,
                 "max_tokens": 16,
                 "tools": [
-                    {"name": "read_file", "description": "reads", "input_schema": {"type": "object"}, "defer_loading": true},
+                    {"name": "read_file", "description": "reads", "input_schema": {"type": "object"}, "defer_loading": true, "eager_input_streaming": true},
                     {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
                     {"type": "computer_20250124", "name": "computer"},
                     {"type": "advisor_20260301", "name": "advisor"},

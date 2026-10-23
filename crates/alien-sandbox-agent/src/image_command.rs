@@ -1,38 +1,306 @@
-//! Runs the image's saved OCI command under the same identity boundary as every exec request.
+//! Runs the saved OCI command once under its image identity; exec identity stays separate.
 
 use crate::{
     error::{ErrorData, Result},
     exec::ExecIdentity,
 };
-use alien_core::sandbox_image::{SandboxImageCommand, IMAGE_COMMAND_PATH};
-use alien_error::{Context, IntoAlienError};
-use std::{ffi::CString, fs, os::unix::process::CommandExt, process::Stdio};
+use alien_core::{
+    sandbox_identity::ImageUser,
+    sandbox_image::{SandboxImageCommand, IMAGE_COMMAND_PATH},
+};
+use alien_error::{AlienError, Context, IntoAlienError};
+use std::{
+    collections::BTreeMap,
+    ffi::CString,
+    fs,
+    os::unix::process::{CommandExt, ExitStatusExt},
+    path::Path,
+    process::Stdio,
+    sync::{Arc, Mutex},
+};
 
-pub fn start(identity: ExecIdentity) -> Result<Option<tokio::process::Child>> {
-    start_with_env(identity, &Default::default())
+/// One image process per agent boot. Its exit is observable but never triggers a restart.
+pub struct ImageProcess {
+    status: Arc<Mutex<ImageStatus>>,
+    image_user: bool,
+    shutdown: tokio::sync::watch::Sender<bool>,
+    monitor: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
-/// Start the saved OCI command with supervisor-owned environment additions.
-pub fn start_with_env(
-    identity: ExecIdentity,
-    env: &std::collections::BTreeMap<String, String>,
-) -> Result<Option<tokio::process::Child>> {
-    start_from_with_env(std::path::Path::new(IMAGE_COMMAND_PATH), identity, env)
+impl Default for ImageProcess {
+    fn default() -> Self {
+        Self {
+            status: Arc::new(Mutex::new(ImageStatus::Pending)),
+            image_user: false,
+            shutdown: tokio::sync::watch::channel(false).0,
+            monitor: Mutex::new(None),
+        }
+    }
+}
+
+/// Image process lifecycle, independent of session/network readiness.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum ImageStatus {
+    /// Released images without a saved startup command retain their old behavior.
+    NotConfigured,
+    /// The provider lifecycle hook or native-file binding has not activated this boot.
+    AwaitingActivation,
+    /// Waiting for network checks and, when required, gateway identity delivery.
+    #[default]
+    Pending,
+    /// OCI metadata contains no ENTRYPOINT or CMD.
+    Empty,
+    /// The command was successfully executed; no application readiness is implied.
+    Running,
+    /// The command exited. Session operations may continue.
+    Exited {
+        code: Option<i32>,
+        signal: Option<i32>,
+    },
+    /// Startup or process observation failed. Never retry the boot process implicitly.
+    Failed,
+}
+
+impl ImageProcess {
+    /// New packages explicitly opt into OCI USER semantics. Released packages keep
+    /// their exec identity even if their metadata happened to preserve USER.
+    pub fn with_image_user() -> Self {
+        Self {
+            image_user: true,
+            ..Default::default()
+        }
+    }
+
+    /// Defer boot until the provider hook or authenticated binding activates it.
+    pub fn awaiting_activation() -> Self {
+        Self {
+            status: Arc::new(Mutex::new(ImageStatus::AwaitingActivation)),
+            image_user: true,
+            ..Default::default()
+        }
+    }
+
+    pub fn activate(&self) -> Result<()> {
+        let mut status = self.status.lock().map_err(|_| monitor_failed())?;
+        if *status == ImageStatus::AwaitingActivation {
+            *status = ImageStatus::Pending;
+        }
+        Ok(())
+    }
+
+    pub fn waiting_for_activation(&self) -> Result<bool> {
+        Ok(self.status()? == ImageStatus::AwaitingActivation)
+    }
+
+    /// Compatibility for released images that never saved or started an OCI command.
+    pub fn not_configured() -> Self {
+        Self {
+            status: Arc::new(Mutex::new(ImageStatus::NotConfigured)),
+            image_user: false,
+            ..Default::default()
+        }
+    }
+
+    /// Whether this package may start an image under a UID distinct from exec.
+    pub fn uses_image_user(&self) -> bool {
+        self.image_user
+    }
+
+    pub fn status(&self) -> Result<ImageStatus> {
+        self.status
+            .lock()
+            .map(|status| status.clone())
+            .map_err(|_| monitor_failed())
+    }
+
+    /// Forward shutdown to the boot process group, then wait for its bounded cleanup.
+    pub async fn shutdown(&self) -> Result<()> {
+        // Serialize with spawn so no image starts after shutdown sees Pending.
+        {
+            let _status = self.status.lock().map_err(|_| monitor_failed())?;
+            self.shutdown.send_replace(true);
+        }
+        let monitor = self.monitor.lock().map_err(|_| monitor_failed())?.take();
+        if let Some(monitor) = monitor {
+            monitor
+                .await
+                .into_alien_error()
+                .context(ErrorData::OperationFailed {
+                    operation: "stop image process group".into(),
+                    reason: "image monitor task did not complete".into(),
+                })?;
+        }
+        if self.status()? == ImageStatus::Failed {
+            return Err(monitor_failed());
+        }
+        Ok(())
+    }
+
+    pub fn start_once(&self, identity: ExecIdentity, env: &BTreeMap<String, String>) -> Result<()> {
+        self.start_once_from(Path::new(IMAGE_COMMAND_PATH), identity, env)
+    }
+
+    fn start_once_from(
+        &self,
+        path: &Path,
+        identity: ExecIdentity,
+        env: &BTreeMap<String, String>,
+    ) -> Result<()> {
+        let mut status = self.status.lock().map_err(|_| monitor_failed())?;
+        if *self.shutdown.borrow() {
+            return Err(monitor_failed());
+        }
+        match *status {
+            ImageStatus::AwaitingActivation => {
+                return Err(AlienError::new(ErrorData::EgressPathUnexpected))
+            }
+            ImageStatus::Pending => (),
+            ImageStatus::Failed => return Err(monitor_failed()),
+            _ => return Ok(()),
+        }
+        // Hold the lock until spawn has completed its pre-exec work. A simultaneous
+        // session operation cannot observe "started" before the actual exec succeeds.
+        let child = match start_from_with_env(path, identity, env, self.image_user) {
+            Ok(child) => child,
+            Err(error) => {
+                *status = ImageStatus::Failed;
+                return Err(error);
+            }
+        };
+        let Some((mut child, registration)) = child else {
+            *status = ImageStatus::Empty;
+            return Ok(());
+        };
+        *status = ImageStatus::Running;
+        let shared = Arc::clone(&self.status);
+        let mut shutdown = self.shutdown.subscribe();
+        let monitor = tokio::spawn(async move {
+            let _registration = registration;
+            let outcome = async {
+                let pid = child.id().ok_or_else(|| std::io::Error::other("image PID missing"))?;
+                let mut observed_exit = false;
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+                loop {
+                    tokio::select! {
+                        _ = shutdown.changed() => break,
+                        _ = interval.tick(), if !observed_exit => {
+                            if let Some(exit) = observe_exit(pid)? {
+                                tracing::info!(?exit, "image command exited; it will not be restarted");
+                                *shared.lock().map_err(|_| std::io::Error::other("image state poisoned"))? = exit;
+                                observed_exit = true;
+                            }
+                        }
+                    }
+                }
+                signal_group(pid, libc::SIGTERM)?;
+                // Keep the leader unreaped even if it exited before shutdown. This
+                // reserves the process-group ID while surviving workers clean up.
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                signal_group(pid, libc::SIGKILL)?;
+                child.wait().await
+            }.await;
+            let outcome = match outcome {
+                Ok(exit) => {
+                    tracing::info!(%exit, "image command exited; it will not be restarted");
+                    ImageStatus::Exited {
+                        code: exit.code(),
+                        signal: exit.signal(),
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(%error, "could not reap image command");
+                    ImageStatus::Failed
+                }
+            };
+            match shared.lock() {
+                Ok(mut status) => *status = outcome,
+                Err(_) => tracing::error!("image process state lock is poisoned; health will fail"),
+            }
+        });
+        *self.monitor.lock().map_err(|_| monitor_failed())? = Some(monitor);
+        Ok(())
+    }
+}
+
+/// Observe the direct child's exit without releasing the PID used by its group.
+/// At most one exited leader per boot is retained; adopted children are still reaped.
+fn observe_exit(pid: u32) -> std::io::Result<Option<ImageStatus>> {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    if unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    } != 0
+    {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            return Ok(None);
+        }
+        return Err(error);
+    }
+    #[cfg(target_os = "linux")]
+    let (pid, status) = unsafe { (info.si_pid(), info.si_status()) };
+    #[cfg(not(target_os = "linux"))]
+    let (pid, status) = (info.si_pid, info.si_status);
+    if pid == 0 {
+        return Ok(None);
+    }
+    Ok(Some(ImageStatus::Exited {
+        code: (info.si_code == libc::CLD_EXITED).then_some(status),
+        signal: (info.si_code != libc::CLD_EXITED).then_some(status),
+    }))
+}
+
+fn signal_group(pid: u32, signal: i32) -> std::io::Result<()> {
+    if unsafe { libc::kill(-(pid as i32), signal) } != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+/// AWS snapshots the listening agent before Run. Image code must wait for that hook,
+/// including packages whose declared network mode does not need transparent forwarding.
+pub fn defer_to_run_hook() -> Result<bool> {
+    const SETTING: &str = "ALIEN_SANDBOX_EGRESS_RUN_HOOK";
+    match std::env::var(SETTING) {
+        Ok(value) if value == "true" => Ok(true),
+        Ok(value) if value == "false" => Ok(false),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        _ => Err(AlienError::new(ErrorData::ConfigInvalid {
+            setting: SETTING.into(),
+            reason: "must be true or false".into(),
+        })),
+    }
+}
+
+fn monitor_failed() -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::OperationFailed {
+        operation: "image process lifecycle".into(),
+        reason: "image startup or observation failed; this boot will not retry it".into(),
+    })
 }
 
 #[cfg(test)]
 fn start_from(
-    path: &std::path::Path,
+    path: &Path,
     identity: ExecIdentity,
-) -> Result<Option<tokio::process::Child>> {
-    start_from_with_env(path, identity, &Default::default())
+) -> Result<Option<(tokio::process::Child, crate::children::Registration)>> {
+    start_from_with_env(path, identity, &Default::default(), false)
 }
 
 fn start_from_with_env(
-    path: &std::path::Path,
+    path: &Path,
     identity: ExecIdentity,
-    env: &std::collections::BTreeMap<String, String>,
-) -> Result<Option<tokio::process::Child>> {
+    env: &BTreeMap<String, String>,
+    image_user: bool,
+) -> Result<Option<(tokio::process::Child, crate::children::Registration)>> {
     let failed = || ErrorData::OperationFailed {
         operation: "start image command".to_string(),
         reason: "the bundle must preserve the image's OCI command in root-owned metadata"
@@ -45,6 +313,62 @@ fn start_from_with_env(
     let Some(program) = image.command.first() else {
         return Ok(None);
     };
+    let image_identity = if image_user {
+        let user = image
+            .user
+            .as_deref()
+            .ok_or_else(|| AlienError::new(failed()))?;
+        let passwd = fs::read_to_string("/etc/passwd")
+            .into_alien_error()
+            .context(failed())?;
+        let group = fs::read_to_string("/etc/group")
+            .into_alien_error()
+            .context(failed())?;
+        let resolved = ImageUser {
+            user,
+            passwd: &passwd,
+            group: &group,
+        }
+        .image_identity()
+        .context(failed())?;
+        ExecIdentity {
+            uid: resolved.uid,
+            gid: resolved.gid,
+        }
+    } else {
+        identity
+    };
+    #[cfg(target_os = "linux")]
+    if image_identity.uid == 0 && crate::egress::legacy_from_env()?.is_some() {
+        return Err(AlienError::new(ErrorData::ConfigInvalid {
+            setting: "ALIEN_SANDBOX_EGRESS".into(),
+            reason: "root image USER cannot run with legacy UID-scoped egress; rebuild with a gateway-backed policy".into(),
+        }));
+    }
+    // Docker supplies these defaults even when the image config omits them.
+    // Explicit image or create-time variables retain precedence.
+    let passwd = fs::read_to_string("/etc/passwd")
+        .into_alien_error()
+        .context(failed())?;
+    let home = passwd
+        .lines()
+        .find_map(|line| {
+            let fields: Vec<_> = line.split(':').collect();
+            (fields.len() >= 6 && fields[2].parse::<u32>() == Ok(image_identity.uid))
+                .then(|| fields[5])
+        })
+        .filter(|home| !home.is_empty())
+        .unwrap_or("/");
+    let mut hostname = [0u8; 256];
+    if unsafe { libc::gethostname(hostname.as_mut_ptr().cast(), hostname.len()) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .into_alien_error()
+            .context(failed());
+    }
+    let hostname = std::ffi::CStr::from_bytes_until_nul(&hostname)
+        .into_alien_error()
+        .context(failed())?
+        .to_string_lossy();
     // Allocate before fork; enter the directory only after dropping privileges.
     let directory = CString::new(image.working_directory)
         .into_alien_error()
@@ -53,11 +377,14 @@ fn start_from_with_env(
     command
         .args(&image.command[1..])
         .env_clear()
+        .env("HOME", home)
+        .env("HOSTNAME", hostname.as_ref())
         .envs(image.env)
         .envs(env)
         .env_remove("ALIEN_SANDBOX_EGRESS_TOKEN")
         .env("ALIEN_SANDBOX_EXEC_UID", identity.uid.to_string())
         .env("ALIEN_SANDBOX_EXEC_GID", identity.gid.to_string())
+        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
@@ -66,7 +393,14 @@ fn start_from_with_env(
     }
     unsafe {
         command.pre_exec(move || {
-            crate::privilege::drop_to(identity)?;
+            if image_user {
+                #[cfg(target_os = "linux")]
+                crate::privilege::drop_image_to(image_identity)?;
+                #[cfg(not(target_os = "linux"))]
+                return Err(std::io::Error::from_raw_os_error(libc::ENOTSUP));
+            } else {
+                crate::privilege::drop_to(image_identity)?;
+            }
             if libc::chdir(directory.as_ptr()) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
@@ -75,8 +409,7 @@ fn start_from_with_env(
     }
     let mut command = tokio::process::Command::from(command);
     command.kill_on_drop(true);
-    command
-        .spawn()
+    crate::children::spawn(&mut command)
         .map(Some)
         .into_alien_error()
         .context(failed())
@@ -87,10 +420,187 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
+    fn process_fixture(
+        command: Vec<String>,
+    ) -> (tempfile::TempDir, std::path::PathBuf, ExecIdentity) {
+        let temp = tempfile::tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o777)).unwrap();
+        let path = temp.path().join("command.json");
+        let image = SandboxImageCommand {
+            user: None,
+            command,
+            env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+            working_directory: temp.path().display().to_string(),
+        };
+        fs::write(&path, serde_json::to_vec(&image).unwrap()).unwrap();
+        let identity = ExecIdentity {
+            uid: unsafe {
+                if libc::geteuid() == 0 {
+                    60000
+                } else {
+                    libc::geteuid()
+                }
+            },
+            gid: unsafe {
+                if libc::getegid() == 0 {
+                    60000
+                } else {
+                    libc::getegid()
+                }
+            },
+        };
+        (temp, path, identity)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires root with Docker default capabilities and setpriv"]
+    async fn saved_image_user_controls_boot_without_changing_exec_identity() {
+        for (user, uid, gid) in [("root", 0, 0), ("", 0, 0), ("2001:2002", 2001, 2002)] {
+            let script = if uid == 0 {
+                "cat /proc/self/status > observed; setpriv --reuid 2000 --regid 2000 --clear-groups id -u > worker"
+            } else {
+                "cat /proc/self/status > observed"
+            };
+            let (temp, path, exec) =
+                process_fixture(vec!["/bin/sh".into(), "-c".into(), script.into()]);
+            let mut metadata: SandboxImageCommand =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            metadata.user = Some(user.into());
+            fs::write(&path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+            let (mut child, _registration) =
+                start_from_with_env(&path, exec, &Default::default(), true)
+                    .unwrap()
+                    .unwrap();
+            assert!(child.wait().await.unwrap().success());
+            let status = fs::read_to_string(temp.path().join("observed")).unwrap();
+            assert!(
+                status.contains(&format!("Uid:\t{uid}\t{uid}\t{uid}\t{uid}")),
+                "{status}"
+            );
+            assert!(
+                status.contains(&format!("Gid:\t{gid}\t{gid}\t{gid}\t{gid}")),
+                "{status}"
+            );
+            let caps = if uid == 0 {
+                crate::privilege::IMAGE_ROOT_CAPABILITIES
+            } else {
+                0
+            };
+            for set in ["CapEff", "CapPrm", "CapBnd"] {
+                assert!(status.contains(&format!("{set}:\t{caps:016x}")), "{status}");
+            }
+            if uid == 0 {
+                assert_eq!(
+                    fs::read_to_string(temp.path().join("worker")).unwrap(),
+                    "2000\n"
+                );
+            }
+            assert_ne!(exec.uid, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn new_startup_refuses_metadata_without_an_image_user() {
+        let (_temp, path, identity) = process_fixture(vec!["/bin/true".into()]);
+        assert!(start_from_with_env(&path, identity, &Default::default(), true).is_err());
+        let (mut legacy, _registration) = start_from(&path, identity).unwrap().unwrap();
+        assert!(legacy.wait().await.unwrap().success());
+    }
+
+    #[tokio::test]
+    async fn image_starts_once_without_waiting_for_readiness_and_retains_its_exit() {
+        for deferred in [false, true] {
+            let (temp, path, identity) = process_fixture(vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf started >> starts; while ! test -e release; do sleep 0.02; done; exit 7"
+                    .into(),
+            ]);
+            let process = if deferred {
+                ImageProcess {
+                    status: Arc::new(Mutex::new(ImageStatus::AwaitingActivation)),
+                    ..Default::default()
+                }
+            } else {
+                ImageProcess::default()
+            };
+            if deferred {
+                let refused = process
+                    .start_once_from(&path, identity, &Default::default())
+                    .unwrap_err();
+                assert_eq!(refused.code, "EGRESS_PATH_UNEXPECTED");
+                assert!(!temp.path().join("starts").exists());
+                assert!(process.waiting_for_activation().unwrap());
+                process.activate().unwrap();
+            }
+            process
+                .start_once_from(&path, identity, &Default::default())
+                .unwrap();
+            // The app is still waiting for its own readiness condition. Spawn must return.
+            assert_eq!(process.status().unwrap(), ImageStatus::Running);
+            process
+                .start_once_from(&path, identity, &Default::default())
+                .unwrap();
+            fs::write(temp.path().join("release"), b"ready").unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if matches!(process.status().unwrap(), ImageStatus::Exited { .. }) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("image exit must be observed");
+            assert_eq!(
+                process.status().unwrap(),
+                ImageStatus::Exited {
+                    code: Some(7),
+                    signal: None
+                }
+            );
+            process.activate().unwrap();
+            process
+                .start_once_from(&path, identity, &Default::default())
+                .unwrap();
+            assert_eq!(
+                fs::read_to_string(temp.path().join("starts")).unwrap(),
+                "started"
+            );
+            assert_eq!(
+                process.status().unwrap(),
+                ImageStatus::Exited {
+                    code: Some(7),
+                    signal: None
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_boot_spawn_is_not_retried_by_a_later_session_operation() {
+        let (temp, path, identity) = process_fixture(vec!["/nonexistent-image-entrypoint".into()]);
+        let process = ImageProcess::default();
+        assert!(process
+            .start_once_from(&path, identity, &Default::default())
+            .is_err());
+        assert_eq!(process.status().unwrap(), ImageStatus::Failed);
+        let mut image: SandboxImageCommand =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        image.command = vec!["/bin/sh".into(), "-c".into(), "touch restarted".into()];
+        fs::write(&path, serde_json::to_vec(&image).unwrap()).unwrap();
+        assert!(process
+            .start_once_from(&path, identity, &Default::default())
+            .is_err());
+        assert!(!temp.path().join("restarted").exists());
+        assert_eq!(process.status().unwrap(), ImageStatus::Failed);
+    }
+
     #[tokio::test]
     async fn image_command_refuses_a_directory_the_command_cannot_enter() {
         let temp = tempfile::tempdir().expect("private directory");
         let image = SandboxImageCommand {
+            user: None,
             command: vec!["/bin/true".to_string()],
             env: Default::default(),
             working_directory: temp.path().display().to_string(),
@@ -148,8 +658,9 @@ mod tests {
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o777))
             .expect("command can write its test output");
         let image = SandboxImageCommand {
+            user: None,
             command: vec!["/bin/sh".to_string(), "-c".to_string(), "id -u > identity; printf '%s' \"$IMAGE_VAR\" >> identity; test -z \"$ALIEN_SANDBOX_PUBLIC_KEY\"".to_string()],
-            env: std::collections::BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string()), ("IMAGE_VAR".to_string(), "image-only".to_string())]),
+            env: BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string()), ("IMAGE_VAR".to_string(), "image-only".to_string())]),
             working_directory: temp.path().display().to_string(),
         };
         let path = temp.path().join("command.json");
@@ -158,13 +669,248 @@ mod tests {
             serde_json::to_vec(&image).expect("serialize command"),
         )
         .expect("save command");
-        let mut child = start_from(&path, ExecIdentity { uid, gid })
+        let (mut child, _registration) = start_from(&path, ExecIdentity { uid, gid })
             .expect("start image command")
             .expect("image has a command");
         assert!(child.wait().await.expect("reap image command").success());
         assert_eq!(
             fs::read_to_string(output).expect("image output"),
             format!("{uid}\nimage-only")
+        );
+    }
+    #[test]
+    #[ignore = "requires root with Docker default capabilities"]
+    fn legacy_egress_refuses_root_image_before_spawn() {
+        const CHILD: &str = "ALIEN_TEST_LEGACY_BOOT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            for mode in [
+                r#"{"mode":"deny"}"#,
+                r#"{"mode":"allow"}"#,
+                r#"{"mode":"allowDomains","domains":["example.com"]}"#,
+            ] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "image_command::tests::legacy_egress_refuses_root_image_before_spawn",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, "1")
+                    .env("ALIEN_SANDBOX_EGRESS", mode)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{mode}: {} {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        }
+        assert_eq!(unsafe { libc::geteuid() }, 0);
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            for user in ["root", "0", "", "0:2001"] {
+                let (temp, path, exec) =
+                    process_fixture(vec!["/bin/sh".into(), "-c".into(), "touch started".into()]);
+                let mut metadata: SandboxImageCommand =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                metadata.user = Some(user.into());
+                fs::write(&path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+                let result = start_from_with_env(&path, exec, &Default::default(), true);
+                // Reap even the broken version so the regression never leaves a root process.
+                let error = match result {
+                    Ok(Some((mut child, _registration))) => {
+                        child.wait().await.unwrap();
+                        panic!("legacy UID-scoped egress started root USER {user:?}");
+                    }
+                    Ok(None) => panic!("fixture must contain a command"),
+                    Err(error) => error,
+                };
+                assert_eq!(error.code, "AGENT_CONFIG_INVALID");
+                assert!(
+                    error.to_string().contains("legacy UID-scoped egress"),
+                    "{error}"
+                );
+                assert!(!temp.path().join("started").exists());
+                // Released packages continue to run their command as the exec identity.
+                let (mut legacy, _registration) =
+                    start_from_with_env(&path, exec, &Default::default(), false)
+                        .unwrap()
+                        .unwrap();
+                assert!(legacy.wait().await.unwrap().success());
+            }
+        });
+    }
+    #[tokio::test]
+    async fn boot_environment_has_account_home_and_hostname_with_explicit_overrides() {
+        for explicit in [false, true] {
+            let (temp, path, identity) = process_fixture(vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf '%s\\n%s' \"$HOME\" \"$HOSTNAME\" > environment".into(),
+            ]);
+            let mut metadata: SandboxImageCommand =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            if explicit {
+                metadata.env.insert("HOME".into(), "/image-home".into());
+                metadata.env.insert("HOSTNAME".into(), "image-host".into());
+            }
+            fs::write(&path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+            let (mut child, _registration) = start_from(&path, identity).unwrap().unwrap();
+            assert!(child.wait().await.unwrap().success());
+            let observed = fs::read_to_string(temp.path().join("environment")).unwrap();
+            let expected_home = fs::read_to_string("/etc/passwd")
+                .unwrap()
+                .lines()
+                .find_map(|line| {
+                    let fields: Vec<_> = line.split(':').collect();
+                    (fields.len() >= 6 && fields[2].parse::<u32>() == Ok(identity.uid))
+                        .then(|| fields[5].to_owned())
+                })
+                .unwrap_or_else(|| "/".into());
+            let host = std::process::Command::new("hostname").output().unwrap();
+            let expected = if explicit {
+                "/image-home\nimage-host".into()
+            } else {
+                format!(
+                    "{expected_home}\n{}",
+                    String::from_utf8(host.stdout).unwrap().trim()
+                )
+            };
+            assert_eq!(observed, expected);
+        }
+    }
+    #[tokio::test]
+    async fn shutdown_forwards_term_to_the_boot_group_and_kills_after_grace() {
+        for cooperative in [true, false] {
+            let script = r#"
+import os, signal, time
+from pathlib import Path
+cooperative = COOPERATIVE
+child = os.fork()
+role = 'child' if child == 0 else 'parent'
+def term(sig, frame):
+    Path(role + '-term').write_text('received')
+    if cooperative:
+        os._exit(0)
+signal.signal(signal.SIGTERM, term)
+Path(role + '-ready').write_text(str(os.getpid()))
+while True:
+    time.sleep(.01)
+"#
+            .replace("COOPERATIVE", if cooperative { "True" } else { "False" });
+            let (temp, path, identity) =
+                process_fixture(vec!["/usr/bin/python3".into(), "-c".into(), script]);
+            let process = ImageProcess::default();
+            process
+                .start_once_from(&path, identity, &Default::default())
+                .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while !temp.path().join("child-ready").exists()
+                    || !temp.path().join("parent-ready").exists()
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let started = std::time::Instant::now();
+            tokio::time::timeout(std::time::Duration::from_secs(4), process.shutdown())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(started.elapsed() >= std::time::Duration::from_secs(2));
+            for role in ["parent", "child"] {
+                assert_eq!(
+                    fs::read_to_string(temp.path().join(format!("{role}-term"))).unwrap(),
+                    "received"
+                );
+                let pid = fs::read_to_string(temp.path().join(format!("{role}-ready"))).unwrap();
+                // SIGKILL delivery to a group is asynchronous for each member.
+                tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                    while let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
+                        if stat.split_once(") ").unwrap().1.starts_with('Z') {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("every group member must stop after KILL");
+            }
+            assert_eq!(
+                process.status().unwrap(),
+                ImageStatus::Exited {
+                    code: cooperative.then_some(0),
+                    signal: (!cooperative).then_some(libc::SIGKILL),
+                }
+            );
+            assert!(process
+                .start_once_from(&path, identity, &Default::default())
+                .is_err());
+        }
+    }
+    #[tokio::test]
+    async fn exited_boot_leader_keeps_worker_shutdown_available() {
+        let script = r#"
+import os,signal,time
+from pathlib import Path
+Path('leader').write_text(str(os.getpid()))
+if os.fork() == 0:
+ def term(sig,frame):
+  Path('worker-term').write_text('received')
+  os._exit(0)
+ signal.signal(signal.SIGTERM,term)
+ Path('worker-ready').write_text('ready')
+ while True: time.sleep(.01)
+while not Path('worker-ready').exists(): time.sleep(.01)
+os._exit(23)
+"#;
+        let (temp, path, identity) =
+            process_fixture(vec!["/usr/bin/python3".into(), "-c".into(), script.into()]);
+        let process = ImageProcess::default();
+        process
+            .start_once_from(&path, identity, &Default::default())
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while process.status().unwrap()
+                != (ImageStatus::Exited {
+                    code: Some(23),
+                    signal: None,
+                })
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let leader: u32 = fs::read_to_string(temp.path().join("leader"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let reserved = std::path::Path::new(&format!("/proc/{leader}")).exists();
+        let shutdown = process.shutdown().await;
+        let received = temp.path().join("worker-term").exists();
+        // Clean up even on the broken implementation so the regression never leaks
+        // its worker when it demonstrates the failure.
+        signal_group(leader, libc::SIGKILL).unwrap();
+        shutdown.unwrap();
+        assert!(
+            received,
+            "an orphaned boot worker must receive TERM after its leader exits"
+        );
+        assert!(
+            reserved,
+            "retain the exited leader until group cleanup to prevent ID reuse"
+        );
+        assert!(!std::path::Path::new(&format!("/proc/{leader}")).exists());
+        assert_eq!(
+            process.status().unwrap(),
+            ImageStatus::Exited {
+                code: Some(23),
+                signal: None
+            }
         );
     }
 }

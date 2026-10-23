@@ -30,3 +30,8 @@ fn after_runner_and_log_verification() {
 fn cni_probe_listener() {
     unittest("tests", &["test_cni_probe"]);
 }
+
+#[test]
+fn metadata_credential_response_controls() {
+    unittest("entrypoint", &["test_metadata", "test_gateway"]);
+}

@@ -530,8 +530,8 @@ export interface JobPoll {
  * error: an unsupported operation raises rather than silently doing nothing.
  */
 export interface Sandbox {
-  /** Which operations this platform supports. */
-  capabilities(): Promise<string[]>
+  /** Operations supported by new sessions, or by the specified existing session. */
+  capabilities(sandboxId?: string): Promise<string[]>
   /**
    * Creates a sandbox that can already take work.
    *

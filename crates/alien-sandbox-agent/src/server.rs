@@ -73,10 +73,17 @@ pub enum AgentAuthorization {
     /// One MicroVM is one session, so the scope the capability would add is already enforced,
     /// and terminate is `TerminateMicrovm`, which destroys the VM rather than fencing it.
     Transport,
+
+    /// The cloud authenticates a native file read of a per-boot token. Requests use that
+    /// credential on a published HTTP port without executing a privileged native process.
+    #[cfg(unix)]
+    NativeFile(crate::native_token::NativeToken),
 }
 
 /// Everything the agent knows about itself, fixed at session start.
 pub struct AgentState {
+    /// Once-per-boot image process and its observed exit.
+    pub image_process: crate::image_command::ImageProcess,
     /// Directory every path is resolved against. Canonical.
     pub session_root: PathBuf,
     /// What a request must present to reach this session
@@ -94,10 +101,52 @@ pub struct AgentState {
     pub agent_binary: PathBuf,
 }
 
+impl AgentAuthorization {
+    /// Native-file clients verify cloud policy before authorizing guest startup.
+    pub fn requires_activation(&self) -> bool {
+        #[cfg(unix)]
+        if matches!(self, Self::NativeFile(_)) {
+            return true;
+        }
+        false
+    }
+}
+
+impl AgentState {
+    /// Azure's create-time environment includes user variables and gateway proxy settings.
+    /// Preserve those defaults without letting agent configuration become a child contract.
+    fn native_environment(&self, env: &mut std::collections::BTreeMap<String, String>) {
+        #[cfg(unix)]
+        if matches!(self.authorization, AgentAuthorization::NativeFile(_)) {
+            for (name, value) in std::env::vars() {
+                if !name.starts_with("ALIEN_SANDBOX_") {
+                    env.entry(name).or_insert(value);
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = env;
+    }
+
+    /// Called only after network checks, before accepting any session operation.
+    pub fn start_image_once(&self) -> crate::error::Result<()> {
+        let mut env = std::collections::BTreeMap::new();
+        self.native_environment(&mut env);
+        #[cfg(target_os = "linux")]
+        if let Some(egress) = &self.gateway_egress {
+            egress.ensure_ready()?;
+            egress.command_environment(&mut env)?;
+        }
+        self.image_process.start_once(self.exec_identity, &env)
+    }
+}
+
 /// Liveness, the version the agent speaks, and the container it runs in.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
+    /// Image startup/exit, reported independently of session readiness.
+    pub image_command: crate::image_command::ImageStatus,
     /// The protocol version this agent implements
     pub protocol_version: u32,
     /// The kernel boot id of the container this agent runs in. Stable across calls and processes
@@ -244,6 +293,7 @@ pub fn router(state: Arc<AgentState>) -> Router {
 
     let router = Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/activate", post(activate_boot))
         .route(&hook_path("ready"), get(hook_ready).post(hook_ready))
         .route(
             &hook_path("validate"),
@@ -317,17 +367,41 @@ async fn health(
         }))
     })?;
 
-    let status = "ready";
+    let status = if state.image_process.waiting_for_activation()? {
+        "awaiting-network-verification"
+    } else {
+        "ready"
+    };
     #[cfg(target_os = "linux")]
     let status = match &state.gateway_egress {
         Some(egress) => egress.status()?,
         None => status,
     };
     Ok(Json(HealthResponse {
+        image_command: state.image_process.status()?,
         status: status.into(),
         protocol_version: PROTOCOL_VERSION,
         boot_id,
     }))
+}
+
+/// The binding calls this only after verifying the native provider policy. Repeated calls never
+/// restart image code, including when the first response was lost or the image has exited.
+async fn activate_boot(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<StatusCode, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    if !state.authorization.requires_activation() {
+        return Err(AlienError::new(ErrorData::RequestInvalid {
+            reason: "this backend does not use native-file boot activation".into(),
+        })
+        .into());
+    }
+    state.image_process.activate()?;
+    state.start_image_once()?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The kernel boot id of the container this agent runs in.
@@ -373,7 +447,7 @@ async fn hook_validate(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> std::result::Result<StatusCode, ApiError> {
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     validate::run(&state).await.map_err(|error| {
         tracing::error!(%error, "image validation failed");
         ApiError::from(error)
@@ -396,9 +470,12 @@ async fn resume_egress_hook(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> std::result::Result<StatusCode, ApiError> {
+    if state.image_process.uses_image_user() {
+        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    }
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
-        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
         egress.resume().await?;
     }
     #[cfg(not(target_os = "linux"))]
@@ -414,6 +491,7 @@ async fn run_command(
 ) -> std::result::Result<Response, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
+    state.native_environment(&mut request.env);
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
         egress.command_environment(&mut request.env)?;
@@ -512,6 +590,7 @@ async fn job_start(
 ) -> std::result::Result<Json<JobStartResponse>, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
+    state.native_environment(&mut request.env);
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
         egress.command_environment(&mut request.env)?;
@@ -710,54 +789,71 @@ async fn authorize(
     headers: &HeaderMap,
     required: SandboxOperationClass,
 ) -> std::result::Result<(), ApiError> {
-    authorize_control(state, peer, headers, required)?;
+    authorize_control(state, peer, headers, required).await?;
     #[cfg(target_os = "linux")]
     if let Some(egress) = &state.gateway_egress {
         egress.wait_ready().await?;
     }
+    state.start_image_once()?;
     Ok(())
 }
 
-fn authorize_control(
+async fn authorize_control(
     state: &AgentState,
     peer: SocketAddr,
     headers: &HeaderMap,
     required: SandboxOperationClass,
 ) -> std::result::Result<(), ApiError> {
-    let AgentAuthorization::Capability {
-        public_key,
-        identity,
-    } = &state.authorization
-    else {
-        // Transport mode trusts what arrives through the transport. The command this agent
-        // spawned shares the guest's network stack and reaches the same port without it, so a
-        // caller has to be from off the machine, or in the guest under some other user.
-        if !crate::peer::transport_may_serve(peer, state.exec_identity.uid) {
+    if matches!(&state.authorization, AgentAuthorization::Transport) {
+        let permitted = if state.image_process.uses_image_user() {
+            crate::peer::image_transport_may_serve(peer).await
+        } else {
+            crate::peer::transport_may_serve(peer, state.exec_identity.uid)
+        };
+        if !permitted {
             return Err(ApiError {
                 status: StatusCode::FORBIDDEN,
                 message: "the agent does not serve the code it is running".to_string(),
             });
         }
         return Ok(());
+    }
+    let refused = || ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        message: "a valid agent credential is required".to_string(),
     };
-
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or_else(|| ApiError {
-            status: StatusCode::UNAUTHORIZED,
-            message: "a capability is required".to_string(),
-        })?;
-
-    sandbox_capability_token::verify(
-        token,
-        public_key,
-        identity,
-        required,
-        chrono::Utc::now().timestamp(),
-    )
-    .map_err(ApiError::from)?;
+        .ok_or_else(refused)?;
+    match &state.authorization {
+        AgentAuthorization::Capability {
+            public_key,
+            identity,
+        } => {
+            sandbox_capability_token::verify(
+                token,
+                public_key,
+                identity,
+                required,
+                chrono::Utc::now().timestamp(),
+            )
+            .map_err(ApiError::from)?;
+        }
+        #[cfg(unix)]
+        AgentAuthorization::NativeFile(expected) => {
+            if !expected.accepts(token) {
+                return Err(refused());
+            }
+        }
+        AgentAuthorization::Transport => {
+            return Err(AlienError::new(ErrorData::RequestInvalid {
+                reason: "transport authorization reached credential verification".into(),
+            })
+            .into());
+        }
+    }
 
     Ok(())
 }
@@ -815,7 +911,7 @@ async fn update_egress(
     headers: HeaderMap,
     Json(update): Json<EgressUpdate>,
 ) -> std::result::Result<StatusCode, ApiError> {
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     let egress = state
         .gateway_egress
         .as_ref()
@@ -826,7 +922,7 @@ async fn update_egress(
     let full_delivery = update.token.is_some();
     egress.update(update.token, update.policy).await?;
     if full_delivery {
-        egress.start_image_once(state.exec_identity)?;
+        state.start_image_once()?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -838,13 +934,21 @@ async fn run_egress_hook(
     headers: HeaderMap,
     body: bytes::Bytes,
 ) -> std::result::Result<StatusCode, ApiError> {
+    if state.image_process.uses_image_user() {
+        authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    }
     let Some(egress) = &state.gateway_egress else {
+        if state.image_process.waiting_for_activation()? {
+            authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+            state.image_process.activate()?;
+        }
+        state.start_image_once()?;
         return Ok(StatusCode::OK);
     };
-    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute)?;
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
     if !egress.requires_token() {
         egress.activate_declared_none().await?;
-        egress.start_image_once(state.exec_identity)?;
+        state.start_image_once()?;
         return Ok(StatusCode::OK);
     }
     #[derive(Deserialize)]

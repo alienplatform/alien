@@ -1,11 +1,13 @@
 //! Azure sandbox provider.
 //!
-//! The one backend with no Alien agent inside the sandbox: the ADC data plane implements exec,
-//! files and lifecycle natively, so this provider is a translation layer rather than a transport
-//! for a protocol. Verified against a stock `ubuntu` catalog disk containing no Alien code.
+//! New packages use the bounded root agent over HTTPS, authorized through native file access.
+//! Released catalog and raw disk images retain the native exec/files transport.
 
 #[path = "azure_egress.rs"]
 mod gateway;
+
+#[path = "azure_agent.rs"]
+mod agent;
 
 use std::collections::BTreeMap;
 
@@ -32,6 +34,8 @@ use tracing::warn;
 /// A Sandbox backed by the Azure ADC data plane.
 #[derive(Debug)]
 pub struct AzureSandbox {
+    agent: bool,
+    agent_connections: agent::Connections,
     client: std::sync::Arc<dyn SandboxDataPlaneApi>,
     sandbox_group: String,
     /// Catalog name or registry image every sandbox is created from, from the declaration.
@@ -66,6 +70,8 @@ impl AzureSandbox {
         disk: Option<String>,
     ) -> Self {
         Self {
+            agent: false,
+            agent_connections: Default::default(),
             client,
             sandbox_group,
             disk_image,
@@ -317,15 +323,46 @@ impl Sandbox for AzureSandbox {
     /// sandbox declared — narrowing it (as AWS does for `preview`) would read `false` on an
     /// `allow` sandbox as "can't do this at all".
     fn capabilities(&self) -> SandboxCapabilities {
-        SandboxCapabilities::azure()
+        let mut capabilities = SandboxCapabilities::azure();
+        capabilities.jobs = self.agent;
+        capabilities.supervisor_isolation = self.agent;
+        capabilities
+    }
+
+    async fn session_capabilities(&self, sandbox_id: &str) -> Result<SandboxCapabilities> {
+        let agent = self
+            .session_uses_agent("sandbox.capabilities", sandbox_id)
+            .await?;
+        let mut capabilities = SandboxCapabilities::azure();
+        capabilities.jobs = agent;
+        capabilities.supervisor_isolation = agent;
+        Ok(capabilities)
     }
 
     async fn create(&self, mut request: CreateSandboxRequest) -> Result<SandboxInstance> {
         let policy = self.requested_policy(request.egress.as_ref())?;
         checked_sandbox_env(CREATE, &request.env)?;
+        if self.agent
+            && request
+                .env
+                .keys()
+                .any(|key| key.starts_with("ALIEN_SANDBOX_"))
+        {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: CREATE.into(),
+                details: "ALIEN_SANDBOX_ variables are reserved for the packaged agent".into(),
+                field_name: Some("env".into()),
+            }));
+        }
         refuse_unsupported_create_fields(&request, CREATE)?;
 
         let mut labels = BTreeMap::new();
+        if self.agent {
+            labels.insert(
+                agent::TRANSPORT_LABEL.into(),
+                agent::TRANSPORT_VERSION.into(),
+            );
+        }
         if let Some(expires) = self.creation_deadline() {
             labels.insert(SANDBOX_EXPIRY_LABEL.to_string(), expires.to_string());
         }
@@ -393,6 +430,24 @@ impl Sandbox for AzureSandbox {
                 (&self.egress_manager, &identity, &policy)
             {
                 manager.update(identity, policy).await?;
+            }
+            if self.agent {
+                if !self.session_uses_agent(CREATE, &sandbox.id).await? {
+                    return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                        failure: "agentTransportMissing".into(),
+                        reason: "Azure did not preserve the packaged session's transport marker"
+                            .into(),
+                    }));
+                }
+                self.client
+                    .publish_agent_port(
+                        &self.sandbox_group,
+                        &sandbox.id,
+                        alien_core::sandbox_image::AGENT_PORT,
+                    )
+                    .await
+                    .map_err(|error| Self::failed(CREATE, error))?;
+                self.wait_for_agent(&sandbox.id).await?;
             }
             Ok(instance)
         }
@@ -491,7 +546,10 @@ impl Sandbox for AzureSandbox {
         // sandbox id outlives a declaration change, and nothing else stands between an id a
         // caller kept and the egress it was built with. One extra read against a data plane the
         // command itself is about to cross.
-        self.judged_sandbox(RUN_COMMAND, sandbox_id).await?;
+        let record = self.judged_sandbox(RUN_COMMAND, sandbox_id).await?;
+        if agent::uses_agent(&record)? {
+            return super::agent_protocol::run_command(self, sandbox_id, request).await;
+        }
 
         // The timeout bounds the untrusted code, not the caller's patience. Read out of the
         // preview SDK rather than assumed: `executeShellCommand` sends `command` and an optional
@@ -596,6 +654,12 @@ impl Sandbox for AzureSandbox {
     async fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
         Self::checked_sandbox_id("sandbox.readFile", sandbox_id)?;
         let path = &checked_path("sandbox.readFile", path)?;
+        if self
+            .session_uses_agent("sandbox.readFile", sandbox_id)
+            .await?
+        {
+            return super::agent_protocol::read_file(self, sandbox_id, path).await;
+        }
 
         self.client
             .read_file(&self.sandbox_group, sandbox_id, path)
@@ -616,8 +680,17 @@ impl Sandbox for AzureSandbox {
         // The one file operation that moves the caller's own content in. A write-then-run against
         // an id kept across a tightened declaration would land the payload in a sandbox with the
         // egress the declaration just removed, and the refusal would arrive a beat later.
-        self.judged_sandbox("sandbox.writeFiles", sandbox_id)
+        let record = self
+            .judged_sandbox("sandbox.writeFiles", sandbox_id)
             .await?;
+        if agent::uses_agent(&record)? {
+            return super::agent_protocol::write_files(
+                self,
+                sandbox_id,
+                files.into_iter().collect(),
+            )
+            .await;
+        }
 
         // One request per path, stopping at the first failure: the same partial application every
         // other backend performs, so a caller sees one contract rather than five.
@@ -689,10 +762,20 @@ impl Sandbox for AzureSandbox {
 
         let refusal = match woken {
             Err(error) => error,
-            Ok(running) => match self.policy_must_hold(&running) {
-                Ok(()) => return Ok(()),
-                Err(error) => error,
-            },
+            Ok(running) => {
+                let ready = async {
+                    self.policy_must_hold(&running)?;
+                    if agent::uses_agent(&running)? {
+                        self.wait_for_agent(sandbox_id).await?;
+                    }
+                    Ok(())
+                }
+                .await;
+                match ready {
+                    Ok(()) => return Ok(()),
+                    Err(error) => error,
+                }
+            }
         };
         Err(self.put_back(sandbox_id, resumed_here, refusal).await)
     }
@@ -705,6 +788,10 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn start_job(&self, _sandbox_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
+        let record = self.judged_sandbox("sandbox.jobStart", _sandbox_id).await?;
+        if agent::uses_agent(&record)? {
+            return super::agent_protocol::start_job(self, _sandbox_id, _request).await;
+        }
         Err(self.unsupported("sandbox.jobStart", NO_JOB_HOST))
     }
 
@@ -714,10 +801,22 @@ impl Sandbox for AzureSandbox {
         _job_id: &str,
         _since_seq: Option<u64>,
     ) -> Result<JobPoll> {
+        if self
+            .session_uses_agent("sandbox.jobPoll", _sandbox_id)
+            .await?
+        {
+            return super::agent_protocol::poll_job(self, _sandbox_id, _job_id, _since_seq).await;
+        }
         Err(self.unsupported("sandbox.jobPoll", NO_JOB_HOST))
     }
 
     async fn cancel_job(&self, _sandbox_id: &str, _job_id: &str) -> Result<()> {
+        if self
+            .session_uses_agent("sandbox.jobCancel", _sandbox_id)
+            .await?
+        {
+            return super::agent_protocol::cancel_job(self, _sandbox_id, _job_id).await;
+        }
         Err(self.unsupported("sandbox.jobCancel", NO_JOB_HOST))
     }
 
@@ -768,6 +867,7 @@ impl Sandbox for AzureSandbox {
                 .await
             {
                 if is_not_found(&error) {
+                    self.agent_connections.lock().await.remove(sandbox_id);
                     return revocation;
                 }
                 warn!(sandbox = %sandbox_id, %error, "could not confirm a sandbox is gone");
@@ -829,7 +929,15 @@ impl AzureSandbox {
             Ok(running) => running,
             Err(error) => return Err(self.put_back(sandbox_id, resumed_here, error).await),
         };
-        if let Err(error) = self.policy_must_hold(&running) {
+        let ready = async {
+            self.policy_must_hold(&running)?;
+            if agent::uses_agent(&running)? {
+                self.wait_for_agent(sandbox_id).await?;
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = ready {
             return Err(self.put_back(sandbox_id, resumed_here, error).await);
         }
 
@@ -850,7 +958,11 @@ impl AzureSandbox {
     /// Requires the sandbox to be running, because that is the only state carrying a policy
     /// worth judging — and waking one to write into it would undo the idle suspend the
     /// declaration asked for.
-    async fn judged_sandbox(&self, operation: &str, sandbox_id: &str) -> Result<()> {
+    async fn judged_sandbox(
+        &self,
+        operation: &str,
+        sandbox_id: &str,
+    ) -> Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox> {
         let refuse = |failure: &str, why: &str| {
             Err(AlienError::new(ErrorData::SandboxCommandFailed {
                 failure: failure.to_string(),
@@ -882,7 +994,8 @@ impl AzureSandbox {
             }
         }
 
-        self.policy_must_hold(&sandbox)
+        self.policy_must_hold(&sandbox)?;
+        Ok(sandbox)
     }
 
     /// Reads a sandbox, or `None` when it is gone, without judging its policy.
@@ -2132,6 +2245,23 @@ mod tests {
 
     #[async_trait]
     impl SandboxDataPlaneApi for ScriptedExec {
+        async fn publish_agent_port(
+            &self,
+            _: &str,
+            _: &str,
+            _: u16,
+        ) -> alien_client_core::Result<String> {
+            panic!("legacy native exec must not publish an agent port")
+        }
+        async fn agent_port_url(
+            &self,
+            _: &str,
+            _: &str,
+            _: u16,
+        ) -> alien_client_core::Result<String> {
+            panic!("legacy native exec must not read an agent port")
+        }
+
         async fn stop_sandbox(
             &self,
             _group: &str,
@@ -2341,7 +2471,7 @@ mod tests {
             "partial\n",
             TIMEOUT_PLACEHOLDER,
         )]);
-        let sandbox = provider(client.clone());
+        let sandbox = provider(client.clone()).with_agent(true);
 
         let frames: Vec<Result<CommandOutput>> = sandbox
             .run_command("s1", command(30))
@@ -2747,6 +2877,7 @@ mod tests {
         // An absolute path is one of them — it means "under the sandbox's own root" on every
         // other backend, and arrives at the data plane with the leading slash trimmed.
         let mut client = MockSandboxDataPlaneApi::new();
+        settles_running(&mut client, None);
         client
             .expect_read_file()
             .withf(|_, _, path| !path.starts_with('/'))
@@ -2761,11 +2892,30 @@ mod tests {
         }
     }
 
-    /// The group, the sandbox and the path each reach the call they belong to, and the bytes come
-    /// back unchanged.
+    #[tokio::test]
+    async fn an_unknown_session_transport_never_falls_back_to_native_exec() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_execute_shell_command().never();
+        client.expect_get_sandbox().times(1).returning(|_, id| {
+            let mut record = running(id, None);
+            record
+                .labels
+                .insert(agent::TRANSPORT_LABEL.into(), "unknown-version".into());
+            Ok(record)
+        });
+        let error = match sandbox_with(client).run_command("s1", command(5)).await {
+            Ok(_) => panic!("unknown transport must be refused"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED");
+        assert!(!error.retryable);
+    }
+
+    /// The group, the sandbox and the path reach their call, and the bytes come back unchanged.
     #[tokio::test]
     async fn a_read_carries_the_sandbox_and_path_to_the_data_plane() {
         let mut client = MockSandboxDataPlaneApi::new();
+        settles_running(&mut client, None);
         client
             .expect_read_file()
             .withf(|group, sandbox_id, path| {
@@ -2775,6 +2925,7 @@ mod tests {
             .returning(|_, _, _| Ok(b"print(1)\n".to_vec()));
 
         let contents = sandbox_with(client)
+            .with_agent(true)
             .read_file("s1", "src/app.py")
             .await
             .expect("the read should succeed");
@@ -2846,6 +2997,7 @@ mod tests {
     #[tokio::test]
     async fn only_the_operations_that_are_safe_to_repeat_are_marked_retryable() {
         let mut client = MockSandboxDataPlaneApi::new();
+        settles_running(&mut client, None);
         client.expect_read_file().times(1).returning(|_, _, _| {
             Err(AlienError::new(ClientErrorData::RemoteResourceNotFound {
                 resource_type: "file".to_string(),
@@ -2863,6 +3015,7 @@ mod tests {
         );
 
         let mut client = MockSandboxDataPlaneApi::new();
+        settles_running(&mut client, None);
         client.expect_read_file().times(1).returning(|_, _, _| {
             Err(AlienError::new(ClientErrorData::RemoteServiceUnavailable {
                 message: "the data plane is unavailable".to_string(),
