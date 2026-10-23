@@ -32,6 +32,14 @@ impl std::fmt::Debug for Connection {
 }
 
 impl Connection {
+    fn matches_request(&self, request: &reqwest::Request) -> bool {
+        request
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .is_some_and(|value| value.as_bytes() == format!("Bearer {}", self.token).as_bytes())
+            && request.url().origin() == self.url.origin()
+    }
+
     fn request(&self, method: reqwest::Method, path: &str) -> Result<reqwest::RequestBuilder> {
         let url = self.url.join(path).map_err(|_| invalid_route())?;
         Ok(self.client.request(method, url).bearer_auth(&self.token))
@@ -54,6 +62,18 @@ pub(super) fn uses_agent(
 }
 
 impl AzureSandbox {
+    async fn invalidate_connection(&self, sandbox_id: &str, request: &reqwest::Request) {
+        let slot = self.connection_slot(sandbox_id).await;
+        let mut cached = slot.lock().await;
+        // A concurrent request may already have refreshed the route.
+        if cached
+            .as_ref()
+            .is_some_and(|current| current.matches_request(request))
+        {
+            *cached = None;
+        }
+    }
+
     /// Select the agent transport only for images packaged with the new boot contract.
     pub fn with_agent(mut self, enabled: bool) -> Self {
         self.agent = enabled;
@@ -260,31 +280,36 @@ impl AgentTransport for AzureSandbox {
             {
                 Some(response)
             }
-            Ok(Ok(response)) => return agent_protocol::check_response(response, operation).await,
+            Ok(Ok(response)) => {
+                let result = agent_protocol::check_response(response, operation).await;
+                if result.is_err() {
+                    self.invalidate_connection(sandbox_id, &replay).await;
+                }
+                return result;
+            }
             Ok(Err(error)) if error.is_connect() => None,
             Ok(Err(error)) => {
+                self.invalidate_connection(sandbox_id, &replay).await;
                 return Err(error)
                     .into_alien_error()
                     .context(agent_protocol::unanswered(
                         operation,
                         "the agent connection failed after connecting",
-                    ))
+                    ));
             }
             Err(_) => {
+                self.invalidate_connection(sandbox_id, &replay).await;
                 return Err(AlienError::new(agent_protocol::unanswered(
                     operation,
                     "the agent did not answer before the response deadline",
-                )))
+                )));
             }
         };
         let slot = self.connection_slot(sandbox_id).await;
         let mut cached = slot.lock().await;
-        let old_authorization = replay.headers().get(reqwest::header::AUTHORIZATION);
-        let stale = cached.as_ref().is_none_or(|current| {
-            old_authorization.is_some_and(|value| {
-                value.as_bytes() == format!("Bearer {}", current.token).as_bytes()
-            }) && replay.url().origin() == current.url.origin()
-        });
+        let stale = cached
+            .as_ref()
+            .is_none_or(|current| current.matches_request(&replay));
         if stale {
             let previous = cached.take();
             let fresh = self.fetch_connection(sandbox_id).await?;
@@ -314,14 +339,12 @@ impl AgentTransport for AzureSandbox {
         replay.headers_mut().remove(reqwest::header::AUTHORIZATION);
         let renewed = reqwest::RequestBuilder::from_parts(connection.client.clone(), replay)
             .bearer_auth(&connection.token);
-        let response = agent_protocol::send_raw(renewed, operation).await;
+        let response = match agent_protocol::send_raw(renewed, operation).await {
+            Ok(response) => agent_protocol::check_response(response, operation).await,
+            Err(error) => Err(error),
+        };
         // A failed retry must not pin the stale route for the next operation.
-        if response.as_ref().map_or(true, |response| {
-            matches!(
-                response.status(),
-                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::NOT_FOUND
-            )
-        }) {
+        if response.is_err() {
             let mut cached = slot.lock().await;
             if cached.as_ref().is_some_and(|current| {
                 current.url == connection.url && current.token == connection.token
@@ -329,7 +352,7 @@ impl AgentTransport for AzureSandbox {
                 *cached = None;
             }
         }
-        agent_protocol::check_response(response?, operation).await
+        response
     }
 }
 
@@ -345,6 +368,7 @@ mod tests {
     use futures::StreamExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{collections::BTreeMap, sync::Arc};
+    use tokio::io::AsyncReadExt;
 
     #[tokio::test]
     async fn reconnect_activates_a_fresh_boot_and_does_not_retry_authorization_refusal() {
@@ -881,6 +905,123 @@ mod tests {
                     server.abort();
                 }
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn ambiguous_delivery_is_not_replayed_and_the_next_call_refreshes() {
+        for timeout in [false, true] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let observed = calls.clone();
+            let router = Router::new()
+                .route(
+                    "/v1/activate",
+                    post(|| async { axum::http::StatusCode::NO_CONTENT }),
+                )
+                .route(
+                    "/v1/exec",
+                    post(move || {
+                        let observed = observed.clone();
+                        async move {
+                            observed.fetch_add(1, Ordering::SeqCst);
+                            "{\"t\":\"exit\",\"code\":0}\n"
+                        }
+                    }),
+                );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                axum::serve(listener, router).await.unwrap();
+            });
+            let stale_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let stale_url = format!("http://{}/", stale_listener.local_addr().unwrap());
+            let delivered = Arc::new(AtomicUsize::new(0));
+            let observed = delivered.clone();
+            let stale_server = tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = stale_listener.accept().await.unwrap();
+                    let observed = observed.clone();
+                    tokio::spawn(async move {
+                        let mut buffer = [0u8; 4096];
+                        assert!(socket.read(&mut buffer).await.unwrap() > 0);
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        // The request reached the server, but no response reaches the caller.
+                        if timeout {
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+                        drop(socket);
+                    });
+                }
+            });
+            let mut native = MockSandboxDataPlaneApi::new();
+            native.expect_execute_shell_command().never();
+            native.expect_get_sandbox().times(3).returning(|_, id| {
+                Ok(AzureRecord {
+                    id: id.into(),
+                    labels: BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]),
+                    vnet_connection_name: None,
+                    egress_policy: super::super::egress_policy(&SandboxEgress::None),
+                    state: Some("Running".into()),
+                })
+            });
+            native
+                .expect_agent_port_url()
+                .times(1)
+                .returning(move |_, _, _| Ok(url.clone()));
+            native
+                .expect_read_file()
+                .times(1)
+                .returning(|_, _, _| Ok(STANDARD.encode([7u8; 32]).into_bytes()));
+            let provider = AzureSandbox::new(
+                Arc::new(native),
+                "group".into(),
+                "image".into(),
+                SandboxEgress::None,
+                None,
+                "1000m".into(),
+                "2048Mi".into(),
+                None,
+            );
+            *provider.connection_slot("session").await.lock().await = Some(Connection {
+                client: reqwest::Client::builder()
+                    .no_proxy()
+                    .timeout(Duration::from_millis(100))
+                    .build()
+                    .unwrap(),
+                url: stale_url.parse().unwrap(),
+                token: STANDARD.encode([7u8; 32]),
+            });
+            let request = || RunCommandRequest {
+                command: "true".into(),
+                args: vec![],
+                cwd: None,
+                env: BTreeMap::new(),
+                timeout: Duration::from_secs(5),
+            };
+            let error = provider
+                .run_command("session", request())
+                .await
+                .err()
+                .expect("delivery is ambiguous");
+            assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN");
+            assert!(!error.retryable);
+            assert_eq!(delivered.load(Ordering::SeqCst), 1);
+            assert_eq!(calls.load(Ordering::SeqCst), 0, "must not replay");
+            let mut stream = provider
+                .run_command("session", request())
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("next call must refresh timeout={timeout}: {error}")
+                });
+            assert!(matches!(
+                stream.next().await.unwrap().unwrap(),
+                CommandOutput::Exit { code: 0, .. }
+            ));
+            assert!(stream.next().await.is_none());
+            assert_eq!(delivered.load(Ordering::SeqCst), 1);
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            stale_server.abort();
+            server.abort();
         }
     }
 }
