@@ -762,15 +762,20 @@ impl Sandbox for AzureSandbox {
 
         let refusal = match woken {
             Err(error) => error,
-            Ok(running) => match self.policy_must_hold(&running) {
-                Ok(()) => {
+            Ok(running) => {
+                let ready = async {
+                    self.policy_must_hold(&running)?;
                     if agent::uses_agent(&running)? {
-                        return self.wait_for_agent(sandbox_id).await;
+                        self.wait_for_agent(sandbox_id).await?;
                     }
-                    return Ok(());
+                    Ok(())
                 }
-                Err(error) => error,
-            },
+                .await;
+                match ready {
+                    Ok(()) => return Ok(()),
+                    Err(error) => error,
+                }
+            }
         };
         Err(self.put_back(sandbox_id, resumed_here, refusal).await)
     }

@@ -234,10 +234,11 @@ retain `notConfigured` until rebuilt with startup support.
 New packages distinguish all image descendants from the provider, independently
 of UID. AWS endpoint requests (including egress delivery) and build/lifecycle
 hooks are legitimate callers. Remote requests are scoped by the provider's
-endpoint authentication; local AWS provider sockets must be established, owned
-by root, and have a kernel-reported mark of zero. The agent's cgroup assigns a
+endpoint authentication; local AWS provider sockets must be established
+and have a kernel-reported mark of zero; the provider proxy uses its own nonroot UID. The agent's cgroup assigns a
 nonzero mark to every guest socket and guest code cannot change it. A missing
-socket/mark or failed diagnostic refuses the request. The existing netlink
+socket/mark or failed diagnostic refuses the request. AWS packages without a gateway
+install the same cgroup marker, without adding network redirects. The existing netlink
 library reads the mark without needing access to provider process descriptors.
 
 GCP uses the external authenticated `:execute` proxy and has no legitimate

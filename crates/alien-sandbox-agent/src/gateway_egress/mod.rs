@@ -77,6 +77,15 @@ pub struct GatewayEgress {
     unanswered_since: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
+/// AWS packages without a gateway still need to distinguish provider control
+/// sockets from every image and exec process. Install only the cgroup marker;
+/// unrestricted packages keep their existing network routing.
+pub fn isolate_control_callers() -> Result<()> {
+    guest_network::install()
+        .into_alien_error()
+        .context(failed("isolate guest sockets before starting image code"))
+}
+
 impl GatewayEgress {
     /// Accepted control sockets inherit the agent mark. A Run hook can predate conntrack
     /// activation, so its replies must not depend on the kernel recognizing reply direction.
@@ -124,9 +133,7 @@ impl GatewayEgress {
             return Err(invalid("Run-hook firewall installation requires root"));
         }
         if privileged {
-            guest_network::install()
-                .into_alien_error()
-                .context(failed("isolate guest sockets before starting image code"))?;
+            isolate_control_callers()?;
             // IPv6 sockets can exist on kernels without IPv6 netfilter support.
             // Every image command and exec child installs the irreversible socket
             // filter before executing; an installation failure prevents its launch.

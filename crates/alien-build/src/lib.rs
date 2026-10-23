@@ -2567,9 +2567,14 @@ async fn prepare_prebuilt_sandbox(
 /// other targets were chosen for.
 fn sandbox_base_settings(settings: &BuildSettings) -> BuildSettings {
     let mut sandbox_settings = settings.clone();
-    sandbox_settings.targets = Some(BinaryTarget::defaults_for_platform(
+    if matches!(
         settings.platform.runtime_platform(),
-    ));
+        Platform::Aws | Platform::Azure | Platform::Gcp
+    ) {
+        sandbox_settings.targets = Some(BinaryTarget::defaults_for_platform(
+            settings.platform.runtime_platform(),
+        ));
+    }
     sandbox_settings
 }
 
@@ -6810,9 +6815,13 @@ mod sandbox_build_tests {
                 PlatformBuildSettings::Local {},
                 PlatformBuildSettings::Gcp {},
                 PlatformBuildSettings::Azure {},
+                PlatformBuildSettings::Kubernetes {
+                    base_platform: None,
+                },
             ] {
                 let mut settings = settings();
                 settings.platform = platform;
+                settings.targets = Some(vec![BinaryTarget::LinuxX64]);
                 settings.output_directory = output.path().to_string_lossy().into_owned();
                 let sandbox = Sandbox::new("sbx".into())
                     .code(SandboxCode::Image {

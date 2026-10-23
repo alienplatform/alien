@@ -79,7 +79,7 @@ async fn provider_socket(peer: SocketAddr) -> Option<bool> {
     }
     Some(sockets.iter().all(|socket| {
         matches!(socket, nlink::sockdiag::SocketInfo::Inet(socket)
-            if socket.local == peer && socket.is_connected() && socket.uid == 0 && socket.mark == Some(0))
+            if socket.local == peer && socket.is_connected() && socket.mark == Some(0))
     }))
 }
 
@@ -375,6 +375,19 @@ mod tests {
                 "mark {mark:x}"
             );
         }
+        // AWS's endpoint and lifecycle proxy runs as a provider UID, not root.
+        // The cgroup mark is the boundary even if guest code chooses that same UID.
+        let mut provider = std::process::Command::new("python3");
+        std::os::unix::process::CommandExt::uid(&mut provider, 991);
+        let mut provider = provider.args(["-c",
+            "import socket,sys;s=socket.create_connection(('127.0.0.1',int(sys.argv[1])));sys.stdin.read()",
+            &listener.local_addr().unwrap().port().to_string()])
+            .stdin(std::process::Stdio::piped()).spawn().unwrap();
+        let (_accepted, peer) = listener.accept().unwrap();
+        let permitted = provider_socket(peer).await;
+        drop(provider.stdin.take());
+        assert!(provider.wait().unwrap().success());
+        assert_eq!(permitted, Some(true), "provider UID991 with mark zero");
         assert_eq!(
             provider_socket("127.0.0.1:1".parse().unwrap()).await,
             Some(false)

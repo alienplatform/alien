@@ -73,7 +73,13 @@ fn main() -> Result<()> {
 
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
-    let network_admin = std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some();
+    let aws_image_transport =
+        image_command_enabled()? && alien_sandbox_agent::image_command::defer_to_run_hook()?;
+    let network_admin = std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() || aws_image_transport;
+    #[cfg(target_os = "linux")]
+    if aws_image_transport && state.gateway_egress.is_none() {
+        alien_sandbox_agent::gateway_egress::isolate_control_callers()?;
+    }
     if network_admin || image_command_enabled()? {
         #[cfg(target_os = "linux")]
         if let Some(policy) = alien_sandbox_agent::egress::legacy_from_env()? {

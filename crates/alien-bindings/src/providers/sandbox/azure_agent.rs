@@ -369,6 +369,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_resume_stops_only_the_session_it_woke() {
+        for wake in [false, true] {
+            for unknown_transport in [false, true] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let router = Router::new().route(
+                    "/v1/activate",
+                    post(|| async { axum::http::StatusCode::FORBIDDEN }),
+                );
+                let server = tokio::spawn(async move {
+                    axum::serve(listener, router).await.unwrap();
+                });
+                let mut native = MockSandboxDataPlaneApi::new();
+                let mut reads = 0;
+                native.expect_get_sandbox().returning(move |_, id| {
+                    reads += 1;
+                    Ok(AzureRecord {
+                        id: id.into(),
+                        labels: BTreeMap::from([(
+                            TRANSPORT_LABEL.into(),
+                            if unknown_transport {
+                                "unknown"
+                            } else {
+                                TRANSPORT_VERSION
+                            }
+                            .into(),
+                        )]),
+                        vnet_connection_name: None,
+                        egress_policy: super::super::egress_policy(&SandboxEgress::None),
+                        state: Some(
+                            if wake && reads <= 2 {
+                                "Stopped"
+                            } else {
+                                "Running"
+                            }
+                            .into(),
+                        ),
+                    })
+                });
+                native
+                    .expect_resume_sandbox()
+                    .times(usize::from(wake))
+                    .returning(|_, _| Ok(()));
+                native
+                    .expect_stop_sandbox()
+                    .times(usize::from(wake))
+                    .returning(|_, id| {
+                        assert_eq!(id, "session");
+                        Ok(())
+                    });
+                native.expect_delete_sandbox().never();
+                native
+                    .expect_agent_port_url()
+                    .times(usize::from(!unknown_transport))
+                    .returning(move |_, _, _| Ok(url.clone()));
+                native
+                    .expect_read_file()
+                    .times(usize::from(!unknown_transport))
+                    .returning(|_, _, _| Ok(STANDARD.encode([4u8; 32]).into_bytes()));
+                let provider = AzureSandbox::new(
+                    Arc::new(native),
+                    "group".into(),
+                    "image".into(),
+                    SandboxEgress::None,
+                    None,
+                    "1000m".into(),
+                    "2048Mi".into(),
+                    None,
+                );
+                let error = provider.resume("session").await.unwrap_err();
+                assert_eq!(error.code, "SANDBOX_COMMAND_FAILED");
+                assert!(!error.retryable);
+                server.abort();
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn commands_cross_the_agent_port_without_native_exec() {
         let token = STANDARD.encode([7u8; 32]);
         let expected = format!("Bearer {token}");
