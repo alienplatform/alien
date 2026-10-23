@@ -1419,6 +1419,8 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: OPERATOR_SETUP_METHOD
               value: "helm"
+            - name: OPERATOR_HELM_RELEASE
+              value: {{ .Release.Name | quote }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}

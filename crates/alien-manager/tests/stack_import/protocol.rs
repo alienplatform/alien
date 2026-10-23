@@ -188,3 +188,49 @@ async fn kubernetes_bootstrap_retains_gcp_protocol_and_base_environment() {
         alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
     );
 }
+
+#[tokio::test]
+async fn helm_bootstrap_refuses_a_release_helm_would_not_accept() {
+    let fixture = make_fixture_for_platform(
+        Platform::Kubernetes,
+        Some(Stack::new("kube".into()).build()),
+    )
+    .await;
+    let initialize = |name: &str, release: &str| {
+        serde_json::json!({
+            "name": name, "platform": "kubernetes", "setupMethod": "helm",
+            "initialDesiredRelease": "active",
+            "helmRelease": { "name": release, "namespace": "alien-orders" }
+        })
+    };
+
+    let (status, body) = request(
+        &fixture,
+        "/v1/initialize",
+        &fixture.dg_token,
+        initialize("helm-orders", "alien-operator"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body:#}");
+
+    let (status, body) = request(
+        &fixture,
+        "/v1/initialize",
+        &fixture.dg_token,
+        initialize("helm-refused", "orders; helm list"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body:#}");
+    let deployments = fixture
+        .deployment_store
+        .list_deployments(
+            &alien_manager::auth::Subject::system(),
+            &DeploymentFilter {
+                name: Some("helm-refused".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(deployments.is_empty(), "{deployments:?}");
+}

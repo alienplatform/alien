@@ -20,7 +20,7 @@ use alien_core::{
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::SdkResultExt as _;
+use alien_manager_api::{types::HelmRelease, SdkResultExt as _};
 use clap::{Parser, ValueEnum};
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -139,6 +139,12 @@ pub struct Args {
 
     #[arg(long, env = "OPERATOR_SETUP_METHOD")]
     pub operator_setup_method: Option<String>,
+
+    /// Helm release that installed this Operator. With the namespace, it is
+    /// reported at registration so the deployment's owner can be shown the
+    /// exact `helm uninstall` command.
+    #[arg(long, env = "OPERATOR_HELM_RELEASE")]
+    pub operator_helm_release: Option<String>,
 
     #[arg(long, env = "DATA_DIR")]
     pub data_dir: Option<String>,
@@ -480,6 +486,10 @@ async fn run_operator_cli(
     let operator_scope = args.operator_scope.or_else(|| args.namespace.clone());
     let operator_permission = args.operator_permission;
     let operator_setup_method = args.operator_setup_method;
+    let helm_release = args
+        .operator_helm_release
+        .zip(args.namespace.clone())
+        .map(|(name, namespace)| HelmRelease { name, namespace });
     let stack_input_values_json = load_config_value(
         None,
         args.stack_input_values_file.as_deref(),
@@ -544,6 +554,7 @@ async fn run_operator_cli(
                             operator_scope.as_deref(),
                             operator_permission.as_deref(),
                             operator_setup_method.as_deref(),
+                            helm_release.as_ref(),
                             InitialDesiredReleaseArg::None,
                             &stack_input_values,
                         )
@@ -595,6 +606,7 @@ async fn run_operator_cli(
                         operator_scope.as_deref(),
                         operator_permission.as_deref(),
                         operator_setup_method.as_deref(),
+                        helm_release.as_ref(),
                         args.initial_desired_release,
                         &stack_input_values,
                     )
@@ -1064,6 +1076,7 @@ async fn initialize_with_manager(
     operator_scope: Option<&str>,
     operator_permission: Option<&str>,
     operator_setup_method: Option<&str>,
+    helm_release: Option<&HelmRelease>,
     initial_desired_release: InitialDesiredReleaseArg,
     input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(String, Option<String>)> {
@@ -1138,6 +1151,9 @@ async fn initialize_with_manager(
     }
     if let Some(setup_method) = operator_setup_method {
         builder = builder.body_map(|b| b.setup_method(setup_method.to_string()));
+    }
+    if let Some(helm_release) = helm_release {
+        builder = builder.body_map(|b| b.helm_release(helm_release.clone()));
     }
 
     let response =
@@ -1869,5 +1885,67 @@ mod tests {
         assert!(parse_operator_image_report(&args.operator_image)
             .unwrap()
             .is_none());
+    }
+}
+
+#[cfg(test)]
+mod initialize_tests {
+    use super::{initialize_with_manager, InitialDesiredReleaseArg};
+    use alien_core::Platform;
+    use alien_manager_api::types::HelmRelease;
+    use axum::{routing::post, Json, Router};
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn helm_registration_reports_the_release_name_and_namespace() {
+        let received = Arc::new(Mutex::new(None));
+        let app = Router::new().route(
+            "/v1/initialize",
+            post({
+                let received = received.clone();
+                move |Json(body): Json<serde_json::Value>| async move {
+                    *received.lock().unwrap() = Some(body);
+                    Json(serde_json::json!({
+                        "deploymentId": "dep_a",
+                        "deploymentModel": "pull",
+                        "token": "ax_dep_a"
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let sync_url = url::Url::parse(&format!("http://{address}")).unwrap();
+
+        let (deployment_id, token) = initialize_with_manager(
+            &sync_url,
+            "ax_dg_setup",
+            Platform::Kubernetes,
+            None,
+            Some("orders"),
+            None,
+            None,
+            None,
+            None,
+            Some("helm"),
+            Some(&HelmRelease {
+                name: "shop-operator".to_string(),
+                namespace: "customer-shop".to_string(),
+            }),
+            InitialDesiredReleaseArg::Active,
+            &serde_json::Map::new(),
+        )
+        .await
+        .expect("initialize succeeds");
+
+        assert_eq!(deployment_id, "dep_a");
+        assert_eq!(token.as_deref(), Some("ax_dep_a"));
+        let body = received.lock().unwrap().take().expect("initialize request");
+        assert_eq!(body["setupMethod"], "helm");
+        assert_eq!(
+            body["helmRelease"],
+            serde_json::json!({"name": "shop-operator", "namespace": "customer-shop"})
+        );
     }
 }
