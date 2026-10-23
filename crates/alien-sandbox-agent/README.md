@@ -21,6 +21,15 @@ unchanged; rebuilding them requires the original base image. Repackaging also
 refuses an identical agent layer beneath later overrides, because the image
 builder cannot represent that repeated layer correctly.
 
+New builds inspect prebuilt OCI references as well as Dockerfile outputs. GCP and
+Azure bases then use the normal agent assembler; Local keeps an immutable Docker
+image ID. The resolved original USER drives planning, including root refusal on
+Local/Kubernetes and AWS modes without a connector. Existing AWS S3 bundles keep
+their released startup behavior; rebuild from an OCI base to select the new image
+contract. New Azure catalog builds require a registry base or Dockerfile because
+the catalog does not expose the original USER/command for inspection. Saved native
+releases remain deployable unchanged.
+
 # Azure native-file transport
 
 Azure packages use `ALIEN_SANDBOX_AUTHORIZATION=native-file`. Before boot code
@@ -48,7 +57,7 @@ replacement disk Ready. Each new agent session persists
 select the session transport from that marker, so an upgraded binding can reconnect
 to legacy native sessions and a rollback binding continues using the agent for
 packaged sessions. An unknown marker is refused; an agent failure never triggers
-native exec. Prebuilt-image inspection remains in progress.
+native exec.
 
 # Released supervisor declarations
 

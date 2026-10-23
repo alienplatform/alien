@@ -245,6 +245,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     let mut functions_to_build = Vec::new();
     let mut daemons_to_build: Vec<(String, Daemon, String, ToolchainConfig)> = Vec::new();
     let mut sandboxes_to_build: Vec<(String, Sandbox, String, ToolchainConfig)> = Vec::new();
+    let mut sandboxes_to_inspect = Vec::new();
 
     for (id, resource_entry) in stack.resources() {
         if let Some(func) = resource_entry.config.downcast_ref::<alien_core::Worker>() {
@@ -316,9 +317,18 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                     ));
                 }
                 SandboxCode::Image { .. } => {
-                    info!("Sandbox '{}' already has an image. Skipping.", sandbox.id);
+                    sandboxes_to_inspect.push((id.clone(), sandbox.clone()));
                 }
             }
+        }
+    }
+
+    // Inspect before any build tasks are spawned: an invalid prebuilt image must not leave
+    // other resource builds detached. New OCI bases take the same packaging path as source.
+    for (resource_id, sandbox) in sandboxes_to_inspect {
+        let sandbox = prepare_prebuilt_sandbox(sandbox, settings, &output_dir).await?;
+        if let Some((_, entry)) = stack.resources_mut().find(|(id, _)| *id == &resource_id) {
+            entry.config = alien_core::Resource::new(sandbox);
         }
     }
 
@@ -1124,7 +1134,6 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
             .into_iter()
             .map(|(resource_id, container, image)| {
                 let container_id = container.id.clone();
-                let stack_id = stack_id.clone();
                 let settings = container_settings.clone();
                 let output_dir = output_dir.clone();
                 let bus = current_bus.clone();
@@ -1153,7 +1162,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                             result = pull_and_export_image(
                                 &image,
                                 &container_id,
-                                &stack_id,
+                                toolchain::WorkloadKind::Container,
                                 &settings,
                                 &output_dir,
                             ) => result,
@@ -2477,6 +2486,76 @@ async fn build_resource(
         short_hash
     );
     Ok(finalized_dir)
+}
+
+/// Inspect an OCI reference before planning and route it through normal image publication.
+/// Released AWS bundles keep their existing package contract; new bases are OCI images.
+async fn prepare_prebuilt_sandbox(
+    mut sandbox: Sandbox,
+    settings: &BuildSettings,
+    output_dir: &Path,
+) -> Result<Sandbox> {
+    let SandboxCode::Image { image } = &sandbox.code else {
+        return Ok(sandbox);
+    };
+    let platform = settings.platform.runtime_platform();
+    if platform == Platform::Aws && image.starts_with("s3://") {
+        return Ok(sandbox);
+    }
+    if platform == Platform::Azure
+        && !Path::new(image).is_dir()
+        && matches!(
+            sandbox
+                .azure_image()
+                .context(ErrorData::BuildConfigInvalid {
+                    message: format!("Cannot inspect sandbox '{}' image", sandbox.id),
+                })?,
+            alien_core::AzureSandboxImage::Catalog(_)
+        )
+    {
+        return Err(AlienError::new(ErrorData::BuildConfigInvalid {
+            message: format!(
+                "Sandbox '{}' uses an Azure catalog image whose USER and command cannot be inspected; use a registry base image or Dockerfile. Saved native releases remain deployable unchanged.",
+                sandbox.id
+            ),
+        }));
+    }
+    let settings = sandbox_base_settings(settings);
+    let directory = if Path::new(image).is_dir() {
+        image.clone()
+    } else {
+        pull_and_export_image(
+            image,
+            &sandbox.id,
+            toolchain::WorkloadKind::SandboxBase,
+            &settings,
+            output_dir,
+        )
+        .await?
+    };
+    let targets = settings.get_targets();
+    sandbox_identity::validate_declared_uid(&sandbox, Path::new(&directory)).await?;
+    sandbox.image_user =
+        Some(sandbox_identity::built_image_user(&sandbox, Path::new(&directory), &targets).await?);
+    let image = if platform == Platform::Local {
+        // The local sandbox manager consumes Docker references, not archive directories.
+        // Export used this daemon; its configuration digest pins the already-pulled image.
+        let target = targets.first().ok_or_else(|| {
+            AlienError::new(ErrorData::BuildConfigInvalid {
+                message: "A local sandbox requires an image target".into(),
+            })
+        })?;
+        let archive =
+            Path::new(&directory).join(format!("{}.oci.tar", target.runtime_platform_id()));
+        DockDashImage::from_tarball(archive)
+            .map_dockdash_err()?
+            .config_digest()
+            .to_string()
+    } else {
+        directory
+    };
+    sandbox.code = SandboxCode::Image { image };
+    Ok(sandbox)
 }
 
 /// The settings a sandbox base is built with. The base boots on the cloud's sandbox runtime (an
@@ -3996,7 +4075,7 @@ async fn lock_image_export(image_key: &str, resource_name: &str) -> Result<std::
 async fn pull_and_export_image(
     image: &str,
     container_name: &str,
-    _stack_id: &str,
+    workload: toolchain::WorkloadKind,
     settings: &BuildSettings,
     build_output_dir: &Path,
 ) -> Result<String> {
@@ -4049,29 +4128,35 @@ async fn pull_and_export_image(
 
         info!("Pulling image '{}' for platform {}", image, platform_str);
 
-        // Pull the image with specific platform
-        let pull_output = Command::new("docker")
-            .args(&["pull", "--platform", &platform_str, image])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ImageBuildFailed {
-                resource_name: container_name.to_string(),
-                reason: "Failed to execute docker pull".to_string(),
-                build_output: None,
-            })?;
+        // A local build may already carry this daemon's immutable configuration ID.
+        // Docker cannot pull an ID from a registry; save it directly on repeated builds.
+        if !(settings.platform.runtime_platform() == Platform::Local
+            && image.starts_with("sha256:"))
+        {
+            // Pull the image with specific platform
+            let pull_output = Command::new("docker")
+                .args(&["pull", "--platform", &platform_str, image])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ImageBuildFailed {
+                    resource_name: container_name.to_string(),
+                    reason: "Failed to execute docker pull".to_string(),
+                    build_output: None,
+                })?;
 
-        if !pull_output.status.success() {
-            return Err(image_build_error_with_output(
-                container_name,
-                format!("docker pull failed for image '{}'", image),
-                &pull_output,
-            ));
+            if !pull_output.status.success() {
+                return Err(image_build_error_with_output(
+                    container_name,
+                    format!("docker pull failed for image '{}'", image),
+                    &pull_output,
+                ));
+            }
+
+            info!("Successfully pulled image '{}' for {}", image, platform_str);
         }
-
-        info!("Successfully pulled image '{}' for {}", image, platform_str);
 
         // Export to OCI tarball
         let target_filename = format!("{}.oci.tar", target.runtime_platform_id());
@@ -4126,7 +4211,10 @@ async fn pull_and_export_image(
     }
 
     // Compute content hash
-    let content_hash = compute_function_content_hash(&container_dir).await?;
+    let content_hash = artifact_hash(
+        compute_function_content_hash(&container_dir).await?,
+        layered_sandbox_agent(settings, workload).as_deref(),
+    );
     let short_hash = &content_hash[..8];
 
     // Rename directory to include content hash
@@ -5132,7 +5220,7 @@ mod tests {
         let result = pull_and_export_image(
             "alpine:latest",
             "test-alpine",
-            "test-stack",
+            toolchain::WorkloadKind::Container,
             &settings,
             build_dir.path(),
         )
@@ -5240,14 +5328,14 @@ mod tests {
             pull_and_export_image(
                 "alpine:latest",
                 "parallel-first",
-                "test-stack",
+                toolchain::WorkloadKind::Container,
                 &settings,
                 build_dir.path()
             ),
             pull_and_export_image(
                 "docker.io/library/alpine:latest",
                 "parallel-second",
-                "test-stack",
+                toolchain::WorkloadKind::Container,
                 &reversed,
                 build_dir.path()
             ),
@@ -5319,7 +5407,7 @@ mod tests {
         let result = pull_and_export_image(
             "this-image-definitely-does-not-exist-xyz123:nonexistent",
             "test-nonexistent",
-            "test-stack",
+            toolchain::WorkloadKind::Container,
             &settings,
             build_dir.path(),
         )
@@ -5361,7 +5449,7 @@ mod tests {
         let result = pull_and_export_image(
             "alpine:latest",
             "test-alpine",
-            "test-stack",
+            toolchain::WorkloadKind::Container,
             &settings,
             build_dir.path(),
         )
@@ -6650,12 +6738,154 @@ mod sandbox_build_tests {
         }
     }
 
-    /// A sandbox that already names an image is left alone, the way a worker's is.
     #[tokio::test]
-    async fn a_sandbox_with_an_image_is_not_rebuilt() {
+    async fn prebuilt_oci_user_is_inspected_and_local_images_are_pinned() {
+        let (_registry, host) = dockdash::test_utils::setup_local_registry().await.unwrap();
+        let output = tempfile::tempdir().unwrap();
+        for (tag, user, uid) in [("root", "root", 0), ("absent", "", 0), ("app", "app", 2001)] {
+            let reference = format!("{host}/project/sandbox:{tag}");
+            let layer = dockdash::Layer::builder()
+                .unwrap()
+                .compression(dockdash::LayerCompression::Gzip)
+                .data_with_owner(
+                    "/etc/passwd",
+                    b"root:x:0:0::/root:/bin/sh\napp:x:2001:2001::/home/app:/bin/sh\n",
+                    0o644,
+                    0,
+                    0,
+                )
+                .unwrap()
+                .data_with_owner("/etc/group", b"root:x:0:\napp:x:2001:\n", 0o644, 0, 0)
+                .unwrap()
+                .build()
+                .await
+                .unwrap();
+            let (image, _) = DockDashImage::builder()
+                .platform("linux", &dockdash::Arch::Amd64)
+                .user(user)
+                .entrypoint(vec!["/start".into()])
+                .layer(layer)
+                .build()
+                .await
+                .unwrap();
+            image
+                .push(
+                    &reference,
+                    &dockdash::PushOptions {
+                        protocol: dockdash::ClientProtocol::Http,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            for platform in [
+                PlatformBuildSettings::Local {},
+                PlatformBuildSettings::Azure {},
+            ] {
+                let mut settings = settings();
+                settings.platform = platform;
+                settings.output_directory = output.path().to_string_lossy().into_owned();
+                let sandbox = Sandbox::new("sbx".into())
+                    .code(SandboxCode::Image {
+                        image: reference.clone(),
+                    })
+                    .egress(SandboxEgress::None)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build();
+                let stack = Stack::new("prebuilt".into())
+                    .add(sandbox, ResourceLifecycle::Frozen)
+                    .build();
+                let built = build_stack(stack, &settings).await.unwrap();
+                let sandbox = built
+                    .resources()
+                    .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+                    .unwrap();
+                assert_eq!(sandbox.image_user, Some(uid));
+                if settings.platform.runtime_platform() == Platform::Local {
+                    let SandboxCode::Image { image: pinned } = &sandbox.code else {
+                        panic!("built image")
+                    };
+                    assert_eq!(pinned, image.config_digest());
+                    let status = Command::new("docker")
+                        .args(["image", "inspect", pinned])
+                        .stdout(std::process::Stdio::null())
+                        .status()
+                        .await
+                        .unwrap();
+                    assert!(
+                        status.success(),
+                        "pinned local image must exist in the daemon"
+                    );
+                    let admitted = sandbox.validate_for_platform(Platform::Local);
+                    if uid == 0 {
+                        assert_eq!(admitted.unwrap_err().code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+                    } else {
+                        admitted.unwrap();
+                    }
+                } else {
+                    let SandboxCode::Image { image: directory } = &sandbox.code else {
+                        panic!("built image")
+                    };
+                    let archive =
+                        DockDashImage::from_tarball(Path::new(directory).join("linux-x64.oci.tar"))
+                            .unwrap();
+                    let command = sandbox_identity::image_command(&archive).await.unwrap();
+                    assert_eq!(command.user.as_deref(), Some(user));
+                    assert_eq!(command.command, ["/start"]);
+                }
+                // Reinspection preserves both local IDs and exported Azure archives. Full
+                // planning separately refuses Local root, as asserted above.
+                let reinspected =
+                    prepare_prebuilt_sandbox(sandbox.clone(), &settings, output.path())
+                        .await
+                        .unwrap();
+                assert_eq!(reinspected.image_user, Some(uid));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_catalog_build_requires_an_inspectable_base() {
+        let output = tempfile::tempdir().unwrap();
+        let mut settings = settings();
+        settings.platform = PlatformBuildSettings::Azure {};
+        settings.output_directory = output.path().to_string_lossy().into_owned();
+        let sandbox = Sandbox::new("catalog".into())
+            .code(SandboxCode::Image {
+                image: "ubuntu".into(),
+            })
+            .egress(SandboxEgress::None)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let error = build_stack(
+            Stack::new("catalog".into())
+                .add(sandbox, ResourceLifecycle::Frozen)
+                .build(),
+            &settings,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("registry base image or Dockerfile"),
+            "{error:?}"
+        );
+        assert!(!error.retryable);
+    }
+
+    /// Released AWS bundles retain their old startup contract without executing a rebuild.
+    #[tokio::test]
+    async fn a_released_sandbox_bundle_is_not_rebuilt() {
         let sandbox = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
-                image: "public.ecr.aws/acme/base:v1".to_string(),
+                image: "s3://released-images/base.zip".to_string(),
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
@@ -6677,7 +6907,7 @@ mod sandbox_build_tests {
         assert_eq!(
             code,
             SandboxCode::Image {
-                image: "public.ecr.aws/acme/base:v1".to_string()
+                image: "s3://released-images/base.zip".to_string()
             }
         );
     }
@@ -6737,7 +6967,7 @@ mod sandbox_push_tests {
                 ResourceLifecycle::Live,
             )
             .add(
-                sandbox("published", "public.ecr.aws/acme/base:v1"),
+                sandbox("published", "s3://released-images/base.zip"),
                 ResourceLifecycle::Live,
             )
             .build();
@@ -6773,7 +7003,7 @@ mod sandbox_push_tests {
         );
         assert_eq!(
             image_of(&pushed, "published"),
-            "public.ecr.aws/acme/base:v1"
+            "s3://released-images/base.zip"
         );
     }
 
