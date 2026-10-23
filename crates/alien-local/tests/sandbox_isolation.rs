@@ -7,6 +7,10 @@
 
 use std::collections::HashMap;
 
+use alien_build::settings::{BuildSettings, PlatformBuildSettings};
+use alien_core::{
+    Platform, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
+};
 use alien_local::{LocalSandboxManager, SandboxEgressMode, SandboxOutput, SandboxSessionConfig};
 use tempfile::TempDir;
 
@@ -106,6 +110,80 @@ async fn session_round_trips_and_runs_unprivileged() {
             .is_empty(),
         "a terminated session must not remain"
     );
+}
+
+/// Exercise build inspection and planning before using the pinned image in a real session.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn ubuntu_without_user_keeps_released_exec_identity() {
+    let output = TempDir::new().unwrap();
+    let sandbox = Sandbox::new("ubuntu-no-user".into())
+        .code(SandboxCode::Image {
+            image: "ubuntu:24.04".into(),
+        })
+        .egress(SandboxEgress::None)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let settings = BuildSettings {
+        platform: PlatformBuildSettings::Local {},
+        output_directory: output.path().to_string_lossy().into_owned(),
+        targets: None,
+        cache_url: None,
+        override_base_image: None,
+        debug_mode: false,
+        rebuild: false,
+        pull_base_images: false,
+    };
+    let built = alien_build::build_stack(
+        Stack::new("ubuntu-compat".into())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .build(),
+        &settings,
+    )
+    .await
+    .expect("inspect Ubuntu");
+    let sandbox = built
+        .resources()
+        .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+        .unwrap();
+    sandbox
+        .validate_for_platform(Platform::Local)
+        .expect("absent USER remains supported");
+    assert_eq!(sandbox.image_user, None, "keep the released boot contract");
+    let SandboxCode::Image { image } = &sandbox.code else {
+        panic!("built image")
+    };
+    let docker = bollard::Docker::connect_with_local_defaults().unwrap();
+    let inspected = docker.inspect_image(image).await.unwrap();
+    assert_eq!(
+        inspected
+            .config
+            .unwrap()
+            .user
+            .as_deref()
+            .unwrap_or_default(),
+        ""
+    );
+
+    let (manager, _dir) = manager();
+    let mut config = config(SandboxEgressMode::Deny);
+    config.image = image.clone();
+    let session = manager
+        .create_session(&sandbox.id, "s1", &config)
+        .await
+        .expect("session creates");
+    let result = manager.exec(&session.container_id, &sh("id -u")).await;
+    manager
+        .terminate(&sandbox.id, "s1")
+        .await
+        .expect("terminates");
+    assert!(manager.list_sessions(&sandbox.id).await.unwrap().is_empty());
+    let result = result.expect("exec runs");
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(stdout(&result).trim(), "65534");
 }
 
 #[tokio::test]

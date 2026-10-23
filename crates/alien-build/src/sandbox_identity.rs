@@ -5,6 +5,7 @@ use std::{fs::File, io::Read};
 use alien_core::{
     sandbox_identity::ImageUser,
     sandbox_image::{SandboxImage, SandboxImageCommand, AGENT_PATH, IMAGE_COMMAND_PATH},
+    Platform,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use dockdash::Image;
@@ -40,13 +41,14 @@ pub(crate) async fn validate_declared_uid(
     Ok(())
 }
 
-/// Resolve the boot uid from every built architecture, before the declaration reaches planning.
+/// Resolve the planning identity from every built architecture before publishing a declaration.
 /// Different users across architectures would make the plan depend on which host runs it.
 pub(crate) async fn built_image_user(
     sandbox: &alien_core::Sandbox,
     directory: &std::path::Path,
     targets: &[alien_core::BinaryTarget],
-) -> Result<u32> {
+    platform: Platform,
+) -> Result<Option<u32>> {
     let failed = |message: String| ErrorData::BuildConfigInvalid { message };
     let mut uid = None;
     for target in targets {
@@ -70,6 +72,11 @@ pub(crate) async fn built_image_user(
             sandbox.id
         )))?
         .uid;
+        // Local and Kubernetes keep their released non-root runtime for images that did
+        // not request a USER. Explicit root must still reach planning as Some(0).
+        let legacy_default =
+            base.user.is_empty() && matches!(platform, Platform::Local | Platform::Kubernetes);
+        let current = (current, legacy_default);
         if uid.is_some_and(|previous| previous != current) {
             return Err(AlienError::new(failed(format!(
                 "Sandbox '{}' image USER differs across architectures",
@@ -78,12 +85,16 @@ pub(crate) async fn built_image_user(
         }
         uid = Some(current);
     }
-    uid.ok_or_else(|| {
+    let (uid, legacy_default) = uid.ok_or_else(|| {
         AlienError::new(failed(format!(
             "Sandbox '{}' has no built image targets",
             sandbox.id
         )))
-    })
+    })?;
+    // Preserve old-reader compatibility where the runtime does not need this marker.
+    Ok(Some(uid).filter(|uid| {
+        !legacy_default && (*uid == 0 || matches!(platform, Platform::Aws | Platform::Azure))
+    }))
 }
 
 /// The image's USER and account databases, read from the same immutable archive.
@@ -308,7 +319,7 @@ mod tests {
             .unwrap()
             .data_with_owner(
                 "/etc/passwd",
-                b"root:x:0:0::/root:/bin/sh\n1001:x:9001:9001::/:/bin/sh\napp:x:1001:2001::/home/app:/bin/sh\n",
+                b"root:x:0:0::/root:/bin/sh\nsupervisor:x:0:0::/root:/bin/sh\n1001:x:9001:9001::/:/bin/sh\napp:x:1001:2001::/home/app:/bin/sh\n",
                 0o644,
                 0,
                 0,
@@ -417,7 +428,15 @@ mod tests {
             alien_core::BinaryTarget::LinuxX64,
             alien_core::BinaryTarget::LinuxArm64,
         ];
-        for (user, expected) in [("", 0), ("root", 0), ("app", 1001), ("2000:2000", 2000)] {
+        for (user, expected) in [
+            ("", 0),
+            ("root", 0),
+            ("0", 0),
+            ("0:0", 0),
+            ("supervisor", 0),
+            ("app", 1001),
+            ("2000:2000", 2000),
+        ] {
             let image = base(user).await;
             for target in &targets {
                 std::fs::copy(
@@ -428,12 +447,38 @@ mod tests {
                 )
                 .unwrap();
             }
-            assert_eq!(
-                built_image_user(&sandbox, directory.path(), &targets)
+            for platform in [
+                Platform::Aws,
+                Platform::Gcp,
+                Platform::Azure,
+                Platform::Local,
+                Platform::Kubernetes,
+            ] {
+                let legacy_default =
+                    user.is_empty() && matches!(platform, Platform::Local | Platform::Kubernetes);
+                let marker = built_image_user(&sandbox, directory.path(), &targets, platform)
                     .await
-                    .unwrap(),
-                expected
-            );
+                    .unwrap();
+                assert_eq!(
+                    marker,
+                    (!legacy_default
+                        && (expected == 0 || matches!(platform, Platform::Aws | Platform::Azure)))
+                    .then_some(expected)
+                );
+                let mut planned = sandbox.clone();
+                planned.image_user = marker;
+                if matches!(platform, Platform::Local | Platform::Kubernetes)
+                    && expected == 0
+                    && !user.is_empty()
+                {
+                    assert_eq!(
+                        planned.validate_for_platform(platform).unwrap_err().code,
+                        "SANDBOX_CAPABILITY_UNSUPPORTED"
+                    );
+                } else {
+                    planned.validate_for_platform(platform).unwrap();
+                }
+            }
         }
         let root = base("0").await;
         std::fs::copy(
@@ -443,22 +488,49 @@ mod tests {
                 .join(format!("{}.oci.tar", targets[0].runtime_platform_id())),
         )
         .unwrap();
-        let error = built_image_user(&sandbox, directory.path(), &targets)
+        let error = built_image_user(&sandbox, directory.path(), &targets, Platform::Aws)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("differs across architectures"));
+        let absent = base("").await;
+        std::fs::copy(
+            absent.path(),
+            directory
+                .path()
+                .join(format!("{}.oci.tar", targets[1].runtime_platform_id())),
+        )
+        .unwrap();
+        for platform in [Platform::Local, Platform::Kubernetes] {
+            assert!(
+                built_image_user(&sandbox, directory.path(), &targets, platform)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("differs across architectures")
+            );
+        }
+        assert_eq!(
+            built_image_user(&sandbox, directory.path(), &targets, Platform::Aws)
+                .await
+                .unwrap(),
+            Some(0)
+        );
         std::fs::remove_file(
             directory
                 .path()
                 .join(format!("{}.oci.tar", targets[1].runtime_platform_id())),
         )
         .unwrap();
-        assert!(built_image_user(&sandbox, directory.path(), &targets)
-            .await
-            .is_err());
-        assert!(built_image_user(&sandbox, directory.path(), &[])
-            .await
-            .is_err());
+        assert!(
+            built_image_user(&sandbox, directory.path(), &targets, Platform::Aws)
+                .await
+                .is_err()
+        );
+        assert!(
+            built_image_user(&sandbox, directory.path(), &[], Platform::Aws)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

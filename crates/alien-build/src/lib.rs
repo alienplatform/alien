@@ -772,21 +772,13 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                         Path::new(&image_uri),
                                     )
                                     .await?;
-                                    sandbox.image_user = Some(
-                                        sandbox_identity::built_image_user(
-                                            &sandbox,
-                                            Path::new(&image_uri),
-                                            &settings.get_targets(),
-                                        )
-                                        .await?,
+                                    sandbox.image_user = sandbox_identity::built_image_user(
+                                        &sandbox,
+                                        Path::new(&image_uri),
+                                        &settings.get_targets(),
+                                        settings.platform.runtime_platform(),
                                     )
-                                    .filter(|uid| {
-                                        *uid == 0
-                                            || matches!(
-                                                settings.platform.runtime_platform(),
-                                                Platform::Aws | Platform::Azure
-                                            )
-                                    });
+                                    .await?;
                                     Ok(image_uri)
                                 }
                                 .await
@@ -2539,8 +2531,8 @@ async fn prepare_prebuilt_sandbox(
     let targets = settings.get_targets();
     sandbox_identity::validate_declared_uid(&sandbox, Path::new(&directory)).await?;
     sandbox.image_user =
-        Some(sandbox_identity::built_image_user(&sandbox, Path::new(&directory), &targets).await?)
-            .filter(|uid| *uid == 0 || matches!(platform, Platform::Aws | Platform::Azure));
+        sandbox_identity::built_image_user(&sandbox, Path::new(&directory), &targets, platform)
+            .await?;
     let image = if platform == Platform::Local {
         // The local sandbox manager consumes Docker references, not archive directories.
         // Export used this daemon; its configuration digest pins the already-pulled image.
@@ -6841,8 +6833,19 @@ mod sandbox_build_tests {
                     .resources()
                     .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
                     .unwrap();
+                let platform = settings.platform.runtime_platform();
+                let legacy_default =
+                    user.is_empty() && matches!(platform, Platform::Local | Platform::Kubernetes);
                 let requires_new_reader =
-                    uid == 0 || settings.platform.runtime_platform() == Platform::Azure;
+                    (uid == 0 && !legacy_default) || platform == Platform::Azure;
+                if matches!(platform, Platform::Local | Platform::Kubernetes) {
+                    let admitted = sandbox.validate_for_platform(platform);
+                    if uid == 0 && !user.is_empty() {
+                        assert_eq!(admitted.unwrap_err().code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+                    } else {
+                        admitted.expect("absent USER must retain the released non-root runtime");
+                    }
+                }
                 assert_eq!(sandbox.image_user, requires_new_reader.then_some(uid));
                 let release = serde_json::to_value(sandbox).unwrap();
                 let old = serde_json::from_value::<PreviousSandboxReader>(release);
@@ -6866,12 +6869,6 @@ mod sandbox_build_tests {
                         status.success(),
                         "pinned local image must exist in the daemon"
                     );
-                    let admitted = sandbox.validate_for_platform(Platform::Local);
-                    if uid == 0 {
-                        assert_eq!(admitted.unwrap_err().code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-                    } else {
-                        admitted.unwrap();
-                    }
                 } else {
                     let SandboxCode::Image { image: directory } = &sandbox.code else {
                         panic!("built image")
@@ -6884,7 +6881,7 @@ mod sandbox_build_tests {
                     assert_eq!(command.command, ["/start"]);
                 }
                 // Reinspection preserves both local IDs and exported Azure archives. Full
-                // planning separately refuses Local root, as asserted above.
+                // planning separately refuses explicit Local/Kubernetes root, as asserted above.
                 let reinspected =
                     prepare_prebuilt_sandbox(sandbox.clone(), &settings, output.path())
                         .await

@@ -32,8 +32,10 @@ builder cannot represent that repeated layer correctly.
 
 New builds inspect prebuilt OCI references as well as Dockerfile outputs. GCP and
 Azure bases then use the normal agent assembler; Local keeps an immutable Docker
-image ID. The resolved original USER drives planning, including root refusal on
-Local/Kubernetes and AWS modes without a connector. Existing AWS S3 bundles keep
+image ID. The resolved original USER drives planning, including explicit root refusal on
+Local/Kubernetes and root refusal on AWS modes without a connector. Images without
+USER retain the released Local/Kubernetes behavior: non-root uid 65534 and no new
+image boot contract. Absent USER still selects root boot on AWS, GCP and packaged Azure. Existing AWS S3 bundles keep
 their released startup behavior; rebuild from an OCI base to select the new image
 contract. Azure catalog builds keep their native path and emit a warning because the
 catalog does not expose the original USER/command for inspection. Native exec
