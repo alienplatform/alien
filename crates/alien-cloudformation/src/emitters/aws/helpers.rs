@@ -276,10 +276,19 @@ where
     ])
 }
 
+/// Gives every statement of one policy document a unique Sid. A statement identical to an
+/// earlier one is dropped first: two permission sets in one role can grant the same thing
+/// (`worker/management` and `worker/heartbeat` both list event source mappings).
 pub fn uniquify_iam_statement_sids(statements: Vec<CfExpression>) -> Vec<CfExpression> {
     let mut used_sids = BTreeSet::new();
+    let mut unique: Vec<CfExpression> = Vec::with_capacity(statements.len());
+    for statement in statements {
+        if !unique.contains(&statement) {
+            unique.push(statement);
+        }
+    }
 
-    statements
+    unique
         .into_iter()
         .map(|statement| {
             let CfExpression::Object(mut statement_object) = statement else {
@@ -615,11 +624,19 @@ mod tests {
 
     #[test]
     fn uniquify_iam_statement_sids_suffixes_duplicates_without_colliding() {
+        let read = |sid: &str, resource: &str| {
+            CfExpression::object([
+                ("Sid", CfExpression::from(sid)),
+                ("Resource", CfExpression::from(resource)),
+            ])
+        };
         let statements = uniquify_iam_statement_sids(vec![
-            CfExpression::object([("Sid", CfExpression::from("Read"))]),
-            CfExpression::object([("Sid", CfExpression::from("Read"))]),
-            CfExpression::object([("Sid", CfExpression::from("Read2"))]),
-            CfExpression::object([("Sid", CfExpression::from("Read"))]),
+            read("Read", "arn:a"),
+            read("Read", "arn:b"),
+            read("Read2", "arn:c"),
+            read("Read", "arn:d"),
+            // Identical to the first statement: dropped, not suffixed.
+            read("Read", "arn:a"),
         ]);
 
         let sids: Vec<String> = statements

@@ -42,10 +42,21 @@ pub struct AwsIamPolicy {
 }
 
 /// Ensures every statement in a single AWS IAM policy document has a unique
-/// Sid. Permission sets may intentionally split the same logical permission
-/// across several IAM statements when AWS requires different resource or
-/// condition blocks.
-pub fn ensure_unique_statement_sids(statements: &mut [AwsIamStatement]) {
+/// Sid. A statement identical to an earlier one is dropped: two permission sets
+/// in one role can grant the same thing (`worker/management` and
+/// `worker/heartbeat` both list event source mappings). Permission sets may
+/// also split one logical permission across several statements when AWS
+/// requires different resource or condition blocks; those keep a suffixed Sid.
+pub fn ensure_unique_statement_sids(statements: &mut Vec<AwsIamStatement>) {
+    let mut seen: Vec<AwsIamStatement> = Vec::with_capacity(statements.len());
+    statements.retain(|statement| {
+        if seen.contains(statement) {
+            return false;
+        }
+        seen.push(statement.clone());
+        true
+    });
+
     let mut used = HashSet::new();
 
     for statement in statements {
@@ -254,12 +265,12 @@ mod tests {
     use super::*;
     use crate::registry::get_permission_set;
 
-    fn statement(sid: &str) -> AwsIamStatement {
+    fn statement(sid: &str, resource: &str) -> AwsIamStatement {
         AwsIamStatement {
             sid: sid.to_string(),
             effect: "Allow".to_string(),
             action: vec!["ec2:DescribeInstances".to_string()],
-            resource: vec!["*".to_string()],
+            resource: vec![resource.to_string()],
             not_resource: Vec::new(),
             condition: None,
         }
@@ -268,9 +279,10 @@ mod tests {
     #[test]
     fn duplicate_statement_sids_are_suffixed() {
         let mut statements = vec![
-            statement("DuplicateSid"),
-            statement("DuplicateSid"),
-            statement("DuplicateSid"),
+            statement("DuplicateSid", "arn:a"),
+            statement("DuplicateSid", "arn:b"),
+            statement("Other", "*"),
+            statement("DuplicateSid", "arn:c"),
         ];
 
         ensure_unique_statement_sids(&mut statements);
@@ -279,7 +291,34 @@ mod tests {
             .iter()
             .map(|statement| statement.sid.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(sids, vec!["DuplicateSid", "DuplicateSid2", "DuplicateSid3"]);
+        assert_eq!(sids, ["DuplicateSid", "DuplicateSid2", "Other", "DuplicateSid3"]);
+    }
+
+    #[test]
+    fn a_statement_identical_to_an_earlier_one_is_dropped() {
+        let mut statements = vec![
+            statement("ListEventSourceMappings", "*"),
+            statement("Other", "*"),
+            statement("ListEventSourceMappings", "*"),
+        ];
+
+        ensure_unique_statement_sids(&mut statements);
+
+        assert_eq!(
+            statements,
+            [statement("ListEventSourceMappings", "*"), statement("Other", "*")]
+        );
+    }
+
+    #[test]
+    fn suffixed_sids_stay_within_the_iam_limit() {
+        let long_sid = "A".repeat(128);
+        let mut statements = vec![statement(&long_sid, "arn:a"), statement(&long_sid, "arn:b")];
+
+        ensure_unique_statement_sids(&mut statements);
+
+        assert_eq!(statements[0].sid, long_sid);
+        assert_eq!(statements[1].sid, format!("{}2", "A".repeat(127)));
     }
 
     #[test]
