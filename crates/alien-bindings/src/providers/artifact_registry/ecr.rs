@@ -27,9 +27,8 @@ use tracing::{info, warn};
 ///
 /// The grant runs inside a manager request, and a load balancer in front of the manager may close
 /// an idle request after 60 s. Waiting longer turns a slow replica into a gateway timeout the
-/// caller retries without ever seeing why, so the wait ends well before that and reports a
-/// retryable timeout instead. One request can grant more than one repository, so each wait stays
-/// at a fraction of that limit.
+/// caller retries without ever seeing why, so the wait ends well before that and reports the
+/// replica as not ready, which is retryable.
 const REPLICA_WAIT: Duration = Duration::from_secs(20);
 const REPLICA_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -636,7 +635,9 @@ impl EcrArtifactRegistry {
                     Ok(_) => {
                         "DescribeRepositories response did not include the repository".to_string()
                     }
-                    Err(error) => error.to_string(),
+                    // The top error alone: the full chain spans several lines and ends up in a
+                    // one-line status.
+                    Err(error) => format!("{}: {}", error.code, error.message),
                 };
                 sleep(REPLICA_POLL_INTERVAL).await;
             }
@@ -650,13 +651,11 @@ impl EcrArtifactRegistry {
             );
             return Ok(());
         }
-        Err(AlienError::new(ErrorData::Timeout {
-            operation_context: format!(
-                "Waiting for replicated ECR repository '{}' in {}",
-                repo_name, region
-            ),
+        Err(AlienError::new(ErrorData::RegistryReplicaNotReady {
+            repository: repo_name.to_string(),
+            region: region.to_string(),
             details: format!(
-                "ECR did not make the replicated repository available within {}s; last status: {}",
+                "not created within {}s; last status: {}",
                 REPLICA_WAIT.as_secs(),
                 last_status
             ),
@@ -1950,7 +1949,7 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
-        assert_eq!(error.code, "TIMEOUT", "{error}");
+        assert_eq!(error.code, "REGISTRY_REPLICA_NOT_READY", "{error}");
         assert!(error.retryable, "a replica can still appear: {error}");
         assert!(error.to_string().contains("eu-west-1"), "{error}");
         assert!(

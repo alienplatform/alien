@@ -213,6 +213,16 @@ pub enum ErrorData {
         repository: String,
     },
 
+    /// The deployment's images have no replica in its region yet, so its step is not accepted.
+    #[error(
+        code = "REGISTRY_REPLICA_PENDING",
+        message = "Deployment '{deployment_id}' waits for its images to replicate to its region; the step is retried until they have.",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    RegistryReplicaPending { deployment_id: String },
+
     /// The deployment's AWS region has no copy of the manager's artifact registry.
     #[error(
         code = "REGISTRY_REGION_NOT_SUPPORTED",
