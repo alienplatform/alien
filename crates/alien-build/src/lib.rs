@@ -778,7 +778,12 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                             &settings.get_targets(),
                                         )
                                         .await?,
-                                    );
+                                    )
+                                    .filter(|uid| {
+                                        *uid == 0
+                                            || settings.platform.runtime_platform()
+                                                == Platform::Azure
+                                    });
                                     Ok(image_uri)
                                 }
                                 .await
@@ -2533,7 +2538,8 @@ async fn prepare_prebuilt_sandbox(
     let targets = settings.get_targets();
     sandbox_identity::validate_declared_uid(&sandbox, Path::new(&directory)).await?;
     sandbox.image_user =
-        Some(sandbox_identity::built_image_user(&sandbox, Path::new(&directory), &targets).await?);
+        Some(sandbox_identity::built_image_user(&sandbox, Path::new(&directory), &targets).await?)
+            .filter(|uid| *uid == 0 || platform == Platform::Azure);
     let image = if platform == Platform::Local {
         // The local sandbox manager consumes Docker references, not archive directories.
         // Export used this daemon; its configuration digest pins the already-pulled image.
@@ -6735,6 +6741,30 @@ mod sandbox_build_tests {
         }
     }
 
+    // Reader fields from the release branch before imageUser (253e84d88).
+    // v3.3.40 is not cut yet; this is its current strict Sandbox wire contract.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    #[expect(
+        dead_code,
+        reason = "compatibility test decodes the previous wire contract"
+    )]
+    struct PreviousSandboxReader {
+        id: String,
+        #[serde(default)]
+        links: Vec<alien_core::ResourceRef>,
+        code: SandboxCode,
+        private_base_image: Option<String>,
+        limits: Option<alien_core::SandboxLimits>,
+        egress: SandboxEgress,
+        default_policy: Option<alien_core::EgressPolicy>,
+        privileged_supervisor: Option<alien_core::SandboxPrivilegedSupervisor>,
+        #[serde(alias = "session")]
+        lifecycle: SandboxLifecyclePolicy,
+        #[serde(default)]
+        preview_ports: Vec<u16>,
+    }
+
     #[tokio::test]
     async fn prebuilt_oci_user_is_inspected_and_local_images_are_pinned() {
         let (_registry, host) = dockdash::test_utils::setup_local_registry().await.unwrap();
@@ -6777,6 +6807,7 @@ mod sandbox_build_tests {
                 .unwrap();
             for platform in [
                 PlatformBuildSettings::Local {},
+                PlatformBuildSettings::Gcp {},
                 PlatformBuildSettings::Azure {},
             ] {
                 let mut settings = settings();
@@ -6800,7 +6831,16 @@ mod sandbox_build_tests {
                     .resources()
                     .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
                     .unwrap();
-                assert_eq!(sandbox.image_user, Some(uid));
+                let requires_new_reader =
+                    uid == 0 || settings.platform.runtime_platform() == Platform::Azure;
+                assert_eq!(sandbox.image_user, requires_new_reader.then_some(uid));
+                let release = serde_json::to_value(sandbox).unwrap();
+                let old = serde_json::from_value::<PreviousSandboxReader>(release);
+                if requires_new_reader {
+                    assert!(old.unwrap_err().to_string().contains("imageUser"));
+                } else {
+                    old.expect("ordinary non-root releases must remain readable before upgrade");
+                }
                 if settings.platform.runtime_platform() == Platform::Local {
                     let SandboxCode::Image { image: pinned } = &sandbox.code else {
                         panic!("built image")
@@ -6839,7 +6879,7 @@ mod sandbox_build_tests {
                     prepare_prebuilt_sandbox(sandbox.clone(), &settings, output.path())
                         .await
                         .unwrap();
-                assert_eq!(reinspected.image_user, Some(uid));
+                assert_eq!(reinspected.image_user, requires_new_reader.then_some(uid));
             }
         }
     }
@@ -6868,10 +6908,21 @@ mod sandbox_build_tests {
         )
         .await
         .expect("catalog images retain their native build path");
-        let sandbox = built.resources().find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>()).unwrap();
+        let sandbox = built
+            .resources()
+            .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+            .unwrap();
         assert_eq!(sandbox.image_user, None);
-        assert_eq!(sandbox.code, SandboxCode::Image { image: "ubuntu".into() });
-        assert!(matches!(sandbox.azure_image().unwrap(), alien_core::AzureSandboxImage::Catalog(_)));
+        assert_eq!(
+            sandbox.code,
+            SandboxCode::Image {
+                image: "ubuntu".into()
+            }
+        );
+        assert!(matches!(
+            sandbox.azure_image().unwrap(),
+            alien_core::AzureSandboxImage::Catalog(_)
+        ));
     }
 
     /// Released AWS bundles retain their old startup contract without executing a rebuild.

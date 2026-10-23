@@ -245,3 +245,26 @@ all local transport callers. Released packages that can only run the non-root
 exec identity retain their UID check. Azure uses the per-boot native-file
 credential; Local/Kubernetes use signed capabilities. Health/readiness expose
 no session operation and remain unauthenticated.
+
+## Upgrade order
+
+Ordinary non-root AWS/GCP/Local images whose boot UID already matches exec omit
+`imageUser` from new releases. Their inspected packages carry startup metadata
+without requiring a new release reader. Root and absent-USER releases retain
+`imageUser: 0`: upgrade managers/deployment agents before publishing them. An old
+strict reader intentionally rejects them rather than running root under an old
+security contract.
+
+Azure OCI packages always need the new reader, including non-root bases: the
+packaged container runs a root agent and native exec would no longer preserve
+the command identity. Upgrade managers/deployment agents and runtime clients
+before publishing Azure agent images. Native/catalog releases omit `agent` and
+retain their existing decoding and execution path. Catalog images cannot be
+inspected and warn at build time; native exec may run as root. Use an inspectable
+OCI image for the new non-root exec contract.
+
+Runtime clients from before agent transport cannot decode `agent: true`. Rollback
+requires restoring a native image and its binding together; never point an old
+native client at an agent image. Session transport labels keep agent-aware
+clients on the transport chosen when each session was created, including when a
+newer client reconnects through an older native declaration.

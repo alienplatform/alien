@@ -301,6 +301,14 @@ fn write_bundle_inner(
             path = alien_core::sandbox_image::IMAGE_COMMAND_PATH,
         ));
     }
+    // The inspected package owns boot activation even when its non-root USER
+    // needs no new release field. Old managers can read those declarations.
+    // Root declarations still carry imageUser and require an upgraded reader.
+    if image_command.is_some_and(|command| command.user.is_some()) || command_image.is_some() {
+        dockerfile.push_str(
+            "\nENV ALIEN_SANDBOX_IMAGE_COMMAND=true ALIEN_SANDBOX_EGRESS_RUN_HOOK=true\n",
+        );
+    }
     let agent_bytes = match agent {
         AgentSource::Binary(agent_binary) => Some(
             std::fs::read(agent_binary)
