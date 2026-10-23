@@ -11,6 +11,7 @@ pub mod plan;
 pub mod registry;
 pub mod sandbox_bundle;
 pub mod sandbox_identity;
+mod sandbox_manifest;
 #[cfg(test)]
 mod sandbox_publish_tests;
 pub mod settings;

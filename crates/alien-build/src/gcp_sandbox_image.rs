@@ -257,6 +257,11 @@ pub(crate) async fn build_sandbox_agent_image(
         },
     )
     .await?;
+    crate::sandbox_manifest::normalize(&image)
+        .into_alien_error()
+        .context(failed(
+            "Cannot normalize the assembled OCI layer media types".into(),
+        ))?;
     Ok(SandboxAgentImage {
         image,
         agent_digest: agent_build.resolved_manifest_digest,
@@ -1299,6 +1304,99 @@ mod tests {
             archive_at_pull.try_recv(),
             Ok(false),
             "the base archive was deleted before the agent pull"
+        );
+    }
+    #[tokio::test]
+    async fn docker_base_layers_work_with_an_oci_only_runtime() {
+        let (_registry, host) = setup_local_registry().await.unwrap();
+        let base_reference = format!("{host}/sandbox/base:docker");
+        let options = PushOptions {
+            protocol: ClientProtocol::Http,
+            ..Default::default()
+        };
+        let layer = Layer::builder()
+            .unwrap()
+            .compression(dockdash::LayerCompression::Gzip)
+            .data_with_owner("/base-marker", b"preserved base", 0o644, 0, 0)
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let (base, _) = Image::builder()
+            .platform("linux", &Arch::Amd64)
+            .layer(layer)
+            .build()
+            .await
+            .unwrap();
+        base.push(&base_reference, &options).await.unwrap();
+        // Publish the same blobs as a Docker image, as produced by docker push.
+        let reference: Reference = base_reference.parse().unwrap();
+        let (manifest, _) = client()
+            .pull_image_manifest(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
+            .await
+            .unwrap();
+        let mut docker = serde_json::to_value(manifest).unwrap();
+        docker["mediaType"] = "application/vnd.docker.distribution.manifest.v2+json".into();
+        docker["config"]["mediaType"] = "application/vnd.docker.container.image.v1+json".into();
+        for layer in docker["layers"].as_array_mut().unwrap() {
+            layer["mediaType"] = "application/vnd.docker.image.rootfs.diff.tar.gzip".into();
+        }
+        reqwest::Client::new()
+            .put(format!("http://{host}/v2/sandbox/base/manifests/docker"))
+            .header(
+                "Content-Type",
+                "application/vnd.docker.distribution.manifest.v2+json",
+            )
+            .body(serde_json::to_vec(&docker).unwrap())
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let agent = format!("{host}/sandbox/agent:test");
+        push_image(&agent, &[(AGENT_PATH, b"agent")]).await;
+        let (base, _) = Image::builder()
+            .from(&base_reference)
+            .protocol(ClientProtocol::Http)
+            .platform("linux", &Arch::Amd64)
+            .pull_policy(PullPolicy::Always)
+            .build()
+            .await
+            .unwrap();
+        let result = build_azure_sandbox_image(
+            "box",
+            base,
+            &base_reference,
+            &agent,
+            ClientProtocol::Http,
+            RegistryAuth::Anonymous,
+            default_cache(),
+        )
+        .await
+        .unwrap();
+        let target = format!("{host}/sandbox/output:oci");
+        result.image.push(&target, &options).await.unwrap();
+        // A strict OCI consumer must actually download all layers successfully.
+        let pulled = client()
+            .pull(
+                &target.parse().unwrap(),
+                &oci_client::secrets::RegistryAuth::Anonymous,
+                vec!["application/vnd.oci.image.layer.v1.tar+gzip"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(pulled.layers.len(), 2);
+        assert_eq!(
+            pushed_file(&target, ClientProtocol::Http, "/base-marker")
+                .await
+                .as_deref(),
+            Some("preserved base")
+        );
+        assert_eq!(
+            pushed_file(&target, ClientProtocol::Http, AGENT_PATH)
+                .await
+                .as_deref(),
+            Some("agent")
         );
     }
 }
