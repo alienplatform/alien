@@ -64,7 +64,7 @@ case "$command" in
           linux/arm64) echo " b7 00" ;;
         esac
         ;;
-      *"uid=1000(sandbox)"*)
+      *"root supervisor runs as"*)
         inject identity
         ;;
       *"tool probe:"*)

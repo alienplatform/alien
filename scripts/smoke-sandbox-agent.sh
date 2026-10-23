@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
 # Qualify a published GCP sandbox image on each platform it ships for: the
-# architecture it actually contains, the identity and filesystem it grants the
-# supervised command, its rejection of an invalid config, and a real run that
+# architecture it actually contains, its root agent and non-root exec identities,
+# filesystem permissions, rejection of an invalid config, and a real run that
 # reaches its listener and stays up. With --tools, also that every command in the
-# list file (one per line, `#` comments skipped) runs as the image's user.
+# list file (one per line, `#` comments skipped) runs as the non-root exec user.
 #
 # Usage: scripts/smoke-sandbox-agent.sh [--platforms <p1,p2>] [--tools <list-file>] <image-reference>
 set -euo pipefail
@@ -116,8 +116,12 @@ for platform in "${platform_list[@]}"; do
   # The probe's expansions belong to the container's shell, not this one.
   # shellcheck disable=SC2016
   if ! identity=$(timeout -k 5 60 docker run --rm --platform "$platform" --entrypoint /bin/sh "$image" -c '
-        id | grep -q "uid=1000(sandbox) gid=1000(sandbox)" ||
-          { echo "runs as $(id), not uid=1000(sandbox) gid=1000(sandbox)"; exit 1; }
+        test "$(id -u):$(id -g)" = 0:0 ||
+          { echo "root supervisor runs as $(id), not uid=0 gid=0"; exit 1; }
+        test "$ALIEN_SANDBOX_EXEC_UID:$ALIEN_SANDBOX_EXEC_GID" = 1000:1000 ||
+          { echo "exec identity is not uid=1000 gid=1000"; exit 1; }
+        test "$ALIEN_SANDBOX_ISOLATION" = uid-split ||
+          { echo "ALIEN_SANDBOX_ISOLATION is ${ALIEN_SANDBOX_ISOLATION:-unset}, not uid-split"; exit 1; }
         test "$ALIEN_SANDBOX_AUTHORIZATION" = transport ||
           { echo "ALIEN_SANDBOX_AUTHORIZATION is ${ALIEN_SANDBOX_AUTHORIZATION:-unset}, not transport"; exit 1; }
         test "$ALIEN_SANDBOX_PORT" = 8080 ||
@@ -132,6 +136,7 @@ for platform in "${platform_list[@]}"; do
     tools_budget=120
     status=0
     tools_out=$(timeout -k 5 "$tools_budget" docker run --rm --name "$probe" --platform "$platform" \
+      --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges \
       --entrypoint /bin/sh "$image" -c "$tools_probe" sh "${tools[@]}" 2>&1) || status=$?
     if [ "$status" -ne 0 ]; then
       # The probe exits only 0 or 1. A 137 is our deadline when the container outlived its
@@ -166,10 +171,12 @@ for platform in "${platform_list[@]}"; do
     esac
   fi
   # The unlink rather than the file mode: only the directory permission stops the
-  # supervised command removing its own supervisor. Removing a file it may remove first,
+  # exec user removing its supervisor. Removing a file it may remove first,
   # so a denial is what fails the rm and not an rm that is missing or broken.
   status=0
-  unlink=$(timeout -k 5 60 docker run --rm --platform "$platform" --entrypoint /bin/sh "$image" \
+  unlink=$(timeout -k 5 60 docker run --rm --platform "$platform" \
+    --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges \
+    --entrypoint /bin/sh "$image" \
     -c 'touch /sandbox/probe && rm /sandbox/probe &&
         ! rm -f /usr/local/bin/alien-sandbox-agent &&
         test -x /usr/local/bin/alien-sandbox-agent' 2>&1) || status=$?
@@ -210,7 +217,7 @@ for platform in "${platform_list[@]}"; do
   done
 
   # Every run above is built to fail. Started as it ships, the listening line means
-  # attribution_works() returned true under USER 1000:1000 and the bind took. A dead
+  # the root agent verified its non-root exec identity and the bind took. A dead
   # container's log reads the same, so the inspect is what makes the line mean it still.
   status=0
   container=$(timeout -k 5 60 docker run -d --platform "$platform" "$image") || status=$?
