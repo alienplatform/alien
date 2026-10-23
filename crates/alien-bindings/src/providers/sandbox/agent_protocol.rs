@@ -33,13 +33,14 @@ const JOB_START: &str = "sandbox.jobStart";
 const JOB_POLL: &str = "sandbox.jobPoll";
 const JOB_CANCEL: &str = "sandbox.jobCancel";
 
-/// How long a request to the agent may take to answer with its headers.
+/// How long agent response headers or a non-success response body may take to arrive.
 ///
-/// Bounds reaching the agent, not what it then streams: a command's own deadline governs its
-/// output. Wrapped around `send()` alone rather than set as the request's timeout, which reqwest
-/// runs until the whole body has arrived and so would cut off any command outliving it. A caller
-/// cancelling a command waits for this request to settle before it can close the stream, so an
-/// unbounded one would leave that cancel unable to complete.
+/// Bounds reaching the agent and reading an error, not successful streams: a command's own
+/// deadline governs its output. Applied separately to headers and error bodies rather than set
+/// as the request's timeout, which reqwest runs until the whole body has arrived and so would
+/// cut off any command outliving it. A caller cancelling a command waits for this request to
+/// settle before it can close the stream, so an unbounded one would leave that cancel unable
+/// to complete.
 #[cfg(not(test))]
 pub(super) const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Short in tests so a stalled agent is exercised in milliseconds rather than waited out.
@@ -428,9 +429,15 @@ pub(super) async fn check_response(
     // Read the body first: the agent puts the actual cause there, and a bare status turns a
     // specific refusal into a guess. A read that *fails* is not an empty body — collapsing the
     // two would let a dropped connection claim the request never arrived.
-    let body = match response.text().await {
-        Ok(body) => body,
-        Err(error) => {
+    let body = match tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, response.text()).await {
+        Ok(Ok(body)) => body,
+        Err(_) => {
+            return Err(AlienError::new(unanswered(
+                operation,
+                &format!("{operation} returned {status} and its body exceeded the response deadline"),
+            )))
+        }
+        Ok(Err(error)) => {
             return Err(error).into_alien_error().context(unanswered(
                 operation,
                 &format!("{operation} returned {status} and its body could not be read"),

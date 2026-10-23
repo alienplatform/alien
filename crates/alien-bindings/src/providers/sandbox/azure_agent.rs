@@ -356,6 +356,7 @@ impl AgentTransport for AzureSandbox {
                     .is_some_and(|current| fresh.token == current.token && fresh.url == current.url)
             {
                 *cached = previous;
+                drop(cached);
                 return agent_protocol::check_response(
                     response.ok_or_else(invalid_route)?,
                     operation,
@@ -1236,5 +1237,175 @@ mod tests {
                 .is_none());
             server.abort();
         }
+    }
+    #[tokio::test]
+    async fn stalled_error_body_is_bounded_and_never_replayed() {
+        for status in ["403 Forbidden", "500 Internal Server Error"] {
+            for operation in ["sandbox.runCommand", "sandbox.jobStart", "sandbox.readFile"] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}/", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = [0; 4096];
+                    assert!(socket.read(&mut request).await.unwrap() > 0);
+                    socket
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 {status}\r\nContent-Length: 100\r\n\r\npartial error"
+                            )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                    std::future::pending::<()>().await;
+                });
+                let mut native = MockSandboxDataPlaneApi::new();
+                native.expect_agent_port_url().never();
+                let provider = AzureSandbox::new(
+                    Arc::new(native),
+                    "group".into(),
+                    "image".into(),
+                    SandboxEgress::None,
+                    None,
+                    "1000m".into(),
+                    "2048Mi".into(),
+                    None,
+                );
+                *provider.connection_slot("session").await.lock().await = Some(Connection {
+                    client: reqwest::Client::builder().no_proxy().build().unwrap(),
+                    url: url.parse().unwrap(),
+                    token: STANDARD.encode([7u8; 32]),
+                });
+                let request = provider
+                    .request("session", reqwest::Method::POST, "/v1/test")
+                    .await
+                    .unwrap();
+                let result = tokio::time::timeout(
+                    agent_protocol::AGENT_RESPONSE_TIMEOUT * 3,
+                    provider.send("session", request, operation),
+                )
+                .await
+                .expect("a stalled error body must not hang the operation");
+                let error = result.unwrap_err();
+                let idempotent = operation == "sandbox.readFile";
+                assert_eq!(
+                    error.code,
+                    if idempotent {
+                        "SANDBOX_UNREACHABLE"
+                    } else {
+                        "SANDBOX_OUTCOME_UNKNOWN"
+                    }
+                );
+                assert_eq!(error.retryable, idempotent);
+                assert!(error.to_string().contains("body"), "{error}");
+                assert!(provider
+                    .connection_slot("session")
+                    .await
+                    .lock()
+                    .await
+                    .is_none());
+                server.abort();
+                assert!(server.await.unwrap_err().is_cancelled());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stalled_unauthorized_body_does_not_block_same_session() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let router = Router::new()
+            .route(
+                "/v1/first",
+                post(move || {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    async {
+                        (
+                            axum::http::StatusCode::UNAUTHORIZED,
+                            axum::body::Body::from_stream(futures::stream::pending::<
+                                std::result::Result<bytes::Bytes, std::io::Error>,
+                            >()),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/v1/second",
+                post(|| async { axum::http::StatusCode::NO_CONTENT }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let refreshed = Arc::new(tokio::sync::Notify::new());
+        let notify_refresh = refreshed.clone();
+        let mut native = MockSandboxDataPlaneApi::new();
+        let fresh_url = url.clone();
+        native
+            .expect_agent_port_url()
+            .times(1)
+            .returning(move |_, _, _| Ok(fresh_url.clone()));
+        native
+            .expect_read_file()
+            .times(1)
+            .returning(move |_, _, _| {
+                notify_refresh.notify_one();
+                Ok(STANDARD.encode([7u8; 32]).into_bytes())
+            });
+        native.expect_get_sandbox().never();
+        let provider = AzureSandbox::new(
+            Arc::new(native),
+            "group".into(),
+            "image".into(),
+            SandboxEgress::None,
+            None,
+            "1000m".into(),
+            "2048Mi".into(),
+            None,
+        );
+        *provider.connection_slot("session").await.lock().await = Some(Connection {
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            url: url.parse().unwrap(),
+            token: STANDARD.encode([7u8; 32]),
+        });
+        let request = provider
+            .request("session", reqwest::Method::POST, "/v1/first")
+            .await
+            .unwrap();
+        let first = provider.send("session", request, "sandbox.runCommand");
+        tokio::pin!(first);
+        tokio::time::timeout(agent_protocol::AGENT_RESPONSE_TIMEOUT * 3, async {
+            tokio::select! {
+                result = &mut first => panic!("first call should be reading its stalled body: {result:?}"),
+                _ = refreshed.notified() => {}
+            }
+        }).await.expect("the first call must refresh its credential");
+        // Leave the first future parked in its body read. The second call must finish
+        // without needing the first call to finish or its body deadline to expire.
+        let second = tokio::time::timeout(agent_protocol::AGENT_RESPONSE_TIMEOUT * 3, async {
+            let request = provider
+                .request("session", reqwest::Method::POST, "/v1/second")
+                .await
+                .unwrap();
+            provider.send("session", request, "sandbox.readFile").await
+        })
+        .await
+        .expect("a stalled 401 body must not hold the session cache lock")
+        .unwrap();
+        assert_eq!(second.status(), reqwest::StatusCode::NO_CONTENT);
+        let error = tokio::time::timeout(agent_protocol::AGENT_RESPONSE_TIMEOUT * 3, first)
+            .await
+            .expect("the stalled 401 must meet its body deadline")
+            .unwrap_err();
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN");
+        assert!(!error.retryable);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the first operation must not replay"
+        );
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
     }
 }
