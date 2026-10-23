@@ -6,6 +6,43 @@ use futures::FutureExt;
 use tokio::process::Command;
 
 #[tokio::test]
+async fn tmp_preparation_preserves_files_and_repairs_restrictive_permissions() {
+    let directory = tempfile::tempdir().unwrap();
+    let bindings = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
+    let manager = bindings.container_manager().unwrap();
+    let id = format!(
+        "tmp-permissions-{}",
+        directory.path().file_name().unwrap().to_string_lossy()
+    );
+    let tmp = prepare_container_tmp_dir(&manager, &id).await.unwrap();
+    assert_eq!(
+        tmp.metadata().unwrap().permissions().mode() & 0o7777,
+        0o1777
+    );
+
+    let retained = tmp.join("retained");
+    tokio::fs::write(&retained, b"keep existing temporary data")
+        .await
+        .unwrap();
+    tokio::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o700))
+        .await
+        .unwrap();
+
+    for _ in 0..2 {
+        assert_eq!(prepare_container_tmp_dir(&manager, &id).await.unwrap(), tmp);
+        assert_eq!(
+            tmp.metadata().unwrap().permissions().mode() & 0o7777,
+            0o1777
+        );
+        assert_eq!(
+            tokio::fs::read(&retained).await.unwrap(),
+            b"keep existing temporary data"
+        );
+    }
+    tokio::fs::remove_dir_all(tmp).await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "requires Docker CLI, OCI-capable Buildx, and registry access"]
 async fn non_root_tmp_writes_survive_saved_health_and_ready_checkpoints() {
     let directory = tempfile::tempdir().unwrap();
