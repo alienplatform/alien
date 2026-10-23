@@ -3,14 +3,64 @@
 //! Each scenario uses the sample emitter so the snapshot stays focused
 //! on the registration surface (custom resource, outputs, both).
 
-use super::helpers::{render_sample, render_sample_template, sample_stack, SampleResource};
-use alien_cloudformation::{CfExpression, RegistrationMode};
-use alien_core::{ResourceLifecycle, ResourceRef, Stack, StackSettings};
+use super::helpers::{
+    render_built_ins_template, render_sample, render_sample_template, sample_stack, SampleResource,
+};
+use alien_cloudformation::{CfExpression, CloudFormationTarget, RegistrationMode};
+use alien_core::{Kv, ResourceLifecycle, ResourceRef, Stack, StackSettings};
 use indexmap::indexmap;
 
 const LAMBDA_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:setup-registration";
 const REGISTRATION: &str = "DeploymentRegistration";
 const SETUP_STARTED: &str = "DeploymentSetupStarted";
+
+#[test]
+fn registration_signals_preserve_resources_with_matching_names() {
+    let stack = Stack::new("registration-names".to_string())
+        .add(
+            Kv::new("deployment-setup-started".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Kv::new("deployment-registration".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let (template, _) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::CustomResource {
+            lambda_arn: LAMBDA_ARN.to_string(),
+            callback_url: None,
+        },
+        CloudFormationTarget::Aws,
+        "aws",
+        "registration reserved resource names",
+    );
+
+    for logical_id in ["DeploymentSetupStarted2", "DeploymentRegistration2"] {
+        assert_eq!(
+            template.resources[logical_id].resource_type,
+            "AWS::DynamoDB::Table"
+        );
+        assert!(template.resources[REGISTRATION]
+            .depends_on
+            .contains(&logical_id.to_string()));
+        let registration = serde_json::to_value(&template.resources[REGISTRATION])
+            .expect("registration should serialize");
+        assert!(registration
+            .to_string()
+            .contains(&format!("\"{logical_id}\",\"Arn\"")));
+    }
+    assert_eq!(
+        template.resources[SETUP_STARTED].resource_type,
+        "AWS::CloudFormation::CustomResource"
+    );
+    assert_eq!(
+        template.resources[REGISTRATION].resource_type,
+        "AWS::CloudFormation::CustomResource"
+    );
+}
 
 /// `DeploymentSetupStarted` tells the registration endpoint that the stack
 /// began creating, long before the registration resource (which waits for
