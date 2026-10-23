@@ -19,16 +19,25 @@ const CGROUP: &str = "/sys/fs/cgroup/alien-guest";
 /// Runs once during privileged bootstrap, before capabilities are reduced.
 /// A missing cgroup/BPF facility is fatal; UID exemptions cannot contain a root image.
 pub(super) fn install(mark_sockets: bool) -> io::Result<()> {
-    fs::create_dir(CGROUP)?;
+    fs::create_dir(CGROUP).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            io::Error::new(
+                error.kind(),
+                "guest cgroup isolation is already installed; bootstrap must install it only once",
+            )
+        } else {
+            error
+        }
+    })?;
     let cgroup = File::open(CGROUP)?;
     if mark_sockets {
         attach(&cgroup, &load_socket_marker()?, 2)?; // BPF_CGROUP_INET_SOCK_CREATE
     }
     // Provider VMs can expose raw disks without Docker's device controller. A
-    // read-only bind mount does not protect its backing device. Deny block-device
-    // access at the cgroup boundary, covering existing nodes and newly created ones
-    // at every path, without altering provider device access or snapshot restore.
-    attach(&cgroup, &load_block_device_filter()?, 6)?; // BPF_CGROUP_DEVICE
+    // read-only bind mount does not protect its backing device. Permit only ordinary
+    // character devices: raw SCSI/NVMe character nodes can also write backing disks.
+    // This covers every path without changing provider device access or snapshot restore.
+    attach(&cgroup, &load_device_filter()?, 6)?; // BPF_CGROUP_DEVICE
     fs::write(
         format!("{CGROUP}/cgroup.procs"),
         std::process::id().to_string(),
@@ -75,6 +84,8 @@ fn attach(cgroup: &File, program: &OwnedFd, attach_type: u32) -> io::Result<()> 
         replace_fd: 0,
     };
     // A non-override attachment applies to every descendant cgroup as well.
+    // SAFETY: attach has the BPF_PROG_ATTACH layout and both descriptors remain live
+    // throughout the syscall; the kernel copies the attributes before returning.
     if unsafe { libc::syscall(libc::SYS_bpf, 8, &attach, size_of::<Attach>()) } < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -89,51 +100,51 @@ struct Instruction {
     immediate: i32,
 }
 
-fn load_block_device_filter() -> io::Result<OwnedFd> {
-    // bpf_cgroup_dev_ctx.access_type's low 16 bits identify the device type.
-    // Deny every block device (1), for read, write and mknod. Character devices
-    // retain the provider's restrictions, including terminals and /dev/null.
-    load_program(
-        15,
-        &[
-            Instruction {
-                opcode: 0x61,
-                registers: 0x12,
-                offset: 0,
-                immediate: 0,
-            },
-            Instruction {
-                opcode: 0x54,
-                registers: 2,
-                offset: 0,
-                immediate: 0xffff,
-            },
-            Instruction {
-                opcode: 0xb7,
-                registers: 0,
-                offset: 0,
-                immediate: 0,
-            },
-            Instruction {
-                opcode: 0x15,
-                registers: 2,
-                offset: 1,
-                immediate: 1,
-            },
-            Instruction {
-                opcode: 0xb7,
-                registers: 0,
-                offset: 0,
-                immediate: 1,
-            },
-            Instruction {
-                opcode: 0x95,
-                registers: 0,
-                offset: 0,
-                immediate: 0,
-            },
-        ],
-    )
+fn load_device_filter() -> io::Result<OwnedFd> {
+    let instruction = |opcode, registers, offset, immediate| Instruction {
+        opcode,
+        registers,
+        offset,
+        immediate,
+    };
+    // bpf_cgroup_dev_ctx: access_type, major, minor. The low 16 bits of
+    // access_type identify character devices (2); every access kind uses this list.
+    let mut instructions = vec![
+        instruction(0x61, 0x12, 0, 0), // r2 = access_type
+        instruction(0x54, 2, 0, 0xffff),
+        instruction(0x55, 2, 0, 2), // non-character devices jump to deny
+        instruction(0x61, 0x12, 4, 0), // r2 = major
+        instruction(0x61, 0x13, 8, 0), // r3 = minor
+    ];
+    // null, zero, full, random, urandom, tty, console, ptmx. FUSE is not needed
+    // by the agent; neither it nor any other character device gets a blanket grant.
+    let mut allow_jumps = Vec::new();
+    for (major, minor) in [
+        (1, 3),
+        (1, 5),
+        (1, 7),
+        (1, 8),
+        (1, 9),
+        (5, 0),
+        (5, 1),
+        (5, 2),
+    ] {
+        instructions.push(instruction(0x55, 2, 2, major)); // next rule on major mismatch
+        instructions.push(instruction(0x55, 3, 1, minor)); // next rule on minor mismatch
+        allow_jumps.push(instructions.len());
+        instructions.push(instruction(0x05, 0, 0, 0)); // matching pair jumps to allow
+    }
+    allow_jumps.push(instructions.len());
+    instructions.push(instruction(0x15, 2, 0, 136)); // pts, every minor
+    let deny = instructions.len();
+    instructions.extend([instruction(0xb7, 0, 0, 0), instruction(0x95, 0, 0, 0)]);
+    let allow = instructions.len();
+    instructions.extend([instruction(0xb7, 0, 0, 1), instruction(0x95, 0, 0, 0)]);
+    instructions[2].offset = (deny - 3) as i16;
+    for index in allow_jumps {
+        instructions[index].offset = (allow - index - 1) as i16;
+    }
+    load_program(15, &instructions)
 }
 
 fn load_socket_marker() -> io::Result<OwnedFd> {

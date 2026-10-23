@@ -259,6 +259,18 @@ Upgrade managers/deployment agents before publishing any rebuilt AWS image or ro
 image. An old strict reader rejects these releases before it can deploy a bundle
 without the required startup privileges. Saved AWS S3 releases remain unchanged.
 
+In the reverse upgrade direction, older CLIs (including v3.3.39 and the v3.3.40
+candidate) omit `imageUser`. A new packages builder preserves the command metadata
+but does not bake privileged activation into the AWS bundle. Deployment injects
+activation and grants capabilities together, so old releases keep the released
+legacy startup path. This also applies to declarations generated directly from
+TypeScript. Rebuild with an updated CLI to adopt OCI USER startup.
+
+Integrations pinning the packages builder must update calls to `write_bundle`:
+it now takes the inspected `BaseIdentity` as its fourth argument. Inspect the
+same base image used by the bundle; do not synthesize an identity from release
+metadata that an older CLI may omit.
+
 Azure OCI packages always need the new reader, including non-root bases: the
 packaged container runs a root agent and native exec would no longer preserve
 the command identity. Upgrade managers/deployment agents and runtime clients
@@ -344,8 +356,16 @@ creating block devices, including provider-supplied nodes and nodes anywhere in
 the image filesystem. The provider remains outside this cgroup for restore and
 native control operations. The guest cgroup mount is read-only and an inherited
 seccomp filter denies BPF operations, so guest root cannot remove the device
-filter. Missing cgroup device support stops startup. Character devices remain
-available and the root capability grant is unchanged.
+filter. AWS and Azure require cgroup2 with CGROUP_BPF; missing support stops
+startup. The root capability grant is unchanged, but loop devices, blkid/fdisk,
+and device mapper no longer work for guest root.
+
+Only these character devices remain available: null (1:3), zero (1:5), full
+(1:7), random (1:8), urandom (1:9), tty (5:0), console (5:1), ptmx (5:2), and
+pts (136:*). FUSE is not required by the agent and is not allowed. Raw SCSI sg,
+bsg, NVMe generic ng, and every other character device are denied for reads,
+writes and mknod, including nodes the image already contains. Ordinary terminal
+I/O and PTY allocation remain supported.
 
 GCP's sandbox kernel exposes no block devices and rejects block-node creation in
 live qualification; its provider device boundary remains required. The agent's

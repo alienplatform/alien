@@ -71,17 +71,24 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt::init();
 
-    let state = Arc::new(load_state()?);
-    let port: u16 = parse(ENV_PORT)?;
     let aws_image_transport =
         image_command_enabled()? && alien_sandbox_agent::image_command::defer_to_run_hook()?;
+    if aws_image_transport && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file") {
+        return Err(invalid(
+            ENV_AUTHORIZATION,
+            "native-file cannot be combined with AWS Run-hook transport",
+        ));
+    }
+    let state = Arc::new(load_state()?);
+    let port: u16 = parse(ENV_PORT)?;
     let network_admin = std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() || aws_image_transport;
     #[cfg(target_os = "linux")]
     if aws_image_transport && state.gateway_egress.is_none() {
         alien_sandbox_agent::gateway_egress::isolate_control_callers()?;
     }
     #[cfg(target_os = "linux")]
-    if image_command_enabled()? && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file") {
+    if image_command_enabled()? && std::env::var(ENV_AUTHORIZATION).as_deref() == Ok("native-file")
+    {
         alien_sandbox_agent::gateway_egress::isolate_image_devices()?;
     }
     if network_admin || image_command_enabled()? {

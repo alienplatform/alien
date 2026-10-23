@@ -151,3 +151,82 @@ print(json.dumps({'uid':os.getuid(), 'tcpRedirect':True, 'dnsRedirect':True, 'ma
         .join()
         .expect("every guest DNS request redirected");
 }
+
+#[test]
+#[ignore = "requires isolated mount/cgroup namespaces, ALL capabilities and Python 3"]
+fn device_allowlist_denies_raw_commands_and_preserves_terminals() {
+    let directory = tempfile::tempdir().unwrap();
+    // Create nodes before confinement too: denying mknod alone is insufficient.
+    let nodes = Command::new("python3")
+        .arg("-c")
+        .arg(
+            r#"
+import os, stat, sys
+for major, minor in [(1,1), (21,0), (10,236), (10,229), (240,0), (241,0)]:
+    os.mknod(f'{sys.argv[1]}/{major}-{minor}', stat.S_IFCHR | 0o666, os.makedev(major,minor))
+"#,
+        )
+        .arg(directory.path())
+        .status()
+        .unwrap();
+    assert!(nodes.success());
+    super::guest_network::install(false).unwrap();
+    let repeated = super::guest_network::install(false).unwrap_err();
+    assert_eq!(repeated.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(repeated
+        .to_string()
+        .contains("bootstrap must install it only once"));
+    for uid in [0, 60000] {
+        let mut child = Command::new("python3");
+        child
+            .arg("-c")
+            .arg(
+                r#"
+import errno, os, stat, sys, termios, tty
+if os.getuid() == 0:
+    for major, minor in [(1,1), (21,0), (10,236), (10,229), (240,0), (241,0)]:
+        path=f'{sys.argv[1]}/{major}-{minor}'
+        for flags in [os.O_RDONLY, os.O_WRONLY, os.O_RDWR]:
+            try: fd=os.open(path,flags | os.O_NONBLOCK)
+            except OSError as error: assert error.errno == errno.EPERM, (path,error)
+            else: os.close(fd); raise AssertionError(('raw device open',path))
+        try: os.mknod(path+'-new',stat.S_IFCHR | 0o600,os.makedev(major,minor))
+        except OSError as error: assert error.errno == errno.EPERM, (path,error)
+        else: raise AssertionError(('raw device mknod',path))
+    for major, minor in [(1,3),(1,5),(1,7),(1,8),(1,9),(5,0),(5,1),(5,2),(136,0)]:
+        path=f'{sys.argv[1]}/allowed-{major}-{minor}'
+        os.mknod(path,stat.S_IFCHR | 0o600,os.makedev(major,minor))
+        os.unlink(path)
+with open('/dev/null','wb') as f: assert f.write(b'normal output') == 13
+with open('/dev/zero','rb') as f: assert f.read(16) == bytes(16)
+for path in ['/dev/random','/dev/urandom']:
+    with open(path,'rb') as f: assert len(f.read(16)) == 16
+try:
+    fd=os.open('/dev/full',os.O_WRONLY)
+    try: os.write(fd,b'x')
+    finally: os.close(fd)
+except OSError as error: assert error.errno == errno.ENOSPC
+else: raise AssertionError('/dev/full accepted a write')
+master,slave=os.openpty()
+tty.setraw(slave)
+assert os.major(os.fstat(slave).st_rdev) == 136
+os.write(master,b'input'); assert os.read(slave,5)==b'input'
+os.write(slave,b'output'); assert os.read(master,6)==b'output'
+os.close(master); os.close(slave)
+print(f'uid={os.getuid()} ordinary devices and PTY work; raw devices denied')
+"#,
+            )
+            .arg(directory.path());
+        // SAFETY: only async-signal-safe privilege syscalls execute before exec.
+        unsafe {
+            child.pre_exec(move || {
+                privilege::restrict_supervisor(false)?;
+                privilege::drop_image_to(ExecIdentity { uid, gid: uid })
+            });
+        }
+        assert!(
+            child.status().unwrap().success(),
+            "device contract for UID {uid}"
+        );
+    }
+}

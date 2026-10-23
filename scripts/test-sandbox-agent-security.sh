@@ -36,6 +36,7 @@ docker create --name "$container" --privileged --cgroupns=private \
       privilege::tests::root_image_capabilities_survive_exec_without_network_administration \
       privilege::tests::root_image_does_not_inherit_supervisor_network_administration \
       privilege::tests::cgroup_attribution_filters_bpf_without_disabling_ipv6 \
+      gateway_egress::guest_network_tests::device_allowlist_denies_raw_commands_and_preserves_terminals \
       image_command::tests::saved_image_user_controls_boot_without_changing_exec_identity \
       image_command::tests::legacy_egress_refuses_root_image_before_spawn \
       peer::tests::socket_mark_separates_provider_from_every_guest_uid \
@@ -44,7 +45,8 @@ docker create --name "$container" --privileged --cgroupns=private \
     do
       /agent-tests --list --ignored --exact "$name" | grep -Fx "$name: test"
       unshare --mount /agent-tests --ignored --exact "$name" --nocapture
-      if test "$name" = privilege::tests::cgroup_attribution_filters_bpf_without_disabling_ipv6; then
+      if test "$name" = privilege::tests::cgroup_attribution_filters_bpf_without_disabling_ipv6 ||
+         test "$name" = gateway_egress::guest_network_tests::device_allowlist_denies_raw_commands_and_preserves_terminals; then
         rmdir /sys/fs/cgroup/alien-guest
       fi
     done
