@@ -7120,18 +7120,28 @@ mod sandbox_build_tests {
             .unwrap();
         assert!(built_image.status.success(), "{:?}", built_image);
         let inspected = Command::new("docker")
-            .args(["image", "inspect", "--format", "{{.Id}}", &tag])
+            .args([
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}} {{.Architecture}}",
+                &tag,
+            ])
             .output()
             .await
             .unwrap();
         assert!(inspected.status.success());
-        let image_id = String::from_utf8(inspected.stdout)
-            .unwrap()
-            .trim()
-            .to_owned();
+        let metadata = String::from_utf8(inspected.stdout).unwrap();
+        let (id, architecture) = metadata.trim().split_once(' ').unwrap();
+        let image_id = id.to_owned();
+        let target = match architecture {
+            "amd64" => BinaryTarget::LinuxX64,
+            "arm64" => BinaryTarget::LinuxArm64,
+            other => panic!("unsupported Docker fixture architecture: {other}"),
+        };
         let mut settings = settings();
         settings.platform = PlatformBuildSettings::Local {};
-        settings.targets = Some(vec![BinaryTarget::LinuxX64]);
+        settings.targets = Some(vec![target]);
         settings.output_directory = output.path().to_string_lossy().into_owned();
         let sandbox = Sandbox::new("local-only".into())
             .code(SandboxCode::Image { image: tag.clone() })
