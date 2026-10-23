@@ -782,8 +782,10 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                     )
                                     .filter(|uid| {
                                         *uid == 0
-                                            || settings.platform.runtime_platform()
-                                                == Platform::Azure
+                                            || matches!(
+                                                settings.platform.runtime_platform(),
+                                                Platform::Aws | Platform::Azure
+                                            )
                                     });
                                     Ok(image_uri)
                                 }
@@ -2538,7 +2540,7 @@ async fn prepare_prebuilt_sandbox(
     sandbox_identity::validate_declared_uid(&sandbox, Path::new(&directory)).await?;
     sandbox.image_user =
         Some(sandbox_identity::built_image_user(&sandbox, Path::new(&directory), &targets).await?)
-            .filter(|uid| *uid == 0 || platform == Platform::Azure);
+            .filter(|uid| *uid == 0 || matches!(platform, Platform::Aws | Platform::Azure));
     let image = if platform == Platform::Local {
         // The local sandbox manager consumes Docker references, not archive directories.
         // Export used this daemon; its configuration digest pins the already-pulled image.
@@ -6892,6 +6894,92 @@ mod sandbox_build_tests {
         }
     }
 
+    #[tokio::test]
+    async fn aws_nonroot_release_retains_inspected_boot_requirements() {
+        let (_registry, host) = dockdash::test_utils::setup_local_registry().await.unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let reference = format!("{host}/project/sandbox:app");
+        let layer = dockdash::Layer::builder()
+            .unwrap()
+            .compression(dockdash::LayerCompression::Gzip)
+            .data_with_owner(
+                "/etc/passwd",
+                b"app:x:2001:2001::/home/app:/bin/sh\n",
+                0o644,
+                0,
+                0,
+            )
+            .unwrap()
+            .data_with_owner("/etc/group", b"app:x:2001:\n", 0o644, 0, 0)
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let (image, _) = DockDashImage::builder()
+            .platform("linux", &dockdash::Arch::ARM64)
+            .user("app")
+            .entrypoint(vec!["/start".into()])
+            .layer(layer)
+            .build()
+            .await
+            .unwrap();
+        image
+            .push(
+                &reference,
+                &dockdash::PushOptions {
+                    protocol: dockdash::ClientProtocol::Http,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        for egress in [
+            SandboxEgress::Allow,
+            SandboxEgress::None,
+            SandboxEgress::Internet,
+        ] {
+            let mut settings = settings();
+            settings.output_directory = output.path().to_string_lossy().into_owned();
+            let sandbox = Sandbox::new("sbx".into())
+                .code(SandboxCode::Image {
+                    image: reference.clone(),
+                })
+                .egress(egress)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let built = build_stack(
+                Stack::new("metadata".into())
+                    .add(sandbox, ResourceLifecycle::Frozen)
+                    .build(),
+                &settings,
+            )
+            .await
+            .unwrap();
+            let sandbox = built
+                .resources()
+                .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+                .unwrap();
+            assert_eq!(
+                sandbox.image_user,
+                Some(2001),
+                "deployment must retain the inspected package's privileged startup requirement"
+            );
+            let environment =
+                alien_core::sandbox_egress::aws_sandbox_agent_environment(&built, sandbox);
+            assert_eq!(environment["ALIEN_SANDBOX_IMAGE_COMMAND"], "true");
+            assert_eq!(environment["ALIEN_SANDBOX_EGRESS_RUN_HOOK"], "true");
+            let old = serde_json::from_value::<PreviousSandboxReader>(
+                serde_json::to_value(sandbox).unwrap(),
+            );
+            assert!(
+                old.unwrap_err().to_string().contains("imageUser"),
+                "old managers must refuse the package rather than omit its capability grant"
+            );
+        }
+    }
     #[tokio::test]
     async fn a_catalog_build_preserves_native_execution() {
         let output = tempfile::tempdir().unwrap();

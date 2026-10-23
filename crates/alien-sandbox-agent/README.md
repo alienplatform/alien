@@ -250,12 +250,14 @@ no session operation and remain unauthenticated.
 
 ## Upgrade order
 
-Ordinary non-root AWS/GCP/Local images whose boot UID already matches exec omit
-`imageUser` from new releases. Their inspected packages carry startup metadata
-without requiring a new release reader. Root and absent-USER releases retain
-`imageUser: 0`: upgrade managers/deployment agents before publishing them. An old
-strict reader intentionally rejects them rather than running root under an old
-security contract.
+Ordinary non-root GCP/Local images whose boot UID already matches exec omit
+`imageUser` from new releases. All newly inspected AWS images retain `imageUser`,
+including non-root images: their agent needs privileged bootstrap to distinguish
+provider control callers from guest code. Deployment derives the capability grant
+from this inspected metadata. Root and absent-USER releases retain `imageUser: 0`.
+Upgrade managers/deployment agents before publishing any rebuilt AWS image or root
+image. An old strict reader rejects these releases before it can deploy a bundle
+without the required startup privileges. Saved AWS S3 releases remain unchanged.
 
 Azure OCI packages always need the new reader, including non-root bases: the
 packaged container runs a root agent and native exec would no longer preserve

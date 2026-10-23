@@ -301,9 +301,9 @@ fn write_bundle_inner(
             path = alien_core::sandbox_image::IMAGE_COMMAND_PATH,
         ));
     }
-    // The inspected package owns boot activation even when its non-root USER
-    // needs no new release field. Old managers can read those declarations.
-    // Root declarations still carry imageUser and require an upgraded reader.
+    // Inspected packages require privileged bootstrap even for non-root image USER.
+    // The release preserves imageUser so deployment grants the capabilities this
+    // startup path needs; older readers must reject it before deploying.
     if image_command.is_some_and(|command| command.user.is_some()) || command_image.is_some() {
         dockerfile.push_str(
             "\nENV ALIEN_SANDBOX_IMAGE_COMMAND=true ALIEN_SANDBOX_EGRESS_RUN_HOOK=true\n",
