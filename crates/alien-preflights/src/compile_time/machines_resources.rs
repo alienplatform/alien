@@ -46,6 +46,14 @@ impl CompileTimeCheck for MachinesResourcesCheck {
                         "Stateful container '{resource_id}' is not supported on platform 'machines'. Stateful containers are supported on kubernetes. Use a stateless replicated container for machines deployments."
                     ));
                 }
+
+                // Replicas listen on host ports Horizon assigns, so nothing would serve the
+                // endpoint's HTTPS address. Daemons run on the host network and can.
+                if !container.public_endpoints.is_empty() {
+                    errors.push(format!(
+                        "Public endpoints on container '{resource_id}' are not supported on platform 'machines'. Use a daemon for public endpoints on machines deployments."
+                    ));
+                }
             }
         }
 
@@ -61,7 +69,8 @@ impl CompileTimeCheck for MachinesResourcesCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ContainerCode, Resource, ResourceEntry, ResourceLifecycle, ResourceSpec, WorkerCode,
+        ContainerCode, Daemon, DaemonCode, ExposeProtocol, PublicEndpoint, Resource, ResourceEntry,
+        ResourceLifecycle, ResourceSpec, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -194,5 +203,58 @@ mod tests {
                     .to_string()
             ]
         );
+    }
+
+    fn public_endpoint() -> PublicEndpoint {
+        PublicEndpoint {
+            name: "web".to_string(),
+            port: 8080,
+            protocol: ExposeProtocol::Http,
+            host_label: None,
+            wildcard_subdomains: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn container_with_public_endpoint_fails_on_machines() {
+        let mut container = stateless_container("web");
+        container.public_endpoints.push(public_endpoint());
+        let mut resources = IndexMap::new();
+        resources.insert("web".to_string(), entry(Resource::new(container)));
+
+        let result = MachinesResourcesCheck
+            .check(&stack(resources), Platform::Machines)
+            .await
+            .expect("check should run");
+
+        assert!(!result.success);
+        assert_eq!(
+            result.errors,
+            vec![
+                "Public endpoints on container 'web' are not supported on platform 'machines'. Use a daemon for public endpoints on machines deployments."
+                    .to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_with_public_endpoint_passes_on_machines() {
+        let daemon = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .public_endpoint(public_endpoint())
+            .permissions("default".to_string())
+            .build();
+        let mut resources = IndexMap::new();
+        resources.insert("gateway".to_string(), entry(Resource::new(daemon)));
+
+        let result = MachinesResourcesCheck
+            .check(&stack(resources), Platform::Machines)
+            .await
+            .expect("check should run");
+
+        assert!(result.success);
+        assert!(result.errors.is_empty());
     }
 }
