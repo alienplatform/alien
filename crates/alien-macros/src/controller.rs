@@ -140,6 +140,12 @@ pub fn controller_struct(_args: TokenStream, input: TokenStream) -> TokenStream 
                     self.#ident = 0;
                 });
             }
+            // A wall-clock wait start: a retry measures a fresh window from its first poll.
+            if name.starts_with("wait_for_") && name.ends_with("_started_at") {
+                retry_state_resets.push(quote! {
+                    self.#ident = None;
+                });
+            }
         }
         fields.named.push(parse_quote! {
             pub(crate) state: #state_enum_name

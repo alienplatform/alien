@@ -244,7 +244,7 @@ async fn failed_certificate_renewal_preserves_delay_through_deployment_step() {
                 ),
                 state: Some("Active".to_string()),
                 last_update_status: Some("Successful".to_string()),
-                kms_key_arn: None,
+                ..Default::default()
             })
         });
     let attempts = Arc::new(AtomicUsize::new(0));
