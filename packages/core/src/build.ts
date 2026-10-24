@@ -4,7 +4,7 @@ import {
   type ComputeType,
   type ResourceType,
 } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceMetadataBuilder } from "./resource.js"
 
 export type { BuildConfig, BuildOutputs, BuildStatus, ComputeType } from "./generated/index.js"
 export {
@@ -19,7 +19,7 @@ export {
  * Builds are designed to be stateless and can be triggered on-demand to compile,
  * test, or package application code.
  */
-export class Build {
+export class Build extends ResourceMetadataBuilder {
   private _config: Partial<BuildConfig> = {
     links: [],
     environment: {},
@@ -30,6 +30,7 @@ export class Build {
    * @param id Identifier for the build resource. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -97,7 +98,7 @@ export class Build {
   public build(): Resource {
     const config = BuildSchema.parse(this._config)
 
-    return new Resource({
+    return this.resource({
       type: "build",
       ...config,
     })

@@ -50,11 +50,9 @@ export class Resource {
 }
 
 /**
- * Base class for the per-resource builders, giving every resource type the same
- * `.enabled()` gate without each builder reimplementing it.
+ * Shared display metadata for resource builders.
  */
-export abstract class ResourceBuilder {
-  private _enabledWhen?: string
+export abstract class ResourceMetadataBuilder {
   private _displayName?: string
   private _description?: string
 
@@ -69,6 +67,15 @@ export abstract class ResourceBuilder {
     this._description = description
     return this
   }
+
+  protected resource(config: BaseResource, enabledWhen?: string): Resource {
+    return new Resource(config, enabledWhen, this._displayName, this._description)
+  }
+}
+
+/** Shared conditional creation for resource types that support gates. */
+export abstract class ResourceBuilder extends ResourceMetadataBuilder {
+  private _enabledWhen?: string
 
   /**
    * Creates this resource only when the given boolean stack input is true.
@@ -90,6 +97,6 @@ export abstract class ResourceBuilder {
    * @returns An immutable Resource.
    */
   protected resource(config: BaseResource): Resource {
-    return new Resource(config, this._enabledWhen, this._displayName, this._description)
+    return super.resource(config, this._enabledWhen)
   }
 }

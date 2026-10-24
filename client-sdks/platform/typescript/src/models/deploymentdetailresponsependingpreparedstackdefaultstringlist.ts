@@ -1746,6 +1746,11 @@ export type DeploymentDetailResponseStackStateResources = {
   dependencies?:
     | Array<DeploymentDetailResponseStackStateDependency>
     | undefined;
+  description?: string | null | undefined;
+  /**
+   * Presentation metadata from the effective resource entry, outside runtime configuration.
+   */
+  displayName?: string | null | undefined;
   error?: DeploymentDetailResponseErrorStackState | string | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
@@ -4725,6 +4730,8 @@ export const DeploymentDetailResponseStackStateResources$inboundSchema:
     dependencies: z.array(
       z.lazy(() => DeploymentDetailResponseStackStateDependency$inboundSchema),
     ).optional(),
+    description: z.nullable(z.string()).optional(),
+    displayName: z.nullable(z.string()).optional(),
     error: z.nullable(
       z.union([
         z.lazy(() => DeploymentDetailResponseErrorStackState$inboundSchema),

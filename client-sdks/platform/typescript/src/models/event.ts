@@ -1408,6 +1408,11 @@ export type EventResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<EventDependency> | undefined;
+  description?: string | null | undefined;
+  /**
+   * Presentation metadata from the effective resource entry, outside runtime configuration.
+   */
+  displayName?: string | null | undefined;
   error?: EventErrorNextState | string | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
@@ -3482,6 +3487,8 @@ export const EventResources$inboundSchema: z.ZodType<EventResources, unknown> =
     ).optional(),
     dependencies: z.array(z.lazy(() => EventDependency$inboundSchema))
       .optional(),
+    description: z.nullable(z.string()).optional(),
+    displayName: z.nullable(z.string()).optional(),
     error: z.nullable(
       z.union([z.lazy(() => EventErrorNextState$inboundSchema), z.string()]),
     ).optional(),

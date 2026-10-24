@@ -22,6 +22,24 @@ describe("Stack builder validation", () => {
     expect(old.resources.documents).not.toHaveProperty("displayName")
     expect(old.resources.documents).not.toHaveProperty("description")
   })
+  it("carries metadata on builders that do not support conditional creation", () => {
+    const builders = [
+      new alien.ArtifactRegistry("images"),
+      new alien.ServiceAccount("identity"),
+      new alien.Build("build").permissions("default"),
+      new alien.ComputeCluster("compute"),
+    ]
+    for (const builder of builders) {
+      const resource = builder
+        .displayName("Application resource")
+        .description("Its purpose.")
+        .build()
+      const stack = new alien.Stack("metadata").add(resource, "frozen").build()
+      expect(stack.resources[resource.config.id]?.displayName).toBe("Application resource")
+      expect(stack.resources[resource.config.id]?.description).toBe("Its purpose.")
+      expect(builder).not.toHaveProperty("enabled")
+    }
+  })
   it("builds compute pools from portable requirements only", () => {
     const compute = new alien.ComputeCluster("runtime")
       .pool("nested", {

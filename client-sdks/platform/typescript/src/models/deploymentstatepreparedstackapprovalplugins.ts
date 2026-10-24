@@ -1757,6 +1757,14 @@ export type DeploymentStatePendingPreparedStackResources = {
    */
   dependencies: Array<DeploymentStatePendingPreparedStackDependency>;
   /**
+   * Authored purpose, displayed as plain text. Does not affect resource configuration.
+   */
+  description?: string | null | undefined;
+  /**
+   * Optional human-readable name. The stable resource ID is the display fallback.
+   */
+  displayName?: string | null | undefined;
+  /**
    * Id of the boolean stack input that decides whether this resource is
    *
    * @remarks
@@ -8280,6 +8288,8 @@ export const DeploymentStatePendingPreparedStackResources$inboundSchema:
     dependencies: z.array(
       z.lazy(() => DeploymentStatePendingPreparedStackDependency$inboundSchema),
     ),
+    description: z.nullable(z.string()).optional(),
+    displayName: z.nullable(z.string()).optional(),
     enabledWhen: z.nullable(z.string()).optional(),
     lifecycle: DeploymentStatePendingPreparedStackLifecycle$inboundSchema,
     remoteAccess: z.boolean().optional(),
@@ -8288,6 +8298,8 @@ export const DeploymentStatePendingPreparedStackResources$inboundSchema:
 export type DeploymentStatePendingPreparedStackResources$Outbound = {
   config: DeploymentStatePendingPreparedStackConfig$Outbound;
   dependencies: Array<DeploymentStatePendingPreparedStackDependency$Outbound>;
+  description?: string | null | undefined;
+  displayName?: string | null | undefined;
   enabledWhen?: string | null | undefined;
   lifecycle: string;
   remoteAccess?: boolean | undefined;
@@ -8307,6 +8319,8 @@ export const DeploymentStatePendingPreparedStackResources$outboundSchema:
         DeploymentStatePendingPreparedStackDependency$outboundSchema
       ),
     ),
+    description: z.nullable(z.string()).optional(),
+    displayName: z.nullable(z.string()).optional(),
     enabledWhen: z.nullable(z.string()).optional(),
     lifecycle: DeploymentStatePendingPreparedStackLifecycle$outboundSchema,
     remoteAccess: z.boolean().optional(),

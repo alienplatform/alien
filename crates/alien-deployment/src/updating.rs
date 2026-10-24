@@ -406,9 +406,12 @@ pub async fn handle_updating(
                 }
             };
             if keep_installed {
-                target_stack
-                    .resources
-                    .insert(resource_id.clone(), entry.clone());
+                let mut retained = entry.clone();
+                if let Some(target) = target_stack.resources.get(resource_id) {
+                    retained.display_name = target.display_name.clone();
+                    retained.description = target.description.clone();
+                }
+                target_stack.resources.insert(resource_id.clone(), retained);
             }
         }
     }
@@ -1095,12 +1098,7 @@ mod tests {
 
         #[tokio::test]
         async fn a_sandbox_added_by_an_update_waits_for_setup_to_create_its_build_role() {
-            assert_setup_required(
-                empty(),
-                sandbox(SandboxEgress::Allow, BUNDLE, None),
-                None,
-            )
-            .await;
+            assert_setup_required(empty(), sandbox(SandboxEgress::Allow, BUNDLE, None), None).await;
         }
 
         /// Every release publishes its bundle under a new version segment of the same prefix,

@@ -1701,6 +1701,14 @@ export type PersistImportedDeploymentRequestPendingPreparedStackResources = {
     PersistImportedDeploymentRequestPendingPreparedStackDependency
   >;
   /**
+   * Authored purpose, displayed as plain text. Does not affect resource configuration.
+   */
+  description?: string | null | undefined;
+  /**
+   * Optional human-readable name. The stable resource ID is the display fallback.
+   */
+  displayName?: string | null | undefined;
+  /**
    * Id of the boolean stack input that decides whether this resource is
    *
    * @remarks
@@ -5698,6 +5706,8 @@ export type PersistImportedDeploymentRequestPendingPreparedStackResources$Outbou
     dependencies: Array<
       PersistImportedDeploymentRequestPendingPreparedStackDependency$Outbound
     >;
+    description?: string | null | undefined;
+    displayName?: string | null | undefined;
     enabledWhen?: string | null | undefined;
     lifecycle: string;
     remoteAccess?: boolean | undefined;
@@ -5717,6 +5727,8 @@ export const PersistImportedDeploymentRequestPendingPreparedStackResources$outbo
         PersistImportedDeploymentRequestPendingPreparedStackDependency$outboundSchema
       ),
     ),
+    description: z.nullable(z.string()).optional(),
+    displayName: z.nullable(z.string()).optional(),
     enabledWhen: z.nullable(z.string()).optional(),
     lifecycle:
       PersistImportedDeploymentRequestPendingPreparedStackLifecycle$outboundSchema,

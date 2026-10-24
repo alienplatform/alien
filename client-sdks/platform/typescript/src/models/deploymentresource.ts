@@ -119,6 +119,14 @@ export type DeploymentResourceError = {
 
 export type DeploymentResource = {
   id: string;
+  /**
+   * Optional friendly name. Use the stable ID when absent.
+   */
+  displayName?: string | null | undefined;
+  /**
+   * Authored resource purpose, displayed as plain text.
+   */
+  description?: string | null | undefined;
   type: string;
   /**
    * Represents the high-level status of a resource during its lifecycle.
@@ -182,6 +190,8 @@ export const DeploymentResource$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  displayName: z.nullable(z.string()).optional(),
+  description: z.nullable(z.string()).optional(),
   type: z.string(),
   status: DeploymentResourceStatus$inboundSchema,
   error: z.nullable(z.lazy(() => DeploymentResourceError$inboundSchema)),

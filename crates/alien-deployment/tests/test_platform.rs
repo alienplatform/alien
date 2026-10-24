@@ -1073,6 +1073,58 @@ async fn test_update_flow_happy_path_promotes_release() {
     );
 }
 
+#[tokio::test]
+async fn metadata_only_release_refreshes_frozen_service_account_labels() {
+    let _vault = test_vault_env().await;
+    let mut stack = create_test_stack("metadata-stack", "worker");
+    stack.resources.insert(
+        "identity".to_string(),
+        ResourceEntry::new(
+            alien_core::ServiceAccount::new("identity".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .display_name("Original identity")
+        .description("Original purpose"),
+    );
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(create_initial_state(stack.clone()), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let installed = state.stack_state.as_ref().unwrap().resources["identity"].clone();
+
+    for (release_id, name, description) in [
+        (
+            "rel_v2",
+            Some("Application identity"),
+            Some("Updated purpose"),
+        ),
+        ("rel_v3", None, None),
+    ] {
+        let entry = stack.resources.get_mut("identity").unwrap();
+        entry.display_name = name.map(str::to_string);
+        entry.description = description.map(str::to_string);
+        start_update(&mut state, release_of(release_id, stack.clone()));
+        state = run_to_completion(state, config.clone()).await;
+        assert_eq!(state.status, DeploymentStatus::Running);
+        let observed = &state.stack_state.as_ref().unwrap().resources["identity"];
+        assert_eq!(observed.display_name.as_deref(), name);
+        assert_eq!(observed.description.as_deref(), description);
+        assert_eq!(observed.config, installed.config);
+        assert_eq!(observed.outputs, installed.outputs);
+        let prepared = state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap();
+        assert_eq!(prepared.resources["identity"].display_name.as_deref(), name);
+        assert_eq!(
+            prepared.resources["identity"].description.as_deref(),
+            description
+        );
+    }
+}
+
 fn worker_image_release(image: &str, release_id: &str) -> ReleaseInfo {
     let mut stack = create_test_stack("test-stack", "test-function");
     stack.resources.get_mut("test-function").unwrap().config = alien_core::Resource::new(
