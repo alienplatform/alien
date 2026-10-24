@@ -48,6 +48,11 @@ export type StackResourceState = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<ResourceRef> | undefined;
+  description?: string | null | undefined;
+  /**
+   * Presentation metadata from the effective resource entry, outside runtime configuration.
+   */
+  displayName?: string | null | undefined;
   error?: AlienError | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
@@ -60,6 +65,10 @@ export type StackResourceState = {
   lifecycle?: ResourceLifecycle | null | undefined;
   outputs?: BaseResourceOutputs | null | undefined;
   previousConfig?: BaseResource | null | undefined;
+  /**
+   * Last reported step explanation for display only; not a machine-readable status.
+   */
+  progress?: string | null | undefined;
   /**
    * Binding parameters for remote access.
    *
@@ -92,11 +101,14 @@ export const StackResourceState$inboundSchema: z.ZodType<
   config: BaseResource$inboundSchema,
   controllerPlatform: z.nullable(PlatformEnum$inboundSchema).optional(),
   dependencies: z.array(ResourceRef$inboundSchema).optional(),
+  description: z.nullable(z.string()).optional(),
+  displayName: z.nullable(z.string()).optional(),
   error: z.nullable(AlienError$inboundSchema).optional(),
   lastFailedState: z.any().optional(),
   lifecycle: z.nullable(ResourceLifecycle$inboundSchema).optional(),
   outputs: z.nullable(BaseResourceOutputs$inboundSchema).optional(),
   previousConfig: z.nullable(BaseResource$inboundSchema).optional(),
+  progress: z.nullable(z.string()).optional(),
   remoteBindingParams: z.any().optional(),
   retryAttempt: z.int().optional(),
   status: ResourceStatus$inboundSchema,
