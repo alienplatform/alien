@@ -5653,13 +5653,6 @@ impl AwsWorkerController {
 
     // ─────────────── HELPER METHODS ────────────────────────────
 
-    /// Gets VPC configuration from the Network resource if one exists in the stack.
-    ///
-    /// If a Network resource exists (ID: "default-network"), this method retrieves
-    /// the VPC ID, subnet IDs, and security group ID from the Network controller
-    /// to configure the Lambda worker to run inside the VPC.
-    ///
-    /// Returns `None` if no Network resource exists in the stack.
     /// One poll of a bounded wait for a Lambda create or update. Returns `None` once the
     /// function is ready and a `Stay` while Lambda is still working. Fails at once when Lambda
     /// reports a failure, and when the wall-clock deadline passes, naming what was pending.
@@ -5729,6 +5722,13 @@ impl AwsWorkerController {
         }))
     }
 
+    /// Gets VPC configuration from the Network resource if one exists in the stack.
+    ///
+    /// If a Network resource exists (ID: "default-network"), this method retrieves
+    /// the VPC ID, subnet IDs, and security group ID from the Network controller
+    /// to configure the Lambda worker to run inside the VPC.
+    ///
+    /// Returns `None` if no Network resource exists in the stack.
     fn get_vpc_config(&self, ctx: &ResourceControllerContext<'_>) -> Result<Option<VpcConfig>> {
         // Check if the stack has a Network resource
         let network_id = "default-network";
