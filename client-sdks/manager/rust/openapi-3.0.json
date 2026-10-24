@@ -17204,6 +17204,15 @@
             },
             "description": "Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition."
           },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "displayName": {
+            "type": "string",
+            "description": "Presentation metadata from the effective resource entry, outside runtime configuration.",
+            "nullable": true
+          },
           "error": {
             "nullable": true,
             "description": "Stores the last error encountered during a failed step transition.",
@@ -17242,6 +17251,11 @@
                 "$ref": "#/components/schemas/BaseResource"
               }
             ]
+          },
+          "progress": {
+            "type": "string",
+            "description": "Last reported step explanation for display only; not a machine-readable status.",
+            "nullable": true
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."

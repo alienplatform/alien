@@ -4,6 +4,11 @@
 
 import * as z from "zod/v4";
 import {
+  HelmRelease,
+  HelmRelease$Outbound,
+  HelmRelease$outboundSchema,
+} from "./helmrelease.js";
+import {
   InitialDesiredRelease,
   InitialDesiredRelease$outboundSchema,
 } from "./initialdesiredrelease.js";
@@ -16,6 +21,7 @@ import {
 
 export type InitializeRequest = {
   basePlatform?: PlatformEnum | null | undefined;
+  helmRelease?: HelmRelease | null | undefined;
   initialDesiredRelease: InitialDesiredRelease;
   /**
    * Deployer-provided stack inputs. Embedded platform managers resolve
@@ -54,6 +60,7 @@ export type InitializeRequest = {
 /** @internal */
 export type InitializeRequest$Outbound = {
   basePlatform?: string | null | undefined;
+  helmRelease?: HelmRelease$Outbound | null | undefined;
   initialDesiredRelease: string;
   inputValues?: { [k: string]: any } | undefined;
   name?: string | null | undefined;
@@ -73,6 +80,7 @@ export const InitializeRequest$outboundSchema: z.ZodType<
   InitializeRequest
 > = z.object({
   basePlatform: z.nullable(PlatformEnum$outboundSchema).optional(),
+  helmRelease: z.nullable(HelmRelease$outboundSchema).optional(),
   initialDesiredRelease: InitialDesiredRelease$outboundSchema,
   inputValues: z.record(z.string(), z.any()).optional(),
   name: z.nullable(z.string()).optional(),
