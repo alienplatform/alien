@@ -65,6 +65,17 @@ pub fn get_project_link_status<P: AsRef<Path>>(dir: P) -> ProjectLinkStatus {
     }
 }
 
+/// Workspace of the project linked to `dir`, or an error if the link is invalid.
+pub fn linked_workspace<P: AsRef<Path>>(dir: P) -> Result<Option<String>> {
+    match get_project_link_status(dir) {
+        ProjectLinkStatus::Linked(link) => Ok(Some(link.workspace)),
+        ProjectLinkStatus::NotLinked => Ok(None),
+        ProjectLinkStatus::Error(message) => {
+            Err(AlienError::new(ErrorData::ProjectLinkInvalid { message }))
+        }
+    }
+}
+
 pub fn save_project_link<P: AsRef<Path>>(dir: P, link: &ProjectLink) -> Result<()> {
     let alien_dir = dir.as_ref().join(ALIEN_DIR);
     let project_file = alien_dir.join(PROJECT_FILE);

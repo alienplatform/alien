@@ -35,7 +35,7 @@ pub async fn whoami_task(args: WhoamiArgs, ctx: ExecutionMode) -> Result<()> {
     let mut request = client.whoami();
     // User principals are per-workspace on the platform; without the hint the
     // server can't pick a membership and rejects user tokens.
-    if let Some(workspace) = ctx.configured_workspace() {
+    if let Some(workspace) = ctx.configured_workspace()? {
         request = request.workspace(workspace);
     }
     let response = request
