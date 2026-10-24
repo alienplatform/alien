@@ -72,7 +72,26 @@ let value: DeploymentDetailResponse = {
   updatedAt: new Date("2024-10-03T08:47:08.184Z"),
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   workspaceId: "ws_It13CUaGEhLLAB87simX0",
-  release: null,
+  resources: [
+    {
+      id: "<id>",
+      type: "<value>",
+      status: "pending",
+      error: {
+        code: "RESOURCE_UNAVAILABLE",
+        internal: false,
+        message: "Resource is temporarily unavailable",
+        retryable: true,
+      },
+      retryAttempt: 925803,
+    },
+  ],
+  release: {
+    id: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    version: "<value>",
+    gitMetadata: null,
+    createdAt: new Date("2024-11-14T18:08:24.160Z"),
+  },
   desiredRelease: {
     id: "rel_WbhQgksrawSKIpEN0NAssHX9",
     version: "<value>",
@@ -89,7 +108,7 @@ let value: DeploymentDetailResponse = {
       commitAuthorLogin: "johndoe",
       commitAuthorAvatarUrl: "https://github.com/johndoe.png",
     },
-    createdAt: new Date("2024-02-09T10:08:53.771Z"),
+    createdAt: new Date("2026-05-31T12:20:40.069Z"),
   },
   deploymentGroup: {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
@@ -100,12 +119,7 @@ let value: DeploymentDetailResponse = {
     id: "prj_mcytp6z3j91f7tn5ryqsfwtr",
     name: "my-app",
   },
-  operatorSync: {
-    id: "dosy_uxveigz3biyrosqycaqubbr",
-    status: "ready",
-    targetBundleHash: "<value>",
-    targetSetAt: new Date("2025-04-02T12:41:43.968Z"),
-  },
+  operatorSync: null,
 };
 ```
 
