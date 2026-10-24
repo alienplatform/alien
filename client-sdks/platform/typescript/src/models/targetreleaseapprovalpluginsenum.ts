@@ -1949,6 +1949,10 @@ export type DeploymentStateStackStateResources = {
   outputs?: DeploymentStateOutputs | string | null | undefined;
   previousConfig?: DeploymentStatePreviousConfig | string | null | undefined;
   /**
+   * Last reported step explanation for display only; not a machine-readable status.
+   */
+  progress?: string | null | undefined;
+  /**
    * Binding parameters for remote access.
    *
    * @remarks
@@ -8240,6 +8244,7 @@ export const DeploymentStateStackStateResources$inboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  progress: z.nullable(z.string()).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
   retryAttempt: z.int().optional(),
   status: DeploymentStateStackStateStatus$inboundSchema,
@@ -8266,6 +8271,7 @@ export type DeploymentStateStackStateResources$Outbound = {
     | string
     | null
     | undefined;
+  progress?: string | null | undefined;
   remoteBindingParams?: any | null | undefined;
   retryAttempt?: number | undefined;
   status: string;
@@ -8307,6 +8313,7 @@ export const DeploymentStateStackStateResources$outboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  progress: z.nullable(z.string()).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
   retryAttempt: z.int().optional(),
   status: DeploymentStateStackStateStatus$outboundSchema,

@@ -1789,6 +1789,7 @@ impl StackExecutor {
 
         // Handle Deletes and the delete half of Replaces - initiate deletion transitions only
         // for deletion-ready resources
+        let mut waiting_progress = HashMap::new();
         let planned_deletes = plan_result
             .deletes
             .iter()
@@ -1820,7 +1821,11 @@ impl StackExecutor {
                     | ResourceStatus::UpdateFailed
                     | ResourceStatus::DeleteFailed => {
                         // Check if this resource is ready for deletion (all dependents are deleted)
-                        if !self.deletion_ready(resource_id, &state, replacing) {
+                        if let Some(dependent) =
+                            self.blocking_dependent(resource_id, &state, replacing)
+                        {
+                            waiting_progress
+                                .insert(resource_id.clone(), format!("Waiting for {dependent}."));
                             debug!(
                                 "Resource '{}' not ready for deletion - skipping until dependents are deleted",
                                 resource_id
@@ -2185,7 +2190,6 @@ impl StackExecutor {
 
         // Determine ready resources by iterating through the *current state* after applying the plan
         let mut ready_resource_ids = Vec::new();
-        let mut waiting_progress = HashMap::new();
         // Use the keys from the state *after* applying the plan
         for resource_id in next_state.resources.keys() {
             // Check status and terminal state using next_state
@@ -2270,7 +2274,7 @@ impl StackExecutor {
             // repair/replacement already in progress. Explicit teardown still runs.
             let explicit_delete = current_resource_view.status == ResourceStatus::Deleting
                 && !self.resources.contains_key(resource_id);
-            let unavailable = if explicit_delete {
+            let unavailable = if explicit_delete || !is_ready {
                 None
             } else {
                 self.unavailable_dependency(resource_id, &state)
@@ -2305,10 +2309,6 @@ impl StackExecutor {
                         .insert(resource_id.clone(), format!("Waiting for {dependency}."));
                 }
             }
-        }
-
-        for (resource_id, progress) in waiting_progress {
-            next_state.resources.get_mut(&resource_id).unwrap().progress = Some(progress);
         }
 
         if !ready_resource_ids.is_empty() {
@@ -2735,6 +2735,16 @@ impl StackExecutor {
         for resource in next_state.resources.values_mut() {
             if resource.status.is_terminal() || resource.status == ResourceStatus::Running {
                 resource.progress = None;
+            }
+        }
+
+        // A planned delete may still be Running while its dependents shut down.
+        // Apply that explanation after Ready handlers and completed-state cleanup.
+        for (resource_id, progress) in waiting_progress {
+            if let Some(resource) = next_state.resources.get_mut(&resource_id) {
+                if !resource.status.is_terminal() {
+                    resource.progress = Some(progress);
+                }
             }
         }
 

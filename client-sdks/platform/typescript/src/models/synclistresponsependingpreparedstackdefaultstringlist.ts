@@ -1717,6 +1717,10 @@ export type SyncListResponseStackStateResources = {
   outputs?: SyncListResponseOutputs | string | null | undefined;
   previousConfig?: SyncListResponsePreviousConfig | string | null | undefined;
   /**
+   * Last reported step explanation for display only; not a machine-readable status.
+   */
+  progress?: string | null | undefined;
+  /**
    * Binding parameters for remote access.
    *
    * @remarks
@@ -1740,7 +1744,7 @@ export type SyncListResponseStackStateResources = {
 };
 
 /**
- * State of infrastructure components managed by this deployment
+ * Deprecated: use resources on the deployment detail response for resource status and errors. Retained for existing consumers.
  */
 export type SyncListResponseStackState = {
   /**
@@ -4396,6 +4400,7 @@ export const SyncListResponseStackStateResources$inboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  progress: z.nullable(z.string()).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
   retryAttempt: z.int().optional(),
   status: SyncListResponseStackStateStatus$inboundSchema,
