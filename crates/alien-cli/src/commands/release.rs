@@ -10,7 +10,7 @@ use alien_core::{
     DaemonCode, Platform, Sandbox, SandboxCode, Stack, StackInputDefinition, StackInputKind,
     StackInputProvider, Worker, WorkerCode,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_manager_api::types::{
     CreateReleaseRequest as ManagerCreateReleaseRequest, StackByPlatform as ManagerStackByPlatform,
 };
@@ -1253,7 +1253,7 @@ fn auto_build_target_group_key(settings: &alien_build::settings::BuildSettings) 
 /// by an older CLI would otherwise become a new release without the checks added since.
 async fn check_prebuilt_stack(stack: &Stack, platform: Platform) -> Result<()> {
     alien_preflights::runner::PreflightRunner::new()
-        .run_build_time_preflights(stack, platform)
+        .run_prebuilt_release_checks(stack, platform)
         .await
         .map_err(|error| {
             // Keeps the preflight error as the source: its check results are what the CLI lists.
