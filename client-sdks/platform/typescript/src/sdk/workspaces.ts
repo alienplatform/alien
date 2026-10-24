@@ -63,7 +63,7 @@ export class Workspaces extends ClientSDK {
   }
 
   /**
-   * Delete a workspace. The workspace must have no projects.
+   * Delete a workspace. The workspace must have no projects and must not be on pay as you go or a contract.
    */
   async delete(
     request: operations.DeleteWorkspaceRequest,

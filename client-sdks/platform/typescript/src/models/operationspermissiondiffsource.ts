@@ -31,32 +31,7 @@ export const OperationsPermissionDiffSource$inboundSchema: z.ZodType<
   operation: z.string(),
   reason: z.string(),
 });
-/** @internal */
-export type OperationsPermissionDiffSource$Outbound = {
-  plugin: string;
-  operation: string;
-  reason: string;
-};
 
-/** @internal */
-export const OperationsPermissionDiffSource$outboundSchema: z.ZodType<
-  OperationsPermissionDiffSource$Outbound,
-  OperationsPermissionDiffSource
-> = z.object({
-  plugin: z.string(),
-  operation: z.string(),
-  reason: z.string(),
-});
-
-export function operationsPermissionDiffSourceToJSON(
-  operationsPermissionDiffSource: OperationsPermissionDiffSource,
-): string {
-  return JSON.stringify(
-    OperationsPermissionDiffSource$outboundSchema.parse(
-      operationsPermissionDiffSource,
-    ),
-  );
-}
 export function operationsPermissionDiffSourceFromJSON(
   jsonString: string,
 ): SafeParseResult<OperationsPermissionDiffSource, SDKValidationError> {

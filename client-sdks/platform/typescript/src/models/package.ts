@@ -70,6 +70,34 @@ export type ConfigTerraform = {
 };
 
 /**
+ * One repository prefix rename, `from` to `to`.
+ */
+export type RepositoryRename = {
+  from: string;
+  to: string;
+};
+
+/**
+ * A bundle store from before the current one. Installations whose setup granted it read every
+ *
+ * @remarks
+ * release's bundle key from it, and build from the base image repositories that setup granted.
+ */
+export type LegacyStore = {
+  /**
+   * How this store's bundles name a private base image: the first rule whose `from` prefixes
+   *
+   * @remarks
+   * the repository replaces that prefix with `to`. No match keeps the repository.
+   */
+  repositoryRenames?: Array<RepositoryRename> | undefined;
+  /**
+   * `s3://` bucket template with exactly one `{region}` token.
+   */
+  uriTemplate: string;
+};
+
+/**
  * Configuration for a sandbox bundle package.
  *
  * @remarks
@@ -94,9 +122,23 @@ export type ConfigSandboxBundle = {
    */
   internetEgress?: boolean | undefined;
   /**
+   * Earlier stores that also receive the bundle under the same key, for installations whose
+   *
+   * @remarks
+   * setup granted one of them rather than the current store.
+   */
+  legacyStores?: Array<LegacyStore> | undefined;
+  /**
    * Object key the bundle is written under in every regional bundle store.
    */
   objectKey: string;
+  /**
+   * The `{region}` store template the generated stack names. Absent on rows written before
+   *
+   * @remarks
+   * it was recorded; those went to the one store configured at the time.
+   */
+  storeUriTemplate?: string | null | undefined;
   /**
    * Regions whose bundle store must receive this bundle. Part of the build input hash,
    *
@@ -407,6 +449,15 @@ export type ConfigCloudformation = {
    * can point at a sandbox bundle for a mixed AWS and Kubernetes release.
    */
   helmPackageId?: string | null | undefined;
+  /**
+   * Require the `ManagementExternalId` parameter, and on a system manager accept only this
+   *
+   * @remarks
+   * environment's management roles as `ManagingRoleArn`. Copied from the project's
+   * "Require AWS External ID" setting when the package is created, so changing the setting
+   * affects only packages built afterwards.
+   */
+  requireManagementExternalId?: boolean | undefined;
   /**
    * AWS regions supported by the environment that built this package.
    */
@@ -1116,6 +1167,43 @@ export function configTerraformFromJSON(
 }
 
 /** @internal */
+export const RepositoryRename$inboundSchema: z.ZodType<
+  RepositoryRename,
+  unknown
+> = z.object({
+  from: z.string(),
+  to: z.string(),
+});
+
+export function repositoryRenameFromJSON(
+  jsonString: string,
+): SafeParseResult<RepositoryRename, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RepositoryRename$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RepositoryRename' from JSON`,
+  );
+}
+
+/** @internal */
+export const LegacyStore$inboundSchema: z.ZodType<LegacyStore, unknown> = z
+  .object({
+    repositoryRenames: z.array(z.lazy(() => RepositoryRename$inboundSchema))
+      .optional(),
+    uriTemplate: z.string(),
+  });
+
+export function legacyStoreFromJSON(
+  jsonString: string,
+): SafeParseResult<LegacyStore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => LegacyStore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'LegacyStore' from JSON`,
+  );
+}
+
+/** @internal */
 export const ConfigSandboxBundle$inboundSchema: z.ZodType<
   ConfigSandboxBundle,
   unknown
@@ -1123,7 +1211,9 @@ export const ConfigSandboxBundle$inboundSchema: z.ZodType<
   agentImage: z.string(),
   baseImage: z.string(),
   internetEgress: z.boolean().optional(),
+  legacyStores: z.array(z.lazy(() => LegacyStore$inboundSchema)).optional(),
   objectKey: z.string(),
+  storeUriTemplate: z.nullable(z.string()).optional(),
   supportedAwsRegions: z.array(z.string()).optional(),
   type: z.literal("sandbox-bundle"),
 });
@@ -1407,6 +1497,7 @@ export const ConfigCloudformation$inboundSchema: z.ZodType<
 > = z.object({
   displayName: z.nullable(z.string()).optional(),
   helmPackageId: z.nullable(z.string()).optional(),
+  requireManagementExternalId: z.boolean().optional(),
   supportedAwsRegions: z.array(z.string()).optional(),
   type: z.literal("cloudformation"),
 });

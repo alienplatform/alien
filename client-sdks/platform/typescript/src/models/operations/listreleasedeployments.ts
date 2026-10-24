@@ -3,6 +3,7 @@
  */
 
 import * as z from "zod/v4";
+import { ClosedEnum } from "../../types/enums.js";
 import * as models from "../index.js";
 
 export type ListReleaseDeploymentsGlobals = {
@@ -11,6 +12,18 @@ export type ListReleaseDeploymentsGlobals = {
    */
   workspace?: string | undefined;
 };
+
+/**
+ * Whether effect filters describe promotion policy or the current rollout. Defaults to promotion.
+ */
+export const EffectScope = {
+  Promotion: "promotion",
+  Rollout: "rollout",
+} as const;
+/**
+ * Whether effect filters describe promotion policy or the current rollout. Defaults to promotion.
+ */
+export type EffectScope = ClosedEnum<typeof EffectScope>;
 
 export type ListReleaseDeploymentsRequest = {
   /**
@@ -26,6 +39,18 @@ export type ListReleaseDeploymentsRequest = {
    */
   deploymentGroup?: string | undefined;
   /**
+   * Only deployments that follow this channel, each with the effect of promoting this release to it
+   */
+  channel?: string | undefined;
+  /**
+   * Whether effect filters describe promotion policy or the current rollout. Defaults to promotion.
+   */
+  effectScope?: EffectScope | undefined;
+  /**
+   * Filter deployments by the effect of promoting this release to their channel
+   */
+  effect?: models.PromotionEffect | undefined;
+  /**
    * Maximum number of items to return per page
    */
   limit?: number | undefined;
@@ -36,10 +61,18 @@ export type ListReleaseDeploymentsRequest = {
 };
 
 /** @internal */
+export const EffectScope$outboundSchema: z.ZodEnum<typeof EffectScope> = z.enum(
+  EffectScope,
+);
+
+/** @internal */
 export type ListReleaseDeploymentsRequest$Outbound = {
   id: string;
   state?: Array<string> | undefined;
   deploymentGroup?: string | undefined;
+  channel?: string | undefined;
+  effectScope?: string | undefined;
+  effect?: string | undefined;
   limit: number;
   cursor?: string | undefined;
 };
@@ -52,6 +85,9 @@ export const ListReleaseDeploymentsRequest$outboundSchema: z.ZodType<
   id: z.string(),
   state: z.array(models.ReleaseRolloutState$outboundSchema).optional(),
   deploymentGroup: z.string().optional(),
+  channel: z.string().optional(),
+  effectScope: EffectScope$outboundSchema.optional(),
+  effect: models.PromotionEffect$outboundSchema.optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
 });

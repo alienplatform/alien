@@ -14,6 +14,7 @@
 * [deleteDeploymentGroup](#deletedeploymentgroup) - Delete deployment group
 * [setDeploymentGroupExternalId](#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 * [createToken](#createtoken) - Create deployment group token
+* [getDeploymentGroupManagementExternalId](#getdeploymentgroupmanagementexternalid) - Get the AWS ExternalId for this deployment group
 * [createFirstPartyDeploymentSession](#createfirstpartydeploymentsession) - Create first-party deployment session
 * [getExternalAIBinding](#getexternalaibinding) - Get external AI connection state
 * [putExternalAIBinding](#putexternalaibinding) - Connect or rotate an external AI provider key
@@ -1096,6 +1097,110 @@ import {
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 400, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## getDeploymentGroupManagementExternalId
+
+Returns the value to enter as the ManagementExternalId parameter when installing or updating this group's CloudFormation or Terraform setup from a template file. The management roles require it as sts:ExternalId. Requires the same permission as creating a setup link.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getDeploymentGroupManagementExternalId" method="get" path="/v1/deployment-groups/{id}/management-external-id" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deploymentGroups.getDeploymentGroupManagementExternalId({
+    id: "dg_r27ict8c7vcgsumpj90ackf7b",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsGetDeploymentGroupManagementExternalId } from "@alienplatform/platform-api/funcs/deploymentGroupsGetDeploymentGroupManagementExternalId.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentGroupsGetDeploymentGroupManagementExternalId(alien, {
+    id: "dg_r27ict8c7vcgsumpj90ackf7b",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentGroupsGetDeploymentGroupManagementExternalId failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useDeploymentGroupsGetDeploymentGroupManagementExternalId,
+  useDeploymentGroupsGetDeploymentGroupManagementExternalIdSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchDeploymentGroupsGetDeploymentGroupManagementExternalId,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateDeploymentGroupsGetDeploymentGroupManagementExternalId,
+  invalidateAllDeploymentGroupsGetDeploymentGroupManagementExternalId,
+} from "@alienplatform/platform-api/react-query/deploymentGroupsGetDeploymentGroupManagementExternalId.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetDeploymentGroupManagementExternalIdRequest](../../models/operations/getdeploymentgroupmanagementexternalidrequest.md)                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentGroupManagementExternalIdResponse](../../models/deploymentgroupmanagementexternalidresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## createFirstPartyDeploymentSession

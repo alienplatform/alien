@@ -97,8 +97,11 @@ async function $do(
   const path = pathToFunc("/v1/releases/{id}/deployments")(pathParams);
 
   const query = encodeFormQuery({
+    "channel": payload.channel,
     "cursor": payload.cursor,
     "deploymentGroup": payload.deploymentGroup,
+    "effect": payload.effect,
+    "effectScope": payload.effectScope,
     "limit": payload.limit,
     "state": payload.state,
     "workspace": client._options.workspace,

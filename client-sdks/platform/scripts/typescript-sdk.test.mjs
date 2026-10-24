@@ -447,8 +447,11 @@ test("deployment resource selections survive the generated request serializer", 
 });
 
 test("existing access request risk enum deep imports remain compatible", async () => {
-  const { CreateAccessRequestMaxRisk } = await import("../typescript/esm/models/createaccessrequest.js");
-  assert.equal(CreateAccessRequestMaxRisk.ReadOnly, "read-only");
+  for (const path of ["index", "createaccessrequest"]) {
+    const models = await import(`../typescript/esm/models/${path}.js`);
+    assert.equal(models.CreateAccessRequestMaxRisk.ReadOnly, "read-only");
+    assert.equal(models.CreateAccessRequestMaxRisk$outboundSchema.parse("mutating"), "mutating");
+  }
 });
 
 test("reported resource serializers retain their published imports", async () => {
@@ -526,5 +529,17 @@ test("execution and target configs retain saved quota overrides and explicit cle
       assert.deepEqual(decoded.stackSettings.quotaWarningOverrides, overrides);
       assert.equal(decoded.stackSettings.setupManagement, "automatic");
     }
+  }
+});
+
+test("published external-binding endpoint models retain root and deep imports", async () => {
+  const endpoint = { secretRef: { name: "queue-endpoint", key: "url" } };
+  for (const path of ["index", "externalbindingunion"]) {
+    const models = await import(`../typescript/esm/models/${path}.js`);
+    assert.deepEqual(models.ExternalBindingEndpoint$inboundSchema.parse(endpoint), endpoint);
+    assert.deepEqual(JSON.parse(models.externalBindingEndpointToJSON(endpoint)), endpoint);
+    assert.deepEqual(models.externalBindingEndpointFromJSON(JSON.stringify(endpoint)), { ok: true, value: endpoint });
+    assert.deepEqual(models.EndpointSecretRef$outboundSchema.parse(endpoint.secretRef), endpoint.secretRef);
+    assert.deepEqual(models.endpointSecretRefFromJSON(JSON.stringify(endpoint.secretRef)), { ok: true, value: endpoint.secretRef });
   }
 });

@@ -99,6 +99,7 @@ export function setPackagesListData(
       type?: operations.ListPackagesType | undefined;
       status?: operations.ListPackagesStatus | undefined;
       sourceReleaseId?: string | undefined;
+      compatibleWithReleaseId?: string | undefined;
       search?: string | undefined;
       limit?: number | undefined;
       cursor?: string | undefined;
@@ -119,6 +120,7 @@ export function invalidatePackagesList(
       type?: operations.ListPackagesType | undefined;
       status?: operations.ListPackagesStatus | undefined;
       sourceReleaseId?: string | undefined;
+      compatibleWithReleaseId?: string | undefined;
       search?: string | undefined;
       limit?: number | undefined;
       cursor?: string | undefined;

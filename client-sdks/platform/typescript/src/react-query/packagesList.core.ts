@@ -44,6 +44,7 @@ export function buildPackagesListQuery(
       type: request?.type,
       status: request?.status,
       sourceReleaseId: request?.sourceReleaseId,
+      compatibleWithReleaseId: request?.compatibleWithReleaseId,
       search: request?.search,
       limit: request?.limit,
       cursor: request?.cursor,
@@ -77,6 +78,7 @@ export function queryKeyPackagesList(
     type?: operations.ListPackagesType | undefined;
     status?: operations.ListPackagesStatus | undefined;
     sourceReleaseId?: string | undefined;
+    compatibleWithReleaseId?: string | undefined;
     search?: string | undefined;
     limit?: number | undefined;
     cursor?: string | undefined;

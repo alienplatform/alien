@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * List distinct git branches across releases. Used for filter dropdowns.
+ * List distinct git branches across releases. Used for filter dropdowns. Empty for deployment and deployment-group tokens.
  */
 export function releasesListBranches(
   client: AlienCore,

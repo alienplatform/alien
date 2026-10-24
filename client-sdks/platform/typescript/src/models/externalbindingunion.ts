@@ -315,6 +315,45 @@ export type ExternalBindingUnion3 =
 /**
  * Reference to a Kubernetes Secret
  */
+export type EndpointSecretRef2 = {
+  key: string;
+  name: string;
+};
+
+export type ExternalBindingEndpoint2 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: EndpointSecretRef2;
+};
+
+export const TypeQueue5 = {
+  Queue: "queue",
+} as const;
+export type TypeQueue5 = ClosedEnum<typeof TypeQueue5>;
+
+/**
+ * Connection to one manager-owned local queue. Old SDKs reject its distinct service tag.
+ */
+export type ExternalBindingLocalQueueHTTP = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  endpoint: any | null;
+  /**
+   * Queue-scoped credential, injected at process start rather than persisted in stack state.
+   */
+  token?: string | null | undefined;
+  service: "local-queue-http";
+  type: TypeQueue5;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
 export type QueuePathSecretRef = {
   key: string;
   name: string;
@@ -503,7 +542,8 @@ export type ExternalBindingUnion2 =
   | ExternalBindingSqs
   | ExternalBindingPubsub
   | ExternalBindingServicebus
-  | ExternalBindingLocalQueue;
+  | ExternalBindingLocalQueue
+  | ExternalBindingLocalQueueHTTP;
 
 /**
  * Reference to a Kubernetes Secret
@@ -665,16 +705,16 @@ export type BucketName1 = {
 /**
  * Reference to a Kubernetes Secret
  */
-export type EndpointSecretRef = {
+export type EndpointSecretRef1 = {
   key: string;
   name: string;
 };
 
-export type ExternalBindingEndpoint = {
+export type ExternalBindingEndpoint1 = {
   /**
    * Reference to a Kubernetes Secret
    */
-  secretRef: EndpointSecretRef;
+  secretRef: EndpointSecretRef1;
 };
 
 /**
@@ -774,6 +814,7 @@ export type ExternalBindingUnion =
   | ExternalBindingPubsub
   | ExternalBindingServicebus
   | ExternalBindingLocalQueue
+  | ExternalBindingLocalQueueHTTP
   | ExternalBindingDynamodb
   | ExternalBindingFirestore
   | ExternalBindingTablestorage
@@ -1728,6 +1769,139 @@ export function externalBindingUnion3FromJSON(
 }
 
 /** @internal */
+export const EndpointSecretRef2$inboundSchema: z.ZodType<
+  EndpointSecretRef2,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+/** @internal */
+export type EndpointSecretRef2$Outbound = {
+  key: string;
+  name: string;
+};
+
+/** @internal */
+export const EndpointSecretRef2$outboundSchema: z.ZodType<
+  EndpointSecretRef2$Outbound,
+  EndpointSecretRef2
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function endpointSecretRef2ToJSON(
+  endpointSecretRef2: EndpointSecretRef2,
+): string {
+  return JSON.stringify(
+    EndpointSecretRef2$outboundSchema.parse(endpointSecretRef2),
+  );
+}
+export function endpointSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<EndpointSecretRef2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EndpointSecretRef2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EndpointSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExternalBindingEndpoint2$inboundSchema: z.ZodType<
+  ExternalBindingEndpoint2,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => EndpointSecretRef2$inboundSchema),
+});
+/** @internal */
+export type ExternalBindingEndpoint2$Outbound = {
+  secretRef: EndpointSecretRef2$Outbound;
+};
+
+/** @internal */
+export const ExternalBindingEndpoint2$outboundSchema: z.ZodType<
+  ExternalBindingEndpoint2$Outbound,
+  ExternalBindingEndpoint2
+> = z.object({
+  secretRef: z.lazy(() => EndpointSecretRef2$outboundSchema),
+});
+
+export function externalBindingEndpoint2ToJSON(
+  externalBindingEndpoint2: ExternalBindingEndpoint2,
+): string {
+  return JSON.stringify(
+    ExternalBindingEndpoint2$outboundSchema.parse(externalBindingEndpoint2),
+  );
+}
+export function externalBindingEndpoint2FromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingEndpoint2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingEndpoint2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingEndpoint2' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypeQueue5$inboundSchema: z.ZodEnum<typeof TypeQueue5> = z.enum(
+  TypeQueue5,
+);
+/** @internal */
+export const TypeQueue5$outboundSchema: z.ZodEnum<typeof TypeQueue5> =
+  TypeQueue5$inboundSchema;
+
+/** @internal */
+export const ExternalBindingLocalQueueHTTP$inboundSchema: z.ZodType<
+  ExternalBindingLocalQueueHTTP,
+  unknown
+> = z.object({
+  endpoint: z.nullable(z.any()),
+  token: z.nullable(z.string()).optional(),
+  service: z.literal("local-queue-http"),
+  type: TypeQueue5$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingLocalQueueHTTP$Outbound = {
+  endpoint: any | null;
+  token?: string | null | undefined;
+  service: "local-queue-http";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingLocalQueueHTTP$outboundSchema: z.ZodType<
+  ExternalBindingLocalQueueHTTP$Outbound,
+  ExternalBindingLocalQueueHTTP
+> = z.object({
+  endpoint: z.nullable(z.any()),
+  token: z.nullable(z.string()).optional(),
+  service: z.literal("local-queue-http"),
+  type: TypeQueue5$outboundSchema,
+});
+
+export function externalBindingLocalQueueHTTPToJSON(
+  externalBindingLocalQueueHTTP: ExternalBindingLocalQueueHTTP,
+): string {
+  return JSON.stringify(
+    ExternalBindingLocalQueueHTTP$outboundSchema.parse(
+      externalBindingLocalQueueHTTP,
+    ),
+  );
+}
+export function externalBindingLocalQueueHTTPFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingLocalQueueHTTP, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingLocalQueueHTTP$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingLocalQueueHTTP' from JSON`,
+  );
+}
+
+/** @internal */
 export const QueuePathSecretRef$inboundSchema: z.ZodType<
   QueuePathSecretRef,
   unknown
@@ -2357,13 +2531,15 @@ export const ExternalBindingUnion2$inboundSchema: z.ZodType<
   z.lazy(() => ExternalBindingPubsub$inboundSchema),
   z.lazy(() => ExternalBindingServicebus$inboundSchema),
   z.lazy(() => ExternalBindingLocalQueue$inboundSchema),
+  z.lazy(() => ExternalBindingLocalQueueHTTP$inboundSchema),
 ]);
 /** @internal */
 export type ExternalBindingUnion2$Outbound =
   | ExternalBindingSqs$Outbound
   | ExternalBindingPubsub$Outbound
   | ExternalBindingServicebus$Outbound
-  | ExternalBindingLocalQueue$Outbound;
+  | ExternalBindingLocalQueue$Outbound
+  | ExternalBindingLocalQueueHTTP$Outbound;
 
 /** @internal */
 export const ExternalBindingUnion2$outboundSchema: z.ZodType<
@@ -2374,6 +2550,7 @@ export const ExternalBindingUnion2$outboundSchema: z.ZodType<
   z.lazy(() => ExternalBindingPubsub$outboundSchema),
   z.lazy(() => ExternalBindingServicebus$outboundSchema),
   z.lazy(() => ExternalBindingLocalQueue$outboundSchema),
+  z.lazy(() => ExternalBindingLocalQueueHTTP$outboundSchema),
 ]);
 
 export function externalBindingUnion2ToJSON(
@@ -2975,79 +3152,79 @@ export function bucketName1FromJSON(
 }
 
 /** @internal */
-export const EndpointSecretRef$inboundSchema: z.ZodType<
-  EndpointSecretRef,
+export const EndpointSecretRef1$inboundSchema: z.ZodType<
+  EndpointSecretRef1,
   unknown
 > = z.object({
   key: z.string(),
   name: z.string(),
 });
 /** @internal */
-export type EndpointSecretRef$Outbound = {
+export type EndpointSecretRef1$Outbound = {
   key: string;
   name: string;
 };
 
 /** @internal */
-export const EndpointSecretRef$outboundSchema: z.ZodType<
-  EndpointSecretRef$Outbound,
-  EndpointSecretRef
+export const EndpointSecretRef1$outboundSchema: z.ZodType<
+  EndpointSecretRef1$Outbound,
+  EndpointSecretRef1
 > = z.object({
   key: z.string(),
   name: z.string(),
 });
 
-export function endpointSecretRefToJSON(
-  endpointSecretRef: EndpointSecretRef,
+export function endpointSecretRef1ToJSON(
+  endpointSecretRef1: EndpointSecretRef1,
 ): string {
   return JSON.stringify(
-    EndpointSecretRef$outboundSchema.parse(endpointSecretRef),
+    EndpointSecretRef1$outboundSchema.parse(endpointSecretRef1),
   );
 }
-export function endpointSecretRefFromJSON(
+export function endpointSecretRef1FromJSON(
   jsonString: string,
-): SafeParseResult<EndpointSecretRef, SDKValidationError> {
+): SafeParseResult<EndpointSecretRef1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EndpointSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EndpointSecretRef' from JSON`,
+    (x) => EndpointSecretRef1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EndpointSecretRef1' from JSON`,
   );
 }
 
 /** @internal */
-export const ExternalBindingEndpoint$inboundSchema: z.ZodType<
-  ExternalBindingEndpoint,
+export const ExternalBindingEndpoint1$inboundSchema: z.ZodType<
+  ExternalBindingEndpoint1,
   unknown
 > = z.object({
-  secretRef: z.lazy(() => EndpointSecretRef$inboundSchema),
+  secretRef: z.lazy(() => EndpointSecretRef1$inboundSchema),
 });
 /** @internal */
-export type ExternalBindingEndpoint$Outbound = {
-  secretRef: EndpointSecretRef$Outbound;
+export type ExternalBindingEndpoint1$Outbound = {
+  secretRef: EndpointSecretRef1$Outbound;
 };
 
 /** @internal */
-export const ExternalBindingEndpoint$outboundSchema: z.ZodType<
-  ExternalBindingEndpoint$Outbound,
-  ExternalBindingEndpoint
+export const ExternalBindingEndpoint1$outboundSchema: z.ZodType<
+  ExternalBindingEndpoint1$Outbound,
+  ExternalBindingEndpoint1
 > = z.object({
-  secretRef: z.lazy(() => EndpointSecretRef$outboundSchema),
+  secretRef: z.lazy(() => EndpointSecretRef1$outboundSchema),
 });
 
-export function externalBindingEndpointToJSON(
-  externalBindingEndpoint: ExternalBindingEndpoint,
+export function externalBindingEndpoint1ToJSON(
+  externalBindingEndpoint1: ExternalBindingEndpoint1,
 ): string {
   return JSON.stringify(
-    ExternalBindingEndpoint$outboundSchema.parse(externalBindingEndpoint),
+    ExternalBindingEndpoint1$outboundSchema.parse(externalBindingEndpoint1),
   );
 }
-export function externalBindingEndpointFromJSON(
+export function externalBindingEndpoint1FromJSON(
   jsonString: string,
-): SafeParseResult<ExternalBindingEndpoint, SDKValidationError> {
+): SafeParseResult<ExternalBindingEndpoint1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => ExternalBindingEndpoint$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ExternalBindingEndpoint' from JSON`,
+    (x) => ExternalBindingEndpoint1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingEndpoint1' from JSON`,
   );
 }
 
@@ -3322,6 +3499,7 @@ export const ExternalBindingUnion$inboundSchema: z.ZodType<
     z.lazy(() => ExternalBindingPubsub$inboundSchema),
     z.lazy(() => ExternalBindingServicebus$inboundSchema),
     z.lazy(() => ExternalBindingLocalQueue$inboundSchema),
+    z.lazy(() => ExternalBindingLocalQueueHTTP$inboundSchema),
   ]),
   z.union([
     z.lazy(() => ExternalBindingDynamodb$inboundSchema),
@@ -3346,6 +3524,7 @@ export type ExternalBindingUnion$Outbound =
   | ExternalBindingPubsub$Outbound
   | ExternalBindingServicebus$Outbound
   | ExternalBindingLocalQueue$Outbound
+  | ExternalBindingLocalQueueHTTP$Outbound
   | ExternalBindingDynamodb$Outbound
   | ExternalBindingFirestore$Outbound
   | ExternalBindingTablestorage$Outbound
@@ -3373,6 +3552,7 @@ export const ExternalBindingUnion$outboundSchema: z.ZodType<
     z.lazy(() => ExternalBindingPubsub$outboundSchema),
     z.lazy(() => ExternalBindingServicebus$outboundSchema),
     z.lazy(() => ExternalBindingLocalQueue$outboundSchema),
+    z.lazy(() => ExternalBindingLocalQueueHTTP$outboundSchema),
   ]),
   z.union([
     z.lazy(() => ExternalBindingDynamodb$outboundSchema),
@@ -3402,3 +3582,17 @@ export function externalBindingUnionFromJSON(
     `Failed to parse 'ExternalBindingUnion' from JSON`,
   );
 }
+
+// Published external-binding endpoint compatibility exports.
+export type { EndpointSecretRef1 as EndpointSecretRef };
+export type { EndpointSecretRef1$Outbound as EndpointSecretRef$Outbound };
+export { EndpointSecretRef1$inboundSchema as EndpointSecretRef$inboundSchema };
+export { EndpointSecretRef1$outboundSchema as EndpointSecretRef$outboundSchema };
+export { endpointSecretRef1FromJSON as endpointSecretRefFromJSON };
+export { endpointSecretRef1ToJSON as endpointSecretRefToJSON };
+export type { ExternalBindingEndpoint1 as ExternalBindingEndpoint };
+export type { ExternalBindingEndpoint1$Outbound as ExternalBindingEndpoint$Outbound };
+export { ExternalBindingEndpoint1$inboundSchema as ExternalBindingEndpoint$inboundSchema };
+export { ExternalBindingEndpoint1$outboundSchema as ExternalBindingEndpoint$outboundSchema };
+export { externalBindingEndpoint1FromJSON as externalBindingEndpointFromJSON };
+export { externalBindingEndpoint1ToJSON as externalBindingEndpointToJSON };

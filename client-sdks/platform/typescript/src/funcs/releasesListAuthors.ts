@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * List distinct commit authors across releases. Used for filter dropdowns.
+ * List distinct commit authors across releases. Used for filter dropdowns. Empty for deployment and deployment-group tokens.
  */
 export function releasesListAuthors(
   client: AlienCore,

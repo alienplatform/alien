@@ -24,6 +24,10 @@ export type WorkspaceBillingEntitlements = {
   limits: BillingLimits;
   syncedAt: Date | null;
   stale: boolean;
+  /**
+   * What deployment pricing would bill now, by Autumn feature: deployments, capability installs, custom domains and private managers.
+   */
+  billableQuantities: { [k: string]: number };
 };
 
 /** @internal */
@@ -39,6 +43,7 @@ export const WorkspaceBillingEntitlements$inboundSchema: z.ZodType<
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ),
   stale: z.boolean(),
+  billableQuantities: z.record(z.string(), z.number()),
 });
 
 export function workspaceBillingEntitlementsFromJSON(

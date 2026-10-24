@@ -46,6 +46,9 @@ export function buildReleasesListDeploymentsQuery(
     queryKey: queryKeyReleasesListDeployments(request.id, {
       state: request.state,
       deploymentGroup: request.deploymentGroup,
+      channel: request.channel,
+      effectScope: request.effectScope,
+      effect: request.effect,
       limit: request.limit,
       cursor: request.cursor,
     }),
@@ -77,6 +80,9 @@ export function queryKeyReleasesListDeployments(
   parameters: {
     state?: Array<models.ReleaseRolloutState> | undefined;
     deploymentGroup?: string | undefined;
+    channel?: string | undefined;
+    effectScope?: operations.EffectScope | undefined;
+    effect?: models.PromotionEffect | undefined;
     limit?: number | undefined;
     cursor?: string | undefined;
   },

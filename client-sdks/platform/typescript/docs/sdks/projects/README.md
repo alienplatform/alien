@@ -26,7 +26,7 @@
 * [configureKeys](#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 * [configureBuckets](#configurebuckets) - Enable buckets without requiring a project Release.
 * [configureRegistry](#configureregistry) - Enable customer-owned container registries without requiring an application Release.
-* [configureRemoteSandbox](#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
+* [configureRemoteSandbox](#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image; a private one publishes to Azure from its `azureImage` and to GCP from its `gcpImage`.
 * [ensureSandboxBaseImageRepository](#ensuresandboxbaseimagerepository) - Ensure the project's private image repository exists and return where to push a private sandbox base image. Name the pushed image as the remote sandbox base image afterwards.
 * [getCapabilityOverview](#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 * [getRemoteOperatorSummary](#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
@@ -2064,7 +2064,7 @@ import {
 
 ### Response
 
-**Promise\<[any](../../models/.md)\>**
+**Promise\<[models.Release](../../models/release.md)\>**
 
 ### Errors
 
@@ -3499,7 +3499,7 @@ import {
 
 ## configureRemoteSandbox
 
-Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image.
+Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. Without a custom image it publishes to every cloud on Alien's default image, which the project then follows. A custom image publishes to AWS; a public one with a linux/amd64 variant also publishes to Azure, and to GCP once Alien has built its GCP image; a private one publishes to Azure from its `azureImage` and to GCP from its `gcpImage`.
 
 ### Example Usage: projectId
 

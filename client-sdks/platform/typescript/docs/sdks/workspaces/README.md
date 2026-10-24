@@ -7,7 +7,7 @@
 * [list](#list) - Retrieve all workspaces.
 * [get](#get) - Retrieve a workspace by ID.
 * [update](#update) - Update a workspace.
-* [delete](#delete) - Delete a workspace. The workspace must have no projects.
+* [delete](#delete) - Delete a workspace. The workspace must have no projects and must not be on pay as you go or a contract.
 * [listMembers](#listmembers) - List all members of a workspace.
 * [addMember](#addmember) - Add a member to a workspace by email. The user must already have an account.
 * [updateMember](#updatemember) - Update a workspace member's role.
@@ -314,7 +314,7 @@ import {
 
 ## delete
 
-Delete a workspace. The workspace must have no projects.
+Delete a workspace. The workspace must have no projects and must not be on pay as you go or a contract.
 
 ### Example Usage
 

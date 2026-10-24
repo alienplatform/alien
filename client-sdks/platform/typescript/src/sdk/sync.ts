@@ -5,6 +5,7 @@
 import { syncAcquire } from "../funcs/syncAcquire.js";
 import { syncContext } from "../funcs/syncContext.js";
 import { syncList } from "../funcs/syncList.js";
+import { syncManagementExternalId } from "../funcs/syncManagementExternalId.js";
 import { syncReconcile } from "../funcs/syncReconcile.js";
 import { syncRelease } from "../funcs/syncRelease.js";
 import { syncRenew } from "../funcs/syncRenew.js";
@@ -36,6 +37,20 @@ export class Sync extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.SyncAcquireResponseDeployment> {
     return unwrapAsync(syncContext(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get the AWS sts:ExternalId the deployment's management and remote-bindings roles trust. Only the manager runtime assigned to the deployment can read it.
+   */
+  async managementExternalId(
+    request?: models.SyncManagementExternalIdRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.SyncManagementExternalIdResponse> {
+    return unwrapAsync(syncManagementExternalId(
       this,
       request,
       options,

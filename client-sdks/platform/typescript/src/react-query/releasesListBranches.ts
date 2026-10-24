@@ -53,7 +53,7 @@ export type ReleasesListBranchesQueryError =
   | SDKValidationError;
 
 /**
- * List distinct git branches across releases. Used for filter dropdowns.
+ * List distinct git branches across releases. Used for filter dropdowns. Empty for deployment and deployment-group tokens.
  */
 export function useReleasesListBranches(
   request?: operations.ListReleaseBranchesRequest | undefined,
@@ -77,7 +77,7 @@ export function useReleasesListBranches(
 }
 
 /**
- * List distinct git branches across releases. Used for filter dropdowns.
+ * List distinct git branches across releases. Used for filter dropdowns. Empty for deployment and deployment-group tokens.
  */
 export function useReleasesListBranchesSuspense(
   request?: operations.ListReleaseBranchesRequest | undefined,

@@ -7,6 +7,7 @@ import { releasesGet } from "../funcs/releasesGet.js";
 import { releasesList } from "../funcs/releasesList.js";
 import { releasesListAuthors } from "../funcs/releasesListAuthors.js";
 import { releasesListBranches } from "../funcs/releasesListBranches.js";
+import { releasesListChannelImpact } from "../funcs/releasesListChannelImpact.js";
 import { releasesListDeployments } from "../funcs/releasesListDeployments.js";
 import { releasesPromote } from "../funcs/releasesPromote.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -44,7 +45,7 @@ export class Releases extends ClientSDK {
   }
 
   /**
-   * List distinct git branches across releases. Used for filter dropdowns.
+   * List distinct git branches across releases. Used for filter dropdowns. Empty for deployment and deployment-group tokens.
    */
   async listBranches(
     request?: operations.ListReleaseBranchesRequest | undefined,
@@ -58,7 +59,7 @@ export class Releases extends ClientSDK {
   }
 
   /**
-   * List distinct commit authors across releases. Used for filter dropdowns.
+   * List distinct commit authors across releases. Used for filter dropdowns. Empty for deployment and deployment-group tokens.
    */
   async listAuthors(
     request?: operations.ListReleaseAuthorsRequest | undefined,
@@ -93,6 +94,20 @@ export class Releases extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.ReleaseDeploymentsResponse> {
     return unwrapAsync(releasesListDeployments(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * List the project's release channels with what each runs now and what promoting this release to it would change.
+   */
+  async listChannelImpact(
+    request: operations.ListReleaseChannelImpactRequest,
+    options?: RequestOptions,
+  ): Promise<models.ReleaseChannelImpactResponse> {
+    return unwrapAsync(releasesListChannelImpact(
       this,
       request,
       options,

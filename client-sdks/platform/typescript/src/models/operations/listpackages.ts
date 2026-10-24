@@ -66,6 +66,10 @@ export type ListPackagesRequest = {
    */
   sourceReleaseId?: string | undefined;
   /**
+   * Only packages a new install of this release uses: setup packages whose setup matches the release (possibly built from an earlier release), and other packages built from it
+   */
+  compatibleWithReleaseId?: string | undefined;
+  /**
    * Search packages by type or version
    */
   search?: string | undefined;
@@ -109,6 +113,7 @@ export type ListPackagesRequest$Outbound = {
   type?: string | undefined;
   status?: string | undefined;
   sourceReleaseId?: string | undefined;
+  compatibleWithReleaseId?: string | undefined;
   search?: string | undefined;
   limit: number;
   cursor?: string | undefined;
@@ -123,6 +128,7 @@ export const ListPackagesRequest$outboundSchema: z.ZodType<
   type: ListPackagesType$outboundSchema.optional(),
   status: ListPackagesStatus$outboundSchema.optional(),
   sourceReleaseId: z.string().optional(),
+  compatibleWithReleaseId: z.string().optional(),
   search: z.string().optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
