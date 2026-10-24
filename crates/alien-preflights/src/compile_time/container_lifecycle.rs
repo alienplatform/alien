@@ -93,6 +93,8 @@ mod tests {
                 config: Resource::new(container),
                 lifecycle: ResourceLifecycle::Live, // Correct
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -126,6 +128,8 @@ mod tests {
                 config: Resource::new(container),
                 lifecycle: ResourceLifecycle::Frozen, // Wrong
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },

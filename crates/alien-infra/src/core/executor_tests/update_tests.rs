@@ -180,6 +180,8 @@ fn entry(resource: Resource, lifecycle: ResourceLifecycle) -> alien_core::Resour
         config: resource,
         lifecycle,
         dependencies: Vec::new(),
+        display_name: None,
+        description: None,
         remote_access: false,
         enabled_when: None,
     }

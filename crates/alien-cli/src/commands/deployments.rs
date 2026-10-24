@@ -2300,6 +2300,15 @@ fn print_redeploy_result(
 // Display helpers
 // ---------------------------------------------------------------------------
 
+fn resource_display_detail(description: Option<&str>, detail: Option<&str>) -> String {
+    match (description, detail) {
+        (Some(description), Some(detail)) => format!("{description} · {detail}"),
+        (Some(description), None) => description.to_string(),
+        (None, Some(detail)) => detail.to_string(),
+        (None, None) => "—".to_string(),
+    }
+}
+
 fn print_stack_resources(stack_state: &alien_core::StackState) {
     println!("{}", heading("Resources"));
     let mut resources: Vec<_> = stack_state.resources.iter().collect();
@@ -2308,12 +2317,19 @@ fn print_stack_resources(stack_state: &alien_core::StackState) {
     let mut table = make_table(&["Name", "Type", "Status", "Details"]);
     for (resource_name, resource) in resources {
         table.add_row(vec![
-            resource_name.to_string().into(),
+            resource
+                .display_name
+                .as_ref()
+                .map(|name| format!("{name} ({resource_name})"))
+                .unwrap_or_else(|| resource_name.to_string())
+                .into(),
             resource.resource_type.clone().into(),
             status_cell(format_resource_status(resource.status)),
-            deployment_resource_detail(resource)
-                .unwrap_or_else(|| "—".to_string())
-                .into(),
+            resource_display_detail(
+                resource.description.as_deref(),
+                deployment_resource_detail(resource).as_deref(),
+            )
+            .into(),
         ]);
     }
     print_table(table);
@@ -2323,6 +2339,10 @@ fn print_stack_resources(stack_state: &alien_core::StackState) {
 #[serde(rename_all = "camelCase")]
 struct ResourceSummary {
     name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
     #[serde(rename = "type")]
     resource_type: String,
     status: String,
@@ -2376,11 +2396,14 @@ fn resources_task(deployment: &DeploymentResponse, json: bool) -> Result<()> {
             _ => "—".to_string(),
         };
         table.add_row(vec![
-            resource.name,
+            resource
+                .display_name
+                .map(|name| format!("{name} ({})", resource.name))
+                .unwrap_or(resource.name),
             resource.resource_type,
             resource.status,
             machines,
-            resource.detail.unwrap_or_else(|| "—".to_string()),
+            resource_display_detail(resource.description.as_deref(), resource.detail.as_deref()),
         ]);
     }
     print_table(table);
@@ -2415,6 +2438,8 @@ fn resource_summaries(stack_state: alien_core::StackState) -> Vec<ResourceSummar
                 .as_ref()
                 .map(|groups| groups.iter().map(|group| group.desired_machines).sum());
             ResourceSummary {
+                display_name: resource.display_name.clone(),
+                description: resource.description.clone(),
                 name,
                 resource_type: resource.resource_type.clone(),
                 status: format_resource_status(resource.status).to_ascii_lowercase(),
@@ -4389,6 +4414,8 @@ mod tests {
     #[test]
     fn resource_summary_json_has_no_arbitrary_configuration_fields() {
         let summary = ResourceSummary {
+            display_name: None,
+            description: None,
             name: "compute".to_string(),
             resource_type: "compute".to_string(),
             status: "ready".to_string(),

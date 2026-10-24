@@ -1031,6 +1031,8 @@ mod tests {
                 config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },

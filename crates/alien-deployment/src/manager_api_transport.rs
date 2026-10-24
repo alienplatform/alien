@@ -1386,6 +1386,8 @@ mod tests {
             "worker".to_string(),
             alien_core::StackResourceState {
                 progress: None,
+                display_name: None,
+                description: None,
                 resource_type: resource.resource_type().as_ref().to_string(),
                 config: resource,
                 status: alien_core::ResourceStatus::ProvisionFailed,

@@ -9,6 +9,12 @@ use sha2::{Digest, Sha256};
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceEntry {
+    /// Optional human-readable name. The stable resource ID is the display fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Authored purpose, displayed as plain text. Does not affect resource configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Resource configuration (can be any type of resource)
     pub config: Resource,
     /// Lifecycle management configuration for this resource
@@ -32,6 +38,29 @@ pub struct ResourceEntry {
 }
 
 impl ResourceEntry {
+    /// Creates a resource entry with no presentation metadata.
+    pub fn new<T: crate::ResourceDefinition>(resource: T, lifecycle: ResourceLifecycle) -> Self {
+        StackBuilder::entry(resource, lifecycle)
+    }
+
+    /// Sets the human-readable name without changing the stable resource ID.
+    pub fn display_name(mut self, name: impl Into<String>) -> Self {
+        self.display_name = Some(name.into());
+        self
+    }
+
+    /// Describes this resource's purpose without changing its runtime configuration.
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn display_name_or_id(&self) -> &str {
+        self.display_name
+            .as_deref()
+            .unwrap_or_else(|| self.config.id())
+    }
+
     /// Returns intrinsic and stack-authored dependencies in planner order.
     pub fn combined_dependencies(&self) -> Vec<ResourceRef> {
         let mut dependencies = self.config.get_dependencies();
@@ -176,6 +205,9 @@ impl Stack {
             .map(|(id, entry)| {
                 let mut value =
                     serde_json::to_value(entry).expect("resource entries always serialize to JSON");
+                let object = value.as_object_mut().expect("resource entry is an object");
+                object.remove("displayName");
+                object.remove("description");
                 if let Some(sandbox) = entry.config.downcast_ref::<crate::Sandbox>() {
                     value["config"]["egress"] = sandbox.setup_digest_value();
                     value["config"]
@@ -315,6 +347,11 @@ fn canonicalize_json(value: &mut serde_json::Value) {
 }
 
 impl StackBuilder {
+    /// Adds an entry with authored presentation metadata and lifecycle settings.
+    pub fn add_entry(self, entry: ResourceEntry) -> Self {
+        self.insert(entry)
+    }
+
     /// Adds a resource to the stack with its lifecycle state.
     /// The resource's intrinsic dependencies (from resource.get_dependencies()) are automatically included.
     /// Use add_with_dependencies() if you need to specify additional dependencies.
@@ -380,6 +417,8 @@ impl StackBuilder {
             config: Resource::new(resource),
             lifecycle,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         }
@@ -505,6 +544,8 @@ mod tests {
             config: Resource::new(resource),
             lifecycle,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access,
             enabled_when: None,
         }
@@ -816,6 +857,45 @@ mod tests {
         let serialized = serde_json::to_string_pretty(&stack_extend).expect("Failed to serialize");
         let deserialized: Stack = serde_json::from_str(&serialized).expect("Failed to deserialize");
         assert_eq!(stack_extend, deserialized);
+    }
+
+    #[test]
+    fn presentation_metadata_preserves_setup_fingerprints_and_old_entries() {
+        let original = Stack::new("metadata".to_string())
+            .add(
+                Storage::new("documents".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut documented = original.clone();
+        let entry = documented.resources.get_mut("documents").unwrap();
+        entry.display_name = Some("Document storage".to_string());
+        entry.description = Some("Uploaded documents and processed results.".to_string());
+        assert_eq!(
+            original.setup_owned_digest(),
+            documented.setup_owned_digest()
+        );
+        assert_eq!(
+            original.setup_update_digest(),
+            documented.setup_update_digest()
+        );
+        assert_eq!(
+            original.resources["documents"].config,
+            documented.resources["documents"].config
+        );
+        let old_json = serde_json::to_value(&original).unwrap();
+        assert!(old_json["resources"]["documents"]
+            .get("displayName")
+            .is_none());
+        let loaded: Stack = serde_json::from_value(old_json).unwrap();
+        assert_eq!(
+            loaded.resources["documents"].display_name_or_id(),
+            "documents"
+        );
+        assert!(loaded.resources["documents"].description.is_none());
+        let round_trip: Stack =
+            serde_json::from_value(serde_json::to_value(&documented).unwrap()).unwrap();
+        assert_eq!(round_trip, documented);
     }
 
     fn digest_sandbox(id: &str, image: &str, private_base_image: Option<&str>) -> crate::Sandbox {

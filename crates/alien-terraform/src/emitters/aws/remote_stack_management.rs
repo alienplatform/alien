@@ -278,6 +278,8 @@ mod tests {
             ),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         }
@@ -306,6 +308,8 @@ mod tests {
             config: Resource::new(Storage::new("uploads".to_string()).build()),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
         };
         let context = resource_scoped_aws_permission_context(

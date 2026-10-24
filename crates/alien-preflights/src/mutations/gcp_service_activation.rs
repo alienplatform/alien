@@ -119,6 +119,10 @@ impl StackMutation for GcpServiceActivationMutation {
                 config: alien_core::Resource::new(service_activation),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(), // GCP service activations don't depend on other resources
+                display_name: Some("Required Google Cloud API".to_string()),
+                description: Some(
+                    "Enables a Google Cloud API required by this deployment.".to_string(),
+                ),
                 remote_access: false,
             };
 

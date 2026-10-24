@@ -101,6 +101,8 @@ impl StackMutation for ServiceAccountMutation {
                 config: alien_core::Resource::new(service_account),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
+                display_name: Some("Application identity".to_string()),
+                description: Some("Grants application workloads the permissions declared by their permission profile.".to_string()),
                 remote_access: false,
             };
 

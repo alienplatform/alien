@@ -143,7 +143,10 @@ fn network_extra_variables(stack: &Stack, labels: &IndexMap<String, String>) -> 
         {
             extra_string_vars.push((
                 format!("{label}_vpc_id"),
-                "Existing VPC ID supplied by the customer.".to_string(),
+                format!(
+                    "Existing VPC ID for {} supplied by the customer.",
+                    entry.display_name_or_id()
+                ),
                 Some(Expression::String(vpc_id.clone())),
             ));
             extra_list_vars.push((
@@ -551,6 +554,7 @@ fn generate_terraform_module_internal(
         )?)?,
     );
 
+    let resource_inventory = resource_inventory(stack, &per_resource);
     for (resource_id, fragment) in per_resource {
         let body = fragment_to_body(fragment);
         if !body_is_empty(&body) {
@@ -608,6 +612,7 @@ fn generate_terraform_module_internal(
         "README.md".to_string(),
         readme_md(
             stack,
+            &resource_inventory,
             target,
             options.registration.as_ref(),
             options.display_name.as_deref(),
@@ -4453,8 +4458,71 @@ fn outputs_body(
     Body::from(blocks)
 }
 
+fn resource_inventory(stack: &Stack, fragments: &IndexMap<String, TfFragment>) -> String {
+    if !stack
+        .resources
+        .values()
+        .any(|entry| entry.display_name.is_some() || entry.description.is_some())
+    {
+        return String::new();
+    }
+    let mut text = String::from("## Resources\n\nNames and purpose are authored documentation. Setup components below are derived from this module; review their `.tf` files for permissions and deletion policies. Frozen resources are setup-owned; Live resources are runtime-owned.\n\n| Name | ID | Purpose | Lifecycle | Setup components |\n| --- | --- | --- | --- | --- |\n");
+    for (id, entry) in &stack.resources {
+        let components = fragments
+            .get(id)
+            .map(|fragment| {
+                fragment
+                    .resource_blocks
+                    .iter()
+                    .map(|block| {
+                        block
+                            .labels
+                            .iter()
+                            .map(|label| label.as_str())
+                            .collect::<Vec<_>>()
+                            .join(".")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        text.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n",
+            markdown_cell(entry.display_name_or_id()),
+            markdown_cell(id),
+            markdown_cell(entry.description.as_deref().unwrap_or("")),
+            match entry.lifecycle {
+                ResourceLifecycle::Frozen => "Frozen",
+                ResourceLifecycle::Live => "Live",
+            },
+            markdown_cell(&components)
+        ));
+    }
+    text.push('\n');
+    text
+}
+
+fn markdown_cell(value: &str) -> String {
+    let mut escaped = String::new();
+    for c in value.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\n' | '\r' => escaped.push(' '),
+            '|' | '\\' | '`' | '*' | '_' | '[' | ']' => {
+                escaped.push('\\');
+                escaped.push(c);
+            }
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
 fn readme_md(
     stack: &Stack,
+    resource_inventory: &str,
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
     display_name: Option<&str>,
@@ -4617,7 +4685,7 @@ fn readme_md(
         "# Deployment setup - {display_name}\n\n\
 Target: `{target}`.\n\n\
 This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.\n\n\
-## Inputs\n\n\
+{resource_inventory}## Inputs\n\n\
 {inputs}\n\n\
 {azure_sandbox_note}{azure_identity_note}## Run\n\n\
 Use your organization's normal backend and approval workflow. A typical local review looks like:\n\n\

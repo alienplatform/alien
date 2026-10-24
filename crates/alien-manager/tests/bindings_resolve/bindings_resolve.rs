@@ -302,6 +302,8 @@ fn sandbox_only_stack() -> Stack {
             config: Resource::new(sandbox),
             dependencies: Vec::new(),
             lifecycle: ResourceLifecycle::Frozen,
+            display_name: None,
+            description: None,
             remote_access: true,
         },
     );
@@ -593,6 +595,8 @@ async fn a_sandbox_sharing_the_release_with_another_remote_resource_refuses_a_da
             config: Resource::new(sandbox),
             dependencies: Vec::new(),
             lifecycle: ResourceLifecycle::Frozen,
+            display_name: None,
+            description: None,
             remote_access: true,
         },
     );

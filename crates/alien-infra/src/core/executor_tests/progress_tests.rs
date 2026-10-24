@@ -143,3 +143,54 @@ async fn planned_delete_explains_wait_before_the_delete_controller_starts() {
         .values()
         .all(|resource| resource.progress.is_none()));
 }
+
+#[tokio::test]
+async fn metadata_only_release_updates_presentation_without_a_resource_operation() {
+    let mut stack = Stack::new("metadata".to_owned())
+        .add_entry(
+            alien_core::ResourceEntry::new(test_function("worker"), ResourceLifecycle::Live)
+                .display_name("Document processor")
+                .description("Processes uploaded documents."),
+        )
+        .build();
+    let state = run_to_synced(&new_executor(&stack).unwrap(), new_test_state())
+        .await
+        .unwrap();
+    assert_eq!(
+        state.resources["worker"].display_name.as_deref(),
+        Some("Document processor")
+    );
+    let before = state.resources["worker"].clone();
+    stack.resources.get_mut("worker").unwrap().description =
+        Some("Processes documents and results.".to_owned());
+    let executor = new_executor(&stack).unwrap();
+    let plan = executor.plan(&state).unwrap();
+    assert!(
+        plan.creates.is_empty()
+            && plan.updates.is_empty()
+            && plan.deletes.is_empty()
+            && plan.replaces.is_empty()
+            && plan.setup_required.is_empty()
+    );
+    let result = executor.step(state).await.unwrap();
+    let after = &result.next_state.resources["worker"];
+    assert_eq!(after.status, ResourceStatus::Running);
+    assert_eq!(after.internal_state, before.internal_state);
+    assert_eq!(after.outputs, before.outputs);
+    assert_eq!(after.config, before.config);
+    assert_eq!(
+        after.description.as_deref(),
+        Some("Processes documents and results.")
+    );
+    stack.resources.get_mut("worker").unwrap().display_name = None;
+    stack.resources.get_mut("worker").unwrap().description = None;
+    let cleared = new_executor(&stack)
+        .unwrap()
+        .step(result.next_state)
+        .await
+        .unwrap();
+    assert!(cleared.next_state.resources["worker"]
+        .display_name
+        .is_none());
+    assert!(cleared.next_state.resources["worker"].description.is_none());
+}

@@ -95,6 +95,8 @@ export class Stack {
     if (options?.remoteAccess) {
       entry.remoteAccess = true
     }
+    if (resource.displayName !== undefined) entry.displayName = resource.displayName
+    if (resource.description !== undefined) entry.description = resource.description
     if (resource.enabledWhen !== undefined) {
       entry.enabledWhen = resource.enabledWhen
     }
