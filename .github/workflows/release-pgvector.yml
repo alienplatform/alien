@@ -134,8 +134,8 @@ jobs:
           # theseus's pg_config bakes an -isysroot for its build-time Xcode SDK, which is absent on
           # the runner; point PGXS at the runner's actual SDK so system headers (stdio.h) resolve.
           SDK="$(xcrun --show-sdk-path)"
-          make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK"
-          make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK" install
+          make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK" OPTFLAGS="" with_llvm=no
+          make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK" OPTFLAGS="" with_llvm=no install
 
       - name: Package artifact
         run: |
@@ -184,11 +184,15 @@ jobs:
           echo "PGROOT=$PWD/pgdist" >> "$GITHUB_ENV"
           echo "PGROOT_WIN=$(cygpath -w "$PWD/pgdist")" >> "$GITHUB_ENV"
 
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Build pgvector (MSVC nmake)
         shell: cmd
         run: |
           git clone --depth 1 --branch "v%PGVECTOR_VERSION%" https://github.com/pgvector/pgvector.git
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cd pgvector
           nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%"
           nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%" install
