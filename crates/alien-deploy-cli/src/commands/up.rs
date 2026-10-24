@@ -2531,6 +2531,95 @@ machines = 1
     }
 
     #[tokio::test]
+    async fn hosted_initial_compute_saved_with_override_reaches_setup() {
+        for status in ["pending", "preflights-failed"] {
+            let manager = MockServer::start_async().await;
+            let api = MockServer::start_async().await;
+            let name = format!("compute-override-{}", uuid::Uuid::new_v4());
+            let mut detail = installed_deployment(status, Some("rel_target"));
+            detail["platform"] = serde_json::json!("aws");
+            detail["currentReleaseId"] = serde_json::Value::Null;
+            detail["stackSettings"] = serde_json::json!({});
+            manager
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    then.status(200).json_body(detail);
+                })
+                .await;
+            let manager_url = manager.base_url();
+            api.mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/v1/resolve");
+                then.status(200)
+                    .json_body(serde_json::json!({"managerUrl": manager_url}));
+            })
+            .await;
+            manager
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/initialize");
+                    then.status(200).json_body(serde_json::json!({
+                        "deploymentId": "dep_demo", "deploymentModel": "push", "token": "test-compute-token"
+                    }));
+                })
+                .await;
+            let selected = serde_json::json!({"pools": {"general": {
+                "mode": "fixed", "machine": "r6a.2xlarge", "machines": 1
+            }}});
+            let save = api
+                .mock_async(|when, then| {
+                    when.method(PATCH)
+                        .path("/v1/deployments/dep_demo/compute")
+                        .header("authorization", "Bearer test-compute-token")
+                        .json_body(serde_json::json!({
+                            "compute": selected, "quotaWarningOverrides": ["L-1216C47A"]
+                        }));
+                    then.status(200).json_body(serde_json::json!({}));
+                })
+                .await;
+            let mut file = tempfile::NamedTempFile::new().unwrap();
+            writeln!(
+                file,
+                r#"
+[compute.pools.general]
+mode = "fixed"
+machine = "r6a.2xlarge"
+machines = 1
+"#
+            )
+            .unwrap();
+            let api_url = api.base_url();
+            let args = UpArgs::parse_from([
+                "deploy",
+                "--name",
+                &name,
+                "--platform",
+                "aws",
+                "--base-url",
+                &api_url,
+                "--manager-url",
+                &manager_url,
+                "--token",
+                "test-compute-token",
+                "--config",
+                file.path().to_str().unwrap(),
+                "--quota-warning-override",
+                "L-1216C47A",
+            ]);
+            let error = up_command(args, None)
+                .await
+                .expect_err("setup has no target credentials in this test");
+            DeploymentTracker::new().unwrap().remove(&name).unwrap();
+            assert!(
+                !error
+                    .to_string()
+                    .contains("requested compute settings differ"),
+                "{status}: {error:?}"
+            );
+            save.assert_hits_async(1).await;
+        }
+    }
+
+    #[tokio::test]
     async fn hosted_initial_override_command_submits_before_setup_and_stops_on_refusal() {
         for (status, same) in [
             ("pending", false),
@@ -4101,26 +4190,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
 
     let hosted_platform =
         manager_url.trim_end_matches('/') != resolved.base_url.trim_end_matches('/');
-    // Initialize may resume an existing name without changing its saved settings.
-    // Setup must not provision that old selection while displaying a different request.
-    // Hosted states with a compute update API are handled below instead.
-    if init.deployment_model == DeploymentModel::Push
-        && requires_install_context(platform)
-        && !(hosted_platform && supports_hosted_compute_update(&current_deployment.status))
-    {
-        let saved: StackSettings = current_deployment
-            .stack_settings
-            .clone()
-            .map(serde_json::from_value)
-            .transpose()
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to deserialize saved compute settings".into(),
-            })?
-            .unwrap_or_default();
-        validate_setup_compute_settings(&saved, &stack_settings)?;
-    }
     let requested_overrides = requested_quota_warning_overrides(&args, deploy_config.as_ref());
+    // Set when the hosted pending/preflights-failed path saves compute with the overrides.
+    let mut compute_saved_with_overrides = false;
     if let Some(overrides) = &requested_overrides {
         let saved: StackSettings = current_deployment
             .stack_settings
@@ -4195,6 +4267,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                         &patch,
                     )
                     .await?;
+                    compute_saved_with_overrides = stack_settings.compute.is_some();
                     current_deployment = client
                         .get_deployment()
                         .id(&deployment_id)
@@ -4209,6 +4282,27 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 }
             }
         }
+    }
+    // Initialize may resume an existing name without changing its saved settings.
+    // Setup must not provision that old selection while displaying a different request.
+    // Hosted states with a compute update API are handled below instead, and the hosted
+    // quota-override path above may already have saved the requested compute.
+    if init.deployment_model == DeploymentModel::Push
+        && requires_install_context(platform)
+        && !compute_saved_with_overrides
+        && !(hosted_platform && supports_hosted_compute_update(&current_deployment.status))
+    {
+        let saved: StackSettings = current_deployment
+            .stack_settings
+            .clone()
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize saved compute settings".into(),
+            })?
+            .unwrap_or_default();
+        validate_setup_compute_settings(&saved, &stack_settings)?;
     }
     if !hosted_platform && requested_overrides.is_some() && current_deployment.status == "running" {
         output::success("Deployment already has the requested quota warning overrides.");
