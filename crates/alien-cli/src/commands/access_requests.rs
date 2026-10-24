@@ -48,7 +48,7 @@ EXAMPLES:
     # Request access to one operation
     alien access-requests create --deployment mycustomer/prod \\
       --operation kubernetes/restart-pod \\
-      --params '{\"namespace\":\"braintrust\",\"pod\":\"api-123\"}' \\
+      --params '{\"namespace\":\"payments\",\"pod\":\"api-123\"}' \\
       --duration 1h
 
     # Request temporary access to every read-only Kubernetes operation
@@ -57,12 +57,12 @@ EXAMPLES:
 
     # Request a kubectl debug session scoped to one namespace
     alien access-requests create --deployment mycustomer/prod \\
-      --debug-tool kubectl --debug-namespace braintrust --duration 30m
+      --debug-tool kubectl --debug-namespace payments --duration 30m
 
     # Request both an operation and a debug session in one row
     alien access-requests create --deployment mycustomer/prod \\
       --operation 'kubernetes/*' --max-risk read-only \\
-      --debug-tool kubectl --debug-namespace braintrust --duration 30m
+      --debug-tool kubectl --debug-namespace payments --duration 30m
 
     # Review a request, then wait for the customer to approve it
     alien access-requests get ar_123
