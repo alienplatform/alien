@@ -447,8 +447,11 @@ test("deployment resource selections survive the generated request serializer", 
 });
 
 test("existing access request risk enum deep imports remain compatible", async () => {
-  const { CreateAccessRequestMaxRisk } = await import("../typescript/esm/models/createaccessrequest.js");
-  assert.equal(CreateAccessRequestMaxRisk.ReadOnly, "read-only");
+  for (const path of ["index", "createaccessrequest"]) {
+    const models = await import(`../typescript/esm/models/${path}.js`);
+    assert.equal(models.CreateAccessRequestMaxRisk.ReadOnly, "read-only");
+    assert.equal(models.CreateAccessRequestMaxRisk$outboundSchema.parse("mutating"), "mutating");
+  }
 });
 
 test("reported resource serializers retain their published imports", async () => {

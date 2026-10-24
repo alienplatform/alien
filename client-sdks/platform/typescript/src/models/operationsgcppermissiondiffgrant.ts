@@ -10,8 +10,6 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   OperationsPermissionDiffSource,
   OperationsPermissionDiffSource$inboundSchema,
-  OperationsPermissionDiffSource$Outbound,
-  OperationsPermissionDiffSource$outboundSchema,
 } from "./operationspermissiondiffsource.js";
 
 /**
@@ -42,10 +40,6 @@ export type OperationsGcpPermissionDiffGrant = {
 export const OperationsGcpPermissionDiffGrantScope$inboundSchema: z.ZodEnum<
   typeof OperationsGcpPermissionDiffGrantScope
 > = z.enum(OperationsGcpPermissionDiffGrantScope);
-/** @internal */
-export const OperationsGcpPermissionDiffGrantScope$outboundSchema: z.ZodEnum<
-  typeof OperationsGcpPermissionDiffGrantScope
-> = OperationsGcpPermissionDiffGrantScope$inboundSchema;
 
 /** @internal */
 export const OperationsGcpPermissionDiffGrant$inboundSchema: z.ZodType<
@@ -56,32 +50,7 @@ export const OperationsGcpPermissionDiffGrant$inboundSchema: z.ZodType<
   scope: OperationsGcpPermissionDiffGrantScope$inboundSchema,
   sources: z.array(OperationsPermissionDiffSource$inboundSchema),
 });
-/** @internal */
-export type OperationsGcpPermissionDiffGrant$Outbound = {
-  permission: string;
-  scope: string;
-  sources: Array<OperationsPermissionDiffSource$Outbound>;
-};
 
-/** @internal */
-export const OperationsGcpPermissionDiffGrant$outboundSchema: z.ZodType<
-  OperationsGcpPermissionDiffGrant$Outbound,
-  OperationsGcpPermissionDiffGrant
-> = z.object({
-  permission: z.string(),
-  scope: OperationsGcpPermissionDiffGrantScope$outboundSchema,
-  sources: z.array(OperationsPermissionDiffSource$outboundSchema),
-});
-
-export function operationsGcpPermissionDiffGrantToJSON(
-  operationsGcpPermissionDiffGrant: OperationsGcpPermissionDiffGrant,
-): string {
-  return JSON.stringify(
-    OperationsGcpPermissionDiffGrant$outboundSchema.parse(
-      operationsGcpPermissionDiffGrant,
-    ),
-  );
-}
 export function operationsGcpPermissionDiffGrantFromJSON(
   jsonString: string,
 ): SafeParseResult<OperationsGcpPermissionDiffGrant, SDKValidationError> {

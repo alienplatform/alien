@@ -9,8 +9,6 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   OperationsPermissionDiffSource,
   OperationsPermissionDiffSource$inboundSchema,
-  OperationsPermissionDiffSource$Outbound,
-  OperationsPermissionDiffSource$outboundSchema,
 } from "./operationspermissiondiffsource.js";
 
 export type OperationsKubernetesPermissionDiffGrant = {
@@ -40,39 +38,7 @@ export const OperationsKubernetesPermissionDiffGrant$inboundSchema: z.ZodType<
   remediationOnly: z.boolean(),
   sources: z.array(OperationsPermissionDiffSource$inboundSchema),
 });
-/** @internal */
-export type OperationsKubernetesPermissionDiffGrant$Outbound = {
-  apiGroup: string;
-  resource: string;
-  verbs: Array<string>;
-  resourceNames: Array<string>;
-  remediationOnly: boolean;
-  sources: Array<OperationsPermissionDiffSource$Outbound>;
-};
 
-/** @internal */
-export const OperationsKubernetesPermissionDiffGrant$outboundSchema: z.ZodType<
-  OperationsKubernetesPermissionDiffGrant$Outbound,
-  OperationsKubernetesPermissionDiffGrant
-> = z.object({
-  apiGroup: z.string(),
-  resource: z.string(),
-  verbs: z.array(z.string()),
-  resourceNames: z.array(z.string()),
-  remediationOnly: z.boolean(),
-  sources: z.array(OperationsPermissionDiffSource$outboundSchema),
-});
-
-export function operationsKubernetesPermissionDiffGrantToJSON(
-  operationsKubernetesPermissionDiffGrant:
-    OperationsKubernetesPermissionDiffGrant,
-): string {
-  return JSON.stringify(
-    OperationsKubernetesPermissionDiffGrant$outboundSchema.parse(
-      operationsKubernetesPermissionDiffGrant,
-    ),
-  );
-}
 export function operationsKubernetesPermissionDiffGrantFromJSON(
   jsonString: string,
 ): SafeParseResult<

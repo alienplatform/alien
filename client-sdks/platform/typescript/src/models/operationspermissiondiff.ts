@@ -9,20 +9,14 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   OperationsAwsPermissionDiffStatement,
   OperationsAwsPermissionDiffStatement$inboundSchema,
-  OperationsAwsPermissionDiffStatement$Outbound,
-  OperationsAwsPermissionDiffStatement$outboundSchema,
 } from "./operationsawspermissiondiffstatement.js";
 import {
   OperationsGcpPermissionDiffGrant,
   OperationsGcpPermissionDiffGrant$inboundSchema,
-  OperationsGcpPermissionDiffGrant$Outbound,
-  OperationsGcpPermissionDiffGrant$outboundSchema,
 } from "./operationsgcppermissiondiffgrant.js";
 import {
   OperationsKubernetesPermissionDiffGrant,
   OperationsKubernetesPermissionDiffGrant$inboundSchema,
-  OperationsKubernetesPermissionDiffGrant$Outbound,
-  OperationsKubernetesPermissionDiffGrant$outboundSchema,
 } from "./operationskubernetespermissiondiffgrant.js";
 
 export type OperationsPermissionDiffAws = {
@@ -67,30 +61,7 @@ export const OperationsPermissionDiffAws$inboundSchema: z.ZodType<
   added: z.array(OperationsAwsPermissionDiffStatement$inboundSchema),
   removed: z.array(OperationsAwsPermissionDiffStatement$inboundSchema),
 });
-/** @internal */
-export type OperationsPermissionDiffAws$Outbound = {
-  added: Array<OperationsAwsPermissionDiffStatement$Outbound>;
-  removed: Array<OperationsAwsPermissionDiffStatement$Outbound>;
-};
 
-/** @internal */
-export const OperationsPermissionDiffAws$outboundSchema: z.ZodType<
-  OperationsPermissionDiffAws$Outbound,
-  OperationsPermissionDiffAws
-> = z.object({
-  added: z.array(OperationsAwsPermissionDiffStatement$outboundSchema),
-  removed: z.array(OperationsAwsPermissionDiffStatement$outboundSchema),
-});
-
-export function operationsPermissionDiffAwsToJSON(
-  operationsPermissionDiffAws: OperationsPermissionDiffAws,
-): string {
-  return JSON.stringify(
-    OperationsPermissionDiffAws$outboundSchema.parse(
-      operationsPermissionDiffAws,
-    ),
-  );
-}
 export function operationsPermissionDiffAwsFromJSON(
   jsonString: string,
 ): SafeParseResult<OperationsPermissionDiffAws, SDKValidationError> {
@@ -109,30 +80,7 @@ export const OperationsPermissionDiffGcp$inboundSchema: z.ZodType<
   added: z.array(OperationsGcpPermissionDiffGrant$inboundSchema),
   removed: z.array(OperationsGcpPermissionDiffGrant$inboundSchema),
 });
-/** @internal */
-export type OperationsPermissionDiffGcp$Outbound = {
-  added: Array<OperationsGcpPermissionDiffGrant$Outbound>;
-  removed: Array<OperationsGcpPermissionDiffGrant$Outbound>;
-};
 
-/** @internal */
-export const OperationsPermissionDiffGcp$outboundSchema: z.ZodType<
-  OperationsPermissionDiffGcp$Outbound,
-  OperationsPermissionDiffGcp
-> = z.object({
-  added: z.array(OperationsGcpPermissionDiffGrant$outboundSchema),
-  removed: z.array(OperationsGcpPermissionDiffGrant$outboundSchema),
-});
-
-export function operationsPermissionDiffGcpToJSON(
-  operationsPermissionDiffGcp: OperationsPermissionDiffGcp,
-): string {
-  return JSON.stringify(
-    OperationsPermissionDiffGcp$outboundSchema.parse(
-      operationsPermissionDiffGcp,
-    ),
-  );
-}
 export function operationsPermissionDiffGcpFromJSON(
   jsonString: string,
 ): SafeParseResult<OperationsPermissionDiffGcp, SDKValidationError> {
@@ -151,30 +99,7 @@ export const OperationsPermissionDiffKubernetes$inboundSchema: z.ZodType<
   added: z.array(OperationsKubernetesPermissionDiffGrant$inboundSchema),
   removed: z.array(OperationsKubernetesPermissionDiffGrant$inboundSchema),
 });
-/** @internal */
-export type OperationsPermissionDiffKubernetes$Outbound = {
-  added: Array<OperationsKubernetesPermissionDiffGrant$Outbound>;
-  removed: Array<OperationsKubernetesPermissionDiffGrant$Outbound>;
-};
 
-/** @internal */
-export const OperationsPermissionDiffKubernetes$outboundSchema: z.ZodType<
-  OperationsPermissionDiffKubernetes$Outbound,
-  OperationsPermissionDiffKubernetes
-> = z.object({
-  added: z.array(OperationsKubernetesPermissionDiffGrant$outboundSchema),
-  removed: z.array(OperationsKubernetesPermissionDiffGrant$outboundSchema),
-});
-
-export function operationsPermissionDiffKubernetesToJSON(
-  operationsPermissionDiffKubernetes: OperationsPermissionDiffKubernetes,
-): string {
-  return JSON.stringify(
-    OperationsPermissionDiffKubernetes$outboundSchema.parse(
-      operationsPermissionDiffKubernetes,
-    ),
-  );
-}
 export function operationsPermissionDiffKubernetesFromJSON(
   jsonString: string,
 ): SafeParseResult<OperationsPermissionDiffKubernetes, SDKValidationError> {
@@ -196,32 +121,7 @@ export const OperationsPermissionDiff$inboundSchema: z.ZodType<
   kubernetes: z.lazy(() => OperationsPermissionDiffKubernetes$inboundSchema),
   incompleteForPlugins: z.array(z.string()).optional(),
 });
-/** @internal */
-export type OperationsPermissionDiff$Outbound = {
-  aws: OperationsPermissionDiffAws$Outbound;
-  gcp: OperationsPermissionDiffGcp$Outbound;
-  kubernetes: OperationsPermissionDiffKubernetes$Outbound;
-  incompleteForPlugins?: Array<string> | undefined;
-};
 
-/** @internal */
-export const OperationsPermissionDiff$outboundSchema: z.ZodType<
-  OperationsPermissionDiff$Outbound,
-  OperationsPermissionDiff
-> = z.object({
-  aws: z.lazy(() => OperationsPermissionDiffAws$outboundSchema),
-  gcp: z.lazy(() => OperationsPermissionDiffGcp$outboundSchema),
-  kubernetes: z.lazy(() => OperationsPermissionDiffKubernetes$outboundSchema),
-  incompleteForPlugins: z.array(z.string()).optional(),
-});
-
-export function operationsPermissionDiffToJSON(
-  operationsPermissionDiff: OperationsPermissionDiff,
-): string {
-  return JSON.stringify(
-    OperationsPermissionDiff$outboundSchema.parse(operationsPermissionDiff),
-  );
-}
 export function operationsPermissionDiffFromJSON(
   jsonString: string,
 ): SafeParseResult<OperationsPermissionDiff, SDKValidationError> {

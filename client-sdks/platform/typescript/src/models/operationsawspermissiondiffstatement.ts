@@ -10,8 +10,6 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   OperationsPermissionDiffSource,
   OperationsPermissionDiffSource$inboundSchema,
-  OperationsPermissionDiffSource$Outbound,
-  OperationsPermissionDiffSource$outboundSchema,
 } from "./operationspermissiondiffsource.js";
 
 export const OperationsAwsPermissionDiffStatementEffect = {
@@ -35,10 +33,6 @@ export const OperationsAwsPermissionDiffStatementEffect$inboundSchema:
   z.ZodEnum<typeof OperationsAwsPermissionDiffStatementEffect> = z.enum(
     OperationsAwsPermissionDiffStatementEffect,
   );
-/** @internal */
-export const OperationsAwsPermissionDiffStatementEffect$outboundSchema:
-  z.ZodEnum<typeof OperationsAwsPermissionDiffStatementEffect> =
-    OperationsAwsPermissionDiffStatementEffect$inboundSchema;
 
 /** @internal */
 export const OperationsAwsPermissionDiffStatement$inboundSchema: z.ZodType<
@@ -51,36 +45,7 @@ export const OperationsAwsPermissionDiffStatement$inboundSchema: z.ZodType<
   condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string()))),
   sources: z.array(OperationsPermissionDiffSource$inboundSchema),
 });
-/** @internal */
-export type OperationsAwsPermissionDiffStatement$Outbound = {
-  effect: string;
-  actions: Array<string>;
-  resources: Array<string>;
-  condition: { [k: string]: { [k: string]: string } } | null;
-  sources: Array<OperationsPermissionDiffSource$Outbound>;
-};
 
-/** @internal */
-export const OperationsAwsPermissionDiffStatement$outboundSchema: z.ZodType<
-  OperationsAwsPermissionDiffStatement$Outbound,
-  OperationsAwsPermissionDiffStatement
-> = z.object({
-  effect: OperationsAwsPermissionDiffStatementEffect$outboundSchema,
-  actions: z.array(z.string()),
-  resources: z.array(z.string()),
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string()))),
-  sources: z.array(OperationsPermissionDiffSource$outboundSchema),
-});
-
-export function operationsAwsPermissionDiffStatementToJSON(
-  operationsAwsPermissionDiffStatement: OperationsAwsPermissionDiffStatement,
-): string {
-  return JSON.stringify(
-    OperationsAwsPermissionDiffStatement$outboundSchema.parse(
-      operationsAwsPermissionDiffStatement,
-    ),
-  );
-}
 export function operationsAwsPermissionDiffStatementFromJSON(
   jsonString: string,
 ): SafeParseResult<OperationsAwsPermissionDiffStatement, SDKValidationError> {
