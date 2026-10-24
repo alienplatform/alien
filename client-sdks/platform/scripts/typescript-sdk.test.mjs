@@ -5,7 +5,7 @@ import { APIError } from "../typescript/esm/models/errors/apierror.js";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
 import { deploymentGroupsCreateToken } from "../typescript/esm/funcs/deploymentGroupsCreateToken.js";
-import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
+import { DeploymentResource$inboundSchema, OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
 import { deploymentSetupConfigInputToJSON } from "../typescript/esm/models/deploymentsetupconfiginput.js";
 import { deploymentSetupPolicyFromJSON, deploymentSetupPolicyToJSON } from "../typescript/esm/models/deploymentsetuppolicy.js";
 import { newDeploymentRequestToJSON } from "../typescript/esm/models/newdeploymentrequest.js";
@@ -542,4 +542,11 @@ test("published external-binding endpoint models retain root and deep imports", 
     assert.deepEqual(models.EndpointSecretRef$outboundSchema.parse(endpoint.secretRef), endpoint.secretRef);
     assert.deepEqual(models.endpointSecretRefFromJSON(JSON.stringify(endpoint.secretRef)), { ok: true, value: endpoint.secretRef });
   }
+});
+
+test("public resource model parses progress and accepts older managers", () => {
+  const resource = { id: "network", type: "network", status: "provisioning", retryAttempt: 0, error: null };
+  assert.deepEqual(DeploymentResource$inboundSchema.parse(resource), resource);
+  const waiting = { ...resource, progress: "Waiting for the NAT gateway to become available." };
+  assert.deepEqual(DeploymentResource$inboundSchema.parse(waiting), waiting);
 });

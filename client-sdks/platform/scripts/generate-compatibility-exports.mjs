@@ -544,3 +544,12 @@ await writeFile(accessRequestUrl, `${accessRequestSource}${accessRequestMarker}e
 export type CreateAccessRequestMaxRisk = MaxRisk;
 export const CreateAccessRequestMaxRisk$outboundSchema = MaxRisk$outboundSchema;
 `);
+
+// Resource observations are public models even when unrelated SDK drift is scoped out.
+const modelIndexUrl = new URL("index.ts", models);
+const modelIndex = await readFile(modelIndexUrl, "utf8");
+const resourceExport = 'export * from "./deploymentresource.js";';
+if (!modelIndex.includes(resourceExport)) {
+  await readFile(new URL("deploymentresource.ts", models));
+  await writeFile(modelIndexUrl, `${modelIndex.trimEnd()}\n${resourceExport}\n`);
+}
