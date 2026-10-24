@@ -1,4 +1,6 @@
-use crate::gcp::gcp_request_utils::{auth_send_json, auth_send_no_response, GcpAuthConfig};
+use crate::gcp::gcp_request_utils::{
+    auth_send_json, auth_send_json_once, auth_send_no_response, GcpAuthConfig,
+};
 use crate::gcp::iam::IamPolicy;
 use crate::gcp::GcpClientConfig;
 use crate::gcp::GcpClientConfigExt;
@@ -232,7 +234,10 @@ impl GcsApi for GcsClient {
     /// Get the IAM policy attached to `bucket_name`.
     async fn get_bucket_iam_policy(&self, bucket_name: String) -> Result<IamPolicy> {
         let url = format!("{}/b/{}/iam", self.get_api_base_url(), bucket_name);
-        let builder = self.http.get(url);
+        let builder = self
+            .http
+            .get(url)
+            .query(&[("optionsRequestedPolicyVersion", 3)]);
         auth_send_json(
             builder,
             &self.auth().await?,
@@ -251,7 +256,9 @@ impl GcsApi for GcsClient {
     ) -> Result<IamPolicy> {
         let url = format!("{}/b/{}/iam", self.get_api_base_url(), bucket_name);
         let builder = self.http.put(url).json(&iam_policy);
-        auth_send_json(
+        // Retrying this same etag cannot resolve a conflict. Let the caller re-read
+        // the policy before retrying, including after a lost response.
+        auth_send_json_once(
             builder,
             &self.auth().await?,
             "SetBucketIamPolicy",
