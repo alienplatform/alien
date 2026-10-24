@@ -33,6 +33,7 @@ mod generator {
     pub mod plugin_tests;
     pub mod registration_delete_order_tests;
     pub mod registration_tests;
+    pub mod resource_metadata_tests;
     pub mod stack_input_tests;
     pub mod volume_key_dependency_tests;
 }
