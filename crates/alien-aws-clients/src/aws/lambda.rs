@@ -1010,13 +1010,24 @@ pub struct Environment {
     pub variables: Option<std::collections::HashMap<String, String>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct FunctionConfiguration {
     pub function_name: Option<String>,
     pub function_arn: Option<String>,
     pub state: Option<String>,
+    /// Why the function is in its current `state`, such as the error behind `Failed`.
+    pub state_reason: Option<String>,
+    /// Machine-readable `state_reason`, such as `SubnetOutOfIPAddresses`.
+    pub state_reason_code: Option<String>,
     pub last_update_status: Option<String>,
+    /// Why the last update has its `last_update_status`, such as the error behind `Failed`.
+    pub last_update_status_reason: Option<String>,
+    /// Machine-readable `last_update_status_reason`, such as `EniLimitExceeded`.
+    pub last_update_status_reason_code: Option<String>,
+    /// The subnets and security groups the function is attached to; empty lists or absent
+    /// when it is not attached to a VPC.
+    pub vpc_config: Option<VpcConfig>,
     #[serde(rename = "KMSKeyArn")]
     pub kms_key_arn: Option<String>,
 }
@@ -1123,7 +1134,7 @@ pub struct EphemeralStorage {
 ///
 /// When configured, the Lambda function runs inside the specified VPC with access
 /// to the specified subnets and security groups.
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct VpcConfig {
     /// A list of VPC subnet IDs where the function will run.
