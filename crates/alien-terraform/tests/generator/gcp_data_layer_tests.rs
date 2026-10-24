@@ -584,8 +584,17 @@ fn explicit_management_storage_signing_uses_the_management_account_policy() {
 #[test]
 fn gcp_storage_browser_cors() {
     let stack = Stack::new("browser-storage".to_string())
+        .permissions(PermissionsConfig::new().with_profile(
+            "execution",
+            PermissionProfile::new().resource("assets", ["storage/data-read"]),
+        ))
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .add(
             Storage::new("assets".to_string())
+                .versioning(true)
                 .cors_allowed_origins(vec![
                     "https://app.example.com".to_string(),
                     "https://preview.example.com".to_string(),

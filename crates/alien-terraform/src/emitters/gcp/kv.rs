@@ -46,7 +46,7 @@ impl TfEmitter for GcpKvEmitter {
                     "delete_protection_state",
                     Expression::String("DELETE_PROTECTION_DISABLED".to_string()),
                 ),
-                attr("deletion_policy", Expression::String("DELETE".to_string())),
+                attr("deletion_policy", Expression::String("ABANDON".to_string())),
             ],
         );
 
@@ -82,6 +82,7 @@ impl TfEmitter for GcpKvEmitter {
                 )?;
             }
         }
+        fragment.retain_resources(|kind, _| kind == "google_firestore_database");
         Ok(fragment)
     }
 

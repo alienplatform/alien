@@ -252,3 +252,74 @@ fn failed_state_read_or_mutation_never_loses_recovery_inventory() {
         0o600
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn gcp_expiry_must_be_removed_before_any_data_is_detached() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("retain-data.py"),
+        include_str!("../src/templates/retain-data.py"),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("retained-data.json"),
+        r#"["google_storage_bucket.data"]"#,
+    )
+    .unwrap();
+    let cli = root.path().join("terraform");
+    fs::write(&cli, "#!/bin/sh\nif [ \"$1 $2\" = 'state pull' ]; then cat state.json; exit 0; fi\nif [ \"$1 $2\" = 'state rm' ]; then touch detached; exit 0; fi\nexit 1\n").unwrap();
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
+    let invoke = || {
+        Command::new("python3")
+            .current_dir(root.path())
+            .args(["retain-data.py", "--detach", "--receipt-dir", "receipts"])
+            .env("TF_CLI", "terraform")
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    root.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .output()
+            .unwrap()
+    };
+    let mut state = json!({"version":4,"lineage":"expiry-test","serial":1,"resources":[{
+    "mode":"managed","type":"google_storage_bucket","name":"data","instances":[{
+        "attributes":{"id":"retained-bucket","lifecycle_rule":[{"action":[{"type":"Delete"}],"condition":[{"age":30}]}]}
+    }]}]});
+    fs::write(
+        root.path().join("state.json"),
+        serde_json::to_vec(&state).unwrap(),
+    )
+    .unwrap();
+    let refused = invoke();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr)
+        .contains("Remove Cloud Storage delete lifecycle rules"));
+    assert!(!root.path().join("detached").exists());
+    assert!(!root.path().join("receipts").exists());
+    // A non-destructive storage-class transition is safe to retain.
+    state["resources"][0]["instances"][0]["attributes"]["lifecycle_rule"][0]["action"][0] =
+        json!({"type":"SetStorageClass","storage_class":"NEARLINE"});
+    state["serial"] = 2.into();
+    fs::write(
+        root.path().join("state.json"),
+        serde_json::to_vec(&state).unwrap(),
+    )
+    .unwrap();
+    success(invoke());
+    assert!(root.path().join("detached").exists());
+    let receipt = fs::read_dir(root.path().join("receipts"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(receipt.join("retained.json")).unwrap()).unwrap(),
+        json!([{"address":"google_storage_bucket.data","id":"retained-bucket"}])
+    );
+}

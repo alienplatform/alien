@@ -860,17 +860,6 @@ fn automatic_packages_refuse_resources_the_runtime_cannot_create() {
                 .build(),
         ),
         (
-            "storage with CORS",
-            Stack::new("example".to_string())
-                .add(
-                    Storage::new("files".to_string())
-                        .cors_allowed_origins(vec!["https://console.example.com".to_string()])
-                        .build(),
-                    ResourceLifecycle::Frozen,
-                )
-                .build(),
-        ),
-        (
             "management permission override",
             Stack::new("example".to_string())
                 .add(
@@ -906,14 +895,18 @@ fn automatic_packages_refuse_resources_the_runtime_cannot_create() {
         );
     }
 
-    // Control: the same storage without CORS origins is created by the runtime as declared.
-    let plain = Stack::new("example".to_string())
-        .add(
-            Storage::new("files".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-    render_automatic(&plain, "storage without CORS").expect("plain storage is supported");
+    // Both declarations are supported by the AWS runtime, including browser CORS.
+    for origins in [vec![], vec!["https://console.example.com".to_string()]] {
+        let storage = Stack::new("example".to_string())
+            .add(
+                Storage::new("files".to_string())
+                    .cors_allowed_origins(origins)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        render_automatic(&storage, "storage").expect("AWS storage is supported");
+    }
 
     // Control: a stack-wide management extension is installed by setup like the generated grant.
     let extended = Stack::new("example".to_string())

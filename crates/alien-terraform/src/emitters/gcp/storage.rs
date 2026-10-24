@@ -51,6 +51,13 @@ impl TfEmitter for GcpStorageEmitter {
 
         emit_storage_iam(ctx, &mut fragment, label)?;
 
+        // This grant lets the storage service decrypt retained objects. Application
+        // and public IAM members remain managed for revocation.
+        fragment.retain_state(|kind, name| {
+            kind == "google_kms_crypto_key_iam_member"
+                && name == format!("{label}_storage_encryption")
+        });
+        fragment.retain_resources(|kind, _| kind == "google_storage_bucket");
         Ok(fragment)
     }
 
@@ -121,10 +128,7 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
         attr("location", expr::raw("upper(var.gcp_region)")),
         attr("storage_class", Expression::String("STANDARD".to_string())),
         attr("uniform_bucket_level_access", Expression::Bool(true)),
-        attr(
-            "force_destroy",
-            Expression::Bool(!ctx.resource.has_remote_bindings()),
-        ),
+        attr("force_destroy", Expression::Bool(false)),
         attr(
             "public_access_prevention",
             Expression::String(if storage.public_read {

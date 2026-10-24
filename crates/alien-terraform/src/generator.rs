@@ -580,9 +580,12 @@ fn generate_terraform_module_internal(
             .then(|| format!("{kind}.{label}"))
         })
         .collect();
-    // Every AWS package carries the same fail-closed uninstall entry point,
+    // Every supported cloud package carries the same fail-closed uninstall entry point,
     // including key-only and access-only packages with an empty data inventory.
-    let has_retention_workflow = matches!(target, TerraformTarget::Aws | TerraformTarget::Eks);
+    let has_retention_workflow = matches!(
+        target,
+        TerraformTarget::Aws | TerraformTarget::Eks | TerraformTarget::Gcp | TerraformTarget::Gke
+    );
     if has_retention_workflow {
         files.insert(
             "retained-data.json".into(),
@@ -671,7 +674,13 @@ fn generate_terraform_module_internal(
 
     if has_retention_workflow {
         if let Some(readme) = files.get_mut("README.md") {
-            readme.push_str(include_str!("templates/retained-data.md"));
+            readme.push_str(
+                if matches!(target, TerraformTarget::Gcp | TerraformTarget::Gke) {
+                    include_str!("templates/retained-data-gcp.md")
+                } else {
+                    include_str!("templates/retained-data.md")
+                },
+            );
         }
     }
 
@@ -1690,8 +1699,9 @@ pub(crate) const PROVIDER_REQUIREMENTS: &[(&str, &str, &str)] = &[
     ("aws", "hashicorp/aws", ">= 5.0"),
     ("awscc", "hashicorp/awscc", ">= 1.0"),
     ("tls", "hashicorp/tls", ">= 4.0"),
-    // 7.4 preserves provider-grown Cloud SQL disks while allowing declared growth.
-    ("google", "hashicorp/google", ">= 7.4"),
+    // 7.37 supports the Cloud SQL PSC DNS setting emitted by database extensions;
+    // it also includes grow-only disk planning introduced in 7.4.
+    ("google", "hashicorp/google", ">= 7.37"),
     ("google-beta", "hashicorp/google-beta", ">= 6.0"),
     ("azurerm", "hashicorp/azurerm", ">= 4.75, < 5.0"),
     ("azapi", "Azure/azapi", ">= 2.6, < 3.0"),

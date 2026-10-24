@@ -306,6 +306,10 @@ def main():
             resource_id = instance['attributes'].get('id')
             if not resource_id:
                 raise RuntimeError('Cannot detach a resource without a recovery ID: ' + base + suffix)
+            if resource['type'] == 'google_storage_bucket':
+                rules = instance['attributes'].get('lifecycle_rule') or []
+                if any(action.get('type') == 'Delete' for rule in rules for action in rule.get('action', [])):
+                    raise RuntimeError('Remove Cloud Storage delete lifecycle rules and apply before retaining ' + base + suffix + '; nothing detached')
             selected.append({'address': base + suffix, 'id': resource_id})
     print(json.dumps(selected, indent=2))
     if not args.detach:
