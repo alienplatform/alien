@@ -136,6 +136,48 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
         attr("labels", labels(ctx, "storage")),
     ];
 
+    if !storage.cors_allowed_origins.is_empty() {
+        body.push(nested(block(
+            "cors",
+            [
+                attr(
+                    "origin",
+                    Expression::Array(
+                        storage
+                            .cors_allowed_origins
+                            .iter()
+                            .cloned()
+                            .map(Expression::String)
+                            .collect(),
+                    ),
+                ),
+                attr(
+                    "method",
+                    Expression::Array(
+                        ["GET", "HEAD"]
+                            .map(|v| Expression::String(v.to_string()))
+                            .to_vec(),
+                    ),
+                ),
+                attr(
+                    "response_header",
+                    Expression::Array(
+                        [
+                            "ETag",
+                            "Content-Range",
+                            "Accept-Ranges",
+                            "Range",
+                            "If-Range",
+                        ]
+                        .map(|v| Expression::String(v.to_string()))
+                        .to_vec(),
+                    ),
+                ),
+                attr("max_age_seconds", Expression::from(3600)),
+            ],
+        )));
+    }
+
     if storage.versioning {
         body.push(nested(block(
             "versioning",

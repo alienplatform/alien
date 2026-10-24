@@ -207,7 +207,7 @@ impl GcsApi for GcsClient {
     async fn update_bucket(&self, bucket_name: String, bucket_patch: Bucket) -> Result<Bucket> {
         let url = format!("{}/b/{}", self.get_api_base_url(), bucket_name);
         let builder = self.http.patch(url).json(&bucket_patch);
-        auth_send_json(
+        auth_send_json_once(
             builder,
             &self.auth().await?,
             "UpdateBucket",
@@ -537,6 +537,9 @@ pub struct ProjectServiceAccount {
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
 #[serde(rename_all = "camelCase")]
 pub struct Bucket {
+    /// None leaves CORS unchanged in a patch; an empty list clears it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cors: Option<Vec<CorsRule>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>, // Typically "storage#bucket"
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -584,6 +587,24 @@ pub struct Bucket {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub soft_delete_policy: Option<SoftDeletePolicy>,
     // ... other fields can be added as needed based on the API docs ...
+}
+
+/// Bucket CORS configuration for XML API browser requests.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorsRule {
+    #[serde(default)]
+    pub origin: Vec<String>,
+    #[serde(default)]
+    pub method: Vec<String>,
+    #[serde(default)]
+    pub response_header: Vec<String>,
+    #[serde(default = "default_cors_max_age_seconds")]
+    pub max_age_seconds: u32,
+}
+
+fn default_cors_max_age_seconds() -> u32 {
+    3600
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
@@ -825,6 +846,39 @@ mod tests {
         assert_eq!(
             service_account.kind.as_deref(),
             Some("storage#serviceAccount")
+        );
+    }
+}
+
+#[cfg(test)]
+mod cors_tests {
+    use super::*;
+
+    #[test]
+    fn existing_cors_without_optional_headers_or_max_age_remains_readable() {
+        let bucket: Bucket = serde_json::from_value(serde_json::json!({
+            "name": "existing-bucket", "cors": [{"origin": ["https://app.example.com"], "method": ["GET"]}]
+        })).unwrap();
+        let rule = &bucket.cors.unwrap()[0];
+        assert!(rule.response_header.is_empty());
+        assert_eq!(rule.max_age_seconds, 3600);
+        assert_eq!(rule.method, ["GET"]);
+        assert_eq!(rule.origin, ["https://app.example.com"]);
+    }
+
+    #[test]
+    fn empty_cors_is_sent_but_absent_cors_is_omitted() {
+        assert!(serde_json::to_value(Bucket::default())
+            .unwrap()
+            .get("cors")
+            .is_none());
+        let patch = Bucket {
+            cors: Some(vec![]),
+            ..Bucket::default()
+        };
+        assert_eq!(
+            serde_json::to_value(patch).unwrap(),
+            serde_json::json!({"cors": []})
         );
     }
 }

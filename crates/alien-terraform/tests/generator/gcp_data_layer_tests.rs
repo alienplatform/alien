@@ -580,3 +580,21 @@ fn explicit_management_storage_signing_uses_the_management_account_policy() {
     );
     assert_terraform_valid(&module, "explicit management storage signing");
 }
+
+#[test]
+fn gcp_storage_browser_cors() {
+    let stack = Stack::new("browser-storage".to_string())
+        .add(
+            Storage::new("assets".to_string())
+                .cors_allowed_origins(vec![
+                    "https://app.example.com".to_string(),
+                    "https://preview.example.com".to_string(),
+                ])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    snapshot_module("gcp_storage_browser_cors", &module);
+    assert_terraform_valid(&module, "gcp_storage_browser_cors");
+}

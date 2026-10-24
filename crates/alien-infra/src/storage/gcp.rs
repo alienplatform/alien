@@ -13,13 +13,31 @@ use alien_core::{
     Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
 };
 use alien_gcp_clients::gcs::{
-    Bucket, GcsApi, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition,
+    Bucket, CorsRule, GcsApi, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition,
     LifecycleRule, UniformBucketLevelAccess, Versioning,
 };
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_macros::controller;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+
+fn read_cors(origins: &[String]) -> Vec<CorsRule> {
+    if origins.is_empty() {
+        return Vec::new();
+    }
+    vec![CorsRule {
+        origin: origins.to_vec(),
+        method: vec!["GET".into(), "HEAD".into()],
+        response_header: vec![
+            "ETag".into(),
+            "Content-Range".into(),
+            "Accept-Ranges".into(),
+            "Range".into(),
+            "If-Range".into(),
+        ],
+        max_age_seconds: 3600,
+    }]
+}
 
 /// Generates the full, prefixed GCP bucket name.
 fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
@@ -84,6 +102,10 @@ impl GcpStorageController {
                 .to_string(),
             ),
         });
+
+        if !config.cors_allowed_origins.is_empty() {
+            bucket.cors = Some(read_cors(&config.cors_allowed_origins));
+        }
 
         // Configure versioning if enabled
         if config.versioning {
@@ -286,6 +308,18 @@ impl GcpStorageController {
         let mut bucket_patch = Bucket::default();
         let mut needs_update = false;
 
+        let cors_changed = config.cors_allowed_origins != prev_config.cors_allowed_origins;
+        if cors_changed {
+            if !may_repair_lifecycle(ctx, &config.id) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    resource_id: Some(config.id.clone()),
+                    message: "Storage CORS is setup-owned; apply the updated setup package to change this Frozen bucket".into(),
+                }));
+            }
+            bucket_patch.cors = Some(read_cors(&config.cors_allowed_origins));
+            needs_update = true;
+        }
+
         // Check versioning changes
         if config.versioning != prev_config.versioning {
             info!(bucket = %bucket_name, current = %config.versioning, previous = %prev_config.versioning, "Updating versioning");
@@ -318,6 +352,17 @@ impl GcpStorageController {
                     message: format!("Failed to update GCS bucket '{}'", bucket_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+            if cors_changed
+                && updated_bucket.cors.as_deref().unwrap_or_default()
+                    != read_cors(&config.cors_allowed_origins)
+            {
+                return Err(AlienError::new(ErrorData::ResourceDrift {
+                    resource_id: config.id.clone(),
+                    message: format!(
+                        "GCS bucket '{bucket_name}' returned different CORS rules than requested"
+                    ),
+                }));
+            }
             if write_lifecycle {
                 if !gcs_lifecycle_matches(updated_bucket.lifecycle.as_ref(), &lifecycle) {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
@@ -1780,6 +1825,69 @@ mod lifecycle_prefix_tests {
         .unwrap();
         saved.as_object_mut().unwrap().remove("lifecycleRevision");
         serde_json::from_value(saved).unwrap()
+    }
+
+    #[tokio::test]
+    async fn browser_cors_create_replace_clear_and_frozen_gate() {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let mut config = storage(vec![]);
+        config.cors_allowed_origins =
+            vec!["https://one.example".into(), "https://two.example".into()];
+        let mut run = SingleControllerExecutor::builder()
+            .resource(config.clone())
+            .controller(GcpStorageController::default())
+            .platform(Platform::Gcp)
+            .service_provider(gcs(bodies.clone(), echo))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert_eq!(
+            bodies.lock().unwrap()[0]["cors"],
+            json!([{
+                "origin": config.cors_allowed_origins, "method": ["GET", "HEAD"],
+                "responseHeader": ["ETag", "Content-Range", "Accept-Ranges", "Range", "If-Range"], "maxAgeSeconds": 3600
+            }])
+        );
+        config.cors_allowed_origins = vec!["https://three.example".into()];
+        run.update(config.clone()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(
+            bodies.lock().unwrap().last().unwrap()["cors"][0]["origin"],
+            json!(["https://three.example"])
+        );
+        config.cors_allowed_origins.clear();
+        run.update(config.clone()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(bodies.lock().unwrap().last().unwrap()["cors"], json!([]));
+        let previous = config.clone();
+        config.cors_allowed_origins = vec!["https://four.example".into()];
+        let mut controller = previous_version_ready_controller();
+        controller.state = crate::GcpStorageState::UpdateStart;
+        let controller: GcpStorageController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let mut frozen = SingleControllerExecutor::builder()
+            .resource(config)
+            .previous_resource(previous)
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .service_provider(gcs(bodies.clone(), echo))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let count = bodies.lock().unwrap().len();
+        assert!(frozen
+            .step()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("setup-owned"));
+        assert_eq!(bodies.lock().unwrap().len(), count);
     }
 
     #[tokio::test]
