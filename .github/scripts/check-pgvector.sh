@@ -5,6 +5,10 @@ bindir=$("$PG_CONFIG" --bindir)
 sharedir=$("$PG_CONFIG" --sharedir)
 test_dir=$(mktemp -d)
 cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ -f "$test_dir/server.log" ]; then
+    cat "$test_dir/server.log" >&2
+  fi
   if [ -f "$test_dir/data/postmaster.pid" ]; then
     "$bindir/pg_ctl" -D "$test_dir/data" -m immediate -w stop
   fi
@@ -31,6 +35,6 @@ SQL
 start
 query <<'SQL'
 SET enable_seqscan = off;
-SELECT 1 / ((SELECT id FROM vectors ORDER BY embedding <-> '[0.9,0,0]' LIMIT 1) = 1)::integer;
+SELECT 1 / ((SELECT id FROM vectors ORDER BY embedding <-> '[0.9,0,0]' LIMIT 1) IS NOT DISTINCT FROM 1)::integer;
 SQL
 "$bindir/pg_ctl" -D "$test_dir/data" -w stop
