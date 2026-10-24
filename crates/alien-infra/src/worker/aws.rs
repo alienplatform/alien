@@ -8671,7 +8671,7 @@ mod tests {
             read.last_update_status_reason = Some("The ENI limit was reached.".to_string());
         }
         let controller = AwsWorkerController {
-            state: wait_state,
+            state: wait_state.clone(),
             arn: read.function_arn.clone(),
             // A wait already under way: the failure must also clear its start, so a retry
             // after the cause is fixed gets a full window.
