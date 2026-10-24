@@ -528,3 +528,50 @@ test("execution and target configs retain saved quota overrides and explicit cle
     }
   }
 });
+
+test("installation resume preserves saved credentials and External ID", async () => {
+  const response = {
+    deploymentId,
+    token: "ax_dep_test",
+    managementExternalId: "a".repeat(64),
+    runtimeEncryptionKey: "b".repeat(64),
+    installation: {
+      method: "cloudformation",
+      region: "us-east-1",
+      stackName: "acme",
+      launchUrl: "https://console.example/launch",
+    },
+  };
+  let requests = 0;
+  const sdk = client(async request => {
+    requests++;
+    const url = new URL(request.url);
+    assert.equal(request.method, "POST");
+    assert.equal(url.pathname, `/v1/deployments/${deploymentId}/installation`);
+    assert.equal(url.searchParams.get("workspace"), "test-workspace");
+    assert.equal(request.headers.get("Authorization"), "Bearer ax_ws_test");
+    assert.equal(await request.text(), "");
+    return Response.json(response, { status: 200 });
+  });
+  assert.deepEqual(await sdk.resumeDeploymentInstallation({ id: deploymentId }), response);
+  assert.equal(requests, 1);
+});
+
+test("deployment check accepts 202 and parses the observation request timestamp", async () => {
+  const requestedAt = "2026-10-24T12:00:00.000Z";
+  let requests = 0;
+  const sdk = client(async request => {
+    requests++;
+    const url = new URL(request.url);
+    assert.equal(request.method, "POST");
+    assert.equal(url.pathname, `/v1/deployments/${deploymentId}/check`);
+    assert.equal(url.searchParams.get("workspace"), "test-workspace");
+    assert.equal(request.headers.get("Authorization"), "Bearer ax_ws_test");
+    assert.equal(await request.text(), "");
+    return Response.json({ requestedAt }, { status: 202 });
+  });
+  const result = await sdk.requestDeploymentCheck({ id: deploymentId });
+  assert.ok(result.requestedAt instanceof Date);
+  assert.equal(result.requestedAt.toISOString(), requestedAt);
+  assert.equal(requests, 1);
+});
