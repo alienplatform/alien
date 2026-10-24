@@ -18,6 +18,8 @@ export class Resource {
    * ungated ones, which shows up in the stack snapshots.
    */
   declare readonly enabledWhen?: string
+  declare readonly displayName?: string
+  declare readonly description?: string
 
   /**
    * Creates a new Resource instance.
@@ -27,7 +29,11 @@ export class Resource {
   constructor(
     public config: BaseResource,
     enabledWhen?: string,
+    displayName?: string,
+    description?: string,
   ) {
+    if (displayName !== undefined) this.displayName = displayName
+    if (description !== undefined) this.description = description
     if (enabledWhen !== undefined) {
       this.enabledWhen = enabledWhen
     }
@@ -49,6 +55,20 @@ export class Resource {
  */
 export abstract class ResourceBuilder {
   private _enabledWhen?: string
+  private _displayName?: string
+  private _description?: string
+
+  /** Sets a friendly name; the resource ID remains its stable identity. */
+  public displayName(name: string): this {
+    this._displayName = name
+    return this
+  }
+
+  /** Describes this resource's purpose as plain text. */
+  public description(description: string): this {
+    this._description = description
+    return this
+  }
 
   /**
    * Creates this resource only when the given boolean stack input is true.
@@ -70,6 +90,6 @@ export abstract class ResourceBuilder {
    * @returns An immutable Resource.
    */
   protected resource(config: BaseResource): Resource {
-    return new Resource(config, this._enabledWhen)
+    return new Resource(config, this._enabledWhen, this._displayName, this._description)
   }
 }

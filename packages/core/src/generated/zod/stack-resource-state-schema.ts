@@ -26,6 +26,8 @@ get "controllerPlatform"(){
 get "dependencies"(){
                 return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition.").optional()
               },
+"description": z.string().nullish(),
+"displayName": z.string().describe("Presentation metadata from the effective resource entry, outside runtime configuration.").nullish(),
 get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()
               },

@@ -278,6 +278,12 @@ pub struct StackResourceState {
     /// High-level status derived from the internal state.
     pub status: ResourceStatus,
 
+    /// Presentation metadata from the effective resource entry, outside runtime configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
     /// Last reported step explanation for display only; not a machine-readable status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<String>,
@@ -346,6 +352,8 @@ impl StackResourceState {
             internal_state: None,
             status: ResourceStatus::Pending,
             progress: None,
+            display_name: None,
+            description: None,
             outputs: None,
             config,
             previous_config: None,
@@ -637,6 +645,8 @@ mod tests {
 
         let resource_state = StackResourceState {
             progress: None,
+            display_name: None,
+            description: None,
             resource_type: "worker".to_string(),
             internal_state: None,
             status: ResourceStatus::Running,

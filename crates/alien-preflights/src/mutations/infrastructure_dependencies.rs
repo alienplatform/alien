@@ -615,6 +615,8 @@ mod tests {
                 ),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -627,6 +629,8 @@ mod tests {
                 ),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -637,6 +641,8 @@ mod tests {
                 config: Resource::new(Storage::new("app-storage".to_string()).build()),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -805,7 +811,10 @@ mod tests {
                 ServiceAccount::new("execution-sa".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
-            .add(Storage::new("files".to_string()).build(), ResourceLifecycle::Live)
+            .add(
+                Storage::new("files".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
             .build();
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())

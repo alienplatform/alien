@@ -1859,6 +1859,8 @@ mod tests {
             serde_json::from_value(captured["state"].clone()).unwrap();
         assert_eq!(serving.status, ResourceStatus::Running);
         assert!(serving.progress.is_none());
+        assert!(serving.display_name.is_none());
+        assert!(serving.description.is_none());
         assert!(serde_json::to_value(&serving)
             .unwrap()
             .get("progress")

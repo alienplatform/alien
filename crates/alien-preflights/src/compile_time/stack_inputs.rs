@@ -423,6 +423,8 @@ mod tests {
                 config: Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },

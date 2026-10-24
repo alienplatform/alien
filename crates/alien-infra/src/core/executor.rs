@@ -2732,7 +2732,11 @@ impl StackExecutor {
             subsequent_state_updates.len()
         );
         next_state.resources.extend(subsequent_state_updates);
-        for resource in next_state.resources.values_mut() {
+        for (id, resource) in &mut next_state.resources {
+            if let Some(entry) = self.desired_stack.resources.get(id) {
+                resource.display_name.clone_from(&entry.display_name);
+                resource.description.clone_from(&entry.description);
+            }
             if resource.status.is_terminal() || resource.status == ResourceStatus::Running {
                 resource.progress = None;
             }

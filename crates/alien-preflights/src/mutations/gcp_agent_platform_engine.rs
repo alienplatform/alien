@@ -64,6 +64,8 @@ impl StackMutation for GcpAgentPlatformEngineMutation {
                     config: Resource::new(GcpAgentPlatformEngine::new(engine_id.clone()).build()),
                     lifecycle,
                     dependencies: Vec::new(),
+                    display_name: None,
+                    description: None,
                     remote_access: false,
                 });
 

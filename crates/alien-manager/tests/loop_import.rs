@@ -83,6 +83,8 @@ fn make_imported_state(resource_id: &str, bucket: &str) -> StackState {
         config: resource.clone(),
         lifecycle: ResourceLifecycle::Frozen,
         dependencies: Vec::new(),
+        display_name: None,
+        description: None,
         remote_access: false,
     };
 

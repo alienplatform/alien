@@ -151,6 +151,8 @@ impl StackMutation for SandboxGatewayMutation {
                     lifecycle: ResourceLifecycle::Live,
                     dependencies: Vec::new(),
                     enabled_when: None,
+                    display_name: None,
+                    description: None,
                     remote_access: false,
                 },
             );
@@ -207,6 +209,8 @@ mod tests {
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: vec![],
             enabled_when: None,
+            display_name: None,
+            description: None,
             remote_access: true,
         };
         stack

@@ -130,6 +130,8 @@ mod tests {
             config: Resource::new(Storage::new(id.to_string()).build()),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         }
@@ -140,6 +142,8 @@ mod tests {
             config: Resource::new(Kv::new(id.to_string()).build()),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         }

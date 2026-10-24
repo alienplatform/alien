@@ -273,8 +273,8 @@ impl ResourceImporter for AwsSandboxImporter {
 mod tests {
     use super::*;
     use alien_core::{
-        AwsManagementConfig, ManagementConfig, Resource, ResourceEntry, SandboxCode,
-        SandboxEgress, SandboxLifecyclePolicy, StackSettings,
+        AwsManagementConfig, ManagementConfig, Resource, ResourceEntry, SandboxCode, SandboxEgress,
+        SandboxLifecyclePolicy, StackSettings,
     };
 
     /// A setup update re-registers a template's Frozen internet sandbox with its new image. The
@@ -298,6 +298,8 @@ mod tests {
             ),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: vec![],
+            display_name: None,
+            description: None,
             remote_access: true,
             enabled_when: None,
         };

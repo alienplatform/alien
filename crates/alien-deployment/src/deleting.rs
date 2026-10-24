@@ -796,6 +796,8 @@ mod tests {
     ) -> StackResourceState {
         StackResourceState {
             progress: None,
+            display_name: None,
+            description: None,
             resource_type: resource.resource_type().as_ref().to_string(),
             internal_state: None,
             status,
