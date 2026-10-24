@@ -2409,6 +2409,127 @@ mod tests {
         }
     }
 
+    #[test]
+    fn setup_compute_accepts_saved_or_omitted_selection() {
+        let selected: StackSettings = serde_json::from_value(serde_json::json!({
+            "compute": {"pools": {"general": {
+                "mode": "fixed", "machine": "r6a.2xlarge", "machines": 1
+            }}}
+        }))
+        .unwrap();
+        validate_setup_compute_settings(&selected, &selected).unwrap();
+        validate_setup_compute_settings(&selected, &StackSettings::default()).unwrap();
+        validate_setup_compute_settings(&StackSettings::default(), &StackSettings::default())
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn conflicting_compute_stops_before_setup_or_uses_hosted_update() {
+        for (status, hosted, updates) in [
+            ("pending", true, false),
+            ("preflights-failed", true, false),
+            ("initial-setup", false, false),
+            ("initial-setup", true, true),
+            ("running", true, true),
+        ] {
+            let manager = MockServer::start_async().await;
+            let api = MockServer::start_async().await;
+            let name = format!("compute-resume-{}", uuid::Uuid::new_v4());
+            let mut detail = installed_deployment(status, Some("rel_target"));
+            detail["platform"] = serde_json::json!("aws");
+            detail["currentReleaseId"] = serde_json::Value::Null;
+            detail["stackSettings"] = serde_json::json!({});
+            let deployment = manager
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    then.status(200).json_body(detail);
+                })
+                .await;
+            let manager_url = manager.base_url();
+            let api_url = if hosted {
+                api.base_url()
+            } else {
+                manager_url.clone()
+            };
+            let discovery = if hosted { &api } else { &manager };
+            discovery
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET).path("/v1/resolve");
+                    then.status(200)
+                        .json_body(serde_json::json!({"managerUrl": manager_url}));
+                })
+                .await;
+            let selected = serde_json::json!({"pools": {"general": {
+                "mode": "fixed", "machine": "r6a.2xlarge", "machines": 1
+            }}});
+            let initialize = manager.mock_async(|when, then| {
+                when.method(POST).path("/v1/initialize")
+                    .json_body_partial(serde_json::json!({"stackSettings": {"compute": selected}}).to_string());
+                then.status(200).json_body(serde_json::json!({
+                    "deploymentId": "dep_demo", "deploymentModel": "push", "token": "test-compute-token"
+                }));
+            }).await;
+            let patch = api
+                .mock_async(|when, then| {
+                    when.method(PATCH)
+                        .path("/v1/deployments/dep_demo/compute")
+                        .header("authorization", "Bearer test-compute-token")
+                        .json_body(serde_json::json!({"compute": selected}));
+                    then.status(409).body("compute update refused");
+                })
+                .await;
+            let acquire = manager
+                .mock_async(|when, then| {
+                    when.method(POST).path("/v1/sync/acquire");
+                    then.status(500);
+                })
+                .await;
+            let mut file = tempfile::NamedTempFile::new().unwrap();
+            writeln!(
+                file,
+                r#"
+[compute.pools.general]
+mode = "fixed"
+machine = "r6a.2xlarge"
+machines = 1
+"#
+            )
+            .unwrap();
+            let args = UpArgs::parse_from([
+                "deploy",
+                "--name",
+                &name,
+                "--platform",
+                "aws",
+                "--base-url",
+                &api_url,
+                "--manager-url",
+                &manager_url,
+                "--token",
+                "test-compute-token",
+                "--config",
+                file.path().to_str().unwrap(),
+            ]);
+            let error = up_command(args, None)
+                .await
+                .expect_err("conflict must stop");
+            DeploymentTracker::new().unwrap().remove(&name).unwrap();
+            assert!(
+                error.to_string().contains(if updates {
+                    "compute update refused"
+                } else {
+                    "requested compute settings differ"
+                }),
+                "{status}, hosted={hosted}: {error:?}"
+            );
+            initialize.assert_hits_async(1).await;
+            deployment.assert_hits_async(1).await;
+            patch.assert_hits_async(usize::from(updates)).await;
+            acquire.assert_hits_async(0).await;
+        }
+    }
+
     #[tokio::test]
     async fn hosted_initial_override_command_submits_before_setup_and_stops_on_refusal() {
         for (status, same) in [
@@ -3980,6 +4101,25 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
 
     let hosted_platform =
         manager_url.trim_end_matches('/') != resolved.base_url.trim_end_matches('/');
+    // Initialize may resume an existing name without changing its saved settings.
+    // Setup must not provision that old selection while displaying a different request.
+    // Hosted states with a compute update API are handled below instead.
+    if init.deployment_model == DeploymentModel::Push
+        && requires_install_context(platform)
+        && !(hosted_platform && supports_hosted_compute_update(&current_deployment.status))
+    {
+        let saved: StackSettings = current_deployment
+            .stack_settings
+            .clone()
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize saved compute settings".into(),
+            })?
+            .unwrap_or_default();
+        validate_setup_compute_settings(&saved, &stack_settings)?;
+    }
     let requested_overrides = requested_quota_warning_overrides(&args, deploy_config.as_ref());
     if let Some(overrides) = &requested_overrides {
         let saved: StackSettings = current_deployment
@@ -6015,6 +6155,19 @@ fn has_explicit_non_compute_changes(
     (network && requested.network != current.network)
         || (updates && requested.updates != current.updates)
         || (telemetry && requested.telemetry != current.telemetry)
+}
+
+fn validate_setup_compute_settings(
+    current: &StackSettings,
+    requested: &StackSettings,
+) -> Result<()> {
+    if requested.compute.is_some() && requested.compute != current.compute {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "compute".into(),
+            message: "The requested compute settings differ from this deployment's saved settings. Setup was stopped before creating cloud resources. Resume with the saved settings, or use a new deployment name for this selection.".into(),
+        }));
+    }
+    Ok(())
 }
 
 fn supports_hosted_compute_update(status: &str) -> bool {
