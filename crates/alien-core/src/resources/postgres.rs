@@ -61,6 +61,18 @@ impl Postgres {
     /// The resource type identifier for Postgres.
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("postgres");
 
+    /// Reject a compute failover guarantee until Aurora reader lifecycle is supported.
+    /// Aurora's replicated storage is available independently of this option.
+    pub fn validate_aurora_availability(&self) -> Result<()> {
+        if self.high_availability {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "Aurora highAvailability".to_string(),
+                reason: "Automatic reader placement and failover-safe HA updates are not supported yet. Aurora storage is replicated across Availability Zones, but this deployment creates only one compute instance. Set highAvailability=false to explicitly accept single-instance compute.".to_string(),
+            }));
+        }
+        Ok(())
+    }
+
     /// Aurora parameter groups are tied to the engine's major version, even when a
     /// specific minor release is requested.
     pub fn aurora_parameter_group_family(&self) -> Result<String> {
@@ -76,6 +88,80 @@ impl Postgres {
                 })
             })?;
         Ok(format!("aurora-postgresql{major}"))
+    }
+
+    /// Requested positive finite vCPU count, including millicore quantities.
+    pub fn requested_cpu(&self) -> Result<Option<f64>> {
+        self.cpu
+            .as_deref()
+            .map(|value| {
+                crate::instance_catalog::parse_cpu(value)
+                    .ok()
+                    .filter(|cpu| cpu.is_finite() && *cpu > 0.0)
+                    .ok_or_else(|| self.invalid_size("cpu", value))
+            })
+            .transpose()
+    }
+
+    /// Requested memory in GiB. Binary and decimal units retain their meanings;
+    /// memory requires an explicit unit so legacy GiB numbers cannot become bytes.
+    pub fn requested_memory_gib(&self) -> Result<Option<f64>> {
+        self.memory
+            .as_deref()
+            .map(|value| {
+                if value.trim().parse::<f64>().is_ok() {
+                    return Err(self.invalid_size("memory", value));
+                }
+                self.size_gib("memory", value)
+            })
+            .transpose()
+    }
+
+    /// Requested disk size in GiB, rounded up to a whole provider allocation unit.
+    pub fn requested_storage_gib(&self) -> Result<u64> {
+        Ok(self.size_gib("storage", &self.storage)?.ceil() as u64)
+    }
+
+    fn size_gib(&self, field: &str, value: &str) -> Result<f64> {
+        let quantity = value.trim();
+        // Accept the conventional GiB/GB spellings as aliases of Gi/G.
+        let quantity = quantity.strip_suffix('B').unwrap_or(quantity);
+        crate::instance_catalog::parse_memory_bytes(quantity)
+            .ok()
+            .filter(|bytes| *bytes > 0)
+            .map(|bytes| bytes as f64 / 1024_f64.powi(3))
+            .ok_or_else(|| self.invalid_size(field, value))
+    }
+
+    fn invalid_size(&self, field: &str, value: &str) -> alien_error::AlienError<ErrorData> {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: format!("Postgres {field} sizing"),
+            reason: format!(
+                "'{value}' must be a positive finite resource quantity{}",
+                if field == "memory" {
+                    " with an explicit unit, such as 512Mi or 4Gi"
+                } else {
+                    ""
+                }
+            ),
+        })
+    }
+
+    /// Aurora Serverless v2 ceiling in half-ACU increments (2 GiB per ACU).
+    /// The supported engine configuration allows up to 256 ACU; never clamp a
+    /// larger request downward. The minimum ceiling is 1 ACU. An unspecified ceiling remains 2 ACU.
+    pub fn aurora_max_capacity_acu(&self) -> Result<f64> {
+        let Some(gib) = self.requested_memory_gib()? else {
+            return Ok(2.0);
+        };
+        let capacity = (gib.ceil() / 2.0).max(1.0);
+        if capacity > 256.0 {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "Aurora memory sizing".to_string(),
+                reason: "request exceeds the supported maximum of 512 GiB (256 ACU)".to_string(),
+            }));
+        }
+        Ok(capacity)
     }
 
     /// Returns the database's unique identifier.
@@ -412,5 +498,90 @@ mod tests {
         let json = serde_json::to_string(&outputs).unwrap();
         let deserialized: PostgresOutputs = serde_json::from_str(&json).unwrap();
         assert_eq!(outputs, deserialized);
+    }
+}
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::*;
+
+    #[test]
+    fn memory_units_and_aurora_half_steps_agree() {
+        for (quantity, gib, acu) in [
+            ("512Mi", 0.5, 1.0),
+            ("1Gi", 1.0, 1.0),
+            ("1.5Gi", 1.5, 1.0),
+            ("3Gi", 3.0, 1.5),
+            ("3.9Gi", 3.9, 2.0),
+            ("8Gi", 8.0, 4.0),
+            ("8GiB", 8.0, 4.0),
+            ("512Gi", 512.0, 256.0),
+            ("1GB", 1_000_000_000.0 / 1_073_741_824.0, 1.0),
+        ] {
+            let pg = Postgres::new("db".into()).memory(quantity.into()).build();
+            assert!(
+                (pg.requested_memory_gib().unwrap().unwrap() - gib).abs() < 1e-8,
+                "{quantity}"
+            );
+            assert_eq!(pg.aurora_max_capacity_acu().unwrap(), acu, "{quantity}");
+        }
+        assert_eq!(
+            Postgres::new("db".into())
+                .build()
+                .aurora_max_capacity_acu()
+                .unwrap(),
+            2.0
+        );
+    }
+
+    #[test]
+    fn sizing_rejects_invalid_nonpositive_nonfinite_and_overflow() {
+        for quantity in [
+            "",
+            "0",
+            "8",
+            "1073741824",
+            "0Gi",
+            "-1Gi",
+            "NaNGi",
+            "infGi",
+            "1e100Gi",
+            "8unknown",
+        ] {
+            let pg = Postgres::new("db".into()).memory(quantity.into()).build();
+            assert!(pg.requested_memory_gib().is_err(), "{quantity}");
+            assert!(pg.aurora_max_capacity_acu().is_err(), "{quantity}");
+        }
+        assert!(Postgres::new("db".into())
+            .memory("513Gi".into())
+            .build()
+            .aurora_max_capacity_acu()
+            .is_err());
+        for cpu in ["0", "-1", "NaN", "inf", "invalid"] {
+            assert!(
+                Postgres::new("db".into())
+                    .cpu(cpu.into())
+                    .build()
+                    .requested_cpu()
+                    .is_err(),
+                "{cpu}"
+            );
+        }
+        assert_eq!(
+            Postgres::new("db".into())
+                .cpu("500m".into())
+                .build()
+                .requested_cpu()
+                .unwrap(),
+            Some(0.5)
+        );
+        assert_eq!(
+            Postgres::new("db".into())
+                .storage("1536Mi".into())
+                .build()
+                .requested_storage_gib()
+                .unwrap(),
+            2
+        );
     }
 }

@@ -104,6 +104,10 @@ impl TfEmitter for GcpKeyEmitter {
             ));
         }
 
+        fragment.retain_resources(|kind, _| {
+            matches!(kind, "google_kms_crypto_key" | "google_kms_key_ring")
+        });
+        fragment.retain_state(|kind, _| kind == "random_id");
         Ok(fragment)
     }
 

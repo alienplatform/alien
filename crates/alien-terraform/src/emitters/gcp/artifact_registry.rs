@@ -116,6 +116,7 @@ impl TfEmitter for GcpArtifactRegistryEmitter {
         emit_management_repository_bindings(ctx, &mut fragment, label)?;
         emit_service_account_repository_bindings(ctx, &mut fragment, label)?;
 
+        fragment.retain_resources(|kind, _| kind == "google_artifact_registry_repository");
         Ok(fragment)
     }
 

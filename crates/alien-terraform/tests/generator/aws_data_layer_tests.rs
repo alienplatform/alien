@@ -7,9 +7,9 @@
 
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
-    Ai, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile, Queue, RemoteBindings,
-    ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
-    ServiceAccount, Stack, StackSettings, Storage, Vault,
+    Ai, ArtifactRegistry, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile,
+    Queue, RemoteBindings, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress,
+    SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -47,10 +47,9 @@ fn aws_key_package_is_valid_and_retained() {
         .get("detach-retained-keys.sh")
         .expect("retained Key detach operation");
     assert!(detach.contains("detach_if_present 'aws_kms_key.customer_key[0]'"));
-    assert!(module
-        .get("README.md")
-        .unwrap()
-        .contains("terraform destroy"));
+    let inventory: Vec<String> =
+        serde_json::from_str(module.get("retained-data.json").unwrap()).unwrap();
+    assert_eq!(inventory, vec!["aws_kms_key.customer_key"]);
     assert_terraform_valid(&module, "aws_key_package");
 }
 
@@ -744,5 +743,61 @@ fn automatic_key_packages_are_refused_on_all_clouds() {
         )
         .expect_err("automatic packages cannot hand off setup-owned keys");
         assert!(error.to_string().contains("manual setup"), "{error}");
+    }
+}
+
+#[test]
+fn aws_storage_browser_cors() {
+    let stack = Stack::new("browser-storage".to_string())
+        .add(
+            Storage::new("assets".to_string())
+                .cors_allowed_origins(vec![
+                    "https://app.example.com".to_string(),
+                    "https://preview.example.com".to_string(),
+                ])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    snapshot_module("aws_storage_browser_cors", &module);
+    assert_terraform_valid(&module, "aws_storage_browser_cors");
+}
+
+#[test]
+fn aws_retained_data_setup() {
+    for encrypted in [false, true] {
+        let mut storage = Storage::new("data".to_string()).versioning(true).build();
+        if encrypted {
+            storage.encryption_key = Some(ResourceRef::new(Key::RESOURCE_TYPE, "key"));
+        }
+        let mut stack = Stack::new("retained-data".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(
+                Kv::new("rows".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ArtifactRegistry::new("images".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+        if encrypted {
+            stack = stack.add(
+                Key::new("key".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+        }
+        let module = render(
+            &stack.build(),
+            TerraformTarget::Aws,
+            StackSettings::default(),
+        );
+        let name = if encrypted {
+            "aws_retained_encrypted_data_setup"
+        } else {
+            "aws_retained_data_setup"
+        };
+        snapshot_module(name, &module);
+        assert_terraform_valid(&module, name);
     }
 }

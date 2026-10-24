@@ -19,6 +19,14 @@ pub trait DynamoDbApi: Send + Sync + std::fmt::Debug {
     async fn create_table(&self, request: CreateTableRequest) -> Result<CreateTableResponse>;
     async fn delete_table(&self, request: DeleteTableRequest) -> Result<DeleteTableResponse>;
     async fn describe_table(&self, request: DescribeTableRequest) -> Result<DescribeTableResponse>;
+    async fn describe_continuous_backups(
+        &self,
+        request: DescribeContinuousBackupsRequest,
+    ) -> Result<ContinuousBackupsResponse>;
+    async fn update_continuous_backups(
+        &self,
+        request: UpdateContinuousBackupsRequest,
+    ) -> Result<ContinuousBackupsResponse>;
     async fn get_item(&self, request: GetItemRequest) -> Result<GetItemResponse>;
     async fn put_item(&self, request: PutItemRequest) -> Result<PutItemResponse>;
     async fn delete_item(&self, request: DeleteItemRequest) -> Result<DeleteItemResponse>;
@@ -100,8 +108,13 @@ impl DynamoDbClient {
             builder.content_sha256("")
         };
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+        // The controller rereads PITR before retrying an update. Do not hide a second
+        // mutation in transport retries after an ambiguous response.
+        let result = if operation == "UpdateContinuousBackups" {
+            crate::aws::aws_request_utils::sign_send_json_once(builder, &self.sign_config()).await
+        } else {
+            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await
+        };
 
         Self::map_result(result, operation, resource, body.as_deref())
     }
@@ -183,14 +196,18 @@ impl DynamoDbClient {
                 ErrorData::RateLimitExceeded { message }
             }
             // Service unavailable
-            "ServiceUnavailable" | "InternalServerError" => {
+            "ServiceUnavailable"
+            | "InternalServerError"
+            | "ContinuousBackupsUnavailableException" => {
                 ErrorData::RemoteServiceUnavailable { message }
             }
             // Resource not found
-            "ResourceNotFoundException" => ErrorData::RemoteResourceNotFound {
-                resource_type: "Table".into(),
-                resource_name: resource.into(),
-            },
+            "ResourceNotFoundException" | "TableNotFoundException" => {
+                ErrorData::RemoteResourceNotFound {
+                    resource_type: "Table".into(),
+                    resource_name: resource.into(),
+                }
+            }
             // Conflict / conditional check failed
             "ConditionalCheckFailedException" => ErrorData::RemoteResourceConflict {
                 message,
@@ -232,6 +249,48 @@ impl DynamoDbClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl DynamoDbApi for DynamoDbClient {
+    async fn describe_continuous_backups(
+        &self,
+        request: DescribeContinuousBackupsRequest,
+    ) -> Result<ContinuousBackupsResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize DescribeContinuousBackups for table '{}'",
+                    request.table_name
+                ),
+            },
+        )?;
+        self.send_json(
+            "DynamoDB_20120810.DescribeContinuousBackups",
+            Some(body),
+            "DescribeContinuousBackups",
+            &request.table_name,
+        )
+        .await
+    }
+
+    async fn update_continuous_backups(
+        &self,
+        request: UpdateContinuousBackupsRequest,
+    ) -> Result<ContinuousBackupsResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize UpdateContinuousBackups for table '{}'",
+                    request.table_name
+                ),
+            },
+        )?;
+        self.send_json(
+            "DynamoDB_20120810.UpdateContinuousBackups",
+            Some(body),
+            "UpdateContinuousBackups",
+            &request.table_name,
+        )
+        .await
+    }
+
     async fn create_table(&self, request: CreateTableRequest) -> Result<CreateTableResponse> {
         let body = serde_json::to_string(&request).into_alien_error().context(
             ErrorData::SerializationError {
@@ -1173,4 +1232,54 @@ pub struct DescribeTimeToLiveRequest {
 pub struct DescribeTimeToLiveResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_to_live_description: Option<TimeToLiveDescription>,
+}
+
+/// Reads continuous backup and point-in-time recovery metadata.
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct DescribeContinuousBackupsRequest {
+    pub table_name: String,
+}
+
+/// Changes point-in-time recovery for a table.
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct UpdateContinuousBackupsRequest {
+    pub table_name: String,
+    pub point_in_time_recovery_specification: PointInTimeRecoverySpecification,
+}
+
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct PointInTimeRecoverySpecification {
+    pub point_in_time_recovery_enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ContinuousBackupsResponse {
+    pub continuous_backups_description: ContinuousBackupsDescription,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ContinuousBackupsDescription {
+    pub continuous_backups_status: String,
+    pub point_in_time_recovery_description: Option<PointInTimeRecoveryDescription>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PointInTimeRecoveryDescription {
+    pub point_in_time_recovery_status: String,
+}
+
+impl ContinuousBackupsResponse {
+    /// Continuous backups alone do not imply that point-in-time recovery is enabled.
+    pub fn point_in_time_recovery_enabled(&self) -> bool {
+        self.continuous_backups_description
+            .point_in_time_recovery_description
+            .as_ref()
+            .is_some_and(|pitr| pitr.point_in_time_recovery_status == "ENABLED")
+    }
 }

@@ -609,6 +609,7 @@ pub fn generate_cloudformation_template_with_profile(
     );
     add_management_external_id_parameter(&mut template);
     apply_management_trust(&mut template, &options.management_trust)?;
+    retain_data_network_dependencies(&mut template);
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
     apply_network_iam_dependencies(stack, &emitted_resource_ids, &mut template);
     add_sandbox_gateway_replica_secret(&mut template, stack, options.target);
@@ -1213,6 +1214,44 @@ fn insert_resource(template: &mut CfTemplate, resource: CfResource) -> Result<()
         .resources
         .insert(resource.logical_id.clone(), resource);
     Ok(())
+}
+
+/// Preserve the network objects referenced by retained data resources. Only physical
+/// references count: ordering edges to IAM must not keep application access alive.
+/// NAT gateways, routes, workload groups and grants are not data dependencies.
+fn retain_data_network_dependencies(template: &mut CfTemplate) {
+    loop {
+        let dependencies: Vec<String> = template
+            .resources
+            .iter()
+            .filter(|(_, resource)| {
+                matches!(
+                    resource.resource_type.as_str(),
+                    "AWS::EC2::VPC" | "AWS::EC2::Subnet"
+                ) && resource.deletion_policy.as_deref() != Some("RetainExceptOnCreate")
+            })
+            .filter(|(id, _)| {
+                template.resources.values().any(|resource| {
+                    matches!(
+                        resource.deletion_policy.as_deref(),
+                        Some("Retain" | "RetainExceptOnCreate")
+                    ) && resource
+                        .properties
+                        .values()
+                        .any(|value| expression_references(value, id))
+                })
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if dependencies.is_empty() {
+            break;
+        }
+        for id in dependencies {
+            if let Some(resource) = template.resources.get_mut(&id) {
+                resource.retain_data();
+            }
+        }
+    }
 }
 
 /// Lambda deletes a worker's Hyperplane ENI with the function's execution

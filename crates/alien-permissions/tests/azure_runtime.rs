@@ -689,6 +689,27 @@ fn azure_resource_scopes_name_exactly_the_resource_they_are_filed_under() {
         let expected = format!("{RESOURCE_GROUP}/providers/{provider_path}/my-stack-payments-data");
         for binding in &plan.bindings {
             checked += 1;
+            if id == "postgres/provision" && binding.scope == RESOURCE_GROUP {
+                let role = plan
+                    .custom_roles
+                    .iter()
+                    .find(|role| {
+                        binding.role_definition
+                            == AzureRoleDefinitionRef::Custom {
+                                key: role.key.clone(),
+                            }
+                    })
+                    .expect("operation metadata role");
+                assert_eq!(
+                    role.role_definition.actions,
+                    vec![
+                        "Microsoft.DBforPostgreSQL/locations/azureAsyncOperation/read",
+                        "Microsoft.DBforPostgreSQL/locations/operationResults/read",
+                    ]
+                );
+                assert!(role.role_definition.data_actions.is_empty());
+                continue;
+            }
             assert_eq!(
                 binding.scope, expected,
                 "{id} grants on a resource other than the one it is filed under"
@@ -700,4 +721,37 @@ fn azure_resource_scopes_name_exactly_the_resource_they_are_filed_under() {
         checked > 0,
         "no resource-scoped Azure binding rendered, so this test pins nothing"
     );
+}
+
+#[test]
+fn postgres_update_operations_use_group_scoped_metadata_grants() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("postgres/provision").unwrap();
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
+        let plan = generator
+            .generate_grant_plan(permission_set, target, &create_test_context())
+            .unwrap();
+        let role = plan
+            .custom_roles
+            .iter()
+            .find(|role| {
+                role.role_definition.actions.iter().any(|action| {
+                    action == "Microsoft.DBforPostgreSQL/locations/azureAsyncOperation/read"
+                })
+            })
+            .unwrap();
+        assert_eq!(role.role_definition.actions.len(), 2);
+        assert!(role.role_definition.data_actions.is_empty());
+        let binding = plan
+            .bindings
+            .iter()
+            .find(|binding| {
+                binding.role_definition
+                    == AzureRoleDefinitionRef::Custom {
+                        key: role.key.clone(),
+                    }
+            })
+            .unwrap();
+        assert_eq!(binding.scope, "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod");
+    }
 }

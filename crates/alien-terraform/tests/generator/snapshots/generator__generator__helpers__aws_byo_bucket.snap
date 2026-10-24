@@ -125,6 +125,100 @@ locals {
   ]
 }
 
+=== retained-data.json ===
+[
+  "aws_s3_bucket.files",
+  "aws_s3_bucket_server_side_encryption_configuration.files",
+  "aws_s3_bucket_ownership_controls.files",
+  "aws_s3_bucket_public_access_block.files"
+]
+
+=== retain-data.py ===
+#!/usr/bin/env python3
+"""Detach the generated setup's retained resources, keeping a recovery receipt."""
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+
+def tf(*args):
+    return subprocess.check_output([CLI, *args], text=True)
+
+
+def save(path, value):
+    # Never overwrite a recovery checkpoint, including after an interrupted detach.
+    with path.open('x') as output:
+        json.dump(value, output, indent=2)
+        output.flush()
+        os.fsync(output.fileno())
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--detach', action='store_true', help='confirm detachment before teardown')
+    parser.add_argument('--module-address', default='', help='exact module address when used as a child module')
+    parser.add_argument('--receipt-dir', type=Path, required=True, help='private recovery directory outside the module')
+    args = parser.parse_args()
+    if os.name != "posix":
+        raise RuntimeError("Use Linux, macOS, or a WSL Linux filesystem for private recovery receipts; native Windows is not supported")
+    manifest = json.loads(Path(__file__).with_name('retained-data.json').read_text())
+    prefix = args.module_address + '.' if args.module_address else ''
+    addresses = {prefix + address for address in manifest}
+    # A failed read must abort, never masquerade as an empty installation.
+    state = json.loads(tf('state', 'pull'))
+    if state.get('version') != 4 or not state.get('lineage') or not isinstance(state.get('serial'), int):
+        raise RuntimeError('Unsupported or incomplete Terraform state; nothing detached')
+    selected = []
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        if base not in addresses:
+            continue
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            resource_id = instance['attributes'].get('id')
+            if not resource_id:
+                raise RuntimeError('Cannot detach a resource without a recovery ID: ' + base + suffix)
+            if resource['type'] == 'google_storage_bucket':
+                rules = instance['attributes'].get('lifecycle_rule') or []
+                if any(action.get('type') == 'Delete' for rule in rules for action in rule.get('action', [])):
+                    raise RuntimeError('Remove Cloud Storage delete lifecycle rules and apply before retaining ' + base + suffix + '; nothing detached')
+            selected.append({'address': base + suffix, 'id': resource_id})
+    print(json.dumps(selected, indent=2))
+    if not args.detach:
+        return
+    os.umask(0o077)
+    args.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if args.receipt_dir.stat().st_mode & 0o077:
+        raise RuntimeError('Receipt directory must be private (mode 0700)')
+    # One immutable receipt per attempt preserves IDs across partial failures/retries.
+    attempt = Path(tempfile.mkdtemp(prefix='detach-', dir=args.receipt_dir))
+    save(attempt / 'state-before.json', state)
+    save(attempt / 'retained.json', selected)
+    save(attempt / 'source.json', {'directory': str(Path.cwd()), 'lineage': state.get('lineage'), 'serial': state.get('serial'), 'module': args.module_address})
+    # Check for a concurrent writer between inventory and mutation. Terraform locks
+    # the state mutation itself. Operators must serialize this entire teardown with
+    # other Terraform runs, just as they do for a multi-command import procedure.
+    current = json.loads(tf('state', 'pull'))
+    if (current.get('lineage'), current.get('serial')) != (state.get('lineage'), state.get('serial')):
+        raise RuntimeError('Terraform state changed; no resources detached. Retry after the other run finishes.')
+    if selected:
+        subprocess.run([CLI, 'state', 'rm', '-lock-timeout=60s', *[item['address'] for item in selected]], check=True)
+    save(attempt / 'state-after.json', json.loads(tf('state', 'pull')))
+    print('Recovery receipt: ' + str(attempt))
+    print('Data is retained. Access has NOT yet been revoked. Run and review terraform plan -destroy, then apply that destroy plan. Do not run an ordinary apply after detaching.')
+
+
+if __name__ == '__main__':
+    CLI = os.environ.get('TF_CLI', 'terraform')
+    if CLI not in ('terraform', 'tofu'):
+        raise SystemExit('TF_CLI must be terraform or tofu')
+    main()
+
 === files.tf ===
 resource "aws_s3_bucket" "files" {
   bucket        = "${local.resource_prefix}-files"
@@ -134,6 +228,10 @@ resource "aws_s3_bucket" "files" {
     deployment      = local.resource_prefix
     resource        = "files"
     "resource-type" = "storage"
+  }
+
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
@@ -345,3 +443,25 @@ This module exposes `deployment_management_config`, `deployment_stack_settings`,
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
 - `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.
+## Retain AWS setup data during uninstall
+
+Setup-owned S3 buckets, DynamoDB tables, ECR repositories and Aurora PostgreSQL databases are protected against replacement and destroy. This includes empty resources. Their KMS keys survive with them. Aurora retention also keeps the writer instance, password secret and secret version, TLS parameter group, database security group, subnet group, and any setup-created VPC and private subnets. Database ingress rules, workload roles, routes, internet gateways and NAT gateways remain managed and are removed during teardown. Apply this package to the existing installation before teardown; older state may still allow destructive deletion. Do not remove protected resource blocks or bypass `prevent_destroy`: that protection disappears when a block is removed.
+
+Use Python 3 on Linux or macOS (on Windows, use WSL with receipts on its Linux filesystem) and the same Terraform backend, workspace and working directory used to install this setup. Stop deployment workloads first. Serialize the following procedure with all other Terraform runs. For a child module, add `--module-address 'module.<name>'` (including any module instance index).
+
+```bash
+# Preview exactly which addresses and cloud IDs will be retained.
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup
+# Save private recovery state and detach only the generated retention inventory.
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup --detach
+terraform plan -destroy -out=uninstall.tfplan
+terraform apply uninstall.tfplan
+```
+
+Review the destroy plan before applying: it must remove this setup's application/management roles and bucket policies, while the retained resources stay absent from the delete list. Detachment alone does not revoke access. Retained bucket encryption, object ownership, public-access-block and versioning settings stay in place; lifecycle-expiration configuration remains managed and is removed during destroy. Existing external grants are outside this setup's ownership and require a separate access review.
+
+The receipt contains exact addresses, cloud IDs, state lineage and full before/after state. Keep it private and backed up: Terraform state can contain secrets. A retry creates a new receipt without overwriting earlier IDs. The helper fails on state-read errors and keeps Terraform locking enabled. Do not run ordinary `terraform apply` after detachment: it would try to recreate the resources. To resume management, restore their declarations and use `terraform import ADDRESS ID` for each retained instance, then review an in-place plan. Do not restore a full old state over newer state.
+
+To remove just one data resource from the configuration, first inventory its state and use a reviewed Terraform `removed` block with `lifecycle { destroy = false }`, including its encryption dependencies. The bundled helper is for whole-setup teardown. Replacement requires retaining the old resource and importing or creating the new resource under a separate identity; never destroy old data to unblock a replacement plan.
+
+Retained resources continue to incur cloud charges, including database compute/storage and Secrets Manager. Retained databases remain private, with their application ingress removed; the cloud administrator must deliberately grant new access to reconnect. To explicitly erase data, first finish access revocation, then use the cloud's deletion operations on the exact IDs in the receipt, including stored versions/images, only after confirming that no retained data depends on a key. This workflow covers the AWS setup resources listed above; other database backends, other data types, runtime-owned resources and other clouds require their own retention procedure.

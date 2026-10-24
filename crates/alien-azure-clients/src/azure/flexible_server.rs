@@ -4,7 +4,7 @@
 //! network client.
 
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
-use crate::azure::long_running_operation::OperationResult;
+use crate::azure::long_running_operation::{LongRunningOperation, OperationResult};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, IntoAlienError};
@@ -84,6 +84,32 @@ pub struct FlexibleServerNetwork {
 pub struct FlexibleServerHighAvailability {
     /// "ZoneRedundant" for highAvailability(), else "Disabled".
     pub mode: String,
+    /// Provider readiness of the standby (response only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+/// Partial update: absent fields preserve provider configuration, including credentials,
+/// backup settings, networking, and automatically grown storage.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlexibleServerUpdate {
+    /// New compute capacity, when explicitly changed or required for HA.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sku: Option<FlexibleServerSku>,
+    /// Mutable settings only.
+    pub properties: FlexibleServerUpdateProperties,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlexibleServerUpdateProperties {
+    /// Growth only; omitted when existing storage already meets the request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage: Option<FlexibleServerStorage>,
+    /// Explicit Disabled is required to remove HA.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high_availability: Option<FlexibleServerHighAvailability>,
 }
 
 /// A server configuration value (used to set `azure.extensions`).
@@ -120,6 +146,14 @@ pub trait FlexibleServerApi: Send + Sync + std::fmt::Debug {
         server_name: &str,
         server: &FlexibleServer,
     ) -> Result<FlexibleServerOperationResult>;
+
+    /// Applies one update attempt. Callers persist the returned operation before polling.
+    async fn update_server(
+        &self,
+        resource_group: &str,
+        server_name: &str,
+        update: &FlexibleServerUpdate,
+    ) -> Result<Option<LongRunningOperation>>;
 
     async fn get_server(&self, resource_group: &str, server_name: &str) -> Result<FlexibleServer>;
 
@@ -219,6 +253,38 @@ impl FlexibleServerApi for AzureFlexibleServerClient {
                 )
                 .await,
         )
+    }
+
+    async fn update_server(
+        &self,
+        resource_group: &str,
+        server_name: &str,
+        update: &FlexibleServerUpdate,
+    ) -> Result<Option<LongRunningOperation>> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
+        let url = self.base.build_url(
+            &self.server_path(resource_group, server_name),
+            Some(vec![("api-version", Self::API_VERSION.into())]),
+        );
+        let body = serde_json::to_string(update).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: "Failed to serialize Flexible Server update".to_string(),
+            },
+        )?;
+        let request = AzureRequestBuilder::new(Method::PATCH, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body)
+            .build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        let response = self
+            .base
+            .execute_request_once(signed, "UpdateFlexibleServer", server_name)
+            .await?;
+        LongRunningOperation::from_response_headers(&response)
     }
 
     async fn get_server(&self, resource_group: &str, server_name: &str) -> Result<FlexibleServer> {
@@ -386,6 +452,7 @@ mod tests {
                 },
                 high_availability: Some(FlexibleServerHighAvailability {
                     mode: "ZoneRedundant".into(),
+                    state: None,
                 }),
                 state: None,
             },

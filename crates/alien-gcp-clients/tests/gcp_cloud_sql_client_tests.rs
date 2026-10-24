@@ -112,6 +112,9 @@ async fn cloud_sql_tier_resize_is_in_place_not_recreate() {
         region: Some(REGION.to_string()),
         settings: InstanceSettings {
             tier: SMALL_TIER.to_string(),
+            data_disk_size_gb: Some("20".into()),
+            storage_auto_resize: Some(true),
+            settings_version: None,
             ip_configuration: IpConfiguration {
                 ipv4_enabled: false,
                 psc_config: Some(PscConfig {
@@ -153,7 +156,9 @@ async fn cloud_sql_tier_resize_is_in_place_not_recreate() {
             &name,
             InstancePatch {
                 settings: InstanceSettingsPatch {
-                    tier: LARGE_TIER.to_string(),
+                    tier: Some(LARGE_TIER.to_string()),
+                    settings_version: before.settings.settings_version.clone(),
+                    ..Default::default()
                 },
             },
         )

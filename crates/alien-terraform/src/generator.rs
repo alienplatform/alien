@@ -30,7 +30,7 @@ use alien_core::{
     StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
     TelemetryMode, UpdatesMode,
 };
-use alien_error::{AlienError, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use hcl::{
     expr::Expression,
     structure::{Block, BlockLabel, Body, Structure},
@@ -551,6 +551,56 @@ fn generate_terraform_module_internal(
         )?)?,
     );
 
+    // Keep the manifest tied to actual emitted blocks, including extension emitters.
+    // Access policies remain in state so teardown can revoke them independently.
+    let retained_data_addresses: Vec<String> = per_resource
+        .values()
+        .flat_map(|fragment| {
+            fragment
+                .resource_blocks
+                .iter()
+                .map(move |block| (fragment, block))
+        })
+        .filter(|(_, block)| block.identifier.as_str() == "resource")
+        .filter_map(|(fragment, block)| {
+            let kind = block.labels.first()?.as_str();
+            let label = block.labels.get(1)?.as_str();
+            (fragment.is_retained(block)
+                || matches!(
+                    kind,
+                    "aws_s3_bucket"
+                        | "aws_s3_bucket_server_side_encryption_configuration"
+                        | "aws_s3_bucket_ownership_controls"
+                        | "aws_s3_bucket_public_access_block"
+                        | "aws_s3_bucket_versioning"
+                        | "aws_dynamodb_table"
+                        | "aws_ecr_repository"
+                        | "aws_kms_key"
+                ))
+            .then(|| format!("{kind}.{label}"))
+        })
+        .collect();
+    // Every supported cloud package carries the same fail-closed uninstall entry point,
+    // including key-only and access-only packages with an empty data inventory.
+    let has_retention_workflow = matches!(
+        target,
+        TerraformTarget::Aws | TerraformTarget::Eks | TerraformTarget::Gcp | TerraformTarget::Gke
+    );
+    if has_retention_workflow {
+        files.insert(
+            "retained-data.json".into(),
+            serde_json::to_string_pretty(&retained_data_addresses)
+                .into_alien_error()
+                .context(ErrorData::GenericError {
+                    message: "Could not serialize retained resource addresses".into(),
+                })?,
+        );
+        files.insert(
+            "retain-data.py".into(),
+            include_str!("templates/retain-data.py").into(),
+        );
+    }
+
     for (resource_id, fragment) in per_resource {
         let body = fragment_to_body(fragment);
         if !body_is_empty(&body) {
@@ -616,11 +666,23 @@ fn generate_terraform_module_internal(
             product_remote_operator,
             requires_remote_operator_collector_token,
             &stack_inputs,
-            retained_key_detach.is_some(),
+            retained_key_detach.is_some() && !has_retention_workflow,
             emits_azapi_resource,
             profile,
         ),
     );
+
+    if has_retention_workflow {
+        if let Some(readme) = files.get_mut("README.md") {
+            readme.push_str(
+                if matches!(target, TerraformTarget::Gcp | TerraformTarget::Gke) {
+                    include_str!("templates/retained-data-gcp.md")
+                } else {
+                    include_str!("templates/retained-data.md")
+                },
+            );
+        }
+    }
 
     // Last net: a reference hidden in a raw string escapes the AST rewrite;
     // catch it in the rendered output instead of shipping it.
@@ -1637,7 +1699,9 @@ pub(crate) const PROVIDER_REQUIREMENTS: &[(&str, &str, &str)] = &[
     ("aws", "hashicorp/aws", ">= 5.0"),
     ("awscc", "hashicorp/awscc", ">= 1.0"),
     ("tls", "hashicorp/tls", ">= 4.0"),
-    ("google", "hashicorp/google", ">= 5.0"),
+    // 7.37 supports the Cloud SQL PSC DNS setting emitted by database extensions;
+    // it also includes grow-only disk planning introduced in 7.4.
+    ("google", "hashicorp/google", ">= 7.37"),
     ("google-beta", "hashicorp/google-beta", ">= 6.0"),
     ("azurerm", "hashicorp/azurerm", ">= 4.75, < 5.0"),
     ("azapi", "Azure/azapi", ">= 2.6, < 3.0"),
