@@ -636,18 +636,19 @@ fn pgvector_releases_url() -> String {
         .unwrap_or_else(|_| ALIEN_PGVECTOR_RELEASES_URL_DEFAULT.to_string())
 }
 
-/// Maps the running target to the `{os}-{arch}` path segment the release host serves under.
-/// Only the four targets Alien actually builds are accepted; any other (e.g. an Intel Mac, for
-/// which there is deliberately no build) fails loud here rather than 404-ing mid-download.
+/// Maps the compilation target to the release path, including the embedded server's libc family.
+/// Unsupported targets fail here rather than downloading an incompatible extension.
 fn pgvector_target() -> postgresql_extensions::Result<(&'static str, &'static str)> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") => Ok(("linux", "x86_64")),
-        ("linux", "aarch64") => Ok(("linux", "aarch64")),
+        ("linux", "x86_64") if cfg!(target_env = "gnu") => Ok(("linux-gnu", "x86_64")),
+        ("linux", "x86_64") if cfg!(target_env = "musl") => Ok(("linux-musl", "x86_64")),
+        ("linux", "aarch64") if cfg!(target_env = "gnu") => Ok(("linux-gnu", "aarch64")),
+        ("linux", "aarch64") if cfg!(target_env = "musl") => Ok(("linux-musl", "aarch64")),
         ("macos", "aarch64") => Ok(("darwin", "aarch64")),
         ("windows", "x86_64") => Ok(("windows", "x86_64")),
         (os, arch) => Err(postgresql_extensions::Error::IoError(format!(
             "pgvector: no published build for {os}-{arch}; the release host serves \
-             linux-x86_64, linux-aarch64, darwin-aarch64, windows-x86_64"
+             linux-{{gnu,musl}}-{{x86_64,aarch64}}, darwin-aarch64, windows-x86_64"
         ))),
     }
 }
@@ -708,7 +709,7 @@ impl Repository for AlienPgvectorRepository {
         let base = pgvector_releases_url();
         let (os, arch) = pgvector_target()?;
         // The embedded server reports a full version (e.g. "17.2.0"); the artifacts are
-        // keyed by major, the only axis that changes pgvector's ABI.
+        // keyed by major within the matching OS, CPU architecture and libc family.
         let major = postgresql_version
             .split('.')
             .next()
