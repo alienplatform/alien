@@ -9,7 +9,7 @@ let value: ResumeDeploymentInstallationResponse = {
   deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   token: "<value>",
   installation: {
-    method: "cloudformation",
+    method: "terraform",
   },
 };
 ```

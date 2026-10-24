@@ -1,0 +1,19 @@
+# Mac
+
+## Example Usage
+
+```typescript
+import { Mac } from "@alienplatform/platform-api/models/operations";
+
+let value: Mac = {
+  install: "<value>",
+  command: "<value>",
+};
+```
+
+## Fields
+
+| Field              | Type               | Required           | Description        |
+| ------------------ | ------------------ | ------------------ | ------------------ |
+| `install`          | *string*           | :heavy_check_mark: | N/A                |
+| `command`          | *string*           | :heavy_check_mark: | N/A                |

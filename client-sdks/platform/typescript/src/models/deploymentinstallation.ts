@@ -11,6 +11,9 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 export const DeploymentInstallationMethod = {
   Cloudformation: "cloudformation",
   Terraform: "terraform",
+  Cli: "cli",
+  Helm: "helm",
+  GoogleOauth: "google-oauth",
 } as const;
 export type DeploymentInstallationMethod = ClosedEnum<
   typeof DeploymentInstallationMethod
@@ -42,6 +45,8 @@ export type DeploymentInstallationHelm = {
 
 export type DeploymentInstallation = {
   method: DeploymentInstallationMethod;
+  preparationId?: string | undefined;
+  managerUrl?: string | undefined;
   region?: string | undefined;
   stackName?: string | undefined;
   launchUrl?: string | undefined;
@@ -105,6 +110,8 @@ export const DeploymentInstallation$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   method: DeploymentInstallationMethod$inboundSchema,
+  preparationId: z.string().optional(),
+  managerUrl: z.string().optional(),
   region: z.string().optional(),
   stackName: z.string().optional(),
   launchUrl: z.string().optional(),

@@ -175,6 +175,9 @@ run();
 * [getWorkspaceInviteLink](docs/sdks/alien/README.md#getworkspaceinvitelink)
 * [createWorkspaceInviteLink](docs/sdks/alien/README.md#createworkspaceinvitelink)
 * [revokeWorkspaceInviteLink](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
+* [prepareDeploymentInstallation](docs/sdks/alien/README.md#preparedeploymentinstallation)
+* [getDeploymentPreparation](docs/sdks/alien/README.md#getdeploymentpreparation)
+* [getInstallationDeployment](docs/sdks/alien/README.md#getinstallationdeployment)
 * [resumeDeploymentInstallation](docs/sdks/alien/README.md#resumedeploymentinstallation)
 * [requestDeploymentCheck](docs/sdks/alien/README.md#requestdeploymentcheck)
 * [getDeploymentMetricsHistory](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
@@ -297,6 +300,7 @@ run();
 * [getInfo](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 * [import](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 * [setFirstPartyDeploymentInputs](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
+* [reportDeploymentSetupProgress](docs/sdks/deployments/README.md#reportdeploymentsetupprogress) - Record that a reserved CloudFormation setup started its stack, or that AWS rolled the stack back before it registered. Called by the template's DeploymentSetupStarted resource with the reservation's deployment credential.
 * [createSetupRegistrationOperation](docs/sdks/deployments/README.md#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
 * [getSetupRegistrationOperation](docs/sdks/deployments/README.md#getsetupregistrationoperation) - Get setup registration operation status.
 * [delete](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
@@ -627,6 +631,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsMove`](docs/sdks/deployments/README.md#move) - Reassign a deployment to another group within its project
 - [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 - [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
+- [`deploymentsReportDeploymentSetupProgress`](docs/sdks/deployments/README.md#reportdeploymentsetupprogress) - Record that a reserved CloudFormation setup started its stack, or that AWS rolled the stack back before it registered. Called by the template's DeploymentSetupStarted resource with the reservation's deployment credential.
 - [`deploymentsRestoreVolume`](docs/sdks/deployments/README.md#restorevolume) - Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
 - [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 - [`deploymentsSetFirstPartyDeploymentInputs`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
@@ -653,6 +658,8 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`getDeploymentCredentialRotation`](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
 - [`getDeploymentCredentialRotationValues`](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
 - [`getDeploymentMetricsHistory`](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+- [`getDeploymentPreparation`](docs/sdks/alien/README.md#getdeploymentpreparation)
+- [`getInstallationDeployment`](docs/sdks/alien/README.md#getinstallationdeployment)
 - [`getLogExportDeliveryConfig`](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
 - [`getPendingWorkspaceInvitation`](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
 - [`getProjectLogExport`](docs/sdks/alien/README.md#getprojectlogexport)
@@ -712,6 +719,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`packagesList`](docs/sdks/packages/README.md#list) - List packages with optional filters. Returns packages ordered by creation date (newest first).
 - [`packagesRebuild`](docs/sdks/packages/README.md#rebuild) - Rebuild packages for a project. This will cancel any pending packages and create new ones with auto-incremented versions.
 - [`prepareDeploymentCredentialRotation`](docs/sdks/alien/README.md#preparedeploymentcredentialrotation)
+- [`prepareDeploymentInstallation`](docs/sdks/alien/README.md#preparedeploymentinstallation)
 - [`projectsAcceptRemoteOperatorImage`](docs/sdks/projects/README.md#acceptremoteoperatorimage) - Accept a reported image for a Remote Operator installation
 - [`projectsAcceptRemoteOperatorPermissions`](docs/sdks/projects/README.md#acceptremoteoperatorpermissions) - Record that a Remote Operator installation's setup was re-applied
 - [`projectsConfigureAiProviderHeaders`](docs/sdks/projects/README.md#configureaiproviderheaders) - Replace the static headers added to AI requests for each provider.
@@ -916,6 +924,7 @@ To learn about this feature and how to get started, check
 - [`useDeploymentsMoveMutation`](docs/sdks/deployments/README.md#move) - Reassign a deployment to another group within its project
 - [`useDeploymentsPinReleaseMutation`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 - [`useDeploymentsRedeployMutation`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
+- [`useDeploymentsReportDeploymentSetupProgressMutation`](docs/sdks/deployments/README.md#reportdeploymentsetupprogress) - Record that a reserved CloudFormation setup started its stack, or that AWS rolled the stack back before it registered. Called by the template's DeploymentSetupStarted resource with the reservation's deployment credential.
 - [`useDeploymentsRestoreVolumeMutation`](docs/sdks/deployments/README.md#restorevolume) - Replace one replica's persistent volume with a new volume made from a snapshot. The deployment must be running (an update may already be queued or in progress). The replica is stopped while its volume is swapped, and the replaced volume is snapshotted before it is deleted.
 - [`useDeploymentsRetryMutation`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 - [`useDeploymentsSetFirstPartyDeploymentInputsMutation`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
@@ -942,6 +951,8 @@ To learn about this feature and how to get started, check
 - [`useGetDeploymentCredentialRotation`](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
 - [`useGetDeploymentCredentialRotationValuesMutation`](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
 - [`useGetDeploymentMetricsHistory`](docs/sdks/alien/README.md#getdeploymentmetricshistory) - Metrics Horizon reported for each replica, from the deployment's heartbeats in [from, to): the latest sample per replica per bucket, with empty buckets as null. Kept for 30 days, best effort.
+- [`useGetDeploymentPreparation`](docs/sdks/alien/README.md#getdeploymentpreparation)
+- [`useGetInstallationDeployment`](docs/sdks/alien/README.md#getinstallationdeployment)
 - [`useGetLogExportDeliveryConfig`](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
 - [`useGetPendingWorkspaceInvitation`](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
 - [`useGetProjectLogExport`](docs/sdks/alien/README.md#getprojectlogexport)
@@ -1001,6 +1012,7 @@ To learn about this feature and how to get started, check
 - [`usePackagesList`](docs/sdks/packages/README.md#list) - List packages with optional filters. Returns packages ordered by creation date (newest first).
 - [`usePackagesRebuildMutation`](docs/sdks/packages/README.md#rebuild) - Rebuild packages for a project. This will cancel any pending packages and create new ones with auto-incremented versions.
 - [`usePrepareDeploymentCredentialRotationMutation`](docs/sdks/alien/README.md#preparedeploymentcredentialrotation)
+- [`usePrepareDeploymentInstallationMutation`](docs/sdks/alien/README.md#preparedeploymentinstallation)
 - [`useProjectsAcceptRemoteOperatorImageMutation`](docs/sdks/projects/README.md#acceptremoteoperatorimage) - Accept a reported image for a Remote Operator installation
 - [`useProjectsAcceptRemoteOperatorPermissionsMutation`](docs/sdks/projects/README.md#acceptremoteoperatorpermissions) - Record that a Remote Operator installation's setup was re-applied
 - [`useProjectsConfigureAiProviderHeadersMutation`](docs/sdks/projects/README.md#configureaiproviderheaders) - Replace the static headers added to AI requests for each provider.
