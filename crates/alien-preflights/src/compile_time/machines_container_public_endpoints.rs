@@ -5,8 +5,9 @@ use async_trait::async_trait;
 /// Refuses public endpoints on containers in machines deployments.
 ///
 /// Container replicas on machines listen on host ports Horizon assigns, and the endpoint's DNS
-/// record lists every host, so nothing serves the endpoint's HTTPS address. Daemons run on the
-/// host network and serve their declared port, so they keep their public endpoints.
+/// record lists every host, so nothing serves the endpoint's HTTPS address. Daemons on host
+/// networking serve port 443 themselves, so they keep their public endpoints
+/// (`MachinesDaemonPublicEndpointsCheck` refuses the others).
 ///
 /// This is a build-time check only. Stacks released before it existed may already contain such
 /// containers, and deployments of them must keep updating, so deployment-time and template
@@ -34,7 +35,7 @@ impl CompileTimeCheck for MachinesContainerPublicEndpointsCheck {
                 let container = entry.config.downcast_ref::<Container>()?;
                 (!container.public_endpoints.is_empty()).then(|| {
                     format!(
-                        "Public endpoints on container '{resource_id}' are not supported on platform 'machines'. Use a daemon for public endpoints on machines deployments."
+                        "Public endpoints on container '{resource_id}' are not supported on platform 'machines'. Use a daemon with runtime.networkMode 'host' for public endpoints on machines deployments."
                     )
                 })
             })
@@ -103,7 +104,7 @@ mod tests {
         stack_with(web)
     }
 
-    const WEB_REFUSED: &str = "Public endpoints on container 'web' are not supported on platform 'machines'. Use a daemon for public endpoints on machines deployments.";
+    const WEB_REFUSED: &str = "Public endpoints on container 'web' are not supported on platform 'machines'. Use a daemon with runtime.networkMode 'host' for public endpoints on machines deployments.";
 
     /// `alien build` and `alien release` run the build-time preflights, so a new machines
     /// release with a public container is refused there.

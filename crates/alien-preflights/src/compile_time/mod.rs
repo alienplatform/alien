@@ -14,6 +14,7 @@ pub(crate) mod iam_workload_aggregate;
 pub mod kubernetes_workload_settings;
 pub mod live_provision_permissions;
 pub mod machines_container_public_endpoints;
+pub mod machines_daemon_public_endpoints;
 pub mod machines_resources;
 pub mod network_required;
 pub mod permission_profiles_exist;
@@ -50,6 +51,7 @@ pub use iam_inline_policy_size::IamInlinePolicySizeCheck;
 pub use kubernetes_workload_settings::KubernetesWorkloadSettingsCheck;
 pub use live_provision_permissions::LiveProvisionPermissionsCheck;
 pub use machines_container_public_endpoints::MachinesContainerPublicEndpointsCheck;
+pub use machines_daemon_public_endpoints::MachinesDaemonPublicEndpointsCheck;
 pub use machines_resources::MachinesResourcesCheck;
 pub use network_required::{
     stack_requires_network, NetworkSettingsPlatformCheck, PublicSubnetsRequiredCheck,
