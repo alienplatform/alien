@@ -3323,6 +3323,14 @@ async fn initialize(
         Err(e) => return e.into_response(),
     };
 
+    if req
+        .helm_release
+        .as_ref()
+        .is_some_and(|release| !release.is_valid())
+    {
+        return ErrorData::bad_request(HELM_RELEASE_ERROR_MESSAGE).into_response();
+    }
+
     match subject.scope.clone() {
         crate::auth::Scope::Deployment { deployment_id, .. } => {
             let deployment = match state
@@ -3350,15 +3358,6 @@ async fn initialize(
                 .name
                 .unwrap_or_else(|| format!("agent-{}", &ids::deployment_id()[3..9]));
             let platform = req.platform.unwrap_or(Platform::Kubernetes);
-            // This manager does not keep setup metadata, but it refuses the
-            // same requests as managers that do.
-            if req
-                .helm_release
-                .as_ref()
-                .is_some_and(|release| !release.is_valid())
-            {
-                return ErrorData::bad_request(HELM_RELEASE_ERROR_MESSAGE).into_response();
-            }
             let stack_state = match req.resource_prefix {
                 Some(resource_prefix) => {
                     if !alien_core::is_valid_resource_prefix(&resource_prefix) {
