@@ -115,6 +115,15 @@ impl StackResourceStateExt for StackResourceState {
         &mut self,
         controller: Option<Box<dyn ResourceController>>,
     ) -> Result<()> {
+        let progress = controller.as_ref().and_then(|controller| {
+            if controller.get_status().is_terminal()
+                || controller.get_status() == ResourceStatus::Running
+            {
+                None
+            } else {
+                controller.get_progress().map(str::to_owned)
+            }
+        });
         self.internal_state = match controller {
             Some(c) => Some(
                 crate::core::serialize_controller(&*c)
@@ -126,6 +135,7 @@ impl StackResourceStateExt for StackResourceState {
             ),
             None => None,
         };
+        self.progress = progress;
         Ok(())
     }
 
@@ -267,6 +277,7 @@ impl StackResourceStateExt for StackResourceState {
                     "No last failed state; resource was interrupted before initialization — resetting to Pending"
                 );
                 self.status = ResourceStatus::Pending;
+                self.progress = None;
                 self.internal_state = None;
                 self.retry_attempt = 0;
                 self.error = None;

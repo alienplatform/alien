@@ -39,6 +39,7 @@ get "outputs"(){
 get "previousConfig"(){
                 return z.union([BaseResourceSchema, z.null()]).optional()
               },
+"progress": z.string().describe("Last reported step explanation for display only; not a machine-readable status.").nullish(),
 "remoteBindingParams": z.optional(z.any().describe("Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params().")),
 "retryAttempt": z.optional(z.int().min(0).describe("Tracks consecutive retry attempts for the current state transition.")),
 get "status"(){

@@ -17,6 +17,7 @@ struct HandlerAttr {
     state: Ident,
     on_failure: Ident,
     status: ExprPath,
+    progress: Option<syn::LitStr>,
 }
 
 impl Parse for HandlerAttr {
@@ -24,10 +25,34 @@ impl Parse for HandlerAttr {
         let mut state = None;
         let mut on_failure = None;
         let mut status = None;
+        let mut progress = None;
 
         let args = Punctuated::<ExprAssign, Token![,]>::parse_terminated(input)?;
 
         for arg in args {
+            let Expr::Path(key) = &*arg.left else {
+                return Err(Error::new_spanned(
+                    &arg.left,
+                    "expected a handler attribute name",
+                ));
+            };
+            if key.path.is_ident("progress") {
+                if progress.is_some() {
+                    return Err(Error::new_spanned(
+                        &arg.left,
+                        "duplicate 'progress' attribute",
+                    ));
+                }
+                let value = &arg.right;
+                progress = Some(syn::parse2::<syn::LitStr>(quote! { #value })?);
+                continue;
+            }
+            if !["state", "on_failure", "status"]
+                .iter()
+                .any(|name| key.path.is_ident(name))
+            {
+                return Err(Error::new_spanned(&arg.left, "unknown handler attribute"));
+            }
             if let (Expr::Path(ExprPath { path, .. }), Expr::Path(value_path)) =
                 (&*arg.left, &*arg.right)
             {
@@ -49,6 +74,7 @@ impl Parse for HandlerAttr {
             })?,
             status: status
                 .ok_or_else(|| Error::new(input.span(), "missing 'status' in handler attribute"))?,
+            progress,
         })
     }
 }
@@ -506,6 +532,12 @@ fn generate_controller_impl(
     let step_match_arms = generate_step_match_arms(state_enum_name, handler_action_name, handlers);
     let get_status_match_arms =
         generate_get_status_match_arms(state_enum_name, handlers, terminal_states);
+    let progress_arms = handlers.values().filter_map(|(_, attr)| {
+        attr.progress.as_ref().map(|progress| {
+            let state = &attr.state;
+            quote! { #state_enum_name::#state => Some(#progress), }
+        })
+    });
     let transition_to_failure_body = generate_transition_to_failure(state_enum_name, handlers);
     let transition_to_delete_body = generate_transition_to_delete(state_enum_name, flow_entries);
     let transition_to_teardown_body =
@@ -630,6 +662,13 @@ fn generate_controller_impl(
                 use #state_enum_name::*;
                 match &self.state {
                     #get_status_match_arms
+                }
+            }
+
+            fn get_progress(&self) -> Option<&'static str> {
+                match &self.state {
+                    #(#progress_arms)*
+                    _ => None,
                 }
             }
 
@@ -948,3 +987,7 @@ fn generate_handler_methods(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "controller_tests.rs"]
+mod tests;

@@ -1351,6 +1351,7 @@ pub fn interrupt_in_progress_resources(
         // will reset them back to Pending.
         resource_state.last_failed_state = resource_state.internal_state.clone();
         resource_state.status = interrupted_status;
+        resource_state.progress = None;
         resource_state.error = Some(interrupted_error.clone());
         resource_state.retry_attempt = 0;
         resource_state
@@ -1834,6 +1835,7 @@ mod tests {
         let resource = Resource::new(worker);
 
         StackResourceState {
+            progress: None,
             resource_type: resource.resource_type().as_ref().to_string(),
             internal_state: None,
             status: ResourceStatus::ProvisionFailed,

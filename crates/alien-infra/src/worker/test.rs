@@ -422,6 +422,7 @@ impl TestWorkerController {
         state = CreateWorkerPolling,
         on_failure = CreateFailed,
         status = ResourceStatus::Provisioning,
+        progress = "Waiting for the worker to become available.",
     )]
     async fn create_function_polling(
         &mut self,
