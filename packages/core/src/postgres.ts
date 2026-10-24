@@ -66,6 +66,10 @@ export class Postgres extends ResourceBuilder {
    * Requests memory (e.g. "2Gi", "8Gi"). Drives the size on AWS (the ACU ceiling) and, together
    * with `cpu`, the tier on GCP and Azure.
    *
+   * Use binary units: Ki, Mi, Gi or Ti (e.g. "512Mi", "4Gi"). Decimal units are powers of 1000,
+   * as in Kubernetes: "8G" is 8×10^9 bytes, about 7.45 GiB, so it can pick a smaller tier than
+   * "8Gi". A number without a unit is rejected.
+   *
    * On AWS (Aurora Serverless v2) the ceiling is memory / 2 GiB per ACU, with a minimum of 1 ACU
    * (about 2 GiB): Aurora rejects a lower maximum capacity, so anything under "2Gi" is sized
    * up to 1 ACU.
