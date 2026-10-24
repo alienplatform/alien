@@ -102,7 +102,12 @@ enum LambdaProgress {
 }
 
 /// `name=value`, followed by the provider's reason when it gave one.
-fn lambda_status(name: &str, value: Option<&str>, code: Option<&str>, reason: Option<&str>) -> String {
+fn lambda_status(
+    name: &str,
+    value: Option<&str>,
+    code: Option<&str>,
+    reason: Option<&str>,
+) -> String {
     let value = value.unwrap_or("absent");
     match (code, reason) {
         (Some(code), Some(reason)) => format!("{name}={value} ({code}: {reason})"),
@@ -640,9 +645,10 @@ pub struct AwsWorkerController {
     pub(crate) vpc_eni_wait_started_at: Option<chrono::DateTime<Utc>>,
     /// Wall-clock start of the current wait for a Lambda create or update to finish. A stored
     /// start keeps the deadline fixed however often the stack steps and across restarts.
-    /// Cleared when the wait ends, so a retry after a failed wait gets a full window.
+    /// Cleared when the wait ends, and on retry (the `wait_for_*_started_at` name tells the
+    /// controller macro to reset it), so a retry gets a full window.
     #[serde(default)]
-    pub(crate) lambda_wait_started_at: Option<chrono::DateTime<Utc>>,
+    pub(crate) wait_for_lambda_started_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5658,11 +5664,11 @@ impl AwsWorkerController {
     ) -> Result<Option<AwsWorkerHandlerAction>> {
         let pending = match lambda_progress(config) {
             LambdaProgress::Ready => {
-                self.lambda_wait_started_at = None;
+                self.wait_for_lambda_started_at = None;
                 return Ok(None);
             }
             LambdaProgress::Failed(reason) => {
-                self.lambda_wait_started_at = None;
+                self.wait_for_lambda_started_at = None;
                 return Err(AlienError::new(ErrorData::CloudResourceFailed {
                     resource_id: resource_id.to_string(),
                     operation: operation.to_string(),
@@ -5686,10 +5692,10 @@ impl AwsWorkerController {
             (LAMBDA_WAIT_SECONDS, Duration::from_secs(3))
         };
 
-        let started_at = *self.lambda_wait_started_at.get_or_insert_with(Utc::now);
+        let started_at = *self.wait_for_lambda_started_at.get_or_insert_with(Utc::now);
         let waited_seconds = Utc::now().signed_duration_since(started_at).num_seconds();
         if waited_seconds >= limit_seconds {
-            self.lambda_wait_started_at = None;
+            self.wait_for_lambda_started_at = None;
             return Err(AlienError::new(ErrorData::CloudResourceWaitTimeout {
                 resource_id: resource_id.to_string(),
                 operation: operation.to_string(),
@@ -5838,7 +5844,7 @@ impl AwsWorkerController {
             eventbridge_permission_statement_ids: Vec::new(),
             delete_removed_something: false,
             vpc_eni_wait_started_at: None,
-            lambda_wait_started_at: None,
+            wait_for_lambda_started_at: None,
             _internal_stay_count: None,
         }
     }
@@ -8562,13 +8568,22 @@ mod tests {
             .await
             .expect("executor should build");
 
-        // Step directly so the test exercises the retry budget without sleeping for every
-        // production polling delay.
+        // Step directly so the test exercises the wait without sleeping for every production
+        // polling delay.
+        let mut wait_started_at = None;
         for _ in 0..30 {
             executor
                 .step()
                 .await
                 .expect("slow AWS activation should remain within the polling window");
+            let controller = executor.internal_state::<AwsWorkerController>().unwrap();
+            if controller.state == AwsWorkerState::CreateWaitForActive
+                && controller.wait_for_lambda_started_at.is_some()
+            {
+                // Every pending poll measures from the first one.
+                let started = controller.wait_for_lambda_started_at;
+                assert_eq!(*wait_started_at.get_or_insert(started), started);
+            }
             if executor.status() == ResourceStatus::Running {
                 break;
             }
@@ -8576,6 +8591,253 @@ mod tests {
 
         assert_eq!(executor.status(), ResourceStatus::Running);
         assert_eq!(status_checks.load(Ordering::SeqCst), 22);
+        assert!(
+            wait_started_at.is_some(),
+            "the pending polls record a wait start"
+        );
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .wait_for_lambda_started_at,
+            None,
+            "the wait start is cleared once the function is active"
+        );
+    }
+
+    /// A function read as Lambda reports it mid-create or mid-update.
+    fn lambda_read(state: &str, last_update_status: &str) -> FunctionConfiguration {
+        FunctionConfiguration {
+            function_name: Some("test-basic-func".to_string()),
+            function_arn: Some(
+                "arn:aws:lambda:us-east-1:123456789012:function:test-basic-func".to_string(),
+            ),
+            state: Some(state.to_string()),
+            last_update_status: Some(last_update_status.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn lambda_provider_reading(read: FunctionConfiguration) -> Arc<MockPlatformServiceProvider> {
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_configuration()
+            .times(1)
+            .returning(move |_, _| Ok(read.clone()));
+        let lambda = Arc::new(lambda);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(lambda.clone()));
+        Arc::new(provider)
+    }
+
+    /// A Lambda failure ends the wait on the first read with Lambda's reason, instead of
+    /// polling a function that cannot recover until the wait times out.
+    #[rstest]
+    #[case::create_state_failed(
+        AwsWorkerState::CreateWaitForActive,
+        "Failed",
+        "Failed",
+        "Lambda function create of 'basic-func' failed: State=Failed (SubnetOutOfIPAddresses: All subnets are out of IP addresses.)"
+    )]
+    #[case::update_failed(
+        AwsWorkerState::UpdateConfigWaitForActive,
+        "Active",
+        "Failed",
+        "Lambda configuration update of 'basic-func' failed: LastUpdateStatus=Failed (EniLimitExceeded: The ENI limit was reached.)"
+    )]
+    #[tokio::test]
+    async fn lambda_wait_fails_on_the_first_failed_read(
+        #[case] wait_state: AwsWorkerState,
+        #[case] state: &str,
+        #[case] last_update_status: &str,
+        #[case] expected_message: &str,
+    ) {
+        let mut read = lambda_read(state, last_update_status);
+        if state == "Failed" {
+            read.state_reason_code = Some("SubnetOutOfIPAddresses".to_string());
+            read.state_reason = Some("All subnets are out of IP addresses.".to_string());
+        } else {
+            read.last_update_status_reason_code = Some("EniLimitExceeded".to_string());
+            read.last_update_status_reason = Some("The ENI limit was reached.".to_string());
+        }
+        let controller = AwsWorkerController {
+            state: wait_state,
+            arn: read.function_arn.clone(),
+            // A wait already under way: the failure must also clear its start, so a retry
+            // after the cause is fixed gets a full window.
+            wait_for_lambda_started_at: Some(chrono::Utc::now() - chrono::Duration::seconds(30)),
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(lambda_provider_reading(read))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        let error = executor
+            .step()
+            .await
+            .expect_err("a failed function ends the wait");
+
+        assert_eq!(error.code, "CLOUD_RESOURCE_FAILED");
+        assert!(!error.retryable);
+        assert_eq!(error.message, expected_message);
+        let controller = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(controller.state, wait_state);
+        assert_eq!(controller.wait_for_lambda_started_at, None);
+    }
+
+    /// A retry of a failed wait, which resumes in the wait state, measures a fresh window.
+    /// Without the reset, a retry after the deadline passed would time out on its first poll.
+    #[test]
+    fn retry_resets_the_lambda_wait_start() {
+        let mut controller = AwsWorkerController {
+            state: AwsWorkerState::CreateWaitForActive,
+            wait_for_lambda_started_at: Some(chrono::Utc::now() - chrono::Duration::hours(2)),
+            ..Default::default()
+        };
+
+        // StackResourceState::retry_failed calls this on the last failed controller.
+        ResourceController::reset_stay_count(&mut controller);
+
+        assert_eq!(controller.wait_for_lambda_started_at, None);
+        assert_eq!(controller.state, AwsWorkerState::CreateWaitForActive);
+    }
+
+    /// A function attached to a VPC waits up to 15 minutes for its Hyperplane ENI; any other
+    /// function up to 5. The deadline is wall-clock time stored in the controller, so it
+    /// survives a checkpoint reload.
+    #[rstest]
+    #[case::plain_within_budget(false, 4 * 60, true)]
+    #[case::plain_past_budget(false, 5 * 60, false)]
+    #[case::vpc_past_plain_budget(true, 10 * 60, true)]
+    #[case::vpc_within_budget(true, 14 * 60 + 50, true)]
+    #[case::vpc_past_budget(true, 15 * 60, false)]
+    #[tokio::test]
+    async fn lambda_create_wait_budget_depends_on_vpc_attachment(
+        #[case] attached_to_vpc: bool,
+        #[case] elapsed_seconds: i64,
+        #[case] still_waiting: bool,
+    ) {
+        let mut read = lambda_read("Pending", "InProgress");
+        read.state_reason_code = Some("Creating".to_string());
+        read.state_reason = Some("The function is being created.".to_string());
+        if attached_to_vpc {
+            read.vpc_config = Some(
+                alien_aws_clients::lambda::VpcConfig::builder()
+                    .subnet_ids(vec!["subnet-test".to_string()])
+                    .security_group_ids(vec!["sg-test".to_string()])
+                    .build(),
+            );
+        }
+        let started = chrono::Utc::now() - chrono::Duration::seconds(elapsed_seconds);
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::CreateWaitForActive,
+            arn: read.function_arn.clone(),
+            wait_for_lambda_started_at: Some(started),
+            ..Default::default()
+        };
+        // Persist and reload the deadline just as a later step does.
+        let controller: AwsWorkerController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(lambda_provider_reading(read))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        let result = executor.step().await;
+
+        let controller = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(controller.state, AwsWorkerState::CreateWaitForActive);
+        if still_waiting {
+            let step = result.expect("a pending function within its budget keeps waiting");
+            assert_eq!(
+                step.suggested_delay,
+                Some(std::time::Duration::from_secs(if attached_to_vpc {
+                    10
+                } else {
+                    3
+                }))
+            );
+            assert_eq!(controller.wait_for_lambda_started_at, Some(started));
+        } else {
+            let error = result.expect_err("a pending function past its budget fails");
+            assert_eq!(error.code, "CLOUD_RESOURCE_WAIT_TIMEOUT");
+            let limit = if attached_to_vpc { 900 } else { 300 };
+            // The waited time is read from the clock, so it may be a second past the case's.
+            assert!(
+                error.message.starts_with("Timed out after ")
+                    && error.message.contains(&format!(
+                        "s (limit {limit}s) waiting for Lambda function create of 'basic-func'. Still pending: "
+                    )),
+                "{}",
+                error.message
+            );
+            assert!(
+                error.message.ends_with(
+                    "Still pending: State=Pending (Creating: The function is being created.), LastUpdateStatus=InProgress"
+                ),
+                "{}",
+                error.message
+            );
+            assert_eq!(controller.wait_for_lambda_started_at, None);
+        }
+    }
+
+    /// Attaching a network on update creates the Hyperplane ENI during the configuration
+    /// update. The desired network selects the VPC budget even when Lambda's read does not
+    /// list the subnets yet.
+    #[tokio::test]
+    async fn lambda_update_wait_uses_vpc_budget_for_desired_network() {
+        let settings = existing_vpc_settings();
+        let read = lambda_read("Active", "InProgress");
+        let started = chrono::Utc::now() - chrono::Duration::seconds(10 * 60);
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::UpdateConfigWaitForActive,
+            arn: read.function_arn.clone(),
+            wait_for_lambda_started_at: Some(started),
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .with_dependency(
+                Network::new("default-network".into())
+                    .settings(settings.network.clone().unwrap())
+                    .build(),
+                AwsNetworkController::mock_ready("vpc-test", 2),
+            )
+            .stack_settings(settings)
+            .service_provider(lambda_provider_reading(read))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        let step = executor
+            .step()
+            .await
+            .expect("a VPC update ten minutes in keeps waiting");
+
+        assert_eq!(
+            step.suggested_delay,
+            Some(std::time::Duration::from_secs(10))
+        );
+        let controller = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(controller.state, AwsWorkerState::UpdateConfigWaitForActive);
+        assert_eq!(controller.wait_for_lambda_started_at, Some(started));
     }
 
     /// Test that verifies correct worker configuration parameters
