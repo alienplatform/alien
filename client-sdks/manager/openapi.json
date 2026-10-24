@@ -10813,6 +10813,24 @@
           "on"
         ]
       },
+      "HelmRelease": {
+        "type": "object",
+        "description": "A Helm release, identified by its name and namespace.",
+        "required": [
+          "name",
+          "namespace"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Release name, as passed to `helm install`."
+          },
+          "namespace": {
+            "type": "string",
+            "description": "Kubernetes namespace the release is installed in."
+          }
+        }
+      },
       "HorizonContainerHeartbeatData": {
         "type": "object",
         "required": [
@@ -10955,6 +10973,17 @@
               {
                 "$ref": "#/components/schemas/Platform",
                 "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes."
+              }
+            ]
+          },
+          "helmRelease": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HelmRelease",
+                "description": "Helm release that installed this deployment, for `helm` setups. Lets\nthe manager tell the deployment owner the exact `helm uninstall`\ncommand. Older clients omit it."
               }
             ]
           },

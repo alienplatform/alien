@@ -274,6 +274,11 @@ pub struct InitializeRequest {
     /// rendered Operator manifests or `helm` for generated Helm installs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub setup_method: Option<String>,
+    /// Helm release that installed this deployment, for `helm` setups. Lets
+    /// the manager tell the deployment owner the exact `helm uninstall`
+    /// command. Older clients omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helm_release: Option<HelmRelease>,
     /// Optional base cloud platform for Kubernetes setup targets such as
     /// EKS/GKE/AKS. The runtime platform remains Kubernetes.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -291,6 +296,46 @@ pub struct InitializeRequest {
     /// field so generated setup clients have one stable initialize contract.
     #[serde(default)]
     pub input_values: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// A Helm release, identified by its name and namespace.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HelmRelease {
+    /// Release name, as passed to `helm install`.
+    pub name: String,
+    /// Kubernetes namespace the release is installed in.
+    pub namespace: String,
+}
+
+pub const HELM_RELEASE_ERROR_MESSAGE: &str = "helmRelease needs a Helm release name (lowercase letters, digits, '-' and '.', at most 53 characters) and a Kubernetes namespace (lowercase letters, digits and '-', at most 63 characters)";
+
+impl HelmRelease {
+    /// Whether the name and namespace are ones Helm and Kubernetes accept.
+    /// Valid values contain no characters a shell treats specially, so they
+    /// can be shown in a command without quoting.
+    pub fn is_valid(&self) -> bool {
+        self.name.len() <= 53
+            && self.name.split('.').all(is_dns_label)
+            && self.namespace.len() <= 63
+            && is_dns_label(&self.namespace)
+    }
+}
+
+/// A Kubernetes DNS-1123 label, without the length limit.
+fn is_dns_label(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    match (bytes.first(), bytes.last()) {
+        (Some(first), Some(last)) => {
+            first.is_ascii_alphanumeric()
+                && last.is_ascii_alphanumeric()
+                && bytes
+                    .iter()
+                    .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+        }
+        _ => false,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -899,7 +944,7 @@ mod tests {
         deployment_state_from_record, deployment_target_release_id, management_platform,
         may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
         should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_kubernetes_base_platform, AgentSyncRequest, AgentSyncWireRequest,
+        validate_kubernetes_base_platform, AgentSyncRequest, AgentSyncWireRequest, HelmRelease,
         InitialDesiredRelease, InitializeRequest, ReconcileRequest, RunnerConfigSources,
     };
 
@@ -1502,6 +1547,35 @@ mod tests {
         assert!(
             validate_kubernetes_base_platform(Platform::Kubernetes, Some(Platform::Local)).is_err()
         );
+    }
+
+    #[test]
+    fn helm_release_accepts_only_names_helm_and_kubernetes_accept() {
+        let release = |name: &str, namespace: &str| HelmRelease {
+            name: name.to_string(),
+            namespace: namespace.to_string(),
+        };
+        assert!(release("alien-operator", "alien-orders").is_valid());
+        assert!(release("orders.v2", "default").is_valid());
+        assert!(release(&"a".repeat(53), &"b".repeat(63)).is_valid());
+
+        for (name, namespace) in [
+            ("", "default"),
+            ("orders", ""),
+            ("Orders", "default"),
+            ("-orders", "default"),
+            ("orders.", "default"),
+            ("orders", "team.orders"),
+            ("orders; helm list", "default"),
+            ("orders", "default $(id)"),
+            (&"a".repeat(54), "default"),
+            ("orders", &"b".repeat(64)),
+        ] {
+            assert!(
+                !release(name, namespace).is_valid(),
+                "{name:?} in {namespace:?} should be refused"
+            );
+        }
     }
 
     #[test]
@@ -3248,6 +3322,14 @@ async fn initialize(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+
+    if req
+        .helm_release
+        .as_ref()
+        .is_some_and(|release| !release.is_valid())
+    {
+        return ErrorData::bad_request(HELM_RELEASE_ERROR_MESSAGE).into_response();
+    }
 
     match subject.scope.clone() {
         crate::auth::Scope::Deployment { deployment_id, .. } => {

@@ -37,7 +37,9 @@ use alien_deployment::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
-use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
+use alien_manager_api::{
+    types::HelmRelease, Client as ServerClient, SdkResultExt as ManagerSdkResultExt,
+};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
@@ -2861,6 +2863,76 @@ platform = "aws"
         initialize.assert_async().await;
     }
 
+    #[tokio::test]
+    async fn kubernetes_initialize_reports_the_helm_release_it_installs() {
+        for (flags, expected) in [
+            (
+                vec![],
+                serde_json::json!({"name": "alien-operator", "namespace": "alien-orders-eu"}),
+            ),
+            (
+                vec!["--helm-release", "shop", "--namespace", "customer-shop"],
+                serde_json::json!({"name": "shop", "namespace": "customer-shop"}),
+            ),
+        ] {
+            let server = MockServer::start_async().await;
+            let base_url = server.base_url();
+            server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET).path("/v1/resolve");
+                    then.status(200)
+                        .json_body(serde_json::json!({"managerUrl": base_url}));
+                })
+                .await;
+            // Answer only an initialize request that names the release, and
+            // stop there so nothing is tracked or installed.
+            let initialize = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .path("/v1/initialize")
+                        .json_body_partial(
+                            serde_json::json!({
+                                "name": "orders-eu",
+                                "setupMethod": "helm",
+                                "helmRelease": expected,
+                            })
+                            .to_string(),
+                        );
+                    then.status(409).json_body(serde_json::json!({
+                        "code": "STOP_AFTER_INITIALIZE",
+                        "message": "stop after initialize",
+                        "retryable": false,
+                        "internal": false
+                    }));
+                })
+                .await;
+
+            let mut argv = vec![
+                "deploy",
+                "--name",
+                "orders-eu",
+                "--platform",
+                "kubernetes",
+                "--base-url",
+                &base_url,
+                "--manager-url",
+                &base_url,
+                "--token",
+                "test-helm-token",
+            ];
+            argv.extend(flags);
+            let error = up_command(UpArgs::parse_from(argv), None)
+                .await
+                .expect_err("the mock stops the command after initialize");
+
+            assert!(
+                error.to_string().contains("stop after initialize"),
+                "{error:?}"
+            );
+            initialize.assert_async().await;
+        }
+    }
+
     #[test]
     fn deploy_config_file_accepts_public_endpoints() {
         let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
@@ -3869,6 +3941,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         deploy_config
             .as_ref()
             .and_then(|config| config.public_subdomain.as_deref()),
+        (platform == Platform::Kubernetes).then(|| kubernetes_helm_release(&args, &name)),
     )
     .await?;
     let deployment_id = init.deployment_id;
@@ -6353,6 +6426,7 @@ async fn initialize_deployment(
     input_values: HashMap<String, serde_json::Value>,
     setup_item: Option<SetupItem>,
     public_subdomain: Option<&str>,
+    helm_release: Option<HelmRelease>,
 ) -> Result<InitResult> {
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
@@ -6376,6 +6450,8 @@ async fn initialize_deployment(
         // The Kubernetes CLI installs the Operator with Helm. Runtime work
         // starts inside that Operator, so this must use Helm's setup handoff.
         setup_method: (platform == Platform::Kubernetes).then(|| "helm".to_string()),
+        // Lets the manager show the exact `helm uninstall` command at teardown.
+        helm_release,
     };
 
     let response = match client.initialize().body(body).send().await {
@@ -6739,14 +6815,10 @@ async fn run_kubernetes_pull_model(
 ) -> Result<()> {
     output::info("Kubernetes platform detected — installing alien-operator with Helm.");
     let (stack, resource_prefix) = fetch_kubernetes_release_stack(client, deployment_id).await?;
-    let namespace = args
-        .namespace
-        .clone()
-        .unwrap_or_else(|| format!("alien-{}", sanitize_kubernetes_dns_label(deployment_name)));
-    let release = args
-        .helm_release
-        .clone()
-        .unwrap_or_else(|| "alien-operator".to_string());
+    let HelmRelease {
+        name: release,
+        namespace,
+    } = kubernetes_helm_release(args, deployment_name);
     let operator_image = args
         .operator_image
         .clone()
@@ -6783,6 +6855,21 @@ async fn run_kubernetes_pull_model(
     output::info(&format!("Deployment ID: {}", deployment_id));
 
     Ok(())
+}
+
+/// The Helm release `up` installs the Operator as. Registration reports it, so
+/// it must be the same value the install uses.
+fn kubernetes_helm_release(args: &UpArgs, deployment_name: &str) -> HelmRelease {
+    HelmRelease {
+        name: args
+            .helm_release
+            .clone()
+            .unwrap_or_else(|| "alien-operator".to_string()),
+        namespace: args
+            .namespace
+            .clone()
+            .unwrap_or_else(|| format!("alien-{}", sanitize_kubernetes_dns_label(deployment_name))),
+    }
 }
 
 async fn fetch_kubernetes_release_stack(

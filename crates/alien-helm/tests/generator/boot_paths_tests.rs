@@ -140,6 +140,28 @@ fn bootstrap_uses_selected_endpoint_and_keeps_registered_deployments_explicit() 
     );
 }
 
+#[test]
+fn bootstrap_tells_the_operator_its_helm_release() {
+    let chart = render(
+        &Stack::new("sample-agent".to_string()).build(),
+        StackSettings::default(),
+    );
+    let values = "management:\n  token: ax_bootstrap\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+    let rendered =
+        test_utils::helm_template_for_release(&chart.files, Some(values), "shop-operator");
+    rendered.assert_ok("bootstrap with a custom release name");
+    let env = operator_env(&rendered.stdout);
+    assert_eq!(
+        env.get("OPERATOR_HELM_RELEASE").map(String::as_str),
+        Some("shop-operator")
+    );
+    // `helm template` installs into "default" unless told otherwise.
+    assert_eq!(
+        env.get("KUBERNETES_NAMESPACE").map(String::as_str),
+        Some("default")
+    );
+}
+
 fn operator_env(manifest: &str) -> std::collections::BTreeMap<String, String> {
     let deployment = serde_yaml::Deserializer::from_str(manifest)
         .map(|doc| {
