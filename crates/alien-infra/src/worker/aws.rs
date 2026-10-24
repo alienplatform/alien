@@ -645,8 +645,10 @@ pub struct AwsWorkerController {
     pub(crate) vpc_eni_wait_started_at: Option<chrono::DateTime<Utc>>,
     /// Wall-clock start of the current wait for a Lambda create or update to finish. A stored
     /// start keeps the deadline fixed however often the stack steps and across restarts.
-    /// Cleared when the wait ends, and on retry (the `wait_for_*_started_at` name tells the
-    /// controller macro to reset it), so a retry gets a full window.
+    /// Cleared by every step that starts a Lambda operation, so a wait never inherits the start
+    /// of one it interrupted (a delete that cuts into a create, say). Also cleared when the wait
+    /// ends, and on retry (the `wait_for_*_started_at` name tells the controller macro to reset
+    /// it), so a retry gets a full window.
     #[serde(default)]
     pub(crate) wait_for_lambda_started_at: Option<chrono::DateTime<Utc>>,
 }
@@ -954,6 +956,7 @@ impl AwsWorkerController {
         self.worker_name = Some(aws_worker_name.clone());
         info!(name=%aws_worker_name, arn=%self.arn.as_deref().unwrap_or("unknown"), "Worker created, waiting for active state");
 
+        self.wait_for_lambda_started_at = None;
         Ok(HandlerAction::Continue {
             state: CreateWaitForActive,
             suggested_delay: Some(Duration::from_secs(3)),
@@ -2854,6 +2857,7 @@ impl AwsWorkerController {
                 message: "Failed to refresh the worker's linked bindings".to_string(),
                 resource_id: Some(worker_config.id.clone()),
             })?;
+        self.wait_for_lambda_started_at = None;
         Ok(HandlerAction::Continue {
             state: RefreshingLinkedBindingsWaitForActive,
             suggested_delay: Some(Duration::from_secs(3)),
@@ -3002,6 +3006,7 @@ impl AwsWorkerController {
         }
 
         // Always transition to wait for code update (even if no code change) - linear flow
+        self.wait_for_lambda_started_at = None;
         Ok(HandlerAction::Continue {
             state: UpdateCodeWaitForActive,
             suggested_delay: Some(Duration::from_secs(3)),
@@ -3104,6 +3109,7 @@ impl AwsWorkerController {
                 }
             };
             if !bindings_drifted {
+                self.wait_for_lambda_started_at = None;
                 return Ok(HandlerAction::Continue {
                     state: UpdateConfigWaitForActive,
                     suggested_delay: None,
@@ -3182,6 +3188,7 @@ impl AwsWorkerController {
             })?;
 
         // Always transition to wait state - linear flow
+        self.wait_for_lambda_started_at = None;
         Ok(HandlerAction::Continue {
             state: UpdateConfigWaitForActive,
             suggested_delay: Some(Duration::from_secs(3)),
@@ -4735,6 +4742,7 @@ impl AwsWorkerController {
         match outcome {
             TagScopedDelete::Deleted => {
                 info!(worker=%worker_config.id, "Lambda VPC config detach requested");
+                self.wait_for_lambda_started_at = None;
                 Ok(HandlerAction::Continue {
                     state: DetachVpcWaitForActive,
                     suggested_delay: Some(Duration::from_secs(5)),
@@ -8691,6 +8699,70 @@ mod tests {
         let controller = executor.internal_state::<AwsWorkerController>().unwrap();
         assert_eq!(controller.state, wait_state);
         assert_eq!(controller.wait_for_lambda_started_at, None);
+    }
+
+    /// A delete can cut into a create or update wait and keep its start. The VPC detach that
+    /// follows must measure its own window, not time out at once on the inherited start.
+    #[tokio::test]
+    async fn vpc_detach_wait_does_not_inherit_an_interrupted_wait_start() {
+        let settings = existing_vpc_settings();
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_update_function_configuration()
+            .times(1)
+            .returning(|_, _| Ok(lambda_read("Active", "InProgress")));
+        lambda
+            .expect_get_function_configuration()
+            .times(1)
+            .returning(|_, _| Ok(lambda_read("Active", "InProgress")));
+        let lambda = Arc::new(lambda);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(lambda.clone()));
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::DetachingVpcConfig,
+            arn: lambda_read("Active", "Successful").function_arn,
+            // Left by a create wait that the delete interrupted two hours ago.
+            wait_for_lambda_started_at: Some(chrono::Utc::now() - chrono::Duration::hours(2)),
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .with_dependency(
+                Network::new("default-network".into())
+                    .settings(settings.network.clone().unwrap())
+                    .build(),
+                AwsNetworkController::mock_ready("vpc-test", 2),
+            )
+            .stack_settings(settings)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.expect("the detach is requested");
+        let controller = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(controller.state, AwsWorkerState::DetachVpcWaitForActive);
+        assert_eq!(controller.wait_for_lambda_started_at, None);
+
+        let step = executor
+            .step()
+            .await
+            .expect("a detach in progress keeps waiting on its own window");
+        assert_eq!(
+            step.suggested_delay,
+            Some(std::time::Duration::from_secs(10))
+        );
+        let controller = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(controller.state, AwsWorkerState::DetachVpcWaitForActive);
+        let started = controller
+            .wait_for_lambda_started_at
+            .expect("the detach wait records its own start");
+        assert!(chrono::Utc::now().signed_duration_since(started) < chrono::Duration::minutes(1));
     }
 
     /// A retry of a failed wait, which resumes in the wait state, measures a fresh window.
