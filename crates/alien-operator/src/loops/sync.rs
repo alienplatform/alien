@@ -720,17 +720,31 @@ fn report_operator_capabilities(
             .map(|platform| format!("base platform {platform:?}")),
     });
 
-    capabilities.push(OperatorCapabilityReport {
+    capabilities.push(logs_capability(&state.config, state.pod_log_collection));
+
+    capabilities
+}
+
+/// Logs reach the Operator either from a node collector, which authenticates
+/// with the collector token, or from the Operator's own Pod log stream, which
+/// needs no token. Either one means this installation sends logs.
+fn logs_capability(config: &OperatorConfig, pod_log_collection: bool) -> OperatorCapabilityReport {
+    let detail = if pod_log_collection {
+        Some("Pod logs read through the Kubernetes API")
+    } else if config.collector_token.is_some() {
+        Some("Pod logs sent by the node log collector")
+    } else {
+        None
+    };
+    OperatorCapabilityReport {
         key: "logs".to_string(),
-        state: if state.config.collector_token.is_some() {
+        state: if detail.is_some() {
             OperatorCapabilityState::Granted
         } else {
             OperatorCapabilityState::Unavailable
         },
-        detail: None,
-    });
-
-    capabilities
+        detail: detail.map(str::to_string),
+    }
 }
 
 /// Granted only when the chart bound the dynamic container Role: the manager
@@ -872,7 +886,7 @@ mod tests {
 
     use super::{
         accept_target_release, apply_manager_control_state, create_authenticated_client,
-        dynamic_containers_capability, is_uninitialized_deployment_state,
+        dynamic_containers_capability, is_uninitialized_deployment_state, logs_capability,
         operation_command_address_capability, reported_operations_config, sync_with_manager,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
@@ -1090,6 +1104,7 @@ mod tests {
             db,
             service_provider: None,
             operations_sync_handler: None,
+            pod_log_collection: false,
             cancel: CancellationToken::new(),
         };
         assert!(state.config.base_platform.is_none());
@@ -1203,6 +1218,7 @@ mod tests {
             db,
             service_provider: None,
             operations_sync_handler: None,
+            pod_log_collection: false,
             cancel: CancellationToken::new(),
         };
         let error = sync_with_manager(
@@ -1318,6 +1334,7 @@ mod tests {
             db: Arc::new(db),
             service_provider: fixture.service_provider,
             operations_sync_handler: None,
+            pod_log_collection: false,
             cancel: CancellationToken::new(),
         };
 
@@ -1419,6 +1436,7 @@ mod tests {
             db: Arc::new(db),
             service_provider: None,
             operations_sync_handler: None,
+            pod_log_collection: false,
             cancel: CancellationToken::new(),
         };
         let client = create_authenticated_client("ax_dep_test").unwrap();
@@ -1823,6 +1841,43 @@ mod tests {
         assert_eq!(
             state(config(Platform::Aws, Some("customer"), true)),
             OperatorCapabilityState::Unavailable
+        );
+    }
+
+    #[test]
+    fn reports_logs_when_a_node_collector_or_the_pod_log_stream_is_configured() {
+        let config = |collector_token: Option<&str>| {
+            OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .namespace("customer".to_string())
+                .maybe_collector_token(collector_token.map(str::to_string))
+                .data_dir("unused")
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build()
+        };
+
+        // Collector off: no node collector token and no Pod log stream.
+        let off = logs_capability(&config(None), false);
+        assert_eq!(off.key, "logs");
+        assert_eq!(off.state, OperatorCapabilityState::Unavailable);
+        assert_eq!(off.detail, None);
+
+        // nodeAgent mode: the chart mounts the collector token.
+        let node_agent = logs_capability(&config(Some("collector-secret")), false);
+        assert_eq!(node_agent.key, "logs");
+        assert_eq!(node_agent.state, OperatorCapabilityState::Granted);
+        assert_eq!(
+            node_agent.detail.as_deref(),
+            Some("Pod logs sent by the node log collector")
+        );
+
+        // podApi mode: the chart sets the Pod log label and mounts no token.
+        let pod_api = logs_capability(&config(None), true);
+        assert_eq!(pod_api.key, "logs");
+        assert_eq!(pod_api.state, OperatorCapabilityState::Granted);
+        assert_eq!(
+            pod_api.detail.as_deref(),
+            Some("Pod logs read through the Kubernetes API")
         );
     }
 

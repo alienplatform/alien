@@ -161,6 +161,7 @@ mod tests {
             db,
             service_provider: None,
             operations_sync_handler: None,
+            pod_log_collection: false,
             cancel: cancel.clone(),
         });
 
