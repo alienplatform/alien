@@ -332,6 +332,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         db: db.clone(),
         service_provider,
         operations_sync_handler,
+        pod_log_collection: runtime_options.pod_log_collection.is_some(),
         cancel: cancel.clone(),
     });
 
@@ -934,6 +935,9 @@ pub struct OperatorState {
     /// and reports what's loaded. `None` in OSS builds, which have no
     /// registry.
     pub operations_sync_handler: Option<Arc<dyn loops::operations_exec::OperationsSyncHandler>>,
+    /// Whether this Operator streams Pod logs itself through the Kubernetes
+    /// API (the chart's podApi log collector mode).
+    pub pod_log_collection: bool,
     /// Cancellation token for graceful shutdown.
     pub cancel: CancellationToken,
 }

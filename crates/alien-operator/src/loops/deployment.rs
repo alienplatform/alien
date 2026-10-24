@@ -842,6 +842,7 @@ mod tests {
             db,
             service_provider: None,
             operations_sync_handler: None,
+            pod_log_collection: false,
             cancel: tokio_util::sync::CancellationToken::new(),
         };
         let (steps, delay) = run_deployment_continuously(&state).await.unwrap();
