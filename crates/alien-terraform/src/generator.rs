@@ -1637,7 +1637,8 @@ pub(crate) const PROVIDER_REQUIREMENTS: &[(&str, &str, &str)] = &[
     ("aws", "hashicorp/aws", ">= 5.0"),
     ("awscc", "hashicorp/awscc", ">= 1.0"),
     ("tls", "hashicorp/tls", ">= 4.0"),
-    ("google", "hashicorp/google", ">= 5.0"),
+    // 7.4 preserves provider-grown Cloud SQL disks while allowing declared growth.
+    ("google", "hashicorp/google", ">= 7.4"),
     ("google-beta", "hashicorp/google-beta", ">= 6.0"),
     ("azurerm", "hashicorp/azurerm", ">= 4.75, < 5.0"),
     ("azapi", "Azure/azapi", ">= 2.6, < 3.0"),
