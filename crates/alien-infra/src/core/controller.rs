@@ -771,6 +771,11 @@ pub trait ResourceController: Send + Sync + Debug {
     /// Derives the high-level ResourceStatus from the internal state.
     fn get_status(&self) -> ResourceStatus;
 
+    /// Human-readable explanation of the current step. Consumers must not parse this text.
+    fn get_progress(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Derives the resource outputs (like ARN, URL) from the internal state, if available.
     fn get_outputs(&self) -> Option<ResourceOutputs>;
 

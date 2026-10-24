@@ -4202,6 +4202,7 @@ impl AwsNetworkController {
         state = WaitingForNatGateway,
         on_failure = CreateFailed,
         status = ResourceStatus::Provisioning,
+        progress = "Waiting for the NAT gateway to become available.",
     )]
     async fn waiting_for_nat_gateway(
         &mut self,
