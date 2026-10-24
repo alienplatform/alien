@@ -68,6 +68,10 @@ import {
   DeploymentReleaseInfo$inboundSchema,
 } from "./deploymentreleaseinfo.js";
 import {
+  DeploymentResource,
+  DeploymentResource$inboundSchema,
+} from "./deploymentresource.js";
+import {
   DeploymentUpdateOperationSummary,
   DeploymentUpdateOperationSummary$inboundSchema,
 } from "./deploymentupdateoperationsummary.js";
@@ -1975,7 +1979,7 @@ export type DeploymentDetailResponse = {
    */
   stackSettings: DeploymentDetailResponseStackSettings;
   /**
-   * State of infrastructure components managed by this deployment
+   * Deprecated: use resources on the deployment detail response for resource status and errors. Retained for existing consumers.
    */
   stackState?: DeploymentDetailResponseStackState | null | undefined;
   /**
@@ -2070,6 +2074,10 @@ export type DeploymentDetailResponse = {
    * A customer encryption key is unavailable. Dependent resources are preserved until access returns.
    */
   customerKeyUnavailable?: boolean | undefined;
+  /**
+   * Resource observations ordered by ID; empty before registration. Older servers may omit this field. Retry limits are not reported by the engine.
+   */
+  resources?: Array<DeploymentResource> | undefined;
   /**
    * Time of the last accepted runtime checkpoint or heartbeat; absent before registration.
    */
@@ -4839,6 +4847,7 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   managerId: z.string(),
   workspaceId: z.string(),
   customerKeyUnavailable: z.boolean().optional(),
+  resources: z.array(DeploymentResource$inboundSchema).optional(),
   resourceObservedAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),

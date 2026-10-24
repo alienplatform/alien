@@ -114,3 +114,32 @@ async fn deleting_resource_reports_its_active_dependent_then_clears() {
         .values()
         .all(|resource| resource.progress.is_none()));
 }
+
+#[tokio::test]
+async fn planned_delete_explains_wait_before_the_delete_controller_starts() {
+    let stack = Stack::new("delete-wait".to_owned())
+        .add(test_storage("storage"), ResourceLifecycle::Live)
+        .add_with_dependencies(
+            test_function("worker"),
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "storage")],
+        )
+        .build();
+    let executor = new_executor(&stack).unwrap();
+    let running = run_to_synced(&executor, new_test_state()).await.unwrap();
+    let deletion = new_deletion_executor().unwrap();
+    let waiting = deletion.step(running).await.unwrap().next_state;
+    assert_eq!(waiting.resources["storage"].status, ResourceStatus::Running);
+    assert_eq!(
+        waiting.resources["storage"].progress.as_deref(),
+        Some("Waiting for worker.")
+    );
+    let restored = executor.step(waiting.clone()).await.unwrap().next_state;
+    assert!(restored.resources["storage"].progress.is_none());
+    let deleted = run_to_synced(&deletion, waiting).await.unwrap();
+    assert_deleted(&deleted, &["storage", "worker"]);
+    assert!(deleted
+        .resources
+        .values()
+        .all(|resource| resource.progress.is_none()));
+}

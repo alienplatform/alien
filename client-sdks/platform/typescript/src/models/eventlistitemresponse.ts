@@ -1525,6 +1525,10 @@ export type EventListItemResponseResources = {
     | null
     | undefined;
   /**
+   * Last reported step explanation for display only; not a machine-readable status.
+   */
+  progress?: string | null | undefined;
+  /**
    * Binding parameters for remote access.
    *
    * @remarks
@@ -3907,6 +3911,7 @@ export const EventListItemResponseResources$inboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  progress: z.nullable(z.string()).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
   retryAttempt: z.int().optional(),
   status: EventListItemResponseStatus$inboundSchema,

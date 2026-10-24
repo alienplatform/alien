@@ -1421,6 +1421,10 @@ export type EventResources = {
   outputs?: EventOutputs | string | null | undefined;
   previousConfig?: EventPreviousConfig | string | null | undefined;
   /**
+   * Last reported step explanation for display only; not a machine-readable status.
+   */
+  progress?: string | null | undefined;
+  /**
    * Binding parameters for remote access.
    *
    * @remarks
@@ -3491,6 +3495,7 @@ export const EventResources$inboundSchema: z.ZodType<EventResources, unknown> =
     previousConfig: z.nullable(
       z.union([z.lazy(() => EventPreviousConfig$inboundSchema), z.string()]),
     ).optional(),
+    progress: z.nullable(z.string()).optional(),
     remoteBindingParams: z.nullable(z.any()).optional(),
     retryAttempt: z.int().optional(),
     status: EventStatus$inboundSchema,
