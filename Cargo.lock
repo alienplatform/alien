@@ -3966,7 +3966,7 @@ dependencies = [
  "futures",
  "progenitor-client 0.13.0",
  "regress 0.10.5",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
 ]
@@ -3984,7 +3984,7 @@ dependencies = [
  "deepstore-agent-client",
  "deepstore-server-client",
  "futures",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -4003,7 +4003,7 @@ dependencies = [
  "futures",
  "progenitor-client 0.13.0",
  "regress 0.10.5",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
 ]
@@ -5274,7 +5274,7 @@ dependencies = [
  "idna",
  "ipnet",
  "jni",
- "rand 0.10.2",
+ "rand 0.10.3",
  "thiserror 2.0.20",
  "tinyvec",
  "tokio",
@@ -5294,7 +5294,7 @@ dependencies = [
  "jni",
  "once_cell",
  "prefix-trie",
- "rand 0.10.2",
+ "rand 0.10.3",
  "ring",
  "thiserror 2.0.20",
  "tinyvec",
@@ -5319,7 +5319,7 @@ dependencies = [
  "ndk-context",
  "once_cell",
  "parking_lot",
- "rand 0.10.2",
+ "rand 0.10.3",
  "resolv-conf",
  "smallvec",
  "system-configuration",
@@ -6210,7 +6210,7 @@ dependencies = [
  "k256",
  "p256",
  "p384",
- "rand 0.10.2",
+ "rand 0.10.3",
  "serde",
  "serde_json",
  "superboring",
@@ -7012,6 +7012,18 @@ dependencies = [
  "tracing",
  "url",
  "windows-sys 0.45.0",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.13.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -8092,7 +8104,7 @@ dependencies = [
  "hmac 0.13.0",
  "md-5 0.11.0",
  "memchr",
- "rand 0.10.2",
+ "rand 0.10.3",
  "sha2 0.11.0",
  "stringprep",
 ]
@@ -8110,16 +8122,16 @@ dependencies = [
 
 [[package]]
 name = "postgresql_archive"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "274b4eeb875f1196cc577a69b17c3018a3b189d4017122648b1465066b8b08c1"
+checksum = "48e79dc46e8a3f913dda09f54815bb8583a9db3d1cbe0d90751c99c8e44347a7"
 dependencies = [
  "async-trait",
  "flate2",
  "futures-util",
  "hex",
  "regex-lite",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "reqwest-middleware",
  "reqwest-retry",
  "reqwest-tracing",
@@ -8127,20 +8139,20 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tar",
- "target-triple",
+ "target-tuple",
  "tempfile",
  "tracing",
  "url",
- "zip 8.6.0",
+ "zip 9.0.5",
 ]
 
 [[package]]
 name = "postgresql_commands"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66e1f10f6246287203d57775b1be7a9050c6d3f45c9021853eda3cfee3bf95e9"
+checksum = "dcb516dddcb0eac0bf360564b2dd086eceddb2779ed7fcd97b32135521ddec80"
 dependencies = [
  "tokio",
  "tracing",
@@ -8148,17 +8160,17 @@ dependencies = [
 
 [[package]]
 name = "postgresql_embedded"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87673b35bc80ddcc8eb54072d90290c6d2e3777493fd2d0de46cf2e0d6677fe5"
+checksum = "402b68210be4ef25bf9903b530ecf522ca76699dced416b847aa73e0c9dc5f44"
 dependencies = [
  "anyhow",
  "postgresql_archive",
  "postgresql_commands",
- "rand 0.10.2",
+ "rand 0.10.3",
  "semver",
  "sqlx",
- "target-triple",
+ "target-tuple",
  "tempfile",
  "tokio",
  "tracing",
@@ -8167,19 +8179,19 @@ dependencies = [
 
 [[package]]
 name = "postgresql_extensions"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2c1a295428626fbc992311c4dbcf872a167817d710b5e141f4998f9b7311836"
+checksum = "df648c26788d4950e5e240e1f102045c5da3208c44814cbb66b662adc0c80c36"
 dependencies = [
  "async-trait",
  "postgresql_archive",
  "postgresql_commands",
  "regex-lite",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "semver",
  "serde",
  "serde_json",
- "target-triple",
+ "target-tuple",
  "tempfile",
  "tokio",
  "tracing",
@@ -8378,7 +8390,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "percent-encoding",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -8436,7 +8448,7 @@ dependencies = [
  "chacha20",
  "core_detect",
  "num-traits",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_xorshift",
  "regex-syntax",
  "rusty-fork",
@@ -8681,7 +8693,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_pcg 0.10.2",
  "ring",
  "rustc-hash 2.1.3",
@@ -8771,9 +8783,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -9121,11 +9133,11 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.13.4"
+version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
+checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "futures-core",
  "futures-util",
@@ -9169,7 +9181,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "http 1.5.0",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "serde",
  "thiserror 2.0.20",
  "tower-service",
@@ -9187,7 +9199,7 @@ dependencies = [
  "getrandom 0.2.17",
  "http 1.5.0",
  "hyper 1.11.1",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "reqwest-middleware",
  "retry-policies",
  "thiserror 2.0.20",
@@ -9207,7 +9219,7 @@ dependencies = [
  "getrandom 0.2.17",
  "http 1.5.0",
  "matchit 0.8.4",
- "reqwest 0.13.4",
+ "reqwest 0.13.5",
  "reqwest-middleware",
  "tracing",
 ]
@@ -9224,7 +9236,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc05fbf560421a0357a750cbe78c7ca19d4923918490daabba313d5dbc871e47"
 dependencies = [
- "rand 0.10.2",
+ "rand 0.10.3",
 ]
 
 [[package]]
@@ -9431,9 +9443,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -10544,7 +10556,7 @@ dependencies = [
  "log",
  "md-5 0.11.0",
  "memchr",
- "rand 0.10.2",
+ "rand 0.10.3",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -10813,10 +10825,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
-name = "target-triple"
-version = "1.0.1"
+name = "target-tuple"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
+checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
 
 [[package]]
 name = "temp-env"
@@ -11069,7 +11081,7 @@ dependencies = [
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",
- "rand 0.10.2",
+ "rand 0.10.3",
  "socket2 0.6.5",
  "tokio",
  "tokio-util",
@@ -11083,7 +11095,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a129d95275ebf4c493ec53bf0f8cd95f5ac161bc4f381700809a54f595d4470"
 dependencies = [
  "pin-project-lite",
- "rand 0.10.2",
+ "rand 0.10.3",
  "tokio",
 ]
 
@@ -11542,7 +11554,7 @@ dependencies = [
  "http 1.5.0",
  "httparse",
  "log",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rustls",
  "rustls-pki-types",
  "sha1 0.11.0",
@@ -11749,7 +11761,7 @@ version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8464ec13c3691491391d9fce00f6416c9a48e46972f72d7865688be2080192c9"
 dependencies = [
- "rand 0.10.2",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -13097,14 +13109,15 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "8.6.0"
+version = "9.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+checksum = "6e04976da629d3b04204ba8105b396a193af8ad2583b2c79bfb3ab8af580a11e"
 dependencies = [
  "crc32fast",
  "flate2",
  "indexmap 2.14.1",
  "memchr",
+ "nix",
  "typed-path",
  "zopfli",
 ]
