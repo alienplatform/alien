@@ -11,9 +11,10 @@ import { AlienCore } from "../core.js";
 import { projectsGetActiveRelease } from "../funcs/projectsGetActiveRelease.js";
 import { combineSignals } from "../lib/primitives.js";
 import { RequestOptions } from "../lib/sdks.js";
+import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
-export type ProjectsGetActiveReleaseQueryData = any;
+export type ProjectsGetActiveReleaseQueryData = models.Release;
 
 export function prefetchProjectsGetActiveRelease(
   queryClient: QueryClient,

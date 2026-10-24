@@ -24,7 +24,7 @@
 * [retry](#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 * [getInputs](#getinputs) - Get the active input definitions and current non-secret values for a deployment.
 * [updateInputs](#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
-* [updateCompute](#updatecompute) - Update deployment-time compute pool selections and request reconciliation by the hosted manager.
+* [updateCompute](#updatecompute) - Update deployment-time compute selections or quota warning overrides and request reconciliation by the hosted manager.
 * [updateEnvironmentVariables](#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 * [listMachines](#listmachines)
@@ -1425,7 +1425,7 @@ import {
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 409                      | application/json         |
+| errors.APIError          | 400, 409                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -2422,7 +2422,7 @@ import {
 
 ## updateCompute
 
-Update deployment-time compute pool selections and request reconciliation by the hosted manager.
+Update deployment-time compute selections or quota warning overrides and request reconciliation by the hosted manager.
 
 ### Example Usage
 

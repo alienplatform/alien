@@ -17,11 +17,11 @@ let value: BillingLimits = {
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `maxDeployments`   | *number*           | :heavy_check_mark: | N/A                |
-| `maxProjects`      | *number*           | :heavy_check_mark: | N/A                |
-| `maxSeats`         | *number*           | :heavy_check_mark: | N/A                |
-| `maxCustomDomains` | *number*           | :heavy_check_mark: | N/A                |
-| `creditUsd`        | *number*           | :heavy_check_mark: | N/A                |
-| `seatsIncluded`    | *number*           | :heavy_check_mark: | N/A                |
+| Field                                                     | Type                                                      | Required                                                  | Description                                               |
+| --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| `maxDeployments`                                          | *number*                                                  | :heavy_check_mark:                                        | N/A                                                       |
+| `maxProjects`                                             | *number*                                                  | :heavy_check_mark:                                        | N/A                                                       |
+| `maxSeats`                                                | *number*                                                  | :heavy_check_mark:                                        | N/A                                                       |
+| `maxCustomDomains`                                        | *number*                                                  | :heavy_check_mark:                                        | N/A                                                       |
+| `creditUsd`                                               | *number*                                                  | :heavy_check_mark:                                        | Deprecated. Always null: no plan includes a usage credit. |
+| `seatsIncluded`                                           | *number*                                                  | :heavy_check_mark:                                        | N/A                                                       |

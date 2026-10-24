@@ -221,7 +221,7 @@ export class Projects extends ClientSDK {
   async getActiveRelease(
     request: operations.GetProjectActiveReleaseRequest,
     options?: RequestOptions,
-  ): Promise<any> {
+  ): Promise<models.Release> {
     return unwrapAsync(projectsGetActiveRelease(
       this,
       request,

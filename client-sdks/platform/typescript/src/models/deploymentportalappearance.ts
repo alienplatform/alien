@@ -25,6 +25,10 @@ export type DeploymentPortalAppearance = {
    */
   avatarUrl?: string | null | undefined;
   /**
+   * Optional browser icon override for the deployment portal.
+   */
+  faviconUrl?: string | null | undefined;
+  /**
    * Curated visual style for the deployment portal.
    */
   preset: DeploymentPortalAppearancePreset;
@@ -60,6 +64,7 @@ export const DeploymentPortalAppearance$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   avatarUrl: z.nullable(z.string()).optional(),
+  faviconUrl: z.nullable(z.string()).optional(),
   preset: DeploymentPortalAppearancePreset$inboundSchema.default("clean"),
   accentColor: DeploymentPortalAccentColor$inboundSchema.default("blue"),
   title: z.nullable(z.string()).optional(),
