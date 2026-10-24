@@ -30,7 +30,7 @@ use alien_core::{
     StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
     TelemetryMode, UpdatesMode,
 };
-use alien_error::{AlienError, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use hcl::{
     expr::Expression,
     structure::{Block, BlockLabel, Body, Structure},
@@ -551,6 +551,49 @@ fn generate_terraform_module_internal(
         )?)?,
     );
 
+    // Keep the manifest tied to actual emitted blocks, including extension emitters.
+    // Access policies remain in state so teardown can revoke them independently.
+    let retained_data_addresses: Vec<String> = per_resource
+        .values()
+        .flat_map(|fragment| &fragment.resource_blocks)
+        .filter(|block| block.identifier.as_str() == "resource")
+        .filter_map(|block| {
+            let kind = block.labels.first()?.as_str();
+            let label = block.labels.get(1)?.as_str();
+            matches!(
+                kind,
+                "aws_s3_bucket"
+                    | "aws_s3_bucket_server_side_encryption_configuration"
+                    | "aws_s3_bucket_ownership_controls"
+                    | "aws_s3_bucket_public_access_block"
+                    | "aws_s3_bucket_versioning"
+                    | "aws_dynamodb_table"
+                    | "aws_ecr_repository"
+                    | "aws_kms_key"
+            )
+            .then(|| format!("{kind}.{label}"))
+        })
+        .collect();
+    let has_retained_data = retained_data_addresses.iter().any(|address| {
+        address.starts_with("aws_s3_bucket.")
+            || address.starts_with("aws_dynamodb_table.")
+            || address.starts_with("aws_ecr_repository.")
+    });
+    if has_retained_data {
+        files.insert(
+            "retained-data.json".into(),
+            serde_json::to_string_pretty(&retained_data_addresses)
+                .into_alien_error()
+                .context(ErrorData::GenericError {
+                    message: "Could not serialize retained resource addresses".into(),
+                })?,
+        );
+        files.insert(
+            "retain-data.py".into(),
+            include_str!("templates/retain-data.py").into(),
+        );
+    }
+
     for (resource_id, fragment) in per_resource {
         let body = fragment_to_body(fragment);
         if !body_is_empty(&body) {
@@ -616,11 +659,17 @@ fn generate_terraform_module_internal(
             product_remote_operator,
             requires_remote_operator_collector_token,
             &stack_inputs,
-            retained_key_detach.is_some(),
+            retained_key_detach.is_some() && !has_retained_data,
             emits_azapi_resource,
             profile,
         ),
     );
+
+    if has_retained_data {
+        if let Some(readme) = files.get_mut("README.md") {
+            readme.push_str(include_str!("templates/retained-data.md"));
+        }
+    }
 
     // Last net: a reference hidden in a raw string escapes the AST rewrite;
     // catch it in the rendered output instead of shipping it.

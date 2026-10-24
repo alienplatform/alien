@@ -141,11 +141,12 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> Block {
         label,
         [
             attr("bucket", resource_prefix_template(storage.id())),
-            attr(
-                "force_destroy",
-                Expression::Bool(!ctx.resource.has_remote_bindings()),
-            ),
+            attr("force_destroy", Expression::Bool(false)),
             attr("tags", tags(ctx, "storage")),
+            nested(block(
+                "lifecycle",
+                [attr("prevent_destroy", Expression::Bool(true))],
+            )),
         ],
     )
 }

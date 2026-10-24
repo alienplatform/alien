@@ -48,7 +48,7 @@ impl TfEmitter for AwsArtifactRegistryEmitter {
                 attr("tags", tags(ctx, "artifact-registry")),
                 nested(crate::block::block(
                     "lifecycle",
-                    [attr("prevent_destroy", Expression::Bool(false))],
+                    [attr("prevent_destroy", Expression::Bool(true))],
                 )),
             ],
         ));

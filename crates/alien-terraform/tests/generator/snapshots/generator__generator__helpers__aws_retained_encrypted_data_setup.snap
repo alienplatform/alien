@@ -1,0 +1,719 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
+}
+
+variable "name" {
+  type        = string
+  description = "Deployment name, unique within the deployment group: 2-100 lowercase letters, numbers, and single hyphens. Shown in setup and cloud IAM review metadata."
+
+  validation {
+    condition     = length(var.name) >= 2 && length(var.name) <= 100 && can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.name)) && !startswith(var.name, "ag-")
+    error_message = "name must be 2-100 characters of lowercase letters, numbers, and single hyphens; start and end with a letter or number; and not start with \"ag-\"."
+  }
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+  sensitive   = true
+}
+
+variable "management_url" {
+  type        = string
+  description = "Optional management endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "deployment_model" {
+  type        = string
+  description = "How runtime updates are delivered after setup."
+  default     = "push"
+
+  validation {
+    condition     = contains(["push", "pull"], var.deployment_model)
+    error_message = "deployment_model must be one of: push, pull."
+  }
+}
+
+variable "advanced_settings_json" {
+  type        = string
+  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "advanced_settings_overlay_json" {
+  type        = string
+  description = "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
+variable "updates_mode" {
+  type        = string
+  description = "How application updates are delivered after setup."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "approval-required"], var.updates_mode)
+    error_message = "updates_mode must be one of: auto, approval-required."
+  }
+}
+
+variable "telemetry_mode" {
+  type        = string
+  description = "How logs, metrics, and traces are collected."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
+    error_message = "telemetry_mode must be one of: off, auto, approval-required."
+  }
+}
+
+variable "heartbeats_mode" {
+  type        = string
+  description = "Whether runtime health checks are enabled."
+  default     = "on"
+
+  validation {
+    condition     = contains(["off", "on"], var.heartbeats_mode)
+    error_message = "heartbeats_mode must be one of: off, on."
+  }
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region used by the AWS provider."
+  default     = "us-east-1"
+}
+
+variable "managing_role_arn" {
+  type        = string
+  description = "ARN of the management identity allowed to assume setup-created roles."
+  default     = ""
+}
+
+variable "management_external_id" {
+  type        = string
+  description = "ExternalId from the setup page. The management roles require it on every AssumeRole, so only this installation's control plane can use them. Leave it empty only to update a module applied before this variable existed."
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.management_external_id == "" || can(regex("^[A-Za-z0-9]{32,128}$", var.management_external_id))
+    error_message = "management_external_id must be the ExternalId shown on the setup page: 32 to 128 letters and digits."
+  }
+}
+
+variable "managing_account_id" {
+  type        = string
+  description = "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+data "aws_partition" "current" {}
+
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
+=== locals.tf ===
+locals {
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "aws"
+  deployment_target            = "aws"
+  deployment_region            = data.aws_region.current.region
+  deployment_management_config = null
+  advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access })
+  deployment_resources = [
+    {
+      id   = "data"
+      type = "storage"
+      importData = {
+        bucketName = aws_s3_bucket.data.bucket
+        bucketArn  = aws_s3_bucket.data.arn
+      }
+    },
+    {
+      id   = "rows"
+      type = "kv"
+      importData = {
+        tableName = aws_dynamodb_table.rows.name
+        tableArn  = aws_dynamodb_table.rows.arn
+      }
+    },
+    {
+      id   = "images"
+      type = "artifact-registry"
+      importData = {
+        accountId        = data.aws_caller_identity.current.account_id
+        region           = data.aws_region.current.region
+        registryId       = "${data.aws_caller_identity.current.account_id}:${data.aws_region.current.region}"
+        registryEndpoint = aws_ecr_repository.images.registry_id
+        repositoryPrefix = "${local.resource_prefix}-images"
+        pullRoleArn      = aws_iam_role.images_pull.arn
+        pushRoleArn      = aws_iam_role.images_push.arn
+      }
+    },
+    {
+      id   = "key"
+      type = "key"
+      importData = {
+        keyArn            = terraform_data.key_key_identity.output
+        availabilityProbe = false
+      }
+    }
+  ]
+}
+
+=== retained-data.json ===
+[
+  "aws_s3_bucket.data",
+  "aws_s3_bucket_server_side_encryption_configuration.data",
+  "aws_s3_bucket_ownership_controls.data",
+  "aws_s3_bucket_public_access_block.data",
+  "aws_s3_bucket_versioning.data",
+  "aws_dynamodb_table.rows",
+  "aws_ecr_repository.images",
+  "aws_kms_key.key"
+]
+
+=== retain-data.py ===
+#!/usr/bin/env python3
+"""Detach the generated setup's retained resources, keeping a recovery receipt."""
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+
+def tf(*args):
+    return subprocess.check_output([CLI, *args], text=True)
+
+
+def save(path, value):
+    # Never overwrite a recovery checkpoint, including after an interrupted detach.
+    with path.open('x') as output:
+        json.dump(value, output, indent=2)
+        output.flush()
+        os.fsync(output.fileno())
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--detach', action='store_true', help='confirm detachment before teardown')
+    parser.add_argument('--module-address', default='', help='exact module address when used as a child module')
+    parser.add_argument('--receipt-dir', type=Path, required=True, help='private recovery directory outside the module')
+    args = parser.parse_args()
+    manifest = json.loads(Path(__file__).with_name('retained-data.json').read_text())
+    prefix = args.module_address + '.' if args.module_address else ''
+    addresses = {prefix + address for address in manifest}
+    # A failed read must abort, never masquerade as an empty installation.
+    state = json.loads(tf('state', 'pull'))
+    if state.get('version') != 4 or not state.get('lineage') or not isinstance(state.get('serial'), int):
+        raise RuntimeError('Unsupported or incomplete Terraform state; nothing detached')
+    selected = []
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        if base not in addresses:
+            continue
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            resource_id = instance['attributes'].get('id')
+            if not resource_id:
+                raise RuntimeError('Cannot detach a resource without a recovery ID: ' + base + suffix)
+            selected.append({'address': base + suffix, 'id': resource_id})
+    print(json.dumps(selected, indent=2))
+    if not args.detach:
+        return
+    os.umask(0o077)
+    args.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if args.receipt_dir.stat().st_mode & 0o077:
+        raise RuntimeError('Receipt directory must be private (mode 0700)')
+    # One immutable receipt per attempt preserves IDs across partial failures/retries.
+    attempt = Path(tempfile.mkdtemp(prefix='detach-', dir=args.receipt_dir))
+    save(attempt / 'state-before.json', state)
+    save(attempt / 'retained.json', selected)
+    save(attempt / 'source.json', {'directory': str(Path.cwd()), 'lineage': state.get('lineage'), 'serial': state.get('serial'), 'module': args.module_address})
+    # Check for a concurrent writer between inventory and mutation. Terraform locks
+    # the state mutation itself. Operators must serialize this entire teardown with
+    # other Terraform runs, just as they do for a multi-command import procedure.
+    current = json.loads(tf('state', 'pull'))
+    if (current.get('lineage'), current.get('serial')) != (state.get('lineage'), state.get('serial')):
+        raise RuntimeError('Terraform state changed; no resources detached. Retry after the other run finishes.')
+    if selected:
+        subprocess.run([CLI, 'state', 'rm', '-lock-timeout=60s', *[item['address'] for item in selected]], check=True)
+    save(attempt / 'state-after.json', json.loads(tf('state', 'pull')))
+    print('Recovery receipt: ' + str(attempt))
+    print('Data is retained. Access has NOT yet been revoked. Run and review terraform plan -destroy, then apply that destroy plan. Do not run an ordinary apply after detaching.')
+
+
+if __name__ == '__main__':
+    CLI = os.environ.get('TF_CLI', 'terraform')
+    if CLI not in ('terraform', 'tofu'):
+        raise SystemExit('TF_CLI must be terraform or tofu')
+    main()
+
+=== data.tf ===
+resource "aws_s3_bucket" "data" {
+  bucket        = "${local.resource_prefix}-data"
+  force_destroy = false
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "data"
+    "resource-type" = "storage"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = terraform_data.key_key_identity.output
+    }
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "data" {
+  bucket                  = aws_s3_bucket.data.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "data" {
+  bucket = aws_s3_bucket.data.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "DenyInsecureTransport", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.data.arn, "${aws_s3_bucket.data.arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } }] })
+}
+
+resource "aws_s3_bucket_versioning" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+=== rows.tf ===
+resource "aws_dynamodb_table" "rows" {
+  name         = "${local.resource_prefix}-rows"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "rows"
+    "resource-type" = "kv"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+=== images.tf ===
+resource "aws_ecr_repository" "images" {
+  name                 = "${local.resource_prefix}-images"
+  image_tag_mutability = "IMMUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+
+  force_delete = false
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "images"
+    "resource-type" = "artifact-registry"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "images" {
+  repository = aws_ecr_repository.images.name
+  policy     = jsonencode({ rules = [{ rulePriority = 1, description = "Retain the 100 most recent images", selection = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 100 }, action = { type = "expire" } }] })
+}
+
+resource "aws_iam_role" "images_pull" {
+  name               = length(format("%s-%s", local.resource_prefix, "images-pull")) <= 64 ? format("%s-%s", local.resource_prefix, "images-pull") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "images-pull"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "images-pull")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole" }] })
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "images"
+    "resource-type" = "artifact-registry"
+  }
+}
+
+resource "aws_iam_role" "images_push" {
+  name               = length(format("%s-%s", local.resource_prefix, "images-push")) <= 64 ? format("%s-%s", local.resource_prefix, "images-push") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "images-push"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "images-push")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole" }] })
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "images"
+    "resource-type" = "artifact-registry"
+  }
+}
+
+resource "aws_iam_role_policy" "images_pull_policy" {
+  name   = "ecr-pull"
+  role   = aws_iam_role.images_pull.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = "ecr:GetAuthorizationToken", Resource = "*" }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"], Resource = [aws_ecr_repository.images.arn, format("%s-*", aws_ecr_repository.images.arn)] }] })
+}
+
+resource "aws_iam_role_policy" "images_push_policy" {
+  name   = "ecr-push-pull"
+  role   = aws_iam_role.images_push.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = "ecr:GetAuthorizationToken", Resource = "*" }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages", "ecr:CompleteLayerUpload", "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"], Resource = [aws_ecr_repository.images.arn, format("%s-*", aws_ecr_repository.images.arn)] }, { Sid = "RegionalRepositoryPolicies", Effect = "Allow", Action = ["ecr:GetRepositoryPolicy", "ecr:DeleteRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories"], Resource = [replace(aws_ecr_repository.images.arn, format(":%s:", data.aws_region.current.region), ":*:"), format("%s-*", replace(aws_ecr_repository.images.arn, format(":%s:", data.aws_region.current.region), ":*:"))] }] })
+}
+
+=== key.tf ===
+variable "key_existing_key" {
+  type        = object({ arn = string })
+  default     = null
+  description = "Existing same-account, same-region KMS key. Omit to create a key. The selection is immutable after setup; the supplying setup owns deletion."
+}
+
+moved {
+  from = aws_kms_key.key
+  to   = aws_kms_key.key[0]
+}
+
+resource "aws_kms_key" "key" {
+  count                   = var.key_existing_key == null ? 1 : 0
+  description             = "Encryption key 'key'"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "key"
+    "resource-type" = "key"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "terraform_data" "key_key_identity" {
+  input = var.key_existing_key == null ? aws_kms_key.key[0].arn : var.key_existing_key.arn
+
+  lifecycle {
+    ignore_changes = [
+      input
+    ]
+
+    postcondition {
+      condition     = self.output == (var.key_existing_key == null ? aws_kms_key.key[0].arn : var.key_existing_key.arn)
+      error_message = "The encryption key is immutable. Create a new deployment to use a different key."
+    }
+
+    postcondition {
+      condition     = can(regex("^arn:aws[a-z-]*:kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:key/[a-zA-Z0-9-]+$", self.output))
+      error_message = "The key must be an immutable KMS key ARN in this deployment's AWS account and region. Aliases are not supported."
+    }
+  }
+}
+
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
+  input = {
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    management_url              = var.management_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    inputValues                 = {}
+  }
+  depends_on = [
+    aws_s3_bucket.data,
+    aws_s3_bucket_server_side_encryption_configuration.data,
+    aws_s3_bucket_ownership_controls.data,
+    aws_s3_bucket_public_access_block.data,
+    aws_s3_bucket_policy.data,
+    aws_s3_bucket_versioning.data,
+    aws_dynamodb_table.rows,
+    aws_ecr_repository.images,
+    aws_ecr_lifecycle_policy.images,
+    aws_iam_role.images_pull,
+    aws_iam_role.images_push,
+    aws_iam_role_policy.images_pull_policy,
+    aws_iam_role_policy.images_push_policy,
+    aws_kms_key.key,
+    terraform_data.key_key_identity
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "aws"
+  description = "Terraform module target."
+}
+
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup registration payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Deployment registration management configuration JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Deployment registration settings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Deployment registration resource metadata JSON."
+}
+
+=== detach-retained-keys.sh ===
+#!/bin/sh
+set -eu
+
+if [ "${ALIEN_CONFIRM_DETACH_RETAINED_KEYS:-}" != "yes" ]; then
+echo "Set ALIEN_CONFIRM_DETACH_RETAINED_KEYS=yes after removing all key consumers and remote access." >&2
+exit 1
+fi
+
+TF_CLI=${TF_CLI:-terraform}
+case "$TF_CLI" in
+terraform|tofu) ;;
+*) echo "TF_CLI must be terraform or tofu" >&2; exit 1 ;;
+esac
+
+detach_if_present() {
+address=$1
+if "$TF_CLI" state list | grep -F -x -q "$address"; then
+"$TF_CLI" state rm "$address"
+fi
+}
+
+detach_if_present 'aws_kms_key.key'
+detach_if_present 'aws_kms_key.key[0]'
+
+=== README.md ===
+# Deployment setup - retained-data
+
+Target: `aws`.
+
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Inputs
+
+Required:
+
+- `token`: install token from the setup page.
+- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.
+- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.
+
+AWS settings:
+
+- `aws_region`: AWS region used by the provider.
+- `managing_role_arn`: management identity allowed to assume setup-created roles.
+- `managing_account_id`: account that hosts application container images. Empty disables scoped cross-account image-pull grants.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
+
+```bash
+export TF_VAR_name="retained-data"
+export TF_VAR_token="..."
+terraform init
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.
+## Retain AWS setup data during uninstall
+
+Setup-owned S3 buckets, DynamoDB tables and ECR repositories are protected against replacement and destroy. This includes empty resources. Their KMS keys must survive with them. Apply this package to the existing installation before teardown; older state may still allow destructive deletion. Do not remove protected resource blocks or bypass `prevent_destroy`: that protection disappears when a block is removed.
+
+Use Python 3 and the same Terraform backend, workspace and working directory used to install this setup. Stop deployment workloads first. Serialize the following procedure with all other Terraform runs. For a child module, add `--module-address 'module.<name>'` (including any module instance index).
+
+```bash
+# Preview exactly which addresses and cloud IDs will be retained.
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup
+# Save private recovery state and detach only the generated retention inventory.
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup --detach
+terraform plan -destroy -out=uninstall.tfplan
+terraform apply uninstall.tfplan
+```
+
+Review the destroy plan before applying: it must remove this setup's application/management roles and bucket policies, while the retained resources stay absent from the delete list. Detachment alone does not revoke access. Retained bucket encryption, object ownership, public-access-block and versioning settings stay in place; lifecycle-expiration configuration remains managed and is removed during destroy. Existing external grants are outside this setup's ownership and require a separate access review.
+
+The receipt contains exact addresses, cloud IDs, state lineage and full before/after state. Keep it private and backed up: Terraform state can contain secrets. A retry creates a new receipt without overwriting earlier IDs. The helper fails on state-read errors and keeps Terraform locking enabled. Do not run ordinary `terraform apply` after detachment: it would try to recreate the resources. To resume management, restore their declarations and use `terraform import ADDRESS ID` for each retained instance, then review an in-place plan. Do not restore a full old state over newer state.
+
+To remove just one data resource from the configuration, first inventory its state and use a reviewed Terraform `removed` block with `lifecycle { destroy = false }`, including its encryption dependencies. The bundled helper is for whole-setup teardown. Replacement requires retaining the old resource and importing or creating the new resource under a separate identity; never destroy old data to unblock a replacement plan.
+
+Retained resources continue to incur cloud charges. To explicitly erase data, first finish access revocation, then use the cloud's deletion operations on the exact IDs in the receipt, including stored versions/images, only after confirming that no retained data depends on a key. This workflow covers the AWS setup resources listed above; PostgreSQL, other data types, runtime-owned resources and other clouds require their own retention procedure.

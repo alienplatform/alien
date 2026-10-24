@@ -7,9 +7,9 @@
 
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
-    Ai, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile, Queue, RemoteBindings,
-    ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
-    ServiceAccount, Stack, StackSettings, Storage, Vault,
+    Ai, ArtifactRegistry, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile,
+    Queue, RemoteBindings, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress,
+    SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -763,4 +763,42 @@ fn aws_storage_browser_cors() {
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     snapshot_module("aws_storage_browser_cors", &module);
     assert_terraform_valid(&module, "aws_storage_browser_cors");
+}
+
+#[test]
+fn aws_retained_data_setup() {
+    for encrypted in [false, true] {
+        let mut storage = Storage::new("data".to_string()).versioning(true).build();
+        if encrypted {
+            storage.encryption_key = Some(ResourceRef::new(Key::RESOURCE_TYPE, "key"));
+        }
+        let mut stack = Stack::new("retained-data".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(
+                Kv::new("rows".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ArtifactRegistry::new("images".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+        if encrypted {
+            stack = stack.add(
+                Key::new("key".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+        }
+        let module = render(
+            &stack.build(),
+            TerraformTarget::Aws,
+            StackSettings::default(),
+        );
+        let name = if encrypted {
+            "aws_retained_encrypted_data_setup"
+        } else {
+            "aws_retained_data_setup"
+        };
+        snapshot_module(name, &module);
+        assert_terraform_valid(&module, name);
+    }
 }
