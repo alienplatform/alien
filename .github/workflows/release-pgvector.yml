@@ -110,6 +110,8 @@ jobs:
     runs-on: depot-macos-15
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@v7
+
       - name: Resolve embedded Postgres version
         id: pg
         run: |
@@ -136,15 +138,22 @@ jobs:
           SDK="$(xcrun --show-sdk-path)"
           make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK" OPTFLAGS="" with_llvm=no
           make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK" OPTFLAGS="" with_llvm=no install
+          sh .github/scripts/check-pgvector.sh
 
       - name: Package artifact
         run: |
           LIBDIR=$("$PG_CONFIG" --pkglibdir)
           EXTDIR=$("$PG_CONFIG" --sharedir)/extension
           mkdir -p out
-          cp "$LIBDIR/vector.dylib" out/ 2>/dev/null || cp "$LIBDIR/vector.so" out/vector.dylib
-          cp "$EXTDIR"/vector.control "$EXTDIR"/vector--*.sql out/
-          (cd out && zip -j "pgvector_compiled.zip" vector.dylib vector.control vector--*.sql)
+          # PostgreSQL 15 loads modules as vector.so on macOS; 16+ uses vector.dylib. Keep the name
+          # the server was built to load.
+          LIB=""
+          for f in vector.dylib vector.so; do
+            if [ -f "$LIBDIR/$f" ]; then LIB=$f; break; fi
+          done
+          test -n "$LIB"
+          cp "$LIBDIR/$LIB" "$EXTDIR"/vector.control "$EXTDIR"/vector--*.sql out/
+          (cd out && zip -j "pgvector_compiled.zip" "$LIB" vector.control vector--*.sql)
 
       - uses: actions/upload-artifact@v7
         with:
