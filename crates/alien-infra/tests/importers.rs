@@ -1221,6 +1221,8 @@ fn sandbox_entry(lifecycle: ResourceLifecycle, remote_access: bool) -> ResourceE
         lifecycle,
         dependencies: vec![],
         remote_access,
+        display_name: None,
+        description: None,
         enabled_when: None,
     }
 }

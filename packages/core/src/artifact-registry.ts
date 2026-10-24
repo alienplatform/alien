@@ -3,7 +3,7 @@ import {
   ArtifactRegistrySchema,
   type ResourceType,
 } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceMetadataBuilder } from "./resource.js"
 
 export type {
   ArtifactRegistry as ArtifactRegistryConfig,
@@ -16,7 +16,7 @@ export { ArtifactRegistrySchema as ArtifactRegistryConfigSchema } from "./genera
  * This is a high-level wrapper resource that provides a cloud-agnostic interface over
  * AWS ECR, GCP Artifact Registry, and Azure Container Registry.
  */
-export class ArtifactRegistry {
+export class ArtifactRegistry extends ResourceMetadataBuilder {
   private _config: Partial<ArtifactRegistryConfig> = {}
 
   /**
@@ -24,6 +24,7 @@ export class ArtifactRegistry {
    * @param id Identifier for the artifact registry. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -56,7 +57,7 @@ export class ArtifactRegistry {
   public build(): Resource {
     const config = ArtifactRegistrySchema.parse(this._config)
 
-    return new Resource({
+    return this.resource({
       type: "artifact-registry",
       ...config,
     })

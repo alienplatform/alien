@@ -4,7 +4,7 @@ import {
   type ServiceAccount as ServiceAccountConfig,
   ServiceAccountSchema,
 } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceMetadataBuilder } from "./resource.js"
 
 export type {
   PermissionSet,
@@ -43,7 +43,7 @@ export {
  *   .build()
  * ```
  */
-export class ServiceAccount {
+export class ServiceAccount extends ResourceMetadataBuilder {
   private _config: Partial<ServiceAccountConfig> = {
     stackPermissionSets: [],
   }
@@ -53,6 +53,7 @@ export class ServiceAccount {
    * @param id Identifier for the service account. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -109,7 +110,7 @@ export class ServiceAccount {
   public build(): Resource {
     const config = ServiceAccountSchema.parse(this._config)
 
-    return new Resource({
+    return this.resource({
       type: "service-account",
       ...config,
     })
