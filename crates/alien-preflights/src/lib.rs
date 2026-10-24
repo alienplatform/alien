@@ -393,6 +393,9 @@ impl PreflightRegistry {
         // Add build-time-only checks. A rule added here applies to new releases; stacks
         // released before it existed keep deploying and updating.
         registry.add_build_time_check(Box::new(compile_time::UniqueEndpointHostLabelsCheck));
+        registry.add_build_time_check(Box::new(
+            compile_time::MachinesContainerPublicEndpointsCheck,
+        ));
 
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::SandboxEgressGatewayCheck,
