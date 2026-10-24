@@ -36,6 +36,25 @@ const DRAIN_POLL_INTERVAL_MS: u64 = 1_000;
 #[cfg(test)]
 const DRAIN_POLL_INTERVAL_MS: u64 = 10;
 const WRAPPED_JOIN_TOKEN_PREFIX: &str = "aj1_";
+/// Group joined when the deployment declares no capacity groups, which is
+/// what the machine runtime names its generated pool.
+const DEFAULT_CAPACITY_GROUP: &str = "general";
+/// Programs the machine service runs that the machine bundle does not ship.
+/// The service refuses to start without them.
+const HOST_PROGRAMS: [HostProgram; 3] = [
+    HostProgram {
+        binary: "containerd",
+        package: "containerd",
+    },
+    HostProgram {
+        binary: "wg",
+        package: "wireguard-tools",
+    },
+    HostProgram {
+        binary: "nft",
+        package: "nftables",
+    },
+];
 /// The machine runtime runs containers through the host's containerd, which
 /// keeps images and writable layers under its default root. Pool ephemeral
 /// storage is checked against the filesystem that holds this directory, so a
@@ -63,9 +82,10 @@ pub struct JoinArgs {
     #[arg(long, conflicts_with = "token")]
     pub token_file: Option<PathBuf>,
 
-    /// Capacity group this host should join.
-    #[arg(long, default_value = "general")]
-    pub capacity_group: String,
+    /// Capacity group this host should join. Defaults to the only group the
+    /// deployment declares, or to "general" when it declares none.
+    #[arg(long)]
+    pub capacity_group: Option<String>,
 
     /// Optional physical or logical zone label for this host.
     #[arg(long)]
@@ -398,8 +418,25 @@ struct HostFacts<'a> {
     systemd_runtime_dir: &'a Path,
     systemctl_available: bool,
     wireguard_available: bool,
+    /// Entries of [`HOST_PROGRAMS`] not found on the host.
+    missing_programs: Vec<HostProgram>,
+    package_manager: Option<PackageManager>,
     /// Read on Linux only; other hosts fail the baseline checks first.
     capacity: Option<HostCapacity>,
+}
+
+/// A program the machine service needs, and the package that provides it on
+/// Debian, Ubuntu, Amazon Linux, Fedora and RHEL (all name it the same way).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HostProgram {
+    binary: &'static str,
+    package: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageManager {
+    Apt,
+    Dnf,
 }
 
 /// Host resources compared with the requirements of the capacity group being joined.
@@ -583,7 +620,7 @@ fn build_join_request(
         }
     }
     let arch = preflight_host(&host)?;
-    let capacity_group = normalize_non_empty("capacity-group", &args.capacity_group)?;
+    let capacity_group = resolve_capacity_group(args, wrapped_token.as_ref())?;
     let requirements = capacity_group_requirements(wrapped_token.as_ref(), &capacity_group)?;
     let previous_admission = previous_state
         .as_ref()
@@ -858,6 +895,41 @@ fn preflight_host(host: &HostFacts<'_>) -> Result<MachineArch> {
         }));
     }
 
+    if !host.missing_programs.is_empty() {
+        let packages = host
+            .missing_programs
+            .iter()
+            .map(|program| program.package)
+            .collect::<Vec<_>>()
+            .join(" ");
+        // The machine service installs its packages with apt-get when it
+        // first starts. Other hosts must have them before join installs it.
+        if host.package_manager == Some(PackageManager::Apt) {
+            output::info(&format!(
+                "The machine service installs the missing host packages when it starts: {packages}"
+            ));
+        } else {
+            let programs = host
+                .missing_programs
+                .iter()
+                .map(|program| format!("{} (package {})", program.binary, program.package))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let install = match host.package_manager {
+                Some(PackageManager::Dnf) => format!("dnf install -y {packages}"),
+                _ => format!(
+                    "apt-get install -y {packages} (Debian, Ubuntu) or dnf install -y {packages} (Amazon Linux 2023, Fedora, RHEL)"
+                ),
+            };
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "host".to_string(),
+                message: format!(
+                    "this host is missing programs the machine service needs: {programs}; install them and rerun join: {install}"
+                ),
+            }));
+        }
+    }
+
     match host.arch {
         "x86_64" | "amd64" => Ok(MachineArch::X64),
         "aarch64" | "arm64" => Ok(MachineArch::Arm64),
@@ -876,6 +948,17 @@ fn current_host_facts(install_root: &Path) -> Result<HostFacts<'static>> {
         systemd_runtime_dir: Path::new("/run/systemd/system"),
         systemctl_available: which::which("systemctl").is_ok(),
         wireguard_available: wireguard_available(),
+        missing_programs: HOST_PROGRAMS
+            .into_iter()
+            .filter(|program| which::which(program.binary).is_err())
+            .collect(),
+        package_manager: if which::which("apt-get").is_ok() {
+            Some(PackageManager::Apt)
+        } else if which::which("dnf").is_ok() {
+            Some(PackageManager::Dnf)
+        } else {
+            None
+        },
         capacity: if os == "linux" {
             Some(current_host_capacity(install_root)?)
         } else {
@@ -1100,6 +1183,35 @@ fn parse_lsblk_disks(json: &str) -> Result<Vec<BlockDevice>> {
         // Unconnected network block devices and empty card readers report no size.
         .filter(|disk| !matches!(disk, Ok(disk) if disk.size_bytes == 0))
         .collect()
+}
+
+/// The group named on the command line, else the only group the token
+/// declares. Tokens without groups come from deployments whose pools the
+/// machine runtime generates, which it names after [`DEFAULT_CAPACITY_GROUP`].
+fn resolve_capacity_group(
+    args: &JoinArgs,
+    wrapped_token: Option<&WrappedJoinToken>,
+) -> Result<String> {
+    if let Some(value) = args.capacity_group.as_deref() {
+        return normalize_non_empty("capacity-group", value);
+    }
+    let Some(groups) = wrapped_token
+        .and_then(|token| token.capacity_groups.as_ref())
+        .filter(|groups| !groups.is_empty())
+    else {
+        return Ok(DEFAULT_CAPACITY_GROUP.to_string());
+    };
+    let mut names = groups.keys();
+    match (names.next(), names.next()) {
+        (Some(only), None) => Ok(only.clone()),
+        _ => Err(AlienError::new(ErrorData::ValidationError {
+            field: "capacity-group".to_string(),
+            message: format!(
+                "this deployment declares several capacity groups; pass --capacity-group with one of: {}",
+                groups.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        })),
+    }
 }
 
 /// Requirements of the capacity group being joined, when the join token carries them.
@@ -3137,6 +3249,8 @@ mod tests {
             systemd_runtime_dir,
             systemctl_available: true,
             wireguard_available: true,
+            missing_programs: Vec::new(),
+            package_manager: None,
             capacity: None,
         }
     }
@@ -3145,7 +3259,7 @@ mod tests {
         JoinArgs {
             token: Some("jt_secret".to_string()),
             token_file: None,
-            capacity_group: "general".to_string(),
+            capacity_group: Some("general".to_string()),
             zone: None,
             network_interface: None,
             wireguard_endpoint: None,
@@ -3591,7 +3705,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let args = JoinArgs {
             token: Some(" jt_secret ".to_string()),
-            capacity_group: " gpu ".to_string(),
+            capacity_group: Some(" gpu ".to_string()),
             zone: Some(" rack-1 ".to_string()),
             bundle_url: None,
             dry_run: true,
@@ -3816,6 +3930,8 @@ mod tests {
             systemd_runtime_dir: Path::new("/unused"),
             systemctl_available: true,
             wireguard_available: false,
+            missing_programs: Vec::new(),
+            package_manager: None,
             capacity: None,
         };
 
@@ -3833,6 +3949,8 @@ mod tests {
             systemd_runtime_dir: dir.path(),
             systemctl_available: true,
             wireguard_available: true,
+            missing_programs: Vec::new(),
+            package_manager: None,
             capacity: None,
         };
 
@@ -3851,6 +3969,8 @@ mod tests {
             systemd_runtime_dir: dir.path(),
             systemctl_available: true,
             wireguard_available: false,
+            missing_programs: Vec::new(),
+            package_manager: None,
             capacity: None,
         };
 
@@ -4175,6 +4295,114 @@ mod tests {
     }
 
     #[test]
+    fn join_without_a_group_picks_the_only_declared_one() {
+        // The portal's join command names no group, and pools are rarely called "general".
+        let dir = tempfile::tempdir().expect("temp dir");
+        let args = JoinArgs {
+            token: Some(wrapped_join_token_with_groups(serde_json::json!({
+                "default": pool_requirements(None),
+            }))),
+            capacity_group: None,
+            control_plane_url: None,
+            cluster_id: None,
+            ..test_join_args()
+        };
+
+        let request = build_join_request(
+            &args,
+            None,
+            host_with_capacity(dir.path(), 8, 16, 100, vec![root_disk()]),
+        )
+        .expect("the only declared group should be joined");
+        assert_eq!(request.plan.capacity_group, "default");
+        assert_eq!(
+            request
+                .capacity_group_admission
+                .as_ref()
+                .map(|admission| admission.group.as_str()),
+            Some("default")
+        );
+    }
+
+    #[test]
+    fn join_without_a_group_needs_one_when_several_are_declared() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let args = JoinArgs {
+            token: Some(wrapped_join_token_with_groups(serde_json::json!({
+                "builders": pool_requirements(None),
+                "workers": pool_requirements(None),
+            }))),
+            capacity_group: None,
+            control_plane_url: None,
+            cluster_id: None,
+            ..test_join_args()
+        };
+
+        let error = build_join_request(&args, None, linux_host(dir.path()))
+            .expect_err("several groups need an explicit choice");
+        assert_eq!(
+            error.message,
+            "Validation failed for capacity-group: this deployment declares several capacity groups; pass --capacity-group with one of: builders, workers"
+        );
+    }
+
+    #[test]
+    fn join_without_a_group_keeps_general_for_tokens_without_groups() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let args = JoinArgs {
+            capacity_group: None,
+            ..test_join_args()
+        };
+
+        let plan = build_join_plan(&args, None, linux_host(dir.path())).expect("plan");
+        assert_eq!(plan.capacity_group, "general");
+    }
+
+    #[test]
+    fn join_refuses_a_host_missing_programs_the_service_cannot_install() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let host = HostFacts {
+            missing_programs: HOST_PROGRAMS.to_vec(),
+            package_manager: Some(PackageManager::Dnf),
+            ..linux_host(dir.path())
+        };
+
+        let error = build_join_request(&test_join_args(), None, host)
+            .expect_err("missing programs must be refused before anything is installed");
+        assert_eq!(
+            error.message,
+            "Validation failed for host: this host is missing programs the machine service needs: containerd (package containerd), wg (package wireguard-tools), nft (package nftables); install them and rerun join: dnf install -y containerd wireguard-tools nftables"
+        );
+
+        let host = HostFacts {
+            missing_programs: vec![HOST_PROGRAMS[2]],
+            package_manager: None,
+            ..linux_host(dir.path())
+        };
+        let error = build_join_request(&test_join_args(), None, host)
+            .expect_err("an unknown package manager still refuses");
+        assert!(
+            error.message.contains("nft (package nftables); install them and rerun join: apt-get install -y nftables (Debian, Ubuntu) or dnf install -y nftables (Amazon Linux 2023, Fedora, RHEL)"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn join_continues_when_apt_installs_the_missing_programs() {
+        // The machine service installs its packages with apt-get on first start.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let host = HostFacts {
+            missing_programs: HOST_PROGRAMS.to_vec(),
+            package_manager: Some(PackageManager::Apt),
+            ..linux_host(dir.path())
+        };
+
+        let plan = build_join_plan(&test_join_args(), None, host).expect("apt hosts join");
+        assert_eq!(plan.arch, MachineArch::X64);
+    }
+
+    #[test]
     fn rejoin_rechecks_capacity_but_accepts_its_admitted_data_disk() {
         let root = tempfile::tempdir().expect("install root");
         let state = MachineInstallState {
@@ -4291,7 +4519,7 @@ mod tests {
         )
         .expect("returning to profiles must retain the checked formatted disk");
 
-        legacy_args.capacity_group = "other".to_string();
+        legacy_args.capacity_group = Some("other".to_string());
         let changed_legacy = build_join_request(
             &legacy_args,
             None,
@@ -4304,7 +4532,7 @@ mod tests {
         );
 
         let mut changed_group = args;
-        changed_group.capacity_group = "larger".to_string();
+        changed_group.capacity_group = Some("larger".to_string());
         changed_group.token = Some(wrapped_join_token_with_groups(serde_json::json!({
             "larger": pool_requirements(Some(50)),
         })));
@@ -4753,7 +4981,7 @@ mod tests {
         let manifest = test_manifest();
         let args = JoinArgs {
             token: Some("jt_new".to_string()),
-            capacity_group: "gpu".to_string(),
+            capacity_group: Some("gpu".to_string()),
             zone: Some("rack-2".to_string()),
             install_root: root.path().to_path_buf(),
             ..test_join_args()

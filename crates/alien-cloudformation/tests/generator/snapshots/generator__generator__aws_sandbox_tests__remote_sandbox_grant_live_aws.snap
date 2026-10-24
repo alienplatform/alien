@@ -264,3 +264,10 @@ Resources:
     - AgentsBuildRole
     - AgentsRemoteExecutePolicy
     - AccessRole
+  DeploymentSetupStarted:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:register
+      Operation: setup-started
+      Token:
+        Ref: Token

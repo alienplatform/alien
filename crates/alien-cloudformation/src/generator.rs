@@ -358,7 +358,10 @@ pub fn generate_cloudformation_template_with_profile(
         });
     }
 
-    let names = logical_names(stack)?;
+    let names = logical_names(
+        stack,
+        !matches!(options.registration, RegistrationMode::OutputsFallback),
+    )?;
     // CREATE_COMPLETE reads as "the package is installed". For a runtime-provisioned sandbox the
     // image does not exist yet, and the stack description is the one line every console shows.
     // Not on a Kubernetes target: the sandbox is skipped there, so no build follows registration.
@@ -621,7 +624,7 @@ pub fn generate_cloudformation_template_with_profile(
     if let Some(service_token) = options.registration.service_token(&mut template)? {
         add_custom_resource(
             &mut template,
-            service_token,
+            service_token.clone(),
             management_config.clone(),
             stack_settings.clone(),
             &options,
@@ -632,7 +635,14 @@ pub fn generate_cloudformation_template_with_profile(
             ),
             stack_input_values_expression(&stack_inputs),
             options.registration.callback_url(),
-        );
+        )?;
+        // After the registration, so the registration's DependsOn (every
+        // resource present when it was added) does not include this one.
+        add_setup_started_resource(
+            &mut template,
+            service_token,
+            options.registration.callback_url(),
+        )?;
     }
 
     if options.registration.emits_outputs() {
@@ -1086,9 +1096,15 @@ fn validate_stack_settings(settings: &StackSettings) -> Result<()> {
     Ok(())
 }
 
-fn logical_names(stack: &Stack) -> Result<IndexMap<String, String>> {
+fn logical_names(stack: &Stack, has_registration: bool) -> Result<IndexMap<String, String>> {
     let mut names = IndexMap::new();
     let mut used = HashSet::new();
+    if has_registration {
+        used.extend([
+            "DeploymentRegistration".to_string(),
+            "DeploymentSetupStarted".to_string(),
+        ]);
+    }
 
     for (resource_id, resource) in stack.resources() {
         let mut base = sanitize_logical_id(resource.config.id());
@@ -2666,7 +2682,7 @@ fn add_custom_resource(
     resources: CfExpression,
     input_values: CfExpression,
     callback_url: Option<&str>,
-) {
+) -> Result<()> {
     // On stack delete the registration must go first: its delete callback
     // tears down the runtime resources, which still run on the setup's roles
     // and network. Every other resource is therefore a dependency.
@@ -2762,9 +2778,37 @@ fn add_custom_resource(
             CfExpression::from(callback_url.to_string()),
         );
     }
-    template
-        .resources
-        .insert(resource.logical_id.clone(), resource);
+    insert_resource(template, resource)
+}
+
+/// Reports that the stack started, so the setup owner can show progress
+/// before the registration runs.
+///
+/// The resource has no dependencies and nothing depends on it, so
+/// CloudFormation creates it as soon as the stack starts and deletes it when
+/// the stack rolls back. It shares the registration's service token,
+/// `Token` and callback URL so the same endpoint handles it.
+fn add_setup_started_resource(
+    template: &mut CfTemplate,
+    service_token: CfExpression,
+    callback_url: Option<&str>,
+) -> Result<()> {
+    let mut resource = CfResource::new(
+        "DeploymentSetupStarted".to_string(),
+        "AWS::CloudFormation::CustomResource".to_string(),
+    );
+    resource.properties = indexmap! {
+        "ServiceToken".to_string() => service_token,
+        "Operation".to_string() => CfExpression::from("setup-started"),
+        "Token".to_string() => CfExpression::ref_(PARAM_TOKEN),
+    };
+    if let Some(callback_url) = callback_url.filter(|value| !value.is_empty()) {
+        resource.properties.insert(
+            "CallbackUrl".to_string(),
+            CfExpression::from(callback_url.to_string()),
+        );
+    }
+    insert_resource(template, resource)
 }
 
 fn add_outputs(

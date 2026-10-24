@@ -1068,8 +1068,40 @@ fn descriptor_architecture(descriptor: &Value) -> Option<&str> {
         .and_then(|a| a.as_str())
 }
 
+/// The blob a descriptor points at, when the archive carried it.
+fn descriptor_blob<'a>(descriptor: &Value, blobs: &'a HashMap<String, Value>) -> Option<&'a Value> {
+    blobs.get(descriptor.get("digest")?.as_str()?)
+}
+
+/// Architecture of an image manifest: the descriptor's platform when the index
+/// records one, else the `architecture` of the manifest's config blob. A
+/// containerd-store `docker save` of an image pulled as a single manifest
+/// writes descriptors without a platform.
+fn manifest_architecture<'a>(
+    descriptor: &'a Value,
+    blobs: &'a HashMap<String, Value>,
+) -> Option<&'a str> {
+    descriptor_architecture(descriptor).or_else(|| {
+        let manifest = descriptor_blob(descriptor, blobs)?;
+        let config = descriptor_blob(manifest.get("config")?, blobs)?;
+        config.get("architecture")?.as_str()
+    })
+}
+
+/// Whether a manifest is a referrer of another manifest (an attestation or SBOM
+/// linked through `subject`) rather than an image. `docker save` exports them
+/// next to the image they describe.
+fn is_referrer(descriptor: &Value, blobs: &HashMap<String, Value>) -> bool {
+    descriptor
+        .get("annotations")
+        .and_then(|annotations| annotations.get("io.containerd.manifest.subject"))
+        .is_some()
+        || descriptor_blob(descriptor, blobs)
+            .is_some_and(|manifest| manifest.get("subject").is_some())
+}
+
 /// Walk an index's descriptors (following nested indexes) and collect the real image
-/// manifests, skipping attestation manifests (platform `unknown/unknown`).
+/// manifests, skipping attestations (platform `unknown/unknown` or a `subject`).
 fn collect_image_manifests(
     manifests: Option<&Value>,
     blobs: &HashMap<String, Value>,
@@ -1084,23 +1116,22 @@ fn collect_image_manifests(
             .and_then(|m| m.as_str())
             .unwrap_or_default();
         if is_index_media_type(media_type) {
-            if let Some(nested) = descriptor
-                .get("digest")
-                .and_then(|d| d.as_str())
-                .and_then(|d| blobs.get(d))
-            {
+            if let Some(nested) = descriptor_blob(descriptor, blobs) {
                 collect_image_manifests(nested.get("manifests"), blobs, out);
             }
         } else if is_manifest_media_type(media_type)
             && descriptor_architecture(descriptor) != Some("unknown")
+            && !is_referrer(descriptor, blobs)
         {
             out.push(descriptor.clone());
         }
     }
 }
 
-/// Resolve the one image-manifest descriptor to keep: the one matching `target_arch`, or
-/// the only candidate when architecture isn't recorded. Fails when none can be found.
+/// Resolve the one image-manifest descriptor to keep: the one built for `target_arch`.
+/// A lone image whose architecture is recorded nowhere is kept as is. A lone image
+/// built for another architecture is refused rather than shipped to hosts that
+/// cannot run it.
 fn select_image_manifest_descriptor(
     index: &Value,
     blobs: &HashMap<String, Value>,
@@ -1111,16 +1142,39 @@ fn select_image_manifest_descriptor(
 
     if let Some(descriptor) = candidates
         .iter()
-        .find(|d| descriptor_architecture(d) == Some(target_arch))
+        .find(|d| manifest_architecture(d, blobs) == Some(target_arch))
     {
         return Ok(descriptor.clone());
     }
-    if let [only] = candidates.as_slice() {
-        return Ok(only.clone());
+    let found: Vec<&str> = candidates
+        .iter()
+        .filter_map(|d| manifest_architecture(d, blobs))
+        .collect();
+    match (candidates.as_slice(), found.as_slice()) {
+        ([only], []) => Ok(only.clone()),
+        ([_], [built_for]) => Err(AlienError::new(docker_read_error(&format!(
+            "built for {built_for} only, but this release needs {target_arch}; \
+             publish a multi-architecture image that includes linux/{target_arch}, or set \
+             `architecture: \"{}\"` in the requirements of the pool that runs it",
+            stack_architecture_name(built_for)
+        )))),
+        _ => Err(AlienError::new(docker_read_error(&format!(
+            "OCI archive has no image manifest for architecture '{target_arch}' (found: {})",
+            if found.is_empty() {
+                "none".to_string()
+            } else {
+                found.join(", ")
+            }
+        )))),
     }
-    Err(AlienError::new(docker_read_error(&format!(
-        "OCI archive has no image manifest for architecture '{target_arch}'"
-    ))))
+}
+
+/// The stack's spelling of an OCI architecture, as accepted by a pool's `requirements.architecture`.
+fn stack_architecture_name(oci_arch: &str) -> &str {
+    match oci_arch {
+        "amd64" => "x86_64",
+        other => other,
+    }
 }
 
 /// Whether `index.json` already contains exactly the chosen descriptor (classic store).
@@ -2193,6 +2247,179 @@ CMD ["true"]
             ]
         });
         assert!(select_image_manifest_descriptor(&index, &HashMap::new(), "ppc64le").is_err());
+    }
+
+    #[test]
+    fn select_image_manifest_skips_referrers_and_reads_arch_from_the_config() {
+        // `docker save` from a containerd-store daemon of an image pulled as a single
+        // manifest: descriptors without a platform, plus the image's attestation referrer.
+        let index = json!({
+            "manifests": [
+                { "mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": "sha256:image" },
+                { "mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": "sha256:attest" }
+            ]
+        });
+        let blobs = HashMap::from([
+            (
+                "sha256:image".to_string(),
+                json!({ "config": { "digest": "sha256:config" }, "layers": [] }),
+            ),
+            (
+                "sha256:config".to_string(),
+                json!({ "architecture": "arm64", "os": "linux" }),
+            ),
+            (
+                "sha256:attest".to_string(),
+                json!({ "config": { "digest": "sha256:attest-config" }, "layers": [],
+                        "subject": { "digest": "sha256:image" } }),
+            ),
+        ]);
+
+        let chosen = select_image_manifest_descriptor(&index, &blobs, "arm64").unwrap();
+        assert_eq!(chosen.get("digest").unwrap(), "sha256:image");
+    }
+
+    #[test]
+    fn select_image_manifest_keeps_a_lone_image_without_a_recorded_arch() {
+        let index = json!({
+            "manifests": [
+                { "mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": "sha256:image" }
+            ]
+        });
+        let chosen = select_image_manifest_descriptor(&index, &HashMap::new(), "arm64").unwrap();
+        assert_eq!(chosen.get("digest").unwrap(), "sha256:image");
+    }
+
+    fn sha256_digest(bytes: &[u8]) -> String {
+        format!("sha256:{:x}", Sha256::digest(bytes))
+    }
+
+    /// Write what `docker save` emits for an image pulled as a single manifest from a
+    /// containerd-store daemon: an index whose descriptors carry no platform, the image
+    /// manifest, its config and layer, and the attestation referrer that came with it.
+    /// Returns the image manifest digest.
+    fn saved_single_manifest_archive(path: &Path, architecture: &str) -> String {
+        let layer = vec![0_u8; 1024];
+        let config = serde_json::to_vec(&json!({
+            "architecture": architecture, "os": "linux",
+            "config": {"Cmd": ["/app"]},
+            "rootfs": {"type": "layers", "diff_ids": [sha256_digest(&layer)]},
+        }))
+        .unwrap();
+        let manifest = serde_json::to_vec(&json!({
+            "schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
+                       "digest": sha256_digest(&config), "size": config.len()},
+            "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar",
+                        "digest": sha256_digest(&layer), "size": layer.len()}],
+        }))
+        .unwrap();
+        let attestation = br#"{"predicateType":"https://spdx.dev/Document"}"#.to_vec();
+        let referrer = serde_json::to_vec(&json!({
+            "schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
+                       "digest": sha256_digest(&attestation), "size": attestation.len()},
+            "layers": [{"mediaType": "application/vnd.in-toto+json",
+                        "digest": sha256_digest(&attestation), "size": attestation.len()}],
+            "subject": {"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        "digest": sha256_digest(&manifest), "size": manifest.len()},
+        }))
+        .unwrap();
+        let index = serde_json::to_vec(&json!({
+            "schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [
+                {"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                 "digest": sha256_digest(&manifest), "size": manifest.len(),
+                 "annotations": {"io.containerd.image.name": "registry.example.com/app:1"}},
+                {"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                 "digest": sha256_digest(&referrer), "size": referrer.len(),
+                 "annotations": {"io.containerd.manifest.subject": sha256_digest(&manifest)}},
+            ],
+        }))
+        .unwrap();
+        let docker_manifest = serde_json::to_vec(&json!([{
+            "Config": digest_to_blob_path(&sha256_digest(&config)).unwrap(),
+            "RepoTags": ["registry.example.com/app:1"],
+            "Layers": [digest_to_blob_path(&sha256_digest(&layer)).unwrap()],
+        }]))
+        .unwrap();
+
+        let mut builder = tar::Builder::new(File::create(path).unwrap());
+        let entries = [
+            (
+                "oci-layout".to_string(),
+                br#"{"imageLayoutVersion":"1.0.0"}"#.to_vec(),
+            ),
+            ("index.json".to_string(), index),
+            ("manifest.json".to_string(), docker_manifest),
+        ]
+        .into_iter()
+        .chain(
+            [manifest.clone(), config, layer, referrer, attestation]
+                .into_iter()
+                .map(|bytes| (digest_to_blob_path(&sha256_digest(&bytes)).unwrap(), bytes)),
+        );
+        for (name, bytes) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, name, bytes.as_slice())
+                .unwrap();
+        }
+        builder.finish().unwrap();
+        sha256_digest(&manifest)
+    }
+
+    fn archive_index(path: &Path) -> Value {
+        let mut archive = tar::Archive::new(File::open(path).unwrap());
+        let mut entry = archive
+            .entries()
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .find(|entry| entry.path().unwrap() == Path::new("index.json"))
+            .expect("index.json");
+        read_entry_json(&mut entry).unwrap()
+    }
+
+    #[test]
+    fn saved_single_manifest_image_is_kept_when_its_config_matches_the_target() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("image.tar");
+        let image_digest = saved_single_manifest_archive(&path, "arm64");
+
+        DockerToolchain::normalize_oci_archive(&path, "arm64").unwrap();
+
+        let manifests = archive_index(&path)["manifests"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(manifests.len(), 1, "{manifests:?}");
+        assert_eq!(manifests[0]["digest"], image_digest);
+    }
+
+    #[test]
+    fn saved_single_manifest_image_for_another_arch_is_refused() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("image.tar");
+        saved_single_manifest_archive(&path, "amd64");
+        let original = std::fs::read(&path).unwrap();
+
+        let error = DockerToolchain::normalize_oci_archive(&path, "arm64").unwrap_err();
+
+        assert!(
+            error.message.contains(
+                "built for amd64 only, but this release needs arm64; publish a multi-architecture image that includes linux/arm64, or set `architecture: \"x86_64\"` in the requirements of the pool that runs it"
+            ),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "archive was rewritten"
+        );
     }
 
     #[test]

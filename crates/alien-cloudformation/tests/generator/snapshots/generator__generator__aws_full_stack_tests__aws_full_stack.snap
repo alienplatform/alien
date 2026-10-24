@@ -2228,6 +2228,13 @@ Resources:
     - BuilderLogGroup
     - Builder
     - ManagementRoleManagedPermissions1
+  DeploymentSetupStarted:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:setup-registration
+      Operation: setup-started
+      Token:
+        Ref: Token
 Outputs:
   DeploymentSourceKind:
     Value: cloudformation

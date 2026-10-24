@@ -301,6 +301,17 @@ pub fn render_sample(
     registration: RegistrationMode,
     description: &str,
 ) -> String {
+    render_sample_template(stack, settings, registration, description).1
+}
+
+/// Like [`render_sample`], but hands back the template too, for tests that
+/// assert on its structure rather than on the rendered YAML.
+pub fn render_sample_template(
+    stack: &Stack,
+    settings: StackSettings,
+    registration: RegistrationMode,
+    description: &str,
+) -> (CfTemplate, String) {
     let registry = sample_registry();
     let template = generate_cloudformation_template(
         stack,
@@ -319,7 +330,7 @@ pub fn render_sample(
     .expect("template should render");
     let yaml = to_yaml(&template).expect("template should serialize");
     alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok(description);
-    yaml
+    (template, yaml)
 }
 
 /// Sample registry that maps a single sample resource type to an

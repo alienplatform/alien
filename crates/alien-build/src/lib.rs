@@ -4077,6 +4077,30 @@ async fn lock_image_export(image_key: &str, resource_name: &str) -> Result<std::
     }
 }
 
+/// Name the container and image an exported archive was for; the archive code
+/// only knows the generic `docker-build` resource.
+fn pulled_image_error(
+    error: AlienError<ErrorData>,
+    container_name: &str,
+    image: &str,
+) -> AlienError<ErrorData> {
+    let Some(ErrorData::ImageBuildFailed {
+        reason,
+        build_output,
+        ..
+    }) = error.error.clone()
+    else {
+        return error;
+    };
+    let mut named = AlienError::new(ErrorData::ImageBuildFailed {
+        resource_name: container_name.to_string(),
+        reason: format!("image '{image}': {reason}"),
+        build_output,
+    });
+    named.source = error.source;
+    named
+}
+
 /// Resolve a registry image and export an OCI archive for each target architecture.
 #[alien_event(AlienEvent::BuildingResource {
     resource_name: container_name.to_string(),
@@ -4262,7 +4286,8 @@ async fn pull_and_export_image(
             resource_name: container_name.to_string(),
             reason: "Image archive normalization task failed".to_string(),
             build_output: None,
-        })??;
+        })?
+        .map_err(|error| pulled_image_error(error, container_name, image))?;
 
         info!(
             "Successfully exported {} to {}",

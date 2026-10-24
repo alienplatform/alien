@@ -480,7 +480,7 @@ mod tests {
             panic!("expected join variant");
         };
         assert_eq!(args.token.as_deref(), Some("jt_secret"));
-        assert_eq!(args.capacity_group, "gpu");
+        assert_eq!(args.capacity_group.as_deref(), Some("gpu"));
         assert_eq!(args.zone.as_deref(), Some("rack-1"));
         assert_eq!(args.public_ip.as_deref(), Some("10.0.1.12"));
         assert_eq!(
