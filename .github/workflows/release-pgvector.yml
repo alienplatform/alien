@@ -193,9 +193,17 @@ jobs:
         shell: cmd
         run: |
           git clone --depth 1 --branch "v%PGVECTOR_VERSION%" https://github.com/pgvector/pgvector.git
+          rem Meson distributions name the same server import library postgres.exe.lib.
+          set "LIB=%PGROOT_WIN%\lib;%LIB%"
+          set "POSTGRES_LIB=postgres.lib"
+          if not exist "%PGROOT_WIN%\lib\%POSTGRES_LIB%" set "POSTGRES_LIB=postgres.exe.lib"
+          if not exist "%PGROOT_WIN%\lib\%POSTGRES_LIB%" (
+            echo PostgreSQL import library missing from "%PGROOT_WIN%\lib"
+            exit /b 1
+          )
           cd pgvector
-          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%"
-          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%" install
+          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%" LIBS=%POSTGRES_LIB%
+          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%" LIBS=%POSTGRES_LIB% install
 
       - name: Package artifact
         shell: bash
