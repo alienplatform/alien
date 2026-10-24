@@ -332,6 +332,28 @@ impl PreflightRunner {
         Ok(summary)
     }
 
+    /// Run only the build-time-only checks, for a stack that was built earlier and is now being
+    /// released without a rebuild (`alien release --prebuilt`). The other compile-time checks
+    /// already ran on its source stack, and some of them do not accept a built stack's local
+    /// image paths.
+    pub async fn run_prebuilt_release_checks(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+    ) -> Result<PreflightSummary> {
+        let checks = self.registry.get_build_time_checks(stack, platform);
+        let summary =
+            PreflightSummary::from_results(run_stack_checks(checks, stack, platform).await?);
+        if !summary.success {
+            return Err(AlienError::new(ErrorData::ValidationFailed {
+                error_count: summary.failed_checks,
+                warning_count: summary.warning_count,
+                results: summary.results,
+            }));
+        }
+        Ok(summary)
+    }
+
     /// Run the complete preflight pipeline for build-time (compile-time checks only)
     pub async fn run_build_time_preflights(
         &self,

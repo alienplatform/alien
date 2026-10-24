@@ -65,7 +65,7 @@ const router = new alien.Container("router")
   .build()
 
 export default new alien.Stack("byoc-database")
-  .platforms(["aws", "gcp", "azure", "kubernetes", "machines"])
+  .platforms(["aws", "gcp", "azure", "kubernetes"])
   .operations({
     cloudwatch: { approval: { "*": "auto" } },
     "aws-vpc": { approval: { "*": "auto" } },

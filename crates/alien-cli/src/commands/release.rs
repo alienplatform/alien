@@ -10,7 +10,7 @@ use alien_core::{
     DaemonCode, Platform, Sandbox, SandboxCode, Stack, StackInputDefinition, StackInputKind,
     StackInputProvider, Worker, WorkerCode,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_manager_api::types::{
     CreateReleaseRequest as ManagerCreateReleaseRequest, StackByPlatform as ManagerStackByPlatform,
 };
@@ -624,6 +624,9 @@ async fn release_task_core(
 
         // Load built stack
         let mut built_stack = load_built_stack(&output_dir, platform_str)?;
+        if args.prebuilt {
+            check_prebuilt_stack(&built_stack, platform).await?;
+        }
 
         // Push images if needed (the test platform skips pushing). --prebuilt skips the build,
         // not the push: it reuses already-pushed artifacts via the cache and pushes any local ones.
@@ -1246,6 +1249,20 @@ fn auto_build_target_group_key(settings: &alien_build::settings::BuildSettings) 
 }
 
 /// Load a built stack from .alien/build/{platform}/stack.json
+/// `alien build` runs the build-time preflights; `--prebuilt` skips the build, so a stack saved
+/// by an older CLI would otherwise become a new release without the checks added since.
+async fn check_prebuilt_stack(stack: &Stack, platform: Platform) -> Result<()> {
+    alien_preflights::runner::PreflightRunner::new()
+        .run_prebuilt_release_checks(stack, platform)
+        .await
+        .map_err(|error| {
+            // Keeps the preflight error as the source: its check results are what the CLI lists.
+            let message = error.to_string();
+            error.context(ErrorData::ConfigurationError { message })
+        })?;
+    Ok(())
+}
+
 fn load_built_stack(output_dir: &PathBuf, platform: &str) -> Result<Stack> {
     let stack_file = output_dir.join("build").join(platform).join("stack.json");
 
@@ -3749,5 +3766,62 @@ mod tests {
             None
         );
         config.assert_async().await;
+    }
+
+    /// A stack saved by an older `alien build` reaches the release without the build-time checks
+    /// added since, so `--prebuilt` runs them itself.
+    #[tokio::test]
+    async fn prebuilt_release_runs_the_build_time_checks() {
+        let mut web = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: "example.test/web:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .replicas(1)
+            .permissions("test".to_string())
+            .build();
+        web.public_endpoints.push(alien_core::PublicEndpoint {
+            name: "web".to_string(),
+            port: 8080,
+            protocol: alien_core::ExposeProtocol::Http,
+            host_label: None,
+            wildcard_subdomains: false,
+        });
+        let mut stack = Stack::new("test-stack".to_string())
+            .add(web, ResourceLifecycle::Live)
+            .build();
+        stack.permissions.profiles.insert(
+            "test".to_string(),
+            alien_core::PermissionProfile::new().global(Vec::<&str>::new()),
+        );
+
+        let error = check_prebuilt_stack(&stack, Platform::Machines)
+            .await
+            .expect_err("a machines stack with a public container must not be released");
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains(
+                "Public endpoints on container 'web' are not supported on platform 'machines'"
+            ),
+            "{rendered}"
+        );
+
+        let web = stack
+            .resources
+            .get_mut("web")
+            .and_then(|entry| entry.config.downcast_mut::<Container>())
+            .expect("web container");
+        web.public_endpoints.clear();
+        check_prebuilt_stack(&stack, Platform::Machines)
+            .await
+            .expect("a private container is valid on machines");
     }
 }
