@@ -61,6 +61,18 @@ impl Postgres {
     /// The resource type identifier for Postgres.
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("postgres");
 
+    /// Reject a compute failover guarantee until Aurora reader lifecycle is supported.
+    /// Aurora's replicated storage is available independently of this option.
+    pub fn validate_aurora_availability(&self) -> Result<()> {
+        if self.high_availability {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "Aurora highAvailability".to_string(),
+                reason: "Automatic reader placement and failover-safe HA updates are not supported yet. Aurora storage is replicated across Availability Zones, but this deployment creates only one compute instance. Set highAvailability=false to explicitly accept single-instance compute.".to_string(),
+            }));
+        }
+        Ok(())
+    }
+
     /// Aurora parameter groups are tied to the engine's major version, even when a
     /// specific minor release is requested.
     pub fn aurora_parameter_group_family(&self) -> Result<String> {
