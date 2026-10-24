@@ -10,7 +10,7 @@ name: Release pgvector
 # overrides only the download URL) extracts it unchanged.
 #
 # Published layout (mirrors release.yml + `latest`); manager fetches via CloudFront at
-#   releases.alien.dev/pgvector/v<ver>/<os>-<arch>/pg<major>/pgvector_compiled.zip
+#   releases.alien.dev/pgvector/v<ver>/<os[-libc]>-<arch>/pg<major>/pgvector_compiled.zip
 # (see ALIEN_PGVECTOR_RELEASES_URL_DEFAULT / pgvector_target in crates/alien-local).
 
 on:
@@ -32,58 +32,72 @@ env:
   PG_MAJORS: "15 16 17"
 
 jobs:
-  # ─── Linux (x86_64 + aarch64, native per runner; glibc, matching the embedded default) ───
+  # Build inside the embedded server's libc baseline, rather than the runner's libc.
   build-linux:
     strategy:
       fail-fast: false
       matrix:
         pg_major: [15, 16, 17]
         target:
-          - { arch: x86_64, runner: depot-ubuntu-24.04-16, triple: x86_64-unknown-linux-gnu }
-          - { arch: aarch64, runner: depot-ubuntu-24.04-arm-16, triple: aarch64-unknown-linux-gnu }
+          - { arch: x86_64, libc: gnu, runner: depot-ubuntu-24.04-16, image: "debian:12.4@sha256:79becb70a6247d277b59c09ca340bbe0349af6aacb5afa90ec349528b53ce2c9" }
+          - { arch: aarch64, libc: gnu, runner: depot-ubuntu-24.04-arm-16, image: "debian:12.4@sha256:79becb70a6247d277b59c09ca340bbe0349af6aacb5afa90ec349528b53ce2c9" }
+          - { arch: x86_64, libc: musl, runner: depot-ubuntu-24.04-16, image: "alpine:3.19.0@sha256:51b67269f354137895d43f3b3d810bfacd3945438e94dc5ac55fdac340352f48" }
+          - { arch: aarch64, libc: musl, runner: depot-ubuntu-24.04-arm-16, image: "alpine:3.19.0@sha256:51b67269f354137895d43f3b3d810bfacd3945438e94dc5ac55fdac340352f48" }
     runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 30
     steps:
-      - name: Install build tools
-        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y build-essential git curl jq
+      - uses: actions/checkout@v7
 
       - name: Resolve embedded Postgres version
         id: pg
         run: |
-          # postgresql_embedded resolves "^<major>" to the newest theseus-rs patch; mirror that.
           VERSION=$(curl -fsSL "https://api.github.com/repos/theseus-rs/postgresql-binaries/releases?per_page=100" \
             | jq -r --arg M "${{ matrix.pg_major }}" '.[].tag_name | select(startswith($M + "."))' \
             | sort -V | tail -1)
           test -n "$VERSION" || { echo "no theseus-rs release for PG ${{ matrix.pg_major }}"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Fetch embedded Postgres binaries
+      - name: Fetch embedded Postgres and pgvector source
         run: |
           V="${{ steps.pg.outputs.version }}"
+          TRIPLE="${{ matrix.target.arch }}-unknown-linux-${{ matrix.target.libc }}"
           curl -fsSL -o pg.tar.gz \
-            "https://github.com/theseus-rs/postgresql-binaries/releases/download/${V}/postgresql-${V}-${{ matrix.target.triple }}.tar.gz"
-          # theseus tarballs wrap everything in a top-level postgresql-<ver>-<triple>/ dir; strip it
-          mkdir -p pgdist && tar -xzf pg.tar.gz -C pgdist --strip-components=1
+            "https://github.com/theseus-rs/postgresql-binaries/releases/download/${V}/postgresql-${V}-${TRIPLE}.tar.gz"
+          mkdir -p pgdist out
+          tar -xzf pg.tar.gz -C pgdist --strip-components=1
           echo "PG_CONFIG=$PWD/pgdist/bin/pg_config" >> "$GITHUB_ENV"
-
-      - name: Build & install pgvector
-        run: |
           git clone --depth 1 --branch "v${PGVECTOR_VERSION}" https://github.com/pgvector/pgvector.git
-          make -C pgvector PG_CONFIG="$PG_CONFIG"
-          make -C pgvector PG_CONFIG="$PG_CONFIG" install
 
-      - name: Package artifact
+      - name: Build and exercise portable extension
         run: |
-          LIBDIR=$("$PG_CONFIG" --pkglibdir)
-          EXTDIR=$("$PG_CONFIG" --sharedir)/extension
-          mkdir -p out
-          cp "$LIBDIR/vector.so" out/
-          cp "$EXTDIR"/vector.control "$EXTDIR"/vector--*.sql out/
+          docker run --rm -i --env PG_CONFIG --env HOST_UID="$(id -u)" \
+            --volume "$PWD:$PWD" --workdir "$PWD" \
+            "${{ matrix.target.image }}" sh -s <<'CONTAINER'
+          set -eu
+          if command -v apk >/dev/null; then
+            apk add --no-cache build-base libxml2-dev perl
+            adduser -D -u "$HOST_UID" pgvector
+          else
+            apt-get -o Acquire::Retries=5 update
+            apt-get -o Acquire::Retries=5 install -y --no-install-recommends build-essential libxml2-dev
+            useradd -u "$HOST_UID" -M -s /bin/sh pgvector
+          fi
+          su pgvector -s /bin/sh -c '
+            set -eu
+            make -C pgvector PG_CONFIG="$PG_CONFIG" OPTFLAGS="" with_llvm=no
+            make -C pgvector PG_CONFIG="$PG_CONFIG" OPTFLAGS="" with_llvm=no install
+            sh .github/scripts/check-pgvector.sh
+            LIBDIR=$("$PG_CONFIG" --pkglibdir)
+            EXTDIR=$("$PG_CONFIG" --sharedir)/extension
+            cp "$LIBDIR/vector.so" out/
+            cp "$EXTDIR"/vector.control "$EXTDIR"/vector--*.sql out/
+          '
+          CONTAINER
           (cd out && zip -j "pgvector_compiled.zip" vector.so vector.control vector--*.sql)
 
       - uses: actions/upload-artifact@v7
         with:
-          name: pgvector-linux-${{ matrix.target.arch }}-pg${{ matrix.pg_major }}
+          name: pgvector-linux-${{ matrix.target.libc }}-${{ matrix.target.arch }}-pg${{ matrix.pg_major }}
           retention-days: 1
           path: out/pgvector_compiled.zip
 
@@ -120,8 +134,8 @@ jobs:
           # theseus's pg_config bakes an -isysroot for its build-time Xcode SDK, which is absent on
           # the runner; point PGXS at the runner's actual SDK so system headers (stdio.h) resolve.
           SDK="$(xcrun --show-sdk-path)"
-          make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK"
-          make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK" install
+          make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK" OPTFLAGS="" with_llvm=no
+          make -C pgvector PG_CONFIG="$PG_CONFIG" PG_SYSROOT="$SDK" OPTFLAGS="" with_llvm=no install
 
       - name: Package artifact
         run: |
@@ -170,14 +184,26 @@ jobs:
           echo "PGROOT=$PWD/pgdist" >> "$GITHUB_ENV"
           echo "PGROOT_WIN=$(cygpath -w "$PWD/pgdist")" >> "$GITHUB_ENV"
 
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Build pgvector (MSVC nmake)
         shell: cmd
         run: |
           git clone --depth 1 --branch "v%PGVECTOR_VERSION%" https://github.com/pgvector/pgvector.git
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          rem Meson distributions name the same server import library postgres.exe.lib.
+          set "LIB=%PGROOT_WIN%\lib;%LIB%"
+          set "POSTGRES_LIB=postgres.lib"
+          if not exist "%PGROOT_WIN%\lib\%POSTGRES_LIB%" set "POSTGRES_LIB=postgres.exe.lib"
+          if not exist "%PGROOT_WIN%\lib\%POSTGRES_LIB%" (
+            echo PostgreSQL import library missing from "%PGROOT_WIN%\lib"
+            exit /b 1
+          )
           cd pgvector
-          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%"
-          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%" install
+          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%" LIBS=%POSTGRES_LIB%
+          nmake /NOLOGO /F Makefile.win PGROOT="%PGROOT_WIN%" LIBS=%POSTGRES_LIB% install
 
       - name: Package artifact
         shell: bash
@@ -193,7 +219,7 @@ jobs:
           retention-days: 1
           path: out/pgvector_compiled.zip
 
-  # ─── Upload all 12 artifacts to S3 (versioned + latest), then invalidate CloudFront ───
+  # ─── Upload all artifacts to S3 (versioned + latest), then invalidate CloudFront ───
   upload:
     needs: [build-linux, build-darwin, build-windows]
     if: ${{ !inputs.dry_run }}
@@ -214,13 +240,13 @@ jobs:
 
       - name: Upload to S3 (versioned + latest)
         run: |
-          # Artifact names encode the axes: pgvector-<os>-<arch>-pg<major>. Re-key each one to
+          # Artifact names encode the axes: pgvector-<os[-libc]>-<arch>-pg<major>. Re-key each one to
           # the path the manager fetches, publishing both the pinned and the moving aliases.
           for dir in ./artifacts/pgvector-*; do
-            name=$(basename "$dir")                      # pgvector-linux-x86_64-pg17
-            rest=${name#pgvector-}                        # linux-x86_64-pg17
+            name=$(basename "$dir")                      # pgvector-linux-gnu-x86_64-pg17
+            rest=${name#pgvector-}                        # linux-gnu-x86_64-pg17
             major=${rest##*-pg}                           # 17
-            osarch=${rest%-pg*}                           # linux-x86_64
+            osarch=${rest%-pg*}                           # linux-gnu-x86_64
             src="$dir/pgvector_compiled.zip"
             for prefix in "v${PGVECTOR_VERSION}" latest; do
               aws s3 cp "$src" \
