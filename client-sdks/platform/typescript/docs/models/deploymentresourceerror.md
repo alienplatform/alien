@@ -14,10 +14,9 @@ in distributed systems.
 import { DeploymentResourceError } from "@alienplatform/platform-api/models";
 
 let value: DeploymentResourceError = {
-  code: "RESOURCE_UNAVAILABLE",
+  code: "<value>",
   internal: false,
-  message: "Resource is temporarily unavailable",
-  retryable: true,
+  message: "<value>",
 };
 ```
 

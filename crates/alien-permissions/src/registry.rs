@@ -499,6 +499,8 @@ mod tests {
 
     fn storage(remote_access: bool) -> ResourceEntry {
         ResourceEntry {
+            display_name: None,
+            description: None,
             enabled_when: None,
             config: Resource::new(Storage::new("assets".to_string()).build()),
             dependencies: Vec::new(),
