@@ -7,17 +7,18 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::dynamodb::{
     attribute_types, billing_modes, key_types, table_status, AttributeDefinition,
-    CreateTableRequest, DeleteTableRequest, DescribeTableRequest, DescribeTimeToLiveRequest,
-    KeySchemaElement, TableDescription, Tag, TimeToLiveDescription, TimeToLiveSpecification,
-    UpdateTimeToLiveRequest,
+    CreateTableRequest, DeleteTableRequest, DescribeContinuousBackupsRequest, DescribeTableRequest,
+    DescribeTimeToLiveRequest, KeySchemaElement, PointInTimeRecoverySpecification,
+    TableDescription, Tag, TimeToLiveDescription, TimeToLiveSpecification,
+    UpdateContinuousBackupsRequest, UpdateTimeToLiveRequest,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     standard_resource_tags, AwsDynamoDbKeySchemaElement, AwsDynamoDbKvHeartbeatData,
     HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
-    HeartbeatIssueSeverity, Kv, KvHeartbeatData, KvHeartbeatStatus, KvOutputs, ObservedHealth,
-    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus,
+    HeartbeatIssueSeverity, InitialSetupAuthority, Kv, KvHeartbeatData, KvHeartbeatStatus,
+    KvOutputs, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -265,9 +266,37 @@ impl AwsKvController {
         info!(kv=%config.id, "Successfully applied resource-scoped permissions");
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: EnablingPitr,
             suggested_delay: None,
         })
+    }
+
+    #[handler(state = EnablingPitr, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn enabling_pitr(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ensure_pitr(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: WaitingForPitr,
+            suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    #[handler(state = WaitingForPitr, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn waiting_for_pitr(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.wait_for_pitr(ctx).await
+    }
+
+    #[handler(state = UpdateWaitingForPitr, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn update_waiting_for_pitr(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.wait_for_pitr(ctx).await
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -357,6 +386,14 @@ impl AwsKvController {
             }
         }
 
+        if !self.pitr_enabled(ctx).await? {
+            self.require_pitr_authority(ctx)?;
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -364,7 +401,7 @@ impl AwsKvController {
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────
-    // KV has no mutable fields — update is a no-op that also recovers RefreshFailed.
+    // Reconcile protection for existing tables, including checkpoints from older versions.
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(
         state = UpdateStart,
@@ -372,11 +409,10 @@ impl AwsKvController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<Kv>()?;
-        info!(id=%config.id, "AWS KV update (no-op — no mutable fields)");
+        self.ensure_pitr(ctx).await?;
         Ok(HandlerAction::Continue {
-            state: Ready,
-            suggested_delay: None,
+            state: UpdateWaitingForPitr,
+            suggested_delay: Some(Duration::from_secs(5)),
         })
     }
 
@@ -573,6 +609,91 @@ impl AwsKvController {
 
 // Separate impl block for helper methods
 impl AwsKvController {
+    fn require_pitr_authority(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let config = ctx.desired_resource_config::<Kv>()?;
+        let frozen = ctx
+            .desired_stack
+            .resources
+            .get(&config.id)
+            .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen);
+        if frozen && ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "DynamoDB point-in-time recovery is disabled; rerun setup to repair this Frozen table".into(),
+            }));
+        }
+        Ok(())
+    }
+
+    fn required_table_name(&self, ctx: &ResourceControllerContext<'_>) -> Result<&str> {
+        self.table_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(ctx.desired_config.id().to_string()),
+                message: "Table name not set in state".into(),
+            })
+        })
+    }
+
+    async fn pitr_enabled(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let table_name = self.required_table_name(ctx)?;
+        let client = ctx
+            .service_provider
+            .get_aws_dynamodb_client(ctx.get_aws_config()?)
+            .await?;
+        let response = client
+            .describe_continuous_backups(DescribeContinuousBackupsRequest {
+                table_name: table_name.to_string(),
+            })
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read point-in-time recovery for table '{table_name}'"),
+                resource_id: Some(ctx.desired_config.id().to_string()),
+            })?;
+        Ok(response.point_in_time_recovery_enabled())
+    }
+
+    async fn ensure_pitr(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        // Reread on every retry: a previous update may have succeeded with a lost response.
+        // An unchanged Frozen table needs only heartbeat permissions.
+        if self.pitr_enabled(ctx).await? {
+            return Ok(());
+        }
+        self.require_pitr_authority(ctx)?;
+        let table_name = self.required_table_name(ctx)?;
+        let client = ctx
+            .service_provider
+            .get_aws_dynamodb_client(ctx.get_aws_config()?)
+            .await?;
+        client
+            .update_continuous_backups(UpdateContinuousBackupsRequest {
+                table_name: table_name.to_string(),
+                point_in_time_recovery_specification: PointInTimeRecoverySpecification {
+                    point_in_time_recovery_enabled: true,
+                },
+            })
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to enable point-in-time recovery for table '{table_name}'"
+                ),
+                resource_id: Some(ctx.desired_config.id().to_string()),
+            })?;
+        Ok(())
+    }
+
+    async fn wait_for_pitr(&self, ctx: &ResourceControllerContext<'_>) -> Result<AwsKvHandlerAction> {
+        if !self.pitr_enabled(ctx).await? {
+            return Ok(AwsKvHandlerAction::Stay {
+                max_times: Some(60),
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+        Ok(AwsKvHandlerAction::Continue {
+            state: AwsKvState::Ready,
+            suggested_delay: None,
+        })
+    }
+
     fn clear_state(&mut self) {
         self.table_name = None;
         self.table_arn = None;
@@ -692,4 +813,266 @@ fn region_from_table_arn(table_arn: Option<&str>) -> Option<String> {
         .and_then(|arn| arn.split(':').nth(3))
         .filter(|region| !region.is_empty())
         .map(ToString::to_string)
+}
+
+#[cfg(test)]
+mod pitr_tests {
+    use super::*;
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use alien_aws_clients::dynamodb::{ContinuousBackupsResponse, MockDynamoDbApi};
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct ProviderState {
+        enabled: bool,
+        writes: usize,
+        lost_response: bool,
+        denied: bool,
+        exists: bool,
+    }
+
+    fn model(state: Arc<Mutex<ProviderState>>) -> Arc<MockPlatformServiceProvider> {
+        let mut client = MockDynamoDbApi::new();
+        let read_state = state.clone();
+        client.expect_describe_continuous_backups().returning(move |_| {
+            let state = read_state.lock().unwrap();
+            Ok(serde_json::from_value::<ContinuousBackupsResponse>(json!({
+                "ContinuousBackupsDescription": {
+                    "ContinuousBackupsStatus": "ENABLED",
+                    "PointInTimeRecoveryDescription": {
+                        "PointInTimeRecoveryStatus": if state.enabled { "ENABLED" } else { "DISABLED" }
+                    }
+                }
+            })).unwrap())
+        });
+        let write_state = state.clone();
+        client
+            .expect_update_continuous_backups()
+            .returning(move |request| {
+                assert!(
+                    request
+                        .point_in_time_recovery_specification
+                        .point_in_time_recovery_enabled
+                );
+                let mut state = write_state.lock().unwrap();
+                state.writes += 1;
+                if state.denied {
+                    return Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                        resource_type: "Table".into(),
+                        resource_name: request.table_name,
+                    }));
+                }
+                state.enabled = true;
+                if state.lost_response {
+                    state.lost_response = false;
+                    return Err(AlienError::new(
+                        CloudClientErrorData::RemoteServiceUnavailable {
+                            message: "response lost after enable".into(),
+                        },
+                    ));
+                }
+                // A successful command response is deliberately not readiness evidence.
+                Ok(
+                    serde_json::from_value(json!({"ContinuousBackupsDescription": {
+                        "ContinuousBackupsStatus": "ENABLED"
+                    }}))
+                    .unwrap(),
+                )
+            });
+        let create_state = state.clone();
+        client.expect_create_table().returning(move |request| {
+            create_state.lock().unwrap().exists = true;
+            Ok(serde_json::from_value(
+                json!({"TableDescription": {"TableName": request.table_name}}),
+            )
+            .unwrap())
+        });
+        let describe_state = state.clone();
+        client.expect_describe_table().returning(move |request| {
+            if !describe_state.lock().unwrap().exists {
+                return Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "Table".into(),
+                        resource_name: request.table_name,
+                    },
+                ));
+            }
+            Ok(serde_json::from_value(json!({"Table": {
+                "TableName": request.table_name,
+                "TableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-kv",
+                "TableStatus": "ACTIVE"
+            }}))
+            .unwrap())
+        });
+        client
+            .expect_update_time_to_live()
+            .returning(|_| Ok(serde_json::from_value(json!({})).unwrap()));
+        client
+            .expect_describe_time_to_live()
+            .returning(|_| Ok(serde_json::from_value(json!({})).unwrap()));
+        client.expect_delete_table().returning(move |_| {
+            state.lock().unwrap().exists = false;
+            Ok(serde_json::from_value(json!({"TableDescription": {}})).unwrap())
+        });
+        let client = Arc::new(client);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_dynamodb_client()
+            .returning(move |_| Ok(client.clone()));
+        Arc::new(provider)
+    }
+
+    fn checkpoint(state: AwsKvState) -> AwsKvController {
+        let controller = AwsKvController {
+            state,
+            table_name: Some("test-kv".into()),
+            table_arn: Some("arn:aws:dynamodb:us-east-1:123456789012:table/test-kv".into()),
+            _internal_stay_count: None,
+        };
+        serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap()
+    }
+
+    async fn executor(
+        controller: AwsKvController,
+        state: Arc<Mutex<ProviderState>>,
+        lifecycle: ResourceLifecycle,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(Kv::new("kv".into()).build())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_lifecycle(lifecycle)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .service_provider(model(state))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_readback_refresh_repair_update_and_delete() {
+        let state = Arc::new(Mutex::new(ProviderState::default()));
+        let mut executor = executor(
+            AwsKvController::default(),
+            state.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(state.lock().unwrap().enabled);
+        assert_eq!(state.lock().unwrap().writes, 1);
+        assert!(executor.outputs().is_some());
+        state.lock().unwrap().enabled = false;
+        executor.step().await.unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert!(state.lock().unwrap().enabled);
+        assert_eq!(state.lock().unwrap().writes, 2);
+        executor.update(Kv::new("kv".into()).build()).unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(
+            state.lock().unwrap().writes,
+            2,
+            "unchanged update must not write"
+        );
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert!(!state.lock().unwrap().exists);
+    }
+
+    #[tokio::test]
+    async fn lost_response_resume_rereads_before_writing() {
+        let state = Arc::new(Mutex::new(ProviderState {
+            lost_response: true,
+            exists: true,
+            ..Default::default()
+        }));
+        let mut run = executor(
+            checkpoint(AwsKvState::EnablingPitr),
+            state.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+        assert!(run.step().await.is_err());
+        let saved = run.internal_state::<AwsKvController>().unwrap();
+        let restored = serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+        let mut resumed = executor(restored, state.clone(), ResourceLifecycle::Live).await;
+        resumed.run_until_terminal().await.unwrap();
+        assert_eq!(resumed.status(), ResourceStatus::Running);
+        assert_eq!(state.lock().unwrap().writes, 1);
+    }
+
+    #[tokio::test]
+    async fn frozen_saved_mutation_phases_require_setup_but_unchanged_is_noop() {
+        for phase in [
+            AwsKvState::EnablingPitr,
+            AwsKvState::UpdateStart,
+            AwsKvState::Ready,
+        ] {
+            let state = Arc::new(Mutex::new(ProviderState {
+                exists: true,
+                ..Default::default()
+            }));
+            let mut run =
+                executor(checkpoint(phase), state.clone(), ResourceLifecycle::Frozen).await;
+            let error = run.step().await.unwrap_err();
+            assert!(error.to_string().contains("rerun setup"), "{error}");
+            assert_eq!(state.lock().unwrap().writes, 0);
+            state.lock().unwrap().enabled = true;
+            run.step().await.unwrap();
+            run.run_until_terminal().await.unwrap();
+            assert_eq!(run.status(), ResourceStatus::Running);
+            assert_eq!(state.lock().unwrap().writes, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn denied_enable_keeps_identity_for_delete() {
+        let state = Arc::new(Mutex::new(ProviderState {
+            denied: true,
+            exists: true,
+            ..Default::default()
+        }));
+        let mut run = executor(
+            checkpoint(AwsKvState::EnablingPitr),
+            state.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+        assert!(run.step().await.is_err());
+        assert_eq!(
+            run.internal_state::<AwsKvController>()
+                .unwrap()
+                .table_name
+                .as_deref(),
+            Some("test-kv")
+        );
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Deleted);
+        assert!(!state.lock().unwrap().exists);
+    }
+
+    #[tokio::test]
+    async fn saved_wait_never_claims_ready_without_readback() {
+        let state = Arc::new(Mutex::new(ProviderState {
+            exists: true,
+            ..Default::default()
+        }));
+        let mut run = executor(
+            checkpoint(AwsKvState::WaitingForPitr),
+            state.clone(),
+            ResourceLifecycle::Live,
+        )
+        .await;
+        run.step().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Provisioning);
+        assert_eq!(state.lock().unwrap().writes, 0);
+        state.lock().unwrap().enabled = true;
+        run.step().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+    }
 }
