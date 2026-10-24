@@ -3,27 +3,13 @@
  */
 
 import { billingGetEntitlements } from "../funcs/billingGetEntitlements.js";
-import { billingListAuditLog } from "../funcs/billingListAuditLog.js";
+import { billingSync } from "../funcs/billingSync.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Billing extends ClientSDK {
-  /**
-   * List billing activity entries for the current workspace.
-   */
-  async listAuditLog(
-    request?: operations.ListBillingAuditLogRequest | undefined,
-    options?: RequestOptions,
-  ): Promise<operations.ListBillingAuditLogResponse> {
-    return unwrapAsync(billingListAuditLog(
-      this,
-      request,
-      options,
-    ));
-  }
-
   /**
    * Get the workspace billing entitlements used for product feature gates. Autumn is the source of truth; the response is served through the workspace billing read model with stale-cache fallback.
    */
@@ -32,6 +18,20 @@ export class Billing extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.WorkspaceBillingEntitlements> {
     return unwrapAsync(billingGetEntitlements(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Refresh the workspace billing entitlements from Autumn now, for example right after checkout, instead of waiting for Autumn's billing webhook. Workspace admins only. Calls within a few seconds share one refresh.
+   */
+  async sync(
+    request?: operations.SyncWorkspaceBillingRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.WorkspaceBillingEntitlements> {
+    return unwrapAsync(billingSync(
       this,
       request,
       options,

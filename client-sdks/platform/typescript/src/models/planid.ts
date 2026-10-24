@@ -8,8 +8,8 @@ import { ClosedEnum } from "../types/enums.js";
 export const PlanId = {
   Starter: "starter",
   Pro: "pro",
-  ProAnnual: "pro_annual",
   Enterprise: "enterprise",
+  Internal: "internal",
 } as const;
 export type PlanId = ClosedEnum<typeof PlanId>;
 

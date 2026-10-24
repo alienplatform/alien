@@ -515,3 +515,22 @@ const deploymentInfoAliases = ["Heartbeats", "Telemetry", "Updates"].flatMap(nam
   `export { SetupUpdate${name}$inboundSchema as DeploymentInfo${name}$inboundSchema };`,
 ]);
 await writeFile(deploymentInfoUrl, `${deploymentInfoSource}${deploymentInfoMarker}${deploymentInfoAliases.join("\n")}\n`);
+
+// A second inline Kubernetes secret endpoint numbers the existing external
+// binding endpoint models. Preserve their published names at both root and deep
+// import paths.
+const externalBindingUrl = new URL("externalbindingunion.ts", models);
+const externalBindingMarker = "\n// Published external-binding endpoint compatibility exports.\n";
+const externalBindingSource = (await readFile(externalBindingUrl, "utf8")).split(externalBindingMarker)[0];
+const externalBindingAliases = ["EndpointSecretRef", "ExternalBindingEndpoint"].flatMap(name => {
+  const serializer = name[0].toLowerCase() + name.slice(1);
+  return [
+    `export type { ${name}1 as ${name} };`,
+    `export type { ${name}1$Outbound as ${name}$Outbound };`,
+    `export { ${name}1$inboundSchema as ${name}$inboundSchema };`,
+    `export { ${name}1$outboundSchema as ${name}$outboundSchema };`,
+    `export { ${serializer}1FromJSON as ${serializer}FromJSON };`,
+    `export { ${serializer}1ToJSON as ${serializer}ToJSON };`,
+  ];
+});
+await writeFile(externalBindingUrl, `${externalBindingSource}${externalBindingMarker}${externalBindingAliases.join("\n")}\n`);

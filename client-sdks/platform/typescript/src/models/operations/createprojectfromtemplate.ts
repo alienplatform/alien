@@ -101,6 +101,10 @@ export type CreateProjectFromTemplateCloudformationRequest = {
    * Human-friendly application name shown in generated install artifacts
    */
   displayName?: string | null | undefined;
+  /**
+   * Require AWS External ID. When true, AWS setup templates require the ManagementExternalId parameter (every install and update must enter the deployment group's ExternalId) and, on a hosted manager, accept only its management roles as ManagingRoleArn. Applies to packages built after the change. Missing means false; new projects are created with true.
+   */
+  requireManagementExternalId?: boolean | undefined;
 };
 
 /**
@@ -330,6 +334,10 @@ export type CreateProjectFromTemplateDeploymentPortalAppearance = {
    */
   avatarUrl?: string | null | undefined;
   /**
+   * Optional browser icon override for the deployment portal.
+   */
+  faviconUrl?: string | null | undefined;
+  /**
    * Curated visual style for the deployment portal.
    */
   preset: models.DeploymentPortalAppearancePreset;
@@ -426,6 +434,10 @@ export type CreateProjectFromTemplateCloudformationResponse = {
    * Human-friendly application name shown in generated install artifacts
    */
   displayName?: string | null | undefined;
+  /**
+   * Require AWS External ID. When true, AWS setup templates require the ManagementExternalId parameter (every install and update must enter the deployment group's ExternalId) and, on a hosted manager, accept only its management roles as ManagingRoleArn. Applies to packages built after the change. Missing means false; new projects are created with true.
+   */
+  requireManagementExternalId?: boolean | undefined;
 };
 
 /**
@@ -891,6 +903,7 @@ export function createProjectFromTemplateCliRequestToJSON(
 export type CreateProjectFromTemplateCloudformationRequest$Outbound = {
   enabled: boolean;
   displayName?: string | null | undefined;
+  requireManagementExternalId?: boolean | undefined;
 };
 
 /** @internal */
@@ -901,6 +914,7 @@ export const CreateProjectFromTemplateCloudformationRequest$outboundSchema:
   > = z.object({
     enabled: z.boolean(),
     displayName: z.nullable(z.string()).optional(),
+    requireManagementExternalId: z.boolean().optional(),
   });
 
 export function createProjectFromTemplateCloudformationRequestToJSON(
@@ -1323,6 +1337,7 @@ export const CreateProjectFromTemplateDeploymentPortalAppearance$inboundSchema:
   z.ZodType<CreateProjectFromTemplateDeploymentPortalAppearance, unknown> = z
     .object({
       avatarUrl: z.nullable(z.string()).optional(),
+      faviconUrl: z.nullable(z.string()).optional(),
       preset: models.DeploymentPortalAppearancePreset$inboundSchema.default(
         "clean",
       ),
@@ -1390,6 +1405,7 @@ export const CreateProjectFromTemplateCloudformationResponse$inboundSchema:
     .object({
       enabled: z.boolean(),
       displayName: z.nullable(z.string()).optional(),
+      requireManagementExternalId: z.boolean().optional(),
     });
 
 export function createProjectFromTemplateCloudformationResponseFromJSON(

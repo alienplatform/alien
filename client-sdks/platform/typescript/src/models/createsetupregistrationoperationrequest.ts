@@ -1550,6 +1550,10 @@ export type CreateSetupRegistrationOperationRequest = {
   deploymentId?: string | null | undefined;
   idempotencyKey?: string | undefined;
   cloudFormation?: SetupRegistrationCloudFormationTarget | null | undefined;
+  /**
+   * ManagementExternalId the stack was created or updated with. Absent when the template predates the parameter; empty when the installer left it blank. Compared with the deployment group's value and never stored.
+   */
+  managementExternalId?: string | undefined;
 };
 
 /** @internal */
@@ -4810,6 +4814,7 @@ export type CreateSetupRegistrationOperationRequest$Outbound = {
     | SetupRegistrationCloudFormationTarget$Outbound
     | null
     | undefined;
+  managementExternalId?: string | undefined;
 };
 
 /** @internal */
@@ -4829,6 +4834,7 @@ export const CreateSetupRegistrationOperationRequest$outboundSchema: z.ZodType<
   cloudFormation: z.nullable(
     SetupRegistrationCloudFormationTarget$outboundSchema,
   ).optional(),
+  managementExternalId: z.string().optional(),
 });
 
 export function createSetupRegistrationOperationRequestToJSON(

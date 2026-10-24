@@ -20,8 +20,14 @@ export type GetDynamicContainerLogsRequest = {
    */
   id: string;
   name: string;
+  /**
+   * Minutes of logs to read, ending now. Ignored with a cursor.
+   */
   sinceMinutes?: number | undefined;
   limit?: number | undefined;
+  /**
+   * nextCursor from the previous page. It keeps that page's time window.
+   */
   cursor?: string | undefined;
 };
 
@@ -41,6 +47,10 @@ export type GetDynamicContainerLogsResponse = {
   nextCursor: string | null;
   partial: boolean;
   errorCount: number;
+  /**
+   * True when the cursor had expired, so this page is the first page again with a fresh cursor. Pages read earlier may overlap it; start over from this page.
+   */
+  cursorRestarted: boolean;
 };
 
 /** @internal */
@@ -102,6 +112,7 @@ export const GetDynamicContainerLogsResponse$inboundSchema: z.ZodType<
   nextCursor: z.nullable(z.string()),
   partial: z.boolean(),
   errorCount: z.number(),
+  cursorRestarted: z.boolean(),
 });
 
 export function getDynamicContainerLogsResponseFromJSON(

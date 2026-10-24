@@ -528,3 +528,15 @@ test("execution and target configs retain saved quota overrides and explicit cle
     }
   }
 });
+
+test("published external-binding endpoint models retain root and deep imports", async () => {
+  const endpoint = { secretRef: { name: "queue-endpoint", key: "url" } };
+  for (const path of ["index", "externalbindingunion"]) {
+    const models = await import(`../typescript/esm/models/${path}.js`);
+    assert.deepEqual(models.ExternalBindingEndpoint$inboundSchema.parse(endpoint), endpoint);
+    assert.deepEqual(JSON.parse(models.externalBindingEndpointToJSON(endpoint)), endpoint);
+    assert.deepEqual(models.externalBindingEndpointFromJSON(JSON.stringify(endpoint)), { ok: true, value: endpoint });
+    assert.deepEqual(models.EndpointSecretRef$outboundSchema.parse(endpoint.secretRef), endpoint.secretRef);
+    assert.deepEqual(models.endpointSecretRefFromJSON(JSON.stringify(endpoint.secretRef)), { ok: true, value: endpoint.secretRef });
+  }
+});

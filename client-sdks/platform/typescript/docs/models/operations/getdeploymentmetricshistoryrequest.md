@@ -1,0 +1,23 @@
+# GetDeploymentMetricsHistoryRequest
+
+## Example Usage
+
+```typescript
+import { GetDeploymentMetricsHistoryRequest } from "@alienplatform/platform-api/models/operations";
+
+let value: GetDeploymentMetricsHistoryRequest = {
+  id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  from: new Date("2026-12-01T10:46:39.122Z"),
+  to: new Date("2024-06-18T01:24:11.616Z"),
+};
+```
+
+## Fields
+
+| Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   | Example                                                                                       |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the deployment.                                                         | dep_0c29fq4a2yjb7kx3smwdgxlc                                                                  |
+| `from`                                                                                        | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `to`                                                                                          | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `service`                                                                                     | *string*                                                                                      | :heavy_minus_sign:                                                                            | Resource ID of the service.                                                                   |                                                                                               |
+| `replica`                                                                                     | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |

@@ -5,11 +5,11 @@
 ```typescript
 import { PlanId } from "@alienplatform/platform-api/models";
 
-let value: PlanId = "pro_annual";
+let value: PlanId = "enterprise";
 ```
 
 ## Values
 
 ```typescript
-"starter" | "pro" | "pro_annual" | "enterprise"
+"starter" | "pro" | "enterprise" | "internal"
 ```

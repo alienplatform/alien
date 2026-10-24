@@ -12,6 +12,7 @@ import { deploymentGroupsEnsureDeploymentGroupByExternalId } from "../funcs/depl
 import { deploymentGroupsEnsureDeploymentGroupByName } from "../funcs/deploymentGroupsEnsureDeploymentGroupByName.js";
 import { deploymentGroupsGetDeploymentGroup } from "../funcs/deploymentGroupsGetDeploymentGroup.js";
 import { deploymentGroupsGetDeploymentGroupByExternalId } from "../funcs/deploymentGroupsGetDeploymentGroupByExternalId.js";
+import { deploymentGroupsGetDeploymentGroupManagementExternalId } from "../funcs/deploymentGroupsGetDeploymentGroupManagementExternalId.js";
 import { deploymentGroupsGetExternalAIBinding } from "../funcs/deploymentGroupsGetExternalAIBinding.js";
 import { deploymentGroupsGetExternalAIModelCheck } from "../funcs/deploymentGroupsGetExternalAIModelCheck.js";
 import { deploymentGroupsListDeploymentGroups } from "../funcs/deploymentGroupsListDeploymentGroups.js";
@@ -174,6 +175,23 @@ export class DeploymentGroups extends ClientSDK {
       this,
       id,
       createDeploymentGroupTokenRequest,
+      options,
+    ));
+  }
+
+  /**
+   * Get the AWS ExternalId for this deployment group
+   *
+   * @remarks
+   * Returns the value to enter as the ManagementExternalId parameter when installing or updating this group's CloudFormation or Terraform setup from a template file. The management roles require it as sts:ExternalId. Requires the same permission as creating a setup link.
+   */
+  async getDeploymentGroupManagementExternalId(
+    request: operations.GetDeploymentGroupManagementExternalIdRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentGroupManagementExternalIdResponse> {
+    return unwrapAsync(deploymentGroupsGetDeploymentGroupManagementExternalId(
+      this,
+      request,
       options,
     ));
   }

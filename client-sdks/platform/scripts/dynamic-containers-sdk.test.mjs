@@ -26,7 +26,7 @@ test("generated dynamic container client sends a scoped write and parses status"
       if (new URL(request.url).pathname.endsWith("/logs"))
         return Response.json({
           logs: [{ timestamp: "2026-09-26T00:00:00.000Z", level: "info", message: "ready", replicaId: "replica-1" }],
-          numHits: 1, nextCursor: null, partial: false, errorCount: 0,
+          numHits: 1, nextCursor: null, partial: false, errorCount: 0, cursorRestarted: false,
         })
       if (request.method === "GET" && new URL(request.url).pathname.endsWith("/dynamic-containers"))
         return Response.json([container])
@@ -61,6 +61,7 @@ test("generated dynamic container client sends a scoped write and parses status"
   assert.equal(listed[0].name, "agent")
   const logs = await sdk.dynamicContainers.logs({ id: "dep_example", name: "agent", limit: 10 })
   assert.equal(logs.logs[0]?.message, "ready")
+  assert.equal(logs.cursorRestarted, false)
   assert.equal(new URL(requests.at(-1).url).pathname, "/v1/deployments/dep_example/dynamic-containers/agent/logs")
   assert.equal(new URL(requests.at(-1).url).searchParams.get("limit"), "10")
   const deleted = await sdk.dynamicContainers.delete({ id: "dep_example", name: "agent" })

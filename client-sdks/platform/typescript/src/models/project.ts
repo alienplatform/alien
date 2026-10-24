@@ -54,6 +54,10 @@ export type ProjectDeploymentPortalAppearance = {
    */
   avatarUrl?: string | null | undefined;
   /**
+   * Optional browser icon override for the deployment portal.
+   */
+  faviconUrl?: string | null | undefined;
+  /**
    * Curated visual style for the deployment portal.
    */
   preset: DeploymentPortalAppearancePreset;
@@ -146,6 +150,10 @@ export type ProjectCloudformation = {
    * Human-friendly application name shown in generated install artifacts
    */
   displayName?: string | null | undefined;
+  /**
+   * Require AWS External ID. When true, AWS setup templates require the ManagementExternalId parameter (every install and update must enter the deployment group's ExternalId) and, on a hosted manager, accept only its management roles as ManagingRoleArn. Applies to packages built after the change. Missing means false; new projects are created with true.
+   */
+  requireManagementExternalId?: boolean | undefined;
 };
 
 /**
@@ -515,6 +523,7 @@ export const ProjectDeploymentPortalAppearance$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   avatarUrl: z.nullable(z.string()).optional(),
+  faviconUrl: z.nullable(z.string()).optional(),
   preset: DeploymentPortalAppearancePreset$inboundSchema.default("clean"),
   accentColor: DeploymentPortalAccentColor$inboundSchema.default("blue"),
   title: z.nullable(z.string()).optional(),
@@ -565,6 +574,7 @@ export const ProjectCloudformation$inboundSchema: z.ZodType<
 > = z.object({
   enabled: z.boolean(),
   displayName: z.nullable(z.string()).optional(),
+  requireManagementExternalId: z.boolean().optional(),
 });
 
 export function projectCloudformationFromJSON(

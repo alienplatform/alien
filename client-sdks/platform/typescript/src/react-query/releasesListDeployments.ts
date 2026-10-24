@@ -108,6 +108,9 @@ export function setReleasesListDeploymentsData(
     parameters: {
       state?: Array<models.ReleaseRolloutState> | undefined;
       deploymentGroup?: string | undefined;
+      channel?: string | undefined;
+      effectScope?: operations.EffectScope | undefined;
+      effect?: models.PromotionEffect | undefined;
       limit?: number | undefined;
       cursor?: string | undefined;
     },
@@ -127,6 +130,9 @@ export function invalidateReleasesListDeployments(
       parameters: {
         state?: Array<models.ReleaseRolloutState> | undefined;
         deploymentGroup?: string | undefined;
+        channel?: string | undefined;
+        effectScope?: operations.EffectScope | undefined;
+        effect?: models.PromotionEffect | undefined;
         limit?: number | undefined;
         cursor?: string | undefined;
       },

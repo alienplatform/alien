@@ -12,6 +12,9 @@ export type BillingLimits = {
   maxProjects: number | null;
   maxSeats: number | null;
   maxCustomDomains: number | null;
+  /**
+   * Deprecated. Always null: no plan includes a usage credit.
+   */
   creditUsd: number | null;
   seatsIncluded: number | null;
 };

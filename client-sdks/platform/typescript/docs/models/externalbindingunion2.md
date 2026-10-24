@@ -57,3 +57,12 @@ const value: models.ExternalBindingLocalQueue = {
 };
 ```
 
+### `models.ExternalBindingLocalQueueHTTP`
+
+```typescript
+const value: models.ExternalBindingLocalQueueHTTP = {
+  endpoint: "<value>",
+  service: "local-queue-http",
+  type: "queue",
+};
+```
