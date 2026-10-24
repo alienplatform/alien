@@ -220,8 +220,11 @@ for platform in "${platform_list[@]}"; do
   # the root agent verified its non-root exec identity and the bind took. A dead
   # container's log reads the same, so the inspect is what makes the line mean it still.
   status=0
-  # Bootstrap needs mount administration; the agent drops it before image code.
-  container=$(timeout -k 5 60 docker run -d --cap-add SYS_ADMIN --platform "$platform" "$image") || status=$?
+  # Bootstrap protects its files with private bind mounts before dropping SYS_ADMIN.
+  # Docker default AppArmor denies those mounts independently of the capability;
+  # this guest-image probe needs the same mount access as the supported VM boot.
+  container=$(timeout -k 5 60 docker run -d --cap-add SYS_ADMIN \
+    --security-opt apparmor=unconfined --platform "$platform" "$image") || status=$?
   case "$status" in
     0) ;;
     124|137)
