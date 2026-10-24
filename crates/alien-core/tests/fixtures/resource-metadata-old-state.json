@@ -1,0 +1,19 @@
+{
+  "platform": "aws",
+  "resources": {
+    "documents": {
+      "type": "storage",
+      "status": "pending",
+      "config": {
+        "corsAllowedOrigins": [],
+        "id": "documents",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false
+      },
+      "lifecycle": "frozen"
+    }
+  },
+  "resourcePrefix": "old-document"
+}
