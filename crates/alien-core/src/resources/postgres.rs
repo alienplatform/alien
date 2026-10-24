@@ -92,11 +92,16 @@ impl Postgres {
     }
 
     /// Requested memory in GiB. Binary and decimal units retain their meanings;
-    /// plain numbers denote bytes, as in other resource quantities.
+    /// memory requires an explicit unit so legacy GiB numbers cannot become bytes.
     pub fn requested_memory_gib(&self) -> Result<Option<f64>> {
         self.memory
             .as_deref()
-            .map(|value| self.size_gib("memory", value))
+            .map(|value| {
+                if value.trim().parse::<f64>().is_ok() {
+                    return Err(self.invalid_size("memory", value));
+                }
+                self.size_gib("memory", value)
+            })
             .transpose()
     }
 
@@ -119,7 +124,14 @@ impl Postgres {
     fn invalid_size(&self, field: &str, value: &str) -> alien_error::AlienError<ErrorData> {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("Postgres {field} sizing"),
-            reason: format!("'{value}' must be a positive finite resource quantity"),
+            reason: format!(
+                "'{value}' must be a positive finite resource quantity{}",
+                if field == "memory" {
+                    " with an explicit unit, such as 512Mi or 4Gi"
+                } else {
+                    ""
+                }
+            ),
         })
     }
 
@@ -492,7 +504,6 @@ mod sizing_tests {
             ("8Gi", 8.0, 4.0),
             ("8GiB", 8.0, 4.0),
             ("512Gi", 512.0, 256.0),
-            ("1073741824", 1.0, 1.0),
             ("1GB", 1_000_000_000.0 / 1_073_741_824.0, 1.0),
         ] {
             let pg = Postgres::new("db".into()).memory(quantity.into()).build();
@@ -514,7 +525,16 @@ mod sizing_tests {
     #[test]
     fn sizing_rejects_invalid_nonpositive_nonfinite_and_overflow() {
         for quantity in [
-            "", "0", "0Gi", "-1Gi", "NaNGi", "infGi", "1e100Gi", "8unknown",
+            "",
+            "0",
+            "8",
+            "1073741824",
+            "0Gi",
+            "-1Gi",
+            "NaNGi",
+            "infGi",
+            "1e100Gi",
+            "8unknown",
         ] {
             let pg = Postgres::new("db".into()).memory(quantity.into()).build();
             assert!(pg.requested_memory_gib().is_err(), "{quantity}");
