@@ -63,8 +63,12 @@ export class Postgres extends ResourceBuilder {
   }
 
   /**
-   * Requests memory (e.g. "1Gi", "8Gi"). Drives the size on AWS (the ACU ceiling) and, together
+   * Requests memory (e.g. "2Gi", "8Gi"). Drives the size on AWS (the ACU ceiling) and, together
    * with `cpu`, the tier on GCP and Azure.
+   *
+   * On AWS (Aurora Serverless v2) the ceiling is memory / 2 GiB per ACU, with a minimum of 1 ACU
+   * (about 2 GiB): Aurora rejects a lower maximum capacity, so anything under "2Gi" is sized
+   * up to 1 ACU.
    * @param value The requested memory.
    * @returns The Postgres builder instance.
    */
