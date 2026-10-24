@@ -1790,7 +1790,7 @@ export type DeploymentDetailResponseStackStateResources = {
 };
 
 /**
- * State of infrastructure components managed by this deployment
+ * Deprecated: use resources on the deployment detail response for resource status and errors. Retained for existing consumers.
  */
 export type DeploymentDetailResponseStackState = {
   /**

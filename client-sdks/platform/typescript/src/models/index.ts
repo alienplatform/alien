@@ -127,6 +127,7 @@ export * from "./deploymentpreparedstackapprovalplugins.js";
 export * from "./deploymentprojectinfo.js";
 export * from "./deploymentpurpose.js";
 export * from "./deploymentreleaseinfo.js";
+export * from "./deploymentresource.js";
 export * from "./deploymentrole.js";
 export * from "./deploymentscope.js";
 export * from "./deploymentsetupconfiginput.js";
