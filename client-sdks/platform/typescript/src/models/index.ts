@@ -387,3 +387,4 @@ export * from "./workspaceinvitelink.js";
 export * from "./workspacemember.js";
 export * from "./workspacerole.js";
 export * from "./workspacescope.js";
+export * from "./deploymentresource.js";

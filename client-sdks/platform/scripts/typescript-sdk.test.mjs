@@ -7,7 +7,7 @@ import { APIError } from "../typescript/esm/models/errors/apierror.js";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
 import { deploymentGroupsCreateToken } from "../typescript/esm/funcs/deploymentGroupsCreateToken.js";
-import { OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
+import { DeploymentResource$inboundSchema, OperationsPermissionDiff$inboundSchema } from "../typescript/esm/models/index.js";
 import { deploymentSetupConfigInputToJSON } from "../typescript/esm/models/deploymentsetupconfiginput.js";
 import { deploymentSetupPolicyFromJSON, deploymentSetupPolicyToJSON } from "../typescript/esm/models/deploymentsetuppolicy.js";
 import { newDeploymentRequestToJSON } from "../typescript/esm/models/newdeploymentrequest.js";
@@ -576,4 +576,11 @@ test("published portal appearance types and serializers retain root and deep imp
     assert.deepEqual(models.UpdateProjectDeploymentPortalAppearance$outboundSchema.parse(appearance), appearance);
     assert.deepEqual(JSON.parse(models.updateProjectDeploymentPortalAppearanceToJSON(appearance)), appearance);
   }
+});
+
+test("public resource model parses progress and accepts older managers", () => {
+  const resource = { id: "network", type: "network", status: "provisioning", retryAttempt: 0, error: null };
+  assert.deepEqual(DeploymentResource$inboundSchema.parse(resource), resource);
+  const waiting = { ...resource, progress: "Waiting for the NAT gateway to become available." };
+  assert.deepEqual(DeploymentResource$inboundSchema.parse(waiting), waiting);
 });
