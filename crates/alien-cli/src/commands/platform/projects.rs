@@ -1,4 +1,5 @@
 use super::project_packages::{packages_task, PackageCommand};
+use super::project_portal::{portal_task, PortalCommand};
 use crate::commands::release::{auto_build_settings_for_platform, manager_proxy_push_settings};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -44,6 +45,8 @@ use std::path::{Path, PathBuf};
     alien --workspace my-workspace projects ls
     alien projects packages get my-project --workspace my-workspace --json
     alien projects packages update my-project --workspace my-workspace --file settings.json
+    alien projects portal get my-project --json
+    alien projects portal set my-project --title Acme --accent-color green
     alien projects capabilities status
     alien projects capabilities enable ai --model byo/claude-opus-5
     alien projects capabilities enable encryption
@@ -85,6 +88,11 @@ pub enum ProjectCmd {
         /// Skip the confirmation prompt
         #[arg(long, short = 'y')]
         yes: bool,
+    },
+    /// Manage deployment portal appearance, domain, and Google sign-in
+    Portal {
+        #[command(subcommand)]
+        command: PortalCommand,
     },
     /// Inspect or update installation package settings
     Packages {
@@ -175,6 +183,9 @@ pub enum AiProvider {
 }
 
 pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
+    if let ProjectCmd::Portal { command } = &args.cmd {
+        return portal_task(command, &ctx, args.json).await;
+    }
     if let ProjectCmd::Packages { command } = &args.cmd {
         return packages_task(command, &ctx, args.json).await;
     }
@@ -241,7 +252,7 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
             let (project_id, _) = ctx.resolve_project(project.as_deref(), !args.json).await?;
             get_project_task(&http, workspace_name.as_deref(), &project_id, args.json).await?
         }
-        ProjectCmd::Packages { .. } => {
+        ProjectCmd::Portal { .. } | ProjectCmd::Packages { .. } => {
             unreachable!("package commands are handled before authentication")
         }
         ProjectCmd::Capabilities { command } => {
