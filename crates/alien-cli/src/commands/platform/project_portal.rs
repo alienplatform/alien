@@ -21,6 +21,9 @@ pub enum PortalCommand {
         project: Option<String>,
     },
     /// Merge appearance settings; omitted fields are preserved
+    #[command(
+        long_about = "Merge appearance settings; omitted fields are preserved. The API replaces the full appearance object and does not support conditional writes. Run appearance edits sequentially: concurrent edits from other clients can overwrite each other."
+    )]
     Set(Box<AppearanceArgs>),
     /// Inspect domain status or select an existing verified domain
     Domain {
@@ -285,6 +288,39 @@ async fn project_request(
         })
 }
 
+async fn save_appearance(
+    http: &AuthHttp,
+    workspace: Option<&str>,
+    project: &str,
+    patch: &Map<String, Value>,
+) -> Result<Value> {
+    let response = project_request(http, workspace, project, None).await?;
+    let current = response.get("deploymentPortalAppearance").ok_or_else(|| {
+        AlienError::new(api_error("API response omitted deploymentPortalAppearance"))
+    })?;
+    // This API has no conditional-write or partial-appearance contract. Preserve
+    // fields from this read; concurrent editors still require external coordination.
+    let merged = merge_appearance(current, patch)?;
+    let response = project_request(
+        http,
+        workspace,
+        project,
+        Some(json!({"deploymentPortalAppearance": merged})),
+    )
+    .await?;
+    let saved = response.get("deploymentPortalAppearance").ok_or_else(|| {
+        AlienError::new(api_error("API response omitted deploymentPortalAppearance"))
+    })?;
+    for (field, expected) in patch {
+        if saved.get(field) != Some(expected) {
+            return Err(AlienError::new(api_error(&format!(
+                "The API did not retain appearance field '{field}'. Some settings may have been saved; run `alien projects portal get` and check that the server supports this field."
+            ))));
+        }
+    }
+    Ok(saved.clone())
+}
+
 async fn domain_status(http: &AuthHttp, workspace: Option<&str>, project: &str) -> Result<Value> {
     let mut request = http
         .sdk_client()
@@ -417,33 +453,11 @@ pub async fn portal_task(
             json!({"appearance": appearance, "domain": domain_status(&http, workspace, &project).await?, "googleSignIn": google_settings(&http, workspace, &project, None).await?})
         }
         PortalCommand::Set(_) => {
-            let response = project_request(&http, workspace, &project, None).await?;
-            let current = response.get("deploymentPortalAppearance").ok_or_else(|| {
-                invalid(
-                    "appearance",
-                    "API response omitted deploymentPortalAppearance",
-                )
-            })?;
             let patch =
                 appearance_patch.ok_or_else(|| invalid("set", "Missing appearance patch"))?;
-            let merged = merge_appearance(current, &patch)?;
-            let response = project_request(
-                &http,
-                workspace,
-                &project,
-                Some(json!({"deploymentPortalAppearance": merged})),
-            )
-            .await?;
+            let result = save_appearance(&http, workspace, &project, &patch).await?;
             saved = true;
-            response
-                .get("deploymentPortalAppearance")
-                .cloned()
-                .ok_or_else(|| {
-                    invalid(
-                        "appearance",
-                        "API response omitted deploymentPortalAppearance",
-                    )
-                })?
+            result
         }
         PortalCommand::Domain { domain, unset, .. } => {
             if domain.is_some() || *unset {
@@ -700,6 +714,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refuses_success_when_an_older_server_drops_favicon() {
+        let app = Router::new().route(
+            "/v1/projects/sample",
+            get(|| async { Json(json!({"deploymentPortalAppearance":{"title":"Old"}})) }).patch(
+                |Json(body): Json<Value>| async move {
+                    let mut appearance = body["deploymentPortalAppearance"].clone();
+                    appearance.as_object_mut().unwrap().remove("faviconUrl");
+                    Json(json!({"deploymentPortalAppearance":appearance}))
+                },
+            ),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let http = build_auth_http(
+            client_with_header("Bearer test-key").unwrap(),
+            format!("http://{}", listener.local_addr().unwrap()),
+            None,
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let args = AppearanceArgs {
+            title: Some("Acme".to_string()),
+            favicon_url: Some("https://example.com/favicon.png".to_string()),
+            ..Default::default()
+        };
+        let error = save_appearance(&http, None, "sample", &args.patch().unwrap())
+            .await
+            .expect_err("a discarded favicon must not be reported as saved");
+        assert_eq!(error.code, "API_REQUEST_FAILED");
+        assert!(error.to_string().contains("faviconUrl"));
+        assert!(error
+            .to_string()
+            .contains("Some settings may have been saved"));
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn get_merge_set_preserves_unknown_and_unset_fields() {
         let initial = json!({"title":"Old", "subtitle":"Keep", "accentColor":"purple", "future":{"nested": [1,2]}});
         let state = Arc::new(Mutex::new(initial.clone()));
@@ -730,24 +779,16 @@ mod tests {
             clear: vec!["subtitle".to_string()],
             ..Default::default()
         };
-        let response = project_request(&http, Some("sample-workspace"), "sample", None)
-            .await
-            .unwrap();
-        let merged = merge_appearance(
-            &response["deploymentPortalAppearance"],
-            &args.patch().unwrap(),
-        )
-        .unwrap();
-        let saved = project_request(
+        let saved = save_appearance(
             &http,
             Some("sample-workspace"),
             "sample",
-            Some(json!({"deploymentPortalAppearance":merged})),
+            &args.patch().unwrap(),
         )
         .await
         .unwrap();
         let expected = json!({"title":"Acme", "subtitle":null, "accentColor":"purple", "future":{"nested":[1,2]}});
-        assert_eq!(saved["deploymentPortalAppearance"], expected);
+        assert_eq!(saved, expected);
         assert_eq!(*state.lock().unwrap(), expected);
         server.abort();
     }
