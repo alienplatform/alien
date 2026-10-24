@@ -10,7 +10,7 @@
 //! [`crate::TfRegistry::built_in`]).
 
 use crate::registry::TfRegistry;
-use alien_core::{Result, import::EmitContext};
+use alien_core::{import::EmitContext, Result};
 use hcl::{expr::Expression, structure::Block};
 use indexmap::IndexMap;
 
@@ -36,6 +36,8 @@ pub struct TfFragment {
     /// fragments. Keyed by address, not index, so removals and reordering in
     /// later passes cannot desynchronize the classification.
     shared_addresses: std::collections::HashSet<(String, String)>,
+    /// Durable objects and dependencies detached by the generated retention workflow.
+    retained_addresses: std::collections::HashSet<(String, String)>,
     /// Blocks that carry ANOTHER resource's gate: a grant rendered on behalf
     /// of a resource the deployer can decline, emitted by a shared emitter
     /// (management role, service account) that is itself never gated. The
@@ -139,6 +141,52 @@ impl TfFragment {
             .unwrap_or(false)
     }
 
+    /// Guard selected physical resources and include them in the recovery inventory.
+    /// Access grants must remain managed so uninstall can revoke them.
+    pub fn retain_resources(&mut self, select: impl Fn(&str, &str) -> bool) {
+        for block in &mut self.resource_blocks {
+            let Some((kind, label)) = block_address(block) else {
+                continue;
+            };
+            if !select(&kind, &label) {
+                continue;
+            }
+            let guard = crate::block::attr("prevent_destroy", Expression::Bool(true));
+            if let Some(lifecycle) = block
+                .body
+                .blocks_mut()
+                .find(|block| block.identifier.as_str() == "lifecycle")
+            {
+                lifecycle.body.0.retain(|item| !matches!(item, hcl::Structure::Attribute(attribute) if attribute.key.as_str() == "prevent_destroy"));
+                lifecycle.body.0.push(guard);
+            } else {
+                block.body.0.push(crate::block::nested(crate::block::block(
+                    "lifecycle",
+                    [guard],
+                )));
+            }
+            self.retained_addresses.insert((kind, label));
+        }
+    }
+
+    /// Keep version bookkeeping in the recovery inventory without preventing
+    /// normal replacement, such as a Secrets Manager version during rotation.
+    /// The durable parent resource must be protected separately.
+    pub fn retain_state(&mut self, select: impl Fn(&str, &str) -> bool) {
+        for block in &self.resource_blocks {
+            if let Some((kind, label)) = block_address(block) {
+                if select(&kind, &label) {
+                    self.retained_addresses.insert((kind, label));
+                }
+            }
+        }
+    }
+
+    /// Whether an emitted block belongs in the retention inventory.
+    pub fn is_retained(&self, block: &Block) -> bool {
+        block_address(block).is_some_and(|address| self.retained_addresses.contains(&address))
+    }
+
     /// Merge another fragment into this one (used by the K8s identity overlay
     /// layer to append on top of cloud emitters).
     pub fn extend(&mut self, other: TfFragment) {
@@ -148,6 +196,7 @@ impl TfFragment {
         self.data_blocks.extend(other.data_blocks);
         self.locals.extend(other.locals);
         self.shared_addresses.extend(other.shared_addresses);
+        self.retained_addresses.extend(other.retained_addresses);
         for (address, input_ids) in other.gated_contributions {
             self.declare_contribution(address, &input_ids);
         }

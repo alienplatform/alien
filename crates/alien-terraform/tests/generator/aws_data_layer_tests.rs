@@ -47,10 +47,9 @@ fn aws_key_package_is_valid_and_retained() {
         .get("detach-retained-keys.sh")
         .expect("retained Key detach operation");
     assert!(detach.contains("detach_if_present 'aws_kms_key.customer_key[0]'"));
-    assert!(module
-        .get("README.md")
-        .unwrap()
-        .contains("terraform destroy"));
+    let inventory: Vec<String> =
+        serde_json::from_str(module.get("retained-data.json").unwrap()).unwrap();
+    assert_eq!(inventory, vec!["aws_kms_key.customer_key"]);
     assert_terraform_valid(&module, "aws_key_package");
 }
 

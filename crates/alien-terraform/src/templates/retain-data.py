@@ -26,6 +26,8 @@ def main():
     parser.add_argument('--module-address', default='', help='exact module address when used as a child module')
     parser.add_argument('--receipt-dir', type=Path, required=True, help='private recovery directory outside the module')
     args = parser.parse_args()
+    if os.name != "posix":
+        raise RuntimeError("Use Linux, macOS, or a WSL Linux filesystem for private recovery receipts; native Windows is not supported")
     manifest = json.loads(Path(__file__).with_name('retained-data.json').read_text())
     prefix = args.module_address + '.' if args.module_address else ''
     addresses = {prefix + address for address in manifest}

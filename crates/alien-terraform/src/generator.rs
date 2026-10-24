@@ -555,31 +555,35 @@ fn generate_terraform_module_internal(
     // Access policies remain in state so teardown can revoke them independently.
     let retained_data_addresses: Vec<String> = per_resource
         .values()
-        .flat_map(|fragment| &fragment.resource_blocks)
-        .filter(|block| block.identifier.as_str() == "resource")
-        .filter_map(|block| {
+        .flat_map(|fragment| {
+            fragment
+                .resource_blocks
+                .iter()
+                .map(move |block| (fragment, block))
+        })
+        .filter(|(_, block)| block.identifier.as_str() == "resource")
+        .filter_map(|(fragment, block)| {
             let kind = block.labels.first()?.as_str();
             let label = block.labels.get(1)?.as_str();
-            matches!(
-                kind,
-                "aws_s3_bucket"
-                    | "aws_s3_bucket_server_side_encryption_configuration"
-                    | "aws_s3_bucket_ownership_controls"
-                    | "aws_s3_bucket_public_access_block"
-                    | "aws_s3_bucket_versioning"
-                    | "aws_dynamodb_table"
-                    | "aws_ecr_repository"
-                    | "aws_kms_key"
-            )
+            (fragment.is_retained(block)
+                || matches!(
+                    kind,
+                    "aws_s3_bucket"
+                        | "aws_s3_bucket_server_side_encryption_configuration"
+                        | "aws_s3_bucket_ownership_controls"
+                        | "aws_s3_bucket_public_access_block"
+                        | "aws_s3_bucket_versioning"
+                        | "aws_dynamodb_table"
+                        | "aws_ecr_repository"
+                        | "aws_kms_key"
+                ))
             .then(|| format!("{kind}.{label}"))
         })
         .collect();
-    let has_retained_data = retained_data_addresses.iter().any(|address| {
-        address.starts_with("aws_s3_bucket.")
-            || address.starts_with("aws_dynamodb_table.")
-            || address.starts_with("aws_ecr_repository.")
-    });
-    if has_retained_data {
+    // Every AWS package carries the same fail-closed uninstall entry point,
+    // including key-only and access-only packages with an empty data inventory.
+    let has_retention_workflow = matches!(target, TerraformTarget::Aws | TerraformTarget::Eks);
+    if has_retention_workflow {
         files.insert(
             "retained-data.json".into(),
             serde_json::to_string_pretty(&retained_data_addresses)
@@ -659,13 +663,13 @@ fn generate_terraform_module_internal(
             product_remote_operator,
             requires_remote_operator_collector_token,
             &stack_inputs,
-            retained_key_detach.is_some() && !has_retained_data,
+            retained_key_detach.is_some() && !has_retention_workflow,
             emits_azapi_resource,
             profile,
         ),
     );
 
-    if has_retained_data {
+    if has_retention_workflow {
         if let Some(readme) = files.get_mut("README.md") {
             readme.push_str(include_str!("templates/retained-data.md"));
         }
