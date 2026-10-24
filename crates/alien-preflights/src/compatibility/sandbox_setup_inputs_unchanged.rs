@@ -179,6 +179,38 @@ mod tests {
         assert!(result.success, "{:?}", result.errors);
     }
 
+    /// A publisher keeps installed setups building only from repositories in the namespace they
+    /// granted, so moving the base image to another namespace (a plain repository to one outside
+    /// a replication filter, say) needs setup to grant the new repository.
+    #[tokio::test]
+    async fn a_base_repository_in_another_namespace_needs_setup() {
+        for (old, new) in [
+            (
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/artifacts-prj:base",
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/cache/artifacts-prj:base",
+            ),
+            (
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/cache/artifacts-prj:base",
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/artifacts-prj:base",
+            ),
+            (
+                REPO_A,
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/other/base-a:1",
+            ),
+        ] {
+            let result = run(stack(Some(old), BUNDLE_V1), stack(Some(new), BUNDLE_V1)).await;
+            assert!(!result.success, "{old} -> {new} must need setup");
+            assert!(
+                result
+                    .errors
+                    .iter()
+                    .any(|error| error.contains("agents") && error.contains("build role policy")),
+                "{old} -> {new}: {:?}",
+                result.errors
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_live_sandbox_new_to_the_installed_stack_needs_setup() {
         for private_base_image in [Some(REPO_A), None] {

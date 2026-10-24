@@ -10,7 +10,8 @@ use crate::remote_bindings::{
 use crate::sandbox_build_role::SandboxBuildRole;
 use crate::sandbox_egress::{sandbox_egress_network, sandbox_needs_connector};
 use crate::{
-    ErrorData, ResourceLifecycle, Result, Sandbox, SandboxCode, Stack, BUNDLE_REGION_TOKEN,
+    parse_ecr_image_repository, ErrorData, ResourceLifecycle, Result, Sandbox, SandboxCode, Stack,
+    BUNDLE_REGION_TOKEN,
 };
 
 /// The account a sandbox's scaffolding is rendered into.
@@ -88,6 +89,22 @@ const SETUP_GRANTED_STORE: &str = "setup-granted-store";
 const SETUP_GRANTED_BASE_IMAGE: &str =
     "000000000000.dkr.ecr.us-east-1.amazonaws.com/setup-granted-repository:base";
 
+/// `image` as [`SETUP_GRANTED_BASE_IMAGE`], keeping its repository's namespace (the path before
+/// the last `/`). A publisher keeps installed setups building by writing their bundles `FROM` a
+/// repository they granted, which covers a renamed repository in the same namespace. A move to
+/// another namespace is not covered, so the namespace stays a setup input.
+fn setup_granted_base_image(image: &str) -> std::result::Result<String, String> {
+    let repository = parse_ecr_image_repository(image)?;
+    Ok(match repository.repository.rsplit_once('/') {
+        Some((namespace, _)) => SETUP_GRANTED_BASE_IMAGE.replacen(
+            "/setup-granted-repository",
+            &format!("/{namespace}/setup-granted-repository"),
+            1,
+        ),
+        None => SETUP_GRANTED_BASE_IMAGE.to_string(),
+    })
+}
+
 /// `image` with its bucket replaced by [`SETUP_GRANTED_STORE`], keeping the key.
 fn setup_granted_bundle(image: &str) -> std::result::Result<String, String> {
     image
@@ -99,8 +116,8 @@ fn setup_granted_bundle(image: &str) -> std::result::Result<String, String> {
 
 /// Each setup input with the name a refused update reports it by. A new bundle under the same
 /// stable prefix, or a new tag in the same private repository, leaves them unchanged. For a Live
-/// sandbox the bundle's store and the base image's repository are not inputs at all: they are
-/// fixed by the setup that granted them.
+/// sandbox the bundle's store and the base image's repository name are not inputs at all: they
+/// are fixed by the setup that granted them. The repository's namespace is.
 pub fn aws_sandbox_setup_inputs(
     stack: &Stack,
     sandbox: &Sandbox,
@@ -122,12 +139,15 @@ pub fn aws_sandbox_setup_inputs(
         // A Live sandbox's store and base image repository are fixed by its setup: the runtime
         // reads each release's bundle key from the store this setup granted, and the publisher
         // puts a bundle there whose base image this role can pull. Only the shape of the grant
-        // (stable prefix, whether a private base exists) is a setup input.
+        // (stable prefix, whether a private base exists, its repository namespace) is a setup
+        // input.
         let mut granted = sandbox.clone();
         granted.private_base_image = sandbox
             .private_base_image
-            .as_ref()
-            .map(|_| SETUP_GRANTED_BASE_IMAGE.to_string());
+            .as_deref()
+            .map(setup_granted_base_image)
+            .transpose()
+            .map_err(refuse)?;
         let bundle = setup_granted_bundle(image).map_err(refuse)?;
         aws_sandbox_build_role(&granted, &bundle, lifecycle, account).policy()?
     } else {

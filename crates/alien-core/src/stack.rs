@@ -1015,6 +1015,24 @@ mod tests {
                 },
                 "a remote grant",
             ),
+            (
+                LiveSandbox {
+                    private_base_image: Some(
+                        "123456789012.dkr.ecr.us-east-1.amazonaws.com/cache/team/base-a:1",
+                    ),
+                    ..LiveSandbox::installed()
+                },
+                "a base repository in another namespace",
+            ),
+            (
+                LiveSandbox {
+                    private_base_image: Some(
+                        "123456789012.dkr.ecr.us-east-1.amazonaws.com/base-a:1",
+                    ),
+                    ..LiveSandbox::installed()
+                },
+                "a base repository with no namespace",
+            ),
         ] {
             assert_ne!(installed, changed.digest(), "{what} is setup-owned");
         }
