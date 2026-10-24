@@ -367,6 +367,47 @@ pub enum ErrorData {
         resource_id: String,
     },
 
+    /// The cloud provider reported that a create or update of the resource failed.
+    ///
+    /// Not retryable: the provider keeps reporting the same failure until the cause is fixed
+    /// and the resource is changed again.
+    #[error(
+        code = "CLOUD_RESOURCE_FAILED",
+        message = "{operation} of '{resource_id}' failed: {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    CloudResourceFailed {
+        /// The resource whose operation failed
+        resource_id: String,
+        /// What was being waited for, such as "Lambda function create"
+        operation: String,
+        /// The provider's failure status and reason
+        reason: String,
+    },
+
+    /// A bounded wait for a cloud resource ended before the resource was ready.
+    ///
+    /// The provider may still finish the operation; retrying the step waits again.
+    #[error(
+        code = "CLOUD_RESOURCE_WAIT_TIMEOUT",
+        message = "Timed out after {waited_seconds}s (limit {limit_seconds}s) waiting for {operation} of '{resource_id}'. Still pending: {pending}",
+        retryable = "false",
+        internal = "false"
+    )]
+    CloudResourceWaitTimeout {
+        /// The resource that was not ready in time
+        resource_id: String,
+        /// What was being waited for, such as "Lambda function create"
+        operation: String,
+        /// How long the wait ran
+        waited_seconds: u64,
+        /// The wait's limit
+        limit_seconds: u64,
+        /// The provider status that was still pending at the last read
+        pending: String,
+    },
+
     /// Platform configuration is missing or invalid.
     #[error(
         code = "client_config_INVALID",

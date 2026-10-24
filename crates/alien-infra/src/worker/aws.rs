@@ -75,11 +75,75 @@ fn lambda_concurrency_error(error: AlienError<CloudClientErrorData>, region: &st
     error.into_generic()
 }
 
-const AWS_LAMBDA_ACTIVE_MAX_POLLS: u32 = 60;
+/// How long a Lambda create or update may stay pending, measured on the wall clock from the
+/// first poll. Matches the AWS SDK waiters for Lambda (FunctionActiveV2 and FunctionUpdatedV2
+/// poll 300 times at 1 s).
+const LAMBDA_WAIT_SECONDS: i64 = 5 * 60;
+
+/// The same wait for a function attached to a VPC. Such a function stays Pending until Lambda
+/// has created its Hyperplane ENI, which AWS documents as taking "several minutes", and VPC
+/// configuration changes on update take as long. Well above the five minutes a create can
+/// take in practice, and still short enough that a stuck create fails within one sitting.
+const VPC_LAMBDA_WAIT_SECONDS: i64 = 15 * 60;
 
 // Lambda can take 20 minutes to release Hyperplane ENIs after VPC detachment.
 // Shared ENIs in customer networks may remain in use by other functions indefinitely.
 const EXTERNAL_VPC_ENI_WAIT_SECONDS: i64 = 20 * 60;
+
+/// Where a Lambda create or update stands, from one GetFunctionConfiguration read.
+#[derive(Debug, PartialEq)]
+enum LambdaProgress {
+    /// The function is Active and its last create or update succeeded.
+    Ready,
+    /// Lambda is still working; the text says on what.
+    Pending(String),
+    /// Lambda reported a failure, or a status the wait cannot finish from; the text says why.
+    Failed(String),
+}
+
+/// `name=value`, followed by the provider's reason when it gave one.
+fn lambda_status(name: &str, value: Option<&str>, code: Option<&str>, reason: Option<&str>) -> String {
+    let value = value.unwrap_or("absent");
+    match (code, reason) {
+        (Some(code), Some(reason)) => format!("{name}={value} ({code}: {reason})"),
+        (Some(detail), None) | (None, Some(detail)) => format!("{name}={value} ({detail})"),
+        (None, None) => format!("{name}={value}"),
+    }
+}
+
+fn lambda_progress(config: &FunctionConfiguration) -> LambdaProgress {
+    let state = config.state.as_deref();
+    let update = config.last_update_status.as_deref();
+    let state_text = lambda_status(
+        "State",
+        state,
+        config.state_reason_code.as_deref(),
+        config.state_reason.as_deref(),
+    );
+    let update_text = lambda_status(
+        "LastUpdateStatus",
+        update,
+        config.last_update_status_reason_code.as_deref(),
+        config.last_update_status_reason.as_deref(),
+    );
+    // A Failed state or update never turns into success on its own: a failed create must be
+    // deleted and recreated, and a failed update stays failed until the next update.
+    if state == Some("Failed") {
+        return LambdaProgress::Failed(state_text);
+    }
+    if update == Some("Failed") {
+        return LambdaProgress::Failed(update_text);
+    }
+    match (state, update) {
+        (Some("Active"), Some("Successful")) => LambdaProgress::Ready,
+        (Some("Pending"), _) | (_, Some("InProgress")) => {
+            LambdaProgress::Pending(format!("{state_text}, {update_text}"))
+        }
+        _ => LambdaProgress::Failed(format!(
+            "{state_text}, {update_text}; the function is neither ready nor in progress"
+        )),
+    }
+}
 
 /// Days a worker's CloudWatch log group keeps events. Matches the log group
 /// the CloudFormation template declares for the same worker.
@@ -574,6 +638,11 @@ pub struct AwsWorkerController {
     /// The execution role must retain its VPC permissions until this wait finishes.
     #[serde(default)]
     pub(crate) vpc_eni_wait_started_at: Option<chrono::DateTime<Utc>>,
+    /// Wall-clock start of the current wait for a Lambda create or update to finish. A stored
+    /// start keeps the deadline fixed however often the stack steps and across restarts.
+    /// Cleared when the wait ends, so a retry after a failed wait gets a full window.
+    #[serde(default)]
+    pub(crate) lambda_wait_started_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -908,40 +977,29 @@ impl AwsWorkerController {
                 resource_id: Some(worker_config.id.clone()),
             })?;
 
-        // Check if worker is active based on state and last_update_status
-        let is_active = response.state.as_deref() == Some("Active")
-            && response.last_update_status.as_deref() == Some("Successful");
+        if let Some(stay) =
+            self.poll_lambda_wait(ctx, &response, &worker_config.id, "Lambda function create")?
+        {
+            return Ok(stay);
+        }
 
-        if is_active {
-            if !worker_config.public_endpoints.is_empty() {
-                let has_domain_info = self.ensure_domain_info(ctx, &worker_config)?;
-                let next_state = if has_domain_info {
-                    // Platform mode: wait for certificate then create API Gateway + custom domain
-                    WaitingForCertificate
-                } else {
-                    // Standalone mode: skip certificate/custom domain, use API Gateway default endpoint
-                    Self::gateway_entry_state(&worker_config)
-                };
-                Ok(HandlerAction::Continue {
-                    state: next_state,
-                    suggested_delay: Some(Duration::from_secs(2)),
-                })
+        if !worker_config.public_endpoints.is_empty() {
+            let has_domain_info = self.ensure_domain_info(ctx, &worker_config)?;
+            let next_state = if has_domain_info {
+                // Platform mode: wait for certificate then create API Gateway + custom domain
+                WaitingForCertificate
             } else {
-                Ok(HandlerAction::Continue {
-                    state: ApplyingResourcePermissions,
-                    suggested_delay: Some(Duration::from_secs(2)),
-                })
-            }
+                // Standalone mode: skip certificate/custom domain, use API Gateway default endpoint
+                Self::gateway_entry_state(&worker_config)
+            };
+            Ok(HandlerAction::Continue {
+                state: next_state,
+                suggested_delay: Some(Duration::from_secs(2)),
+            })
         } else {
-            debug!(
-                name = %aws_worker_name,
-                state = %response.state.as_deref().unwrap_or("unknown"),
-                last_update_status = %response.last_update_status.as_deref().unwrap_or("unknown"),
-                "Worker not yet active, retrying"
-            );
-            Ok(HandlerAction::Stay {
-                max_times: Some(AWS_LAMBDA_ACTIVE_MAX_POLLS),
-                suggested_delay: Some(Duration::from_secs(3)),
+            Ok(HandlerAction::Continue {
+                state: ApplyingResourcePermissions,
+                suggested_delay: Some(Duration::from_secs(2)),
             })
         }
     }
@@ -2816,22 +2874,18 @@ impl AwsWorkerController {
                 message: "Failed to read the worker after a binding refresh".to_string(),
                 resource_id: Some(worker_config.id.clone()),
             })?;
-        match (result.state.as_deref(), result.last_update_status.as_deref()) {
-            (Some("Active"), Some("Successful")) => Ok(HandlerAction::Continue {
-                state: Ready,
-                suggested_delay: None,
-            }),
-            (Some("Pending"), _) | (_, Some("InProgress")) => Ok(HandlerAction::Stay {
-                max_times: Some(AWS_LAMBDA_ACTIVE_MAX_POLLS),
-                suggested_delay: Some(Duration::from_secs(5)),
-            }),
-            (state, status) => Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "The worker's binding refresh failed. State: {state:?}, Last Update: {status:?}"
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })),
+        if let Some(stay) = self.poll_lambda_wait(
+            ctx,
+            &result,
+            &worker_config.id,
+            "Lambda linked binding refresh",
+        )? {
+            return Ok(stay);
         }
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: None,
+        })
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────
@@ -2974,31 +3028,16 @@ impl AwsWorkerController {
             },
         )?;
 
-        let is_active = result.state.as_deref() == Some("Active");
-        let is_successful = result.last_update_status.as_deref() == Some("Successful");
-
-        if is_active && is_successful {
-            // Always proceed to config update phase - linear flow
-            Ok(HandlerAction::Continue {
-                state: UpdateConfigStart,
-                suggested_delay: None,
-            })
-        } else if result.state.as_deref() == Some("Pending")
-            || result.last_update_status.as_deref() == Some("InProgress")
+        if let Some(stay) =
+            self.poll_lambda_wait(ctx, &result, &current_config.id, "Lambda code update")?
         {
-            Ok(HandlerAction::Stay {
-                max_times: Some(AWS_LAMBDA_ACTIVE_MAX_POLLS),
-                suggested_delay: Some(Duration::from_secs(5)),
-            })
-        } else {
-            Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Code update failed. State: {:?}, Last Update: {:?}",
-                    result.state, result.last_update_status,
-                ),
-                resource_id: Some(aws_worker_name),
-            }))
+            return Ok(stay);
         }
+        // Always proceed to config update phase - linear flow
+        Ok(HandlerAction::Continue {
+            state: UpdateConfigStart,
+            suggested_delay: None,
+        })
     }
 
     #[handler(
@@ -3169,30 +3208,18 @@ impl AwsWorkerController {
             },
         )?;
 
-        let is_active = result.state.as_deref() == Some("Active");
-        let is_successful = result.last_update_status.as_deref() == Some("Successful");
-
-        if is_active && is_successful {
-            Ok(HandlerAction::Continue {
-                state: UpdateEnsuringPublicExposure,
-                suggested_delay: None,
-            })
-        } else if result.state.as_deref() == Some("Pending")
-            || result.last_update_status.as_deref() == Some("InProgress")
-        {
-            Ok(HandlerAction::Stay {
-                max_times: Some(AWS_LAMBDA_ACTIVE_MAX_POLLS),
-                suggested_delay: Some(Duration::from_secs(5)),
-            })
-        } else {
-            Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Config update failed. State: {:?}, Last Update: {:?}",
-                    result.state, result.last_update_status
-                ),
-                resource_id: Some(aws_worker_name),
-            }))
+        if let Some(stay) = self.poll_lambda_wait(
+            ctx,
+            &result,
+            &current_config.id,
+            "Lambda configuration update",
+        )? {
+            return Ok(stay);
         }
+        Ok(HandlerAction::Continue {
+            state: UpdateEnsuringPublicExposure,
+            suggested_delay: None,
+        })
     }
 
     #[handler(
@@ -4736,31 +4763,17 @@ impl AwsWorkerController {
             .get_function_configuration(function_identifier, None)
             .await
         {
-            Ok(result)
-                if result.state.as_deref() == Some("Active")
-                    && result.last_update_status.as_deref() == Some("Successful") =>
-            {
+            Ok(result) => {
+                if let Some(stay) =
+                    self.poll_lambda_wait(ctx, &result, &worker_config.id, "Lambda VPC detach")?
+                {
+                    return Ok(stay);
+                }
                 Ok(HandlerAction::Continue {
                     state: DeletingWorker,
                     suggested_delay: None,
                 })
             }
-            Ok(result)
-                if result.state.as_deref() == Some("Pending")
-                    || result.last_update_status.as_deref() == Some("InProgress") =>
-            {
-                Ok(HandlerAction::Stay {
-                    max_times: Some(60),
-                    suggested_delay: Some(Duration::from_secs(5)),
-                })
-            }
-            Ok(result) => Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Lambda VPC detach failed. State: {:?}, Last Update: {:?}",
-                    result.state, result.last_update_status
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })),
             // A function that is gone has no tags, so the read is denied rather than not found.
             Err(e) if is_remote_not_found(&e) || is_remote_access_denied(&e) => {
                 Ok(HandlerAction::Continue {
@@ -5633,6 +5646,75 @@ impl AwsWorkerController {
     /// to configure the Lambda worker to run inside the VPC.
     ///
     /// Returns `None` if no Network resource exists in the stack.
+    /// One poll of a bounded wait for a Lambda create or update. Returns `None` once the
+    /// function is ready and a `Stay` while Lambda is still working. Fails at once when Lambda
+    /// reports a failure, and when the wall-clock deadline passes, naming what was pending.
+    fn poll_lambda_wait(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &FunctionConfiguration,
+        resource_id: &str,
+        operation: &str,
+    ) -> Result<Option<AwsWorkerHandlerAction>> {
+        let pending = match lambda_progress(config) {
+            LambdaProgress::Ready => {
+                self.lambda_wait_started_at = None;
+                return Ok(None);
+            }
+            LambdaProgress::Failed(reason) => {
+                self.lambda_wait_started_at = None;
+                return Err(AlienError::new(ErrorData::CloudResourceFailed {
+                    resource_id: resource_id.to_string(),
+                    operation: operation.to_string(),
+                    reason,
+                }));
+            }
+            LambdaProgress::Pending(pending) => pending,
+        };
+
+        // The function as Lambda reports it covers a VPC being removed; the desired network
+        // covers a VPC being added before Lambda reports it.
+        let attached_to_vpc = config
+            .vpc_config
+            .as_ref()
+            .and_then(|vpc| vpc.subnet_ids.as_ref())
+            .is_some_and(|subnets| !subnets.is_empty())
+            || self.get_vpc_config(ctx)?.is_some();
+        let (limit_seconds, delay) = if attached_to_vpc {
+            (VPC_LAMBDA_WAIT_SECONDS, Duration::from_secs(10))
+        } else {
+            (LAMBDA_WAIT_SECONDS, Duration::from_secs(3))
+        };
+
+        let started_at = *self.lambda_wait_started_at.get_or_insert_with(Utc::now);
+        let waited_seconds = Utc::now().signed_duration_since(started_at).num_seconds();
+        if waited_seconds >= limit_seconds {
+            self.lambda_wait_started_at = None;
+            return Err(AlienError::new(ErrorData::CloudResourceWaitTimeout {
+                resource_id: resource_id.to_string(),
+                operation: operation.to_string(),
+                waited_seconds: waited_seconds.unsigned_abs(),
+                limit_seconds: limit_seconds.unsigned_abs(),
+                pending,
+            }));
+        }
+
+        debug!(
+            resource_id,
+            operation,
+            pending = %pending,
+            waited_seconds,
+            limit_seconds,
+            "Lambda is still working, polling again"
+        );
+        Ok(Some(AwsWorkerHandlerAction::Stay {
+            // Bounded by the wall-clock deadline above, not by a poll count: the stack steps
+            // at the shortest delay any resource asks for, so counts run out early.
+            max_times: None,
+            suggested_delay: Some(delay),
+        }))
+    }
+
     fn get_vpc_config(&self, ctx: &ResourceControllerContext<'_>) -> Result<Option<VpcConfig>> {
         // Check if the stack has a Network resource
         let network_id = "default-network";
@@ -5756,6 +5838,7 @@ impl AwsWorkerController {
             eventbridge_permission_statement_ids: Vec::new(),
             delete_removed_something: false,
             vpc_eni_wait_started_at: None,
+            lambda_wait_started_at: None,
             _internal_stay_count: None,
         }
     }
@@ -6251,7 +6334,7 @@ mod tests {
             )),
             state: Some("Active".to_string()),
             last_update_status: Some("Successful".to_string()),
-            kms_key_arn: None,
+            ..Default::default()
         }
     }
 
@@ -8461,7 +8544,7 @@ mod tests {
                         )),
                         state: Some("Pending".to_string()),
                         last_update_status: Some("InProgress".to_string()),
-                        kms_key_arn: None,
+                        ..Default::default()
                     });
                 }
 
