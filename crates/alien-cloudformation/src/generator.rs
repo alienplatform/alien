@@ -406,13 +406,18 @@ pub fn generate_cloudformation_template_with_profile(
             json!(stack
                 .resources
                 .iter()
-                .map(|(id, entry)| json!({
-                    "id": id,
-                    "displayName": entry.display_name_or_id(),
-                    "description": entry.description,
-                    "type": entry.config.resource_type(),
-                    "lifecycle": entry.lifecycle,
-                }))
+                .map(|(id, entry)| {
+                    let mut metadata = json!({
+                        "id": id,
+                        "displayName": entry.display_name_or_id(),
+                        "type": entry.config.resource_type(),
+                        "lifecycle": entry.lifecycle,
+                    });
+                    if let Some(description) = &entry.description {
+                        metadata["description"] = json!(description);
+                    }
+                    metadata
+                })
                 .collect::<Vec<_>>()),
         );
     }
@@ -561,16 +566,18 @@ pub fn generate_cloudformation_template_with_profile(
         let mut emitted_resources = emitter.emit_resources_with_registry(&ctx, options.registry)?;
         if resource.display_name.is_some() || resource.description.is_some() {
             for emitted in &mut emitted_resources {
-                emitted.metadata.insert(
-                    "ApplicationResource".to_string(),
-                    json!({
-                        "id": resource_id,
-                        "displayName": resource.display_name_or_id(),
-                        "description": resource.description,
-                        "componentType": emitted.resource_type,
-                        "lifecycle": resource.lifecycle,
-                    }),
-                );
+                let mut metadata = json!({
+                    "id": resource_id,
+                    "displayName": resource.display_name_or_id(),
+                    "componentType": emitted.resource_type,
+                    "lifecycle": resource.lifecycle,
+                });
+                if let Some(description) = &resource.description {
+                    metadata["description"] = json!(description);
+                }
+                emitted
+                    .metadata
+                    .insert("ApplicationResource".to_string(), metadata);
             }
         }
 
