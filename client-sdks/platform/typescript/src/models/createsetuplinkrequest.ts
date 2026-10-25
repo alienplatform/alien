@@ -57,11 +57,11 @@ export type CreateSetupLinkRequest = {
    */
   maxDeployments?: number | undefined;
   /**
-   * Vendor destination when leaving or completing setup. Null clears the destination.
+   * Vendor destination when leaving or completing setup. Must be an absolute HTTPS URL without userinfo (embedded credentials), at most 2048 characters. Null clears the destination; omit to keep it unchanged.
    */
   returnUrl?: string | null | undefined;
   /**
-   * Vendor destination for expired, revoked, disabled or exhausted setup links. The vendor creates a fresh link there. Null clears the destination.
+   * Vendor destination for expired, revoked, disabled or exhausted setup links. This URL remains available for unusable links; the endpoint must authenticate the user before minting a new link. Must be an absolute HTTPS URL without userinfo (embedded credentials), at most 2048 characters. Null clears the destination; omit to keep it unchanged.
    */
   refreshUrl?: string | null | undefined;
   /**

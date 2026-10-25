@@ -39,7 +39,7 @@ pub struct OnboardArgs {
     #[arg(long, value_parser = parse_setup_link_url, conflicts_with = "airgapped")]
     pub return_url: Option<String>,
 
-    /// HTTPS destination that creates a fresh link when setup expires or is no longer available.
+    /// HTTPS destination for expired or unavailable links. Must authenticate the user before minting a new link.
     #[arg(long, value_parser = parse_setup_link_url, conflicts_with = "airgapped")]
     pub refresh_url: Option<String>,
 
