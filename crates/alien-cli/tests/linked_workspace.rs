@@ -178,7 +178,8 @@ fn workspace_commands_reject_invalid_links_before_requesting_the_saved_workspace
             let command = args[0];
             let output = user.run(&api, checkout.path(), &args);
             assert!(!output.status.success(), "{command} should reject the link");
-            let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert!(output.stdout.is_empty());
+            let error: Value = serde_json::from_slice(&output.stderr).unwrap();
             assert_eq!(error["code"], "PROJECT_LINK_INVALID", "{error}");
         }
     }

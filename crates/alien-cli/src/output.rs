@@ -23,8 +23,7 @@ pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
 
 /// A safe stderr companion for a failed `--json` command.
 ///
-/// JSON remains the sole stdout document, while automation that captures
-/// stdout still gets an actionable failure in its logs. Callers must pass an
+/// Callers rendering a separate human-readable diagnostic must pass an
 /// error that has already crossed [`AlienError::into_external`]. Deliberately
 /// omit structured context: it may contain request inputs or provider data.
 pub fn json_error_diagnostic(error: &AlienError<GenericError>, request_id: Option<&str>) -> String {

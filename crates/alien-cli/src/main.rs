@@ -1,9 +1,4 @@
-use alien_cli::{
-    output::{json_error_diagnostic, json_error_request_id, print_json},
-    run_cli,
-    ui::render_human_error,
-    Cli,
-};
+use alien_cli::{output::json_error_request_id, run_cli, ui::render_human_error, Cli};
 use clap::Parser;
 
 fn main() -> std::process::ExitCode {
@@ -33,14 +28,17 @@ async fn async_main() -> std::process::ExitCode {
         Err(error) => {
             if wants_json_output {
                 let request_id = json_error_request_id(&error);
-                let external_error = error.clone().into_external();
-                if let Err(print_error) = print_json(&external_error) {
-                    eprintln!("{print_error}");
+                let serialized =
+                    serde_json::to_value(error.into_external()).and_then(|mut value| {
+                        if let Some(request_id) = request_id {
+                            value["requestId"] = serde_json::Value::String(request_id);
+                        }
+                        serde_json::to_string_pretty(&value)
+                    });
+                match serialized {
+                    Ok(json) => eprintln!("{json}"),
+                    Err(print_error) => eprintln!("Failed to serialize error: {print_error}"),
                 }
-                eprintln!(
-                    "{}",
-                    json_error_diagnostic(&external_error, request_id.as_deref())
-                );
             } else {
                 eprintln!("{}", render_human_error(&error));
             }
