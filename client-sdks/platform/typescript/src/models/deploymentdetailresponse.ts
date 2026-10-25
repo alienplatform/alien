@@ -1987,7 +1987,7 @@ export type DeploymentDetailResponse = {
    */
   stackSettings: DeploymentDetailResponseStackSettings;
   /**
-   * Deprecated: use resources on the deployment detail response for resource status and errors. Retained for existing consumers.
+   * Raw engine state for installers and the CLI to resume, update, and destroy deployments. UIs should read resources[] for resource status and errors.
    */
   stackState?: DeploymentDetailResponseStackState | null | undefined;
   /**
