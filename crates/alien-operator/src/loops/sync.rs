@@ -720,20 +720,33 @@ fn report_operator_capabilities(
             .map(|platform| format!("base platform {platform:?}")),
     });
 
-    capabilities.push(logs_capability(&state.config, state.pod_log_collection));
+    capabilities.extend(logs_capability(&state.config, state.pod_log_collection));
 
     capabilities
 }
 
-/// Logs reach the Operator either from a node collector, which authenticates
-/// with the collector token, or from the Operator's own Pod log stream, which
-/// needs no token. Either one means this installation sends logs.
+/// Reports whether the Kubernetes log collector sends Pod logs. Logs reach the
+/// Operator either from a node collector, which authenticates with the
+/// collector token, or from the Operator's own Pod log stream, which needs no
+/// token. Either one means this installation sends logs.
+///
+/// Only the Kubernetes chart has a log collector, so other platforms report
+/// nothing. Their logs don't depend on a collector: workers export them over
+/// OTLP to the endpoint in the deployment's monitoring config, and the cloud's
+/// container runtime ships container logs. An `unavailable` report there would
+/// tell clients that a deployment whose logs work sends none.
 ///
 /// Every state carries a detail. Earlier Operators reported this capability
 /// with no detail and marked it unavailable whenever the collector token was
 /// missing, including in podApi mode where logs do flow, so clients trust an
 /// unavailable report only when it has a detail.
-fn logs_capability(config: &OperatorConfig, pod_log_collection: bool) -> OperatorCapabilityReport {
+fn logs_capability(
+    config: &OperatorConfig,
+    pod_log_collection: bool,
+) -> Option<OperatorCapabilityReport> {
+    if config.platform != Platform::Kubernetes {
+        return None;
+    }
     let (state, detail) = if pod_log_collection {
         (
             OperatorCapabilityState::Granted,
@@ -750,11 +763,11 @@ fn logs_capability(config: &OperatorConfig, pod_log_collection: bool) -> Operato
             "No log collector configured",
         )
     };
-    OperatorCapabilityReport {
+    Some(OperatorCapabilityReport {
         key: "logs".to_string(),
         state,
         detail: Some(detail.to_string()),
-    }
+    })
 }
 
 /// Granted only when the chart bound the dynamic container Role: the manager
@@ -896,8 +909,9 @@ mod tests {
 
     use super::{
         accept_target_release, apply_manager_control_state, create_authenticated_client,
-        dynamic_containers_capability, is_uninitialized_deployment_state, logs_capability,
-        operation_command_address_capability, reported_operations_config, sync_with_manager,
+        dynamic_containers_capability, is_uninitialized_deployment_state,
+        operation_command_address_capability, report_operator_capabilities,
+        reported_operations_config, sync_with_manager,
     };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
 
@@ -1854,41 +1868,75 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reports_logs_when_a_node_collector_or_the_pod_log_stream_is_configured() {
-        let config = |collector_token: Option<&str>| {
-            OperatorConfig::builder()
-                .platform(Platform::Kubernetes)
-                .namespace("customer".to_string())
-                .maybe_collector_token(collector_token.map(str::to_string))
-                .data_dir("unused")
-                .encryption_key(TEST_ENCRYPTION_KEY)
-                .build()
-        };
+    /// The `logs` capability describes the Kubernetes log collector. Operators
+    /// on other platforms have none, and their workloads send logs without the
+    /// Operator, so they must not report it: clients read `unavailable` as "this
+    /// deployment sends no logs".
+    #[tokio::test]
+    async fn reports_logs_only_for_the_kubernetes_log_collector() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let directory = data_dir.path().to_str().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(directory, TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let reported_logs =
+            |platform: Platform, collector_token: Option<&str>, pod_log_collection: bool| {
+                let state = OperatorState {
+                    config: OperatorConfig::builder()
+                        .platform(platform)
+                        .namespace("customer".to_string())
+                        .maybe_collector_token(collector_token.map(str::to_string))
+                        .data_dir(directory)
+                        .encryption_key(TEST_ENCRYPTION_KEY)
+                        .build(),
+                    db: db.clone(),
+                    service_provider: None,
+                    operations_sync_handler: None,
+                    pod_log_collection,
+                    cancel: CancellationToken::new(),
+                };
+                report_operator_capabilities(&state, false)
+                    .into_iter()
+                    .find(|capability| capability.key == "logs")
+                    .map(|capability| (capability.state, capability.detail))
+            };
 
         // Collector off: no node collector token and no Pod log stream.
-        let off = logs_capability(&config(None), false);
-        assert_eq!(off.key, "logs");
-        assert_eq!(off.state, OperatorCapabilityState::Unavailable);
-        assert_eq!(off.detail.as_deref(), Some("No log collector configured"));
-
+        assert_eq!(
+            reported_logs(Platform::Kubernetes, None, false),
+            Some((
+                OperatorCapabilityState::Unavailable,
+                Some("No log collector configured".to_string())
+            ))
+        );
         // nodeAgent mode: the chart mounts the collector token.
-        let node_agent = logs_capability(&config(Some("collector-secret")), false);
-        assert_eq!(node_agent.key, "logs");
-        assert_eq!(node_agent.state, OperatorCapabilityState::Granted);
         assert_eq!(
-            node_agent.detail.as_deref(),
-            Some("Pod logs sent by the node log collector")
+            reported_logs(Platform::Kubernetes, Some("collector-secret"), false),
+            Some((
+                OperatorCapabilityState::Granted,
+                Some("Pod logs sent by the node log collector".to_string())
+            ))
+        );
+        // podApi mode: the chart sets the Pod log label and mounts no token.
+        assert_eq!(
+            reported_logs(Platform::Kubernetes, None, true),
+            Some((
+                OperatorCapabilityState::Granted,
+                Some("Pod logs read through the Kubernetes API".to_string())
+            ))
         );
 
-        // podApi mode: the chart sets the Pod log label and mounts no token.
-        let pod_api = logs_capability(&config(None), true);
-        assert_eq!(pod_api.key, "logs");
-        assert_eq!(pod_api.state, OperatorCapabilityState::Granted);
-        assert_eq!(
-            pod_api.detail.as_deref(),
-            Some("Pod logs read through the Kubernetes API")
-        );
+        // Cloud and local Operators have no log collector to report on.
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Local,
+        ] {
+            assert_eq!(reported_logs(platform, None, false), None, "{platform}");
+        }
     }
 
     #[test]
