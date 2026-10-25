@@ -511,6 +511,19 @@ run();
 * [syncGitNamespaces](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 * [listGitNamespaceRepositories](docs/sdks/user/README.md#listgitnamespacerepositories) - List repositories accessible through a git namespace (GitHub installation).
 
+### [Webhooks](docs/sdks/webhooks/README.md)
+
+* [listWebhookEndpoints](docs/sdks/webhooks/README.md#listwebhookendpoints)
+* [createWebhookEndpoint](docs/sdks/webhooks/README.md#createwebhookendpoint)
+* [getWebhookEndpoint](docs/sdks/webhooks/README.md#getwebhookendpoint)
+* [updateWebhookEndpoint](docs/sdks/webhooks/README.md#updatewebhookendpoint)
+* [deleteWebhookEndpoint](docs/sdks/webhooks/README.md#deletewebhookendpoint)
+* [getWebhookSigningSecret](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
+* [rotateWebhookSigningSecret](docs/sdks/webhooks/README.md#rotatewebhooksigningsecret)
+* [listWebhookDeliveries](docs/sdks/webhooks/README.md#listwebhookdeliveries)
+* [retryWebhookDelivery](docs/sdks/webhooks/README.md#retrywebhookdelivery)
+* [testWebhookEndpoint](docs/sdks/webhooks/README.md#testwebhookendpoint)
+
 ### [Workspaces](docs/sdks/workspaces/README.md)
 
 * [list](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.
@@ -799,6 +812,16 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`userListMemberships`](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 - [`userSyncGitNamespaces`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 - [`userUpdateProfile`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
+- [`webhooksCreateWebhookEndpoint`](docs/sdks/webhooks/README.md#createwebhookendpoint)
+- [`webhooksDeleteWebhookEndpoint`](docs/sdks/webhooks/README.md#deletewebhookendpoint)
+- [`webhooksGetWebhookEndpoint`](docs/sdks/webhooks/README.md#getwebhookendpoint)
+- [`webhooksGetWebhookSigningSecret`](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
+- [`webhooksListWebhookDeliveries`](docs/sdks/webhooks/README.md#listwebhookdeliveries)
+- [`webhooksListWebhookEndpoints`](docs/sdks/webhooks/README.md#listwebhookendpoints)
+- [`webhooksRetryWebhookDelivery`](docs/sdks/webhooks/README.md#retrywebhookdelivery)
+- [`webhooksRotateWebhookSigningSecret`](docs/sdks/webhooks/README.md#rotatewebhooksigningsecret)
+- [`webhooksTestWebhookEndpoint`](docs/sdks/webhooks/README.md#testwebhookendpoint)
+- [`webhooksUpdateWebhookEndpoint`](docs/sdks/webhooks/README.md#updatewebhookendpoint)
 - [`workspacesAddMember`](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
 - [`workspacesDelete`](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects and must not be on pay as you go or a contract.
 - [`workspacesGet`](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
@@ -1092,6 +1115,16 @@ To learn about this feature and how to get started, check
 - [`useUserListMemberships`](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 - [`useUserSyncGitNamespacesMutation`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 - [`useUserUpdateProfileMutation`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
+- [`useWebhooksCreateWebhookEndpointMutation`](docs/sdks/webhooks/README.md#createwebhookendpoint)
+- [`useWebhooksDeleteWebhookEndpointMutation`](docs/sdks/webhooks/README.md#deletewebhookendpoint)
+- [`useWebhooksGetWebhookEndpoint`](docs/sdks/webhooks/README.md#getwebhookendpoint)
+- [`useWebhooksGetWebhookSigningSecret`](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
+- [`useWebhooksListWebhookDeliveries`](docs/sdks/webhooks/README.md#listwebhookdeliveries)
+- [`useWebhooksListWebhookEndpoints`](docs/sdks/webhooks/README.md#listwebhookendpoints)
+- [`useWebhooksRetryWebhookDeliveryMutation`](docs/sdks/webhooks/README.md#retrywebhookdelivery)
+- [`useWebhooksRotateWebhookSigningSecretMutation`](docs/sdks/webhooks/README.md#rotatewebhooksigningsecret)
+- [`useWebhooksTestWebhookEndpointMutation`](docs/sdks/webhooks/README.md#testwebhookendpoint)
+- [`useWebhooksUpdateWebhookEndpointMutation`](docs/sdks/webhooks/README.md#updatewebhookendpoint)
 - [`useWorkspacesAddMemberMutation`](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
 - [`useWorkspacesDeleteMutation`](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects and must not be on pay as you go or a contract.
 - [`useWorkspacesGet`](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.

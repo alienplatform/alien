@@ -74,6 +74,7 @@ import { SetupLinks } from "./setuplinks.js";
 import { SlackIntegration } from "./slackintegration.js";
 import { Sync } from "./sync.js";
 import { User } from "./user.js";
+import { Webhooks } from "./webhooks.js";
 import { Workspaces } from "./workspaces.js";
 
 export class Alien extends ClientSDK {
@@ -85,6 +86,11 @@ export class Alien extends ClientSDK {
   private _auth?: Auth;
   get auth(): Auth {
     return (this._auth ??= new Auth(this._options));
+  }
+
+  private _webhooks?: Webhooks;
+  get webhooks(): Webhooks {
+    return (this._webhooks ??= new Webhooks(this._options));
   }
 
   private _workspaces?: Workspaces;
