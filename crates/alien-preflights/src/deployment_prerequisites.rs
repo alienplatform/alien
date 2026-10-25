@@ -16,6 +16,109 @@ use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
 };
 
+/// Customer base domains must produce valid hostnames before any routes are created.
+pub struct KubernetesBaseDomainCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for KubernetesBaseDomainCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("KUBERNETES_BASE_DOMAIN_INVALID")
+    }
+
+    fn description(&self) -> &'static str {
+        "Kubernetes public endpoint base domain"
+    }
+
+    fn should_run(&self, _stack: &Stack, _state: &StackState, config: &DeploymentConfig) -> bool {
+        matches!(
+            config
+                .stack_settings
+                .kubernetes
+                .as_ref()
+                .and_then(|settings| settings.exposure.as_ref()),
+            Some(alien_core::KubernetesExposureSettings::CustomBaseDomain { .. })
+        )
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        _state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let Some(alien_core::KubernetesExposureSettings::CustomBaseDomain {
+            base_domain,
+            certificate,
+            ..
+        }) = config
+            .stack_settings
+            .kubernetes
+            .as_ref()
+            .and_then(|settings| settings.exposure.as_ref())
+        else {
+            return Ok(CheckResult::success());
+        };
+        let mut failures = Vec::new();
+        if !alien_core::access_request_crd::is_valid_kubernetes_label_domain(base_domain) {
+            failures.push("Kubernetes baseDomain must be a DNS name without a scheme, port, path, or wildcard".to_string());
+        }
+        match certificate {
+            alien_core::KubernetesCertificateMode::TlsSecretRef(secret) if !secret.secret_name.is_empty() => {},
+            alien_core::KubernetesCertificateMode::None => {},
+            _ => failures.push("Kubernetes customBaseDomain requires one existing TLS Secret covering all endpoint hostnames, or certificate mode none".to_string()),
+        }
+        let mut hosts = std::collections::HashSet::new();
+        for (resource_id, entry) in stack.resources() {
+            let endpoints = entry
+                .config
+                .downcast_ref::<Container>()
+                .map(|resource| resource.public_endpoints.as_slice())
+                .or_else(|| {
+                    entry
+                        .config
+                        .downcast_ref::<Daemon>()
+                        .map(|resource| resource.public_endpoints.as_slice())
+                });
+            let labels: Vec<&str> = if let Some(endpoints) = endpoints {
+                endpoints
+                    .iter()
+                    .filter(|endpoint| endpoint.protocol == ExposeProtocol::Http)
+                    .map(|endpoint| endpoint.effective_host_label())
+                    .collect()
+            } else if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+                worker
+                    .public_endpoints
+                    .iter()
+                    .map(|endpoint| endpoint.effective_host_label())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            for label in labels {
+                let host = if label == alien_core::APEX_HOST_LABEL {
+                    base_domain.clone()
+                } else {
+                    format!("{label}.{base_domain}")
+                };
+                if !alien_core::access_request_crd::is_valid_kubernetes_label_domain(&host) {
+                    failures.push(format!(
+                        "Public endpoint on '{resource_id}' produces an invalid DNS name: {host}"
+                    ));
+                } else if !hosts.insert(host.clone()) {
+                    failures.push(format!(
+                        "More than one public endpoint uses hostname {host}"
+                    ));
+                }
+            }
+        }
+        if failures.is_empty() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(failures))
+        }
+    }
+}
+
 /// The internet declaration requires a prepared gateway; legacy paths stay unchanged.
 pub struct SandboxEgressGatewayCheck;
 
@@ -810,6 +913,92 @@ mod tests {
             native_image_host: None,
             volume_restores: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn kubernetes_base_domain_validates_customer_routing_before_deploy() {
+        use alien_core::{
+            KubernetesCertificateMode, KubernetesExposureSettings, KubernetesIngressRouteProfile,
+            KubernetesRouteProfile, KubernetesSettings, KubernetesTlsSecretRef,
+        };
+        let stack = create_stack(IndexMap::from([(
+            "worker".into(),
+            create_public_function_entry("worker"),
+        )]));
+        let state = stack_state(Platform::Kubernetes);
+        let mut config = deployment_config();
+        let check = KubernetesBaseDomainCheck;
+        for (base_domain, valid) in [
+            ("app.example.com", true),
+            ("acme.internal", true),
+            ("https://app.example.com", false),
+            ("*.example.com", false),
+            ("app.example.com:443", false),
+            ("app..example.com", false),
+            ("-app.example.com", false),
+        ] {
+            config.stack_settings.kubernetes = Some(KubernetesSettings {
+                cluster: None,
+                exposure: Some(KubernetesExposureSettings::CustomBaseDomain {
+                    base_domain: base_domain.into(),
+                    route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                        ingress_class_name: "nginx".into(),
+                        ..Default::default()
+                    }),
+                    certificate: KubernetesCertificateMode::TlsSecretRef(KubernetesTlsSecretRef {
+                        secret_name: "customer-tls".into(),
+                        namespace: None,
+                    }),
+                }),
+            });
+            assert!(check.should_run(&stack, &state, &config));
+            assert_eq!(
+                check.check(&stack, &state, &config).await.unwrap().success,
+                valid,
+                "{base_domain}"
+            );
+        }
+        let Some(KubernetesExposureSettings::CustomBaseDomain {
+            base_domain,
+            certificate,
+            ..
+        }) = config
+            .stack_settings
+            .kubernetes
+            .as_mut()
+            .unwrap()
+            .exposure
+            .as_mut()
+        else {
+            unreachable!()
+        };
+        *base_domain = "app.example.com".into();
+        *certificate = KubernetesCertificateMode::ManagedTlsSecret {
+            secret_name_template: "different-{{ resourceId }}".into(),
+        };
+        assert!(!check.check(&stack, &state, &config).await.unwrap().success);
+        let Some(KubernetesExposureSettings::CustomBaseDomain { certificate, .. }) = config
+            .stack_settings
+            .kubernetes
+            .as_mut()
+            .unwrap()
+            .exposure
+            .as_mut()
+        else {
+            unreachable!()
+        };
+        *certificate = KubernetesCertificateMode::None;
+        let duplicate_stack = create_stack(IndexMap::from([
+            ("one".into(), create_public_function_entry("one")),
+            ("two".into(), create_public_function_entry("two")),
+        ]));
+        assert!(
+            !check
+                .check(&duplicate_stack, &state, &config)
+                .await
+                .unwrap()
+                .success
+        );
     }
 
     #[tokio::test]

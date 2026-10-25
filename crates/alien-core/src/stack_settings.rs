@@ -651,6 +651,16 @@ pub enum KubernetesExposureSettings {
         /// Customer-owned certificate reference consumed by the route profile.
         certificate: KubernetesCertificateMode,
     },
+    /// Give each named public endpoint a hostname below a customer-owned base domain.
+    #[serde(rename_all = "camelCase")]
+    CustomBaseDomain {
+        /// DNS name without a wildcard or URL scheme, for example `app.example.com`.
+        base_domain: String,
+        /// Route profile shared by all public endpoints.
+        route: KubernetesRouteProfile,
+        /// One customer-owned certificate reference covering every endpoint hostname.
+        certificate: KubernetesCertificateMode,
+    },
 }
 
 /// Kubernetes route API selected for public endpoints.

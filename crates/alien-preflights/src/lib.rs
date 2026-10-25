@@ -412,6 +412,9 @@ impl PreflightRegistry {
             deployment_prerequisites::PrivateEndpointAccessCheck,
         ));
         registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::KubernetesBaseDomainCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::ManagedContainerBackendRequiredCheck,
         ));
         registry.add_deployment_prerequisite_check(Box::new(

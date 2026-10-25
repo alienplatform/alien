@@ -353,3 +353,33 @@ const res = await fetch(
 **Air-gapped sites** need `alien-deploy`, a container registry of their own, and a way to move a folder in and out. See [Air-gapped deployments](https://alien.dev/docs/deploying/air-gapped).
 
 **Release** whenever you like. `alien release` reaches every connected customer within a minute, and each air-gapped site on its next trip. To stage releases, use [release channels and pins](https://alien.dev/docs/releases).
+
+## Public services under a customer domain
+
+For a stack with several named public endpoints, set one base domain and one existing
+TLS Secret in the customer's Helm values:
+
+```yaml
+stackSettings:
+  kubernetes:
+    exposure:
+      mode: customBaseDomain
+      baseDomain: app.example.com
+      route:
+        routeApi: ingress
+        ingressClassName: nginx
+      certificate:
+        mode: tlsSecretRef
+        secretName: app-tls
+```
+
+An endpoint named `api` gets `https://api.app.example.com`; endpoints named `portal`
+and `git` get their own hostnames even when they share a container port. Endpoint
+`hostLabel` overrides follow the same rules as generated domains, including `@` for
+the base hostname. Point those DNS names at the ingress controller. The TLS Secret
+must be in the route namespace and cover every hostname (typically
+`*.app.example.com`, plus `app.example.com` when using `@`). Wildcard endpoint
+subdomains need corresponding certificate coverage too.
+
+Use `mode: custom` with `domain: api.example.com` to retain a single literal hostname.
+The base-domain mode checks DNS names and hostname collisions before deployment.

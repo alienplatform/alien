@@ -2013,26 +2013,29 @@ impl KubernetesContainerController {
                 // volumes reported, there is nothing to restore.
                 volumes: Vec::new(),
                 volume_backups: None,
-                public_endpoints: self
-                    .public_endpoint
-                    .effective_public_url()
-                    .map(|url| {
-                        HashMap::from([(
-                            "default".to_string(),
-                            PublicEndpointOutput {
-                                host: public_url_host(&url).unwrap_or_default(),
-                                protocol: alien_core::ExposeProtocol::Http,
-                                port: alien_core::public_url_port(&url).unwrap_or(443),
-                                url,
-                                wildcard_host: None,
-                                load_balancer_endpoint: self
-                                    .public_endpoint
-                                    .load_balancer_endpoint
-                                    .clone(),
-                            },
-                        )])
-                    })
-                    .unwrap_or_default(),
+                public_endpoints: if self.public_endpoint.named_public_endpoints.is_empty() {
+                    self.public_endpoint
+                        .effective_public_url()
+                        .map(|url| {
+                            HashMap::from([(
+                                "default".to_string(),
+                                PublicEndpointOutput {
+                                    host: public_url_host(&url).unwrap_or_default(),
+                                    protocol: alien_core::ExposeProtocol::Http,
+                                    port: alien_core::public_url_port(&url).unwrap_or(443),
+                                    url,
+                                    wildcard_host: None,
+                                    load_balancer_endpoint: self
+                                        .public_endpoint
+                                        .load_balancer_endpoint
+                                        .clone(),
+                                },
+                            )])
+                        })
+                        .unwrap_or_default()
+                } else {
+                    self.public_endpoint.named_public_endpoints.clone()
+                },
             }))
         } else {
             None
