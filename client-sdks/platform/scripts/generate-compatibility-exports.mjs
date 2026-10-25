@@ -550,3 +550,18 @@ export type MaxRisk = CreateAccessRequestMaxRisk;
 export const MaxRisk$outboundSchema = CreateAccessRequestMaxRisk$outboundSchema;
 `;
 await writeFile(accessRequestUrl, `${accessRequestSource}${accessRequestAliases}`);
+
+// Reservation command variants disambiguate the preparation response models.
+// Preserve their published names, parsers and deep imports.
+const preparationUrl = new URL("deploymentpreparationresponse.ts", models);
+const preparationMarker = "\n// Published preparation compatibility exports.\n";
+const preparationSource = (await readFile(preparationUrl, "utf8")).split(preparationMarker)[0];
+const preparationAliases = ["Linux", "Mac", "CommandVariants"].flatMap(name => {
+  const parser = name[0].toLowerCase() + name.slice(1);
+  return [
+    `export type { DeploymentPreparationResponse${name} as ${name} };`,
+    `export { DeploymentPreparationResponse${name}$inboundSchema as ${name}$inboundSchema };`,
+    `export { deploymentPreparationResponse${name}FromJSON as ${parser}FromJSON };`,
+  ];
+});
+await writeFile(preparationUrl, `${preparationSource}${preparationMarker}${preparationAliases.join("\n")}\n`);

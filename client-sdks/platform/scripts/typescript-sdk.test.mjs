@@ -545,3 +545,18 @@ test("published external-binding endpoint models retain root and deep imports", 
     assert.deepEqual(models.endpointSecretRefFromJSON(JSON.stringify(endpoint.secretRef)), { ok: true, value: endpoint.secretRef });
   }
 });
+
+test("published preparation imports parse command variants at root and deep paths", async () => {
+  const root = await import("../typescript/esm/models/index.js");
+  const deep = await import("../typescript/esm/models/deploymentpreparationresponse.js");
+  const command = { install: "install example", command: "example start" };
+  const variants = { linux: command, mac: command, windows: command };
+  for (const exports of [root, deep]) {
+    for (const [name, value] of [["Linux", command], ["Mac", command], ["CommandVariants", variants]]) {
+      const parser = name[0].toLowerCase() + name.slice(1) + "FromJSON";
+      assert.deepEqual(exports[`${name}$inboundSchema`].parse(value), value);
+      assert.deepEqual(exports[parser](JSON.stringify(value)), { ok: true, value });
+      assert.equal(exports[parser]('{"install":123}').ok, false);
+    }
+  }
+});

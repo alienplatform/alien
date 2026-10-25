@@ -238,3 +238,14 @@ export function deploymentPreparationResponseFromJSON(
     `Failed to parse 'DeploymentPreparationResponse' from JSON`,
   );
 }
+
+// Published preparation compatibility exports.
+export type { DeploymentPreparationResponseLinux as Linux };
+export { DeploymentPreparationResponseLinux$inboundSchema as Linux$inboundSchema };
+export { deploymentPreparationResponseLinuxFromJSON as linuxFromJSON };
+export type { DeploymentPreparationResponseMac as Mac };
+export { DeploymentPreparationResponseMac$inboundSchema as Mac$inboundSchema };
+export { deploymentPreparationResponseMacFromJSON as macFromJSON };
+export type { DeploymentPreparationResponseCommandVariants as CommandVariants };
+export { DeploymentPreparationResponseCommandVariants$inboundSchema as CommandVariants$inboundSchema };
+export { deploymentPreparationResponseCommandVariantsFromJSON as commandVariantsFromJSON };
