@@ -1,7 +1,7 @@
 //! Deferred propagation-window checks for retained storage. Call after disabling expiry.
 use crate::{ErrorData, Result};
-use alien_error::AlienError;
-use alien_gcp_clients::gcs::Bucket;
+use alien_error::{AlienError, Context};
+use alien_gcp_clients::gcs::{Bucket, GcsApi, Lifecycle};
 use serde_json::Value;
 /// A disabled Azure rule can finish an already-running lifecycle batch for up to 24 hours.
 /// Refuse handoff until the setup owner disabled every applicable delete and its policy
@@ -116,9 +116,131 @@ fn invalid(id: &str, message: &str) -> AlienError<ErrorData> {
     })
 }
 
+fn cloud_error(id: &str) -> ErrorData {
+    ErrorData::CloudPlatformError {
+        resource_id: Some(id.to_string()),
+        message: "Failed to protect retained storage; restore the required setup grants and retry deletion".to_string(),
+    }
+}
+
+pub async fn stop_gcs_lifecycle(
+    client: &dyn GcsApi,
+    bucket: &str,
+    id: &str,
+    observed: &Bucket,
+    wait_for_propagation: bool,
+) -> Result<()> {
+    let has_rules = |bucket: &Bucket| {
+        bucket
+            .lifecycle
+            .as_ref()
+            .and_then(|lifecycle| lifecycle.rule.as_ref())
+            .is_some_and(|rules| !rules.is_empty())
+    };
+    if !has_rules(observed) {
+        return if wait_for_propagation {
+            verify_gcs_expiry_window(observed, id, chrono::Utc::now())
+        } else {
+            Ok(())
+        };
+    }
+    // Persist the timestamp atomically with disabling expiry. Cloud metadata survives
+    // a lost response or a process restart, unlike an in-memory deletion receipt.
+    let disabled = chrono::Utc::now().timestamp().to_string();
+    let mut labels = observed.labels.clone().unwrap_or_default();
+    labels.insert(GCS_EXPIRY_DISABLED_AT.to_owned(), disabled.clone());
+    // This is an owned bucket, not an account-level policy. Remove all lifecycle
+    // actions without round-tripping incomplete models of foreign rule conditions.
+    // Explicit [] is required: an empty lifecycle object preserves existing rules.
+    client
+        .update_bucket(
+            bucket.to_string(),
+            Bucket {
+                lifecycle: Some(Lifecycle { rule: Some(vec![]) }),
+                labels: Some(labels),
+                ..Default::default()
+            },
+        )
+        .await
+        .context(cloud_error(id))?;
+    let confirmed = client
+        .get_bucket(bucket.to_string())
+        .await
+        .context(cloud_error(id))?;
+    if has_rules(&confirmed) {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            resource_id: Some(id.to_string()),
+            message: "GCS still reports lifecycle rules on the retained bucket; retry before removing access".to_string(),
+        }));
+    }
+    if confirmed
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get(GCS_EXPIRY_DISABLED_AT))
+        != Some(&disabled)
+    {
+        return Err(invalid(
+            id,
+            "GCS has not confirmed the persisted expiry-disable timestamp; retry before removing access",
+        ));
+    }
+    // Runtime can now remove workloads/access. The privileged setup handoff,
+    // which includes Frozen scope, checks the durable 24-hour window before Retained.
+    if wait_for_propagation {
+        verify_gcs_expiry_window(&confirmed, id, chrono::Utc::now())
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_client_core::ErrorData as ClientError;
+    use alien_gcp_clients::gcs::MockGcsApi;
+    #[tokio::test]
+    async fn gcs_lifecycle_removal_refuses_denied_patch_and_unconfirmed_readback() {
+        for denied in [true, false] {
+            let mut api = MockGcsApi::new();
+            let observed = Bucket {
+                lifecycle: Some(Lifecycle {
+                    rule: Some(vec![alien_gcp_clients::gcs::LifecycleRule::default()]),
+                }),
+                ..Default::default()
+            };
+            api.expect_update_bucket()
+                .times(1)
+                .returning(move |_, patch| {
+                    assert_eq!(
+                        serde_json::to_value(&patch.lifecycle).unwrap(),
+                        json!({"rule":[]})
+                    );
+                    assert!(patch
+                        .labels
+                        .as_ref()
+                        .unwrap()
+                        .contains_key(GCS_EXPIRY_DISABLED_AT));
+                    if denied {
+                        Err(AlienError::new(ClientError::RemoteAccessDenied {
+                            resource_type: "bucket".into(),
+                            resource_name: "owned-data".into(),
+                        }))
+                    } else {
+                        Ok(patch)
+                    }
+                });
+            let readback = observed.clone();
+            api.expect_get_bucket()
+                .times(usize::from(!denied))
+                .returning(move |_| Ok(readback.clone()));
+            assert!(
+                stop_gcs_lifecycle(&api, "owned-data", "data", &observed, true)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
     use serde_json::json;
     #[test]
     fn gcs_expiry_receipt_requires_a_full_day_and_rejects_unknown_or_future_times() {

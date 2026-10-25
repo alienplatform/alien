@@ -36,5 +36,6 @@ pub use fixtures::*;
 
 mod expiry_wait;
 pub use expiry_wait::{
-    verify_azure_retention_policy, verify_gcs_expiry_window, GCS_EXPIRY_DISABLED_AT,
+    stop_gcs_lifecycle, verify_azure_retention_policy, verify_gcs_expiry_window,
+    GCS_EXPIRY_DISABLED_AT,
 };
