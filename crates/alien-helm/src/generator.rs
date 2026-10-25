@@ -370,6 +370,10 @@ fn generate_helm_chart_internal(
         "templates/_infrastructure.tpl".into(),
         infrastructure_helpers_tpl(),
     );
+    files.insert(
+        "templates/postgres.yaml".into(),
+        crate::postgres::TEMPLATE.into(),
+    );
 
     // Per-resource extra templates contributed by emitters.
     for (path, contents) in &analysis.extra_templates {
@@ -397,6 +401,14 @@ fn generate_helm_chart_internal(
         bootstrap_values_example(),
     );
     let mut readme = readme_md(&chart_name);
+    if analysis
+        .postgres
+        .as_object()
+        .is_some_and(|databases| !databases.is_empty())
+    {
+        readme.push_str(crate::postgres::README);
+    }
+
     if has_remote_operator {
         readme.push_str(
             "\n## Runtime cleanup and Helm history\n\nRuntime cleanup and Pod log collection default to the deployment resource prefix (`serviceAccountPrefix`). Helm upgrades automatically preserve the existing immutable cleanup scope. Pod log collection follows the resource prefix independently. For GitOps or offline rendering, set `logCollector.scope.deploymentLabelValue` to the installed cleanup ConfigMap’s `data.labelValue` before upgrading, and render upgrades with `helm template --is-upgrade`; without cluster lookup an upgrade with no explicit scope is refused. Renderers that do not identify upgrades must preserve this value explicitly. Use `logCollector.scope.podLabelKey` and `podLabelValue` to override workload log selection. An older mismatched cleanup scope does not remove those workloads; they require separately scoped cleanup.\n\nRuntime cleanup uses the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set `runtime.cleanup.onUninstall.helmHistoryBackend=configmap`. The SQL and memory backends are unsupported because the chart cannot verify and prune unsafe rollback history.\n\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Install or upgrade the chart once with it disabled, then enable it in a second upgrade with `remoteOperator.bootstrapIdentity=true`; this proves that Helm uses a supported Kubernetes history backend before any durable identity is created. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Protected upgrades use the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set both `runtime.cleanup.onUninstall.helmHistoryBackend=configmap` and `remoteOperator.helmHistoryBackend=configmap`. Before identity creation, a credential-free one-shot Job mounts the exact pending Helm record from that backend and verifies a render-specific proof, so stale records cannot authorize an upgrade. The SQL and memory storage backends are rejected because the chart cannot verify or prune their rollback history. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
@@ -3744,6 +3756,7 @@ struct ChartAnalysis {
     service_accounts: BTreeSet<String>,
     service_account_rbac: BTreeMap<String, Vec<KubernetesRoleRule>>,
     infrastructure: Vec<InfrastructureValue>,
+    postgres: serde_json::Value,
     services: Vec<ServiceValue>,
     extra_templates: IndexMap<String, String>,
     /// The stack has a Sandbox, so application pods must reach the session broker the
@@ -3760,7 +3773,10 @@ struct KubernetesRoleRule {
 
 impl ChartAnalysis {
     fn from_stack(stack: &Stack, registry: &HelmRegistry) -> Result<Self> {
-        let mut analysis = Self::default();
+        let mut analysis = Self {
+            postgres: crate::postgres::values(stack),
+            ..Self::default()
+        };
         if let Some(access) = crate::emitters::sandbox_gateway_access::template(stack)? {
             analysis
                 .extra_templates
@@ -4211,6 +4227,15 @@ ephemeralStorage:
   nodeSelector: {}
 "#,
     );
+    yaml.push_str("\n# Frozen databases. An infrastructure binding overrides the corresponding database.\npostgres: ");
+    yaml.push_str(
+        &serde_json::to_string(&analysis.postgres)
+            .into_alien_error()
+            .context(ErrorData::JsonSerializationFailed {
+                reason: "serializing Postgres chart defaults".into(),
+            })?,
+    );
+    yaml.push('\n');
     Ok(yaml)
 }
 
@@ -4994,6 +5019,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       },
       "additionalProperties": true
     },
+    "postgres": { "type": "object" },
     "infrastructure": { "type": ["object", "null"] },
     "infrastructureExistingSecret": { "type": "string" },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
@@ -5812,10 +5838,7 @@ data:
 }
 
 fn infrastructure_helpers_tpl() -> String {
-    r#"{{- define "deployment.infrastructure" -}}
-{{- default dict .Values.infrastructure | toJson -}}
-{{- end -}}
-"#.into()
+    crate::postgres::HELPERS.into()
 }
 
 fn secret_tpl() -> String {

@@ -590,7 +590,19 @@ pub fn chart_images(chart: &Path) -> Result<BTreeMap<String, String>> {
     .context(invalid("the chart's values.yaml is not valid YAML"))?;
 
     let mut images = BTreeMap::new();
-    for key in CHART_IMAGE_VALUES {
+    let mut image_keys: Vec<String> = CHART_IMAGE_VALUES
+        .iter()
+        .map(|key| (*key).to_string())
+        .collect();
+    if let Some(databases) = values
+        .get("postgres")
+        .and_then(serde_yaml::Value::as_mapping)
+    {
+        for id in databases.keys().filter_map(serde_yaml::Value::as_str) {
+            image_keys.push(format!("postgres.{id}.image"));
+        }
+    }
+    for key in image_keys {
         let image = key
             .split('.')
             .try_fold(&values, |value, part| value.get(part));
@@ -890,7 +902,20 @@ mod tests {
     fn chart_images_are_the_images_a_packaged_chart_runs() {
         // A chart packaged the way a manager serves it, with a digest-pinned
         // Operator the way published charts pin it.
-        let stack = alien_core::Stack::new("app".to_string()).build();
+        let stack = alien_core::Stack::new("app".to_string())
+            .add(
+                alien_core::Postgres::new("database".into())
+                    .version("16".into())
+                    .build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Postgres::new("analytics".into())
+                    .version("17".into())
+                    .build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
         let chart = generate_helm_chart(
             &stack,
             HelmOptions {
@@ -923,6 +948,14 @@ mod tests {
         assert_eq!(
             images,
             BTreeMap::from([
+                (
+                    "postgres.database.image".into(),
+                    "pgvector/pgvector:pg16-bookworm".into()
+                ),
+                (
+                    "postgres.analytics.image".into(),
+                    "pgvector/pgvector:pg17-bookworm".into()
+                ),
                 (
                     "runtime.image".to_string(),
                     format!("registry.example.com/alien-operator:{tag}")
