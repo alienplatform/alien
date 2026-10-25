@@ -17,8 +17,9 @@ use crate::kubernetes_public_endpoint::{
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+    deployment_has_ready_replicas, deployment_rollout_complete, emit_kubernetes_workload_heartbeat,
+    label_selector, statefulset_has_ready_replicas, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -48,23 +49,6 @@ use crate::core::applicable_secret_environment_variables;
 // legitimate provisioning phase; terminal pull failures still surface through
 // workload heartbeats and events.
 const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
-
-fn workload_ready(
-    desired_replicas: i32,
-    ready_replicas: Option<i32>,
-    replicas: Option<i32>,
-    observed_generation: Option<i64>,
-    generation: Option<i64>,
-) -> bool {
-    if desired_replicas == 0 {
-        // Kubernetes omits zero replica counters. Wait for the controller to
-        // observe this generation before accepting the scaled-down workload.
-        return observed_generation.is_some_and(|observed| observed >= generation.unwrap_or(1))
-            && ready_replicas.unwrap_or(0) == 0
-            && replicas.unwrap_or(0) == 0;
-    }
-    matches!((ready_replicas, replicas), (Some(ready), Some(total)) if total > 0 && ready >= desired_replicas.min(total))
-}
 
 async fn create_registry_pull_secret(
     secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
@@ -129,28 +113,6 @@ const GATEWAY_RESTART_SETTINGS_ENV: &str = "ALIEN_EGRESS_GATEWAY_RESTART_SETTING
 
 fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
-}
-
-fn deployment_rollout_complete(
-    deployment: &Deployment,
-    desired_replicas: i32,
-    expected_generation: Option<i64>,
-) -> bool {
-    let (Some(generation), Some(status)) = (deployment.metadata.generation, &deployment.status)
-    else {
-        return false;
-    };
-
-    // Ready replicas can still belong to the old ReplicaSet after an update.
-    Some(generation) == expected_generation
-        && status
-            .observed_generation
-            .is_some_and(|observed| observed >= generation)
-        // Kubernetes omits replica counters when a Deployment is scaled to
-        // zero. An observed generation is enough to complete that rollout.
-        && status.updated_replicas.unwrap_or(0) == desired_replicas
-        && status.replicas.unwrap_or(0) == desired_replicas
-        && status.available_replicas.unwrap_or(0) >= desired_replicas
 }
 
 fn statefulset_rollout_complete(
@@ -559,7 +521,7 @@ impl KubernetesContainerController {
             .await?;
 
         // Check workload status (different API for Deployment vs StatefulSet)
-        let (ready_replicas, replicas, observed_generation, generation) = if self.is_stateful {
+        let (ready_replicas, replicas, healthy) = if self.is_stateful {
             match deployment_client
                 .get_statefulset(namespace, workload_name)
                 .await
@@ -569,11 +531,10 @@ impl KubernetesContainerController {
                         (
                             status.ready_replicas,
                             Some(status.replicas),
-                            status.observed_generation,
-                            statefulset.metadata.generation,
+                            statefulset_has_ready_replicas(&statefulset),
                         )
                     } else {
-                        (None, None, None, None)
+                        (None, None, false)
                     }
                 }
                 Err(e)
@@ -583,7 +544,7 @@ impl KubernetesContainerController {
                     ) =>
                 {
                     debug!(workload_name=%workload_name, "StatefulSet not yet available, continuing to wait");
-                    (None, None, None, None)
+                    (None, None, false)
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -602,11 +563,10 @@ impl KubernetesContainerController {
                         (
                             status.ready_replicas,
                             status.replicas,
-                            status.observed_generation,
-                            deployment.metadata.generation,
+                            deployment_has_ready_replicas(&deployment),
                         )
                     } else {
-                        (None, None, None, None)
+                        (None, None, false)
                     }
                 }
                 Err(e)
@@ -616,7 +576,7 @@ impl KubernetesContainerController {
                     ) =>
                 {
                     debug!(workload_name=%workload_name, "Deployment not yet available, continuing to wait");
-                    (None, None, None, None)
+                    (None, None, false)
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -627,14 +587,7 @@ impl KubernetesContainerController {
             }
         };
 
-        // Check if ready
-        if workload_ready(
-            config.replicas.unwrap_or(1) as i32,
-            ready_replicas,
-            replicas,
-            observed_generation,
-            generation,
-        ) {
+        if healthy {
             let workload_type = if self.is_stateful {
                 "StatefulSet"
             } else {
@@ -828,16 +781,24 @@ impl KubernetesContainerController {
                 }
             }
 
-            if let (Some(ready_replicas), Some(replicas)) = (ready_replicas, replicas) {
-                if ready_replicas < replicas {
-                    return Err(AlienError::new(ErrorData::ResourceDrift {
-                        resource_id: config.id.clone(),
-                        message: format!(
-                            "Container workload has {} ready replicas out of {} total",
-                            ready_replicas, replicas
-                        ),
-                    }));
+            let healthy = match &workload {
+                KubernetesWorkload::Deployment(deployment) => {
+                    deployment_has_ready_replicas(deployment)
                 }
+                KubernetesWorkload::StatefulSet(statefulset) => {
+                    statefulset_has_ready_replicas(statefulset)
+                }
+                KubernetesWorkload::DaemonSet(_) => false,
+            };
+            if !healthy {
+                return Err(AlienError::new(ErrorData::ResourceDrift {
+                    resource_id: config.id.clone(),
+                    message: format!(
+                        "Container workload has {} ready replicas out of {} observed",
+                        ready_replicas.unwrap_or(0),
+                        replicas.unwrap_or(0)
+                    ),
+                }));
             }
 
             let labels = self.build_labels(workload_name);
@@ -2829,6 +2790,10 @@ mod tests {
                 generation: Some(2),
                 ..Default::default()
             },
+            spec: Some(DeploymentSpec {
+                replicas: Some(0),
+                ..Default::default()
+            }),
             status: Some(DeploymentStatus {
                 observed_generation: Some(1),
                 ..Default::default()
@@ -2872,15 +2837,6 @@ mod tests {
         statefulset.metadata.generation = Some(1);
         statefulset.status.as_mut().unwrap().observed_generation = Some(1);
         assert!(!statefulset_rollout_complete(&statefulset, 1, Some(2)));
-    }
-
-    #[test]
-    fn zero_replica_workload_waits_for_the_controller_to_observe_its_generation() {
-        assert!(!workload_ready(0, None, None, None, Some(1)));
-        assert!(!workload_ready(0, None, None, Some(1), Some(2)));
-        assert!(!workload_ready(0, Some(1), Some(1), Some(2), Some(2)));
-        assert!(workload_ready(0, None, None, Some(2), Some(2)));
-        assert!(workload_ready(1, Some(1), Some(1), Some(2), Some(2)));
     }
 
     #[test]

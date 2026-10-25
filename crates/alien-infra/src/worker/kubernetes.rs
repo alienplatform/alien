@@ -11,8 +11,9 @@ use crate::kubernetes_public_endpoint::{
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+    deployment_has_ready_replicas, deployment_rollout_complete, emit_kubernetes_workload_heartbeat,
+    label_selector, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -241,22 +242,14 @@ impl KubernetesWorkerController {
             .await
         {
             Ok(deployment) => {
-                if let Some(status) = &deployment.status {
-                    if let (Some(ready_replicas), Some(replicas)) =
-                        (status.ready_replicas, status.replicas)
-                    {
-                        if ready_replicas == replicas && replicas > 0 {
-                            info!(deployment_name=%deployment_name, namespace=%namespace, "Deployment is ready");
-
-                            return Ok(HandlerAction::Continue {
-                                state: ReconcilePublicEndpoint,
-                                suggested_delay: None,
-                            });
-                        } else {
-                            debug!(deployment_name=%deployment_name, ready=%ready_replicas, total=%replicas, "Deployment not yet ready");
-                        }
-                    }
+                if deployment_has_ready_replicas(&deployment) {
+                    info!(deployment_name=%deployment_name, namespace=%namespace, "Deployment is ready");
+                    return Ok(HandlerAction::Continue {
+                        state: ReconcilePublicEndpoint,
+                        suggested_delay: None,
+                    });
                 }
+                debug!(deployment_name=%deployment_name, "Deployment not yet ready");
             }
             Err(e)
                 if matches!(
@@ -393,20 +386,11 @@ impl KubernetesWorkerController {
                 }
             }
 
-            if let Some(status) = deployment.status.clone() {
-                if let (Some(ready_replicas), Some(replicas)) =
-                    (status.ready_replicas, status.replicas)
-                {
-                    if ready_replicas < replicas {
-                        return Err(AlienError::new(ErrorData::ResourceDrift {
-                            resource_id: config.id.clone(),
-                            message: format!(
-                                "Deployment has {} ready replicas out of {} total",
-                                ready_replicas, replicas
-                            ),
-                        }));
-                    }
-                }
+            if !deployment_has_ready_replicas(&deployment) {
+                return Err(AlienError::new(ErrorData::ResourceDrift {
+                    resource_id: config.id.clone(),
+                    message: "Deployment does not have the requested ready replicas".into(),
+                }));
             }
 
             reconcile_ready_command_service(
@@ -696,21 +680,20 @@ impl KubernetesWorkerController {
             .await
         {
             Ok(deployment) => {
-                if let Some(status) = &deployment.status {
-                    if let (Some(ready_replicas), Some(replicas)) =
-                        (status.ready_replicas, status.replicas)
-                    {
-                        if ready_replicas >= replicas && replicas > 0 {
-                            info!(deployment_name=%deployment_name, "Deployment rollout complete");
-                            return Ok(HandlerAction::Continue {
-                                state: ReconcilePublicEndpointAfterUpdate,
-                                suggested_delay: None,
-                            });
-                        } else {
-                            debug!(deployment_name=%deployment_name, ready=%ready_replicas, total=%replicas, "Deployment rollout in progress");
-                        }
-                    }
+                let desired = deployment
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.replicas)
+                    .unwrap_or(1);
+                if deployment_rollout_complete(&deployment, desired, deployment.metadata.generation)
+                {
+                    info!(deployment_name=%deployment_name, "Deployment rollout complete");
+                    return Ok(HandlerAction::Continue {
+                        state: ReconcilePublicEndpointAfterUpdate,
+                        suggested_delay: None,
+                    });
                 }
+                debug!(deployment_name=%deployment_name, "Deployment rollout in progress");
             }
             Err(e) => {
                 return Err(e.context(ErrorData::CloudPlatformError {
