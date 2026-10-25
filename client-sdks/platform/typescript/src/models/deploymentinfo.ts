@@ -2208,6 +2208,10 @@ export type DeploymentInfo = {
   installContext: DeploymentInfoInstallContext;
   supportedRegions: SupportedCloudRegions;
   modelAvailabilitySources: Array<ModelAvailabilitySource>;
+  /**
+   * Whether the workspace plan permits air-gapped delivery. Link policy and Kubernetes support must also allow it.
+   */
+  airgappedAvailableOnPlan?: boolean | undefined;
   setupItems?: Array<SetupItemStatus> | undefined;
   setupConfig?: DeploymentInfoSetupConfig | undefined;
   readiness?: Readiness | undefined;
@@ -5183,6 +5187,7 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
     modelAvailabilitySources: z.array(
       z.lazy(() => ModelAvailabilitySource$inboundSchema),
     ),
+    airgappedAvailableOnPlan: z.boolean().optional(),
     setupItems: z.array(SetupItemStatus$inboundSchema).optional(),
     setupConfig: DeploymentInfoSetupConfig$inboundSchema.optional(),
     readiness: z.lazy(() => Readiness$inboundSchema).optional(),
