@@ -1250,9 +1250,21 @@ impl DeploymentStore for SqliteDeploymentStore {
             alien_core::DeletionPolicy::Retain => "retain",
             alien_core::DeletionPolicy::Erase => "erase",
         };
+        // Retention removed the cloud management identity. A later erase must
+        // use the setup authority's credentials, including for retained Live data.
+        let next_status = if deployment.status == "retained"
+            && policy == alien_core::DeletionPolicy::Erase
+            && matches!(
+                deployment.platform,
+                alien_core::Platform::Aws | alien_core::Platform::Gcp | alien_core::Platform::Azure
+            ) {
+            "teardown-required"
+        } else {
+            "delete-pending"
+        };
         let sql = Query::update()
             .table(Deployments::Table)
-            .value(Deployments::Status, "delete-pending")
+            .value(Deployments::Status, next_status)
             .value(
                 Deployments::RuntimeMetadata,
                 Expr::cust_with_values(

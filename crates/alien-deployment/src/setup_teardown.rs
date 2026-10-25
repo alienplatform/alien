@@ -308,11 +308,22 @@ async fn run_setup_teardown_after_handoff_inner(
         })
     })?;
 
+    // A later erase runs with setup credentials after runtime access was removed.
+    let lifecycles = if state
+        .runtime_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.deletion_policy == alien_core::DeletionPolicy::Erase)
+    {
+        vec![ResourceLifecycle::Frozen, ResourceLifecycle::Live]
+    } else {
+        vec![ResourceLifecycle::Frozen]
+    };
+
     let executor = match StackExecutor::for_deletion_with_service_provider(
         client_config.clone(),
         config,
         service_provider,
-        Some(vec![ResourceLifecycle::Frozen]),
+        Some(lifecycles.clone()),
     )
     .and_then(|executor| executor.preserving_resources(&stack_state, retained.clone()))
     .context(ErrorData::StackExecutionFailed {
@@ -326,7 +337,7 @@ async fn run_setup_teardown_after_handoff_inner(
     };
 
     let prepared = if retained.is_empty() {
-        stack_state.prepare_for_teardown_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+        stack_state.prepare_for_teardown_with_lifecycle_filter(&lifecycles)
     } else {
         executor.prepare_for_deletion(&mut stack_state)
     };
@@ -357,6 +368,7 @@ async fn run_setup_teardown_after_handoff_inner(
                     message: "Stack state required during setup teardown".to_string(),
                 })
             })?,
+            &lifecycles,
             |resource_id| executor.preserves_resource(resource_id),
         )?;
 
@@ -734,6 +746,7 @@ async fn checkpoint_setup_teardown_state(
 
 fn setup_teardown_status(
     stack_state: &StackState,
+    lifecycles: &[ResourceLifecycle],
     preserved: impl Fn(&str) -> bool,
 ) -> Result<StackStatus> {
     let mut statuses = Vec::new();
@@ -742,8 +755,8 @@ fn setup_teardown_status(
             continue;
         }
         match resource.lifecycle {
-            Some(ResourceLifecycle::Frozen) => statuses.push(resource.status),
-            Some(ResourceLifecycle::Live) => {}
+            Some(lifecycle) if lifecycles.contains(&lifecycle) => statuses.push(resource.status),
+            Some(_) => {}
             None => {
                 return Err(AlienError::new(ErrorData::MissingConfiguration {
                     message: format!(

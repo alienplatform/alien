@@ -3127,18 +3127,37 @@ async fn setup_retention_checkpoint_survives_late_pull_reports_and_reopens_for_e
         .set_delete_pending_with_policy(&subject, &dep.id, alien_core::DeletionPolicy::Erase)
         .await
         .unwrap();
-    let mut erase = test_reconcile_data(&dep.id, "pull", DeploymentStatus::Deleting, None);
-    erase.state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
-    erase.state.runtime_metadata = Some(RuntimeMetadata {
-        deletion_policy: alien_core::DeletionPolicy::Erase,
-        vault_credentials_revoked: true,
-        ..Default::default()
-    });
-    let reopened = store.reconcile(&subject, erase).await.unwrap().record;
-    assert_eq!(reopened.status, "deleting");
+    let reopened = store
+        .get_deployment(&subject, &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened.status, "teardown-required");
     assert_eq!(
         reopened.runtime_metadata.unwrap().deletion_policy,
         alien_core::DeletionPolicy::Erase
+    );
+    let acquired = store
+        .acquire(
+            &subject,
+            "setup-erase",
+            &DeploymentFilter {
+                statuses: Some(vec!["teardown-required".into()]),
+                acquire_mode: Some(DeploymentAcquireMode::SetupTeardown),
+                setup_method: Some("cli".into()),
+                max_deployment_protocol_version: Some(
+                    alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                ),
+                ..Default::default()
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        acquired.len(),
+        1,
+        "later erase is owned by setup, whose credentials still exist"
     );
 }
 
@@ -3176,4 +3195,120 @@ async fn concurrent_completed_retention_cannot_be_overwritten_by_a_pull_report()
         .unwrap();
     assert_eq!(current.status, "retained");
     assert!(current.runtime_metadata.unwrap().vault_credentials_revoked);
+}
+
+mod retention_handoff_tests {
+    use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt};
+    use alien_core::{
+        ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus,
+        EnvironmentVariablesSnapshot, ExternalBindings, Platform, ResourceLifecycle,
+        ResourceStatus, RuntimeMetadata, StackSettings, StackState,
+    };
+    use alien_deployment::{
+        installed_durable_resource_ids,
+        loop_contract::{LoopOperation, LoopOutcome},
+        runner::RunnerPolicy,
+        setup_teardown::run_setup_teardown_after_handoff,
+        transport::{DeploymentLoopTransport, StepReconcileResult},
+    };
+    use alien_error::AlienError;
+    use alien_infra::MockPlatformServiceProvider;
+    use std::sync::Arc;
+
+    struct SetupTransport;
+    #[async_trait::async_trait]
+    impl DeploymentLoopTransport for SetupTransport {
+        async fn reconcile_step(
+            &self,
+            _id: &str,
+            _state: &DeploymentState,
+            _config: &DeploymentConfig,
+            _heartbeat: bool,
+            _delay: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _inventory: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> Result<StepReconcileResult, AlienError> {
+            Ok(StepReconcileResult {
+                state: None,
+                config: None,
+            })
+        }
+    }
+    #[tokio::test]
+    async fn setup_erase_removes_retained_live_bucket() {
+        let mut stack = StackState::with_resource_prefix(Platform::Aws, "test".into());
+        let mut bucket = alien_core::StackResourceState::new_pending(
+            "storage".into(),
+            alien_core::Resource::new(alien_core::Storage::new("data".into()).build()),
+            None,
+            Vec::new(),
+        );
+        bucket.lifecycle = Some(ResourceLifecycle::Live);
+        bucket.status = ResourceStatus::Running;
+        bucket.internal_state = Some(serde_json::json!({
+            "type": "AwsStorageController", "_controllerStateVersion": 1,
+            "state": "ready", "bucketName": "test-data"
+        }));
+        stack.resources.insert("data".into(), bucket);
+        let mut state = DeploymentState::builder()
+            .status(DeploymentStatus::TeardownRequired)
+            .platform(Platform::Aws)
+            .stack_state(stack)
+            .runtime_metadata(RuntimeMetadata {
+                deletion_policy: alien_core::DeletionPolicy::Erase,
+                ..Default::default()
+            })
+            .retry_requested(false)
+            .protocol_version(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION)
+            .build();
+        let mut s3 = alien_aws_clients::s3::MockS3Api::new();
+        s3.expect_get_bucket_tagging().times(1).returning(|name| {
+            assert_eq!(name, "test-data");
+            Ok(alien_core::standard_resource_tags("test", "data"))
+        });
+        s3.expect_empty_bucket().times(1).returning(|name| {
+            assert_eq!(name, "test-data");
+            Ok(())
+        });
+        s3.expect_delete_bucket().times(1).returning(|name| {
+            assert_eq!(name, "test-data");
+            Ok(())
+        });
+        let s3 = Arc::new(s3);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_s3_client()
+            .returning(move |_| Ok(s3.clone()));
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let result = run_setup_teardown_after_handoff(
+            &mut state,
+            &mut config,
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            "test",
+            &RunnerPolicy {
+                operation: LoopOperation::Delete,
+                ..Default::default()
+            },
+            &SetupTransport,
+            Some(Arc::new(provider)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.loop_result.outcome, LoopOutcome::Success);
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["data"].status,
+            ResourceStatus::Deleted
+        );
+    }
 }
