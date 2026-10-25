@@ -425,7 +425,7 @@ impl StackStateExt for StackState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DestroyPreparationMode {
+pub(super) enum DestroyPreparationMode {
     Delete,
     Teardown,
 }
@@ -458,7 +458,7 @@ fn is_runtime_cleanup_resource(
     ))
 }
 
-fn prepare_for_destroy_matching(
+pub(super) fn prepare_for_destroy_matching(
     stack_state: &mut StackState,
     should_prepare: impl Fn(&StackResourceState) -> Result<bool>,
     mode: DestroyPreparationMode,

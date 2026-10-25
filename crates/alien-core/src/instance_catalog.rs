@@ -45,59 +45,29 @@ pub fn parse_memory_bytes(s: &str) -> Result<u64, String> {
         return Err("empty memory/storage string".to_string());
     }
 
-    // Binary suffixes (powers of 1024)
-    if let Some(num) = s.strip_suffix("Ti") {
-        let v: f64 = num
-            .parse()
-            .map_err(|_| format!("invalid memory value: '{s}'"))?;
-        return Ok((v * 1024.0 * 1024.0 * 1024.0 * 1024.0) as u64);
+    for (suffix, multiplier) in [
+        ("Ti", 1024_f64.powi(4)),
+        ("Gi", 1024_f64.powi(3)),
+        ("Mi", 1024_f64.powi(2)),
+        ("Ki", 1024_f64),
+        ("T", 1_000_000_000_000_f64),
+        ("G", 1_000_000_000_f64),
+        ("M", 1_000_000_f64),
+        ("k", 1_000_f64),
+    ] {
+        if let Some(number) = s.strip_suffix(suffix) {
+            let value: f64 = number
+                .parse()
+                .map_err(|_| format!("invalid memory value: '{s}'"))?;
+            let bytes = value * multiplier;
+            // Float-to-integer casts saturate negatives, infinity and NaN instead of
+            // returning an error. Reject them before a sizing request reaches a provider.
+            if !bytes.is_finite() || bytes < 0.0 || bytes >= u64::MAX as f64 {
+                return Err(format!("memory value is out of range: '{s}'"));
+            }
+            return Ok(bytes as u64);
+        }
     }
-    if let Some(num) = s.strip_suffix("Gi") {
-        let v: f64 = num
-            .parse()
-            .map_err(|_| format!("invalid memory value: '{s}'"))?;
-        return Ok((v * 1024.0 * 1024.0 * 1024.0) as u64);
-    }
-    if let Some(num) = s.strip_suffix("Mi") {
-        let v: f64 = num
-            .parse()
-            .map_err(|_| format!("invalid memory value: '{s}'"))?;
-        return Ok((v * 1024.0 * 1024.0) as u64);
-    }
-    if let Some(num) = s.strip_suffix("Ki") {
-        let v: f64 = num
-            .parse()
-            .map_err(|_| format!("invalid memory value: '{s}'"))?;
-        return Ok((v * 1024.0) as u64);
-    }
-
-    // Decimal suffixes (powers of 1000)
-    if let Some(num) = s.strip_suffix('T') {
-        let v: f64 = num
-            .parse()
-            .map_err(|_| format!("invalid memory value: '{s}'"))?;
-        return Ok((v * 1_000_000_000_000.0) as u64);
-    }
-    if let Some(num) = s.strip_suffix('G') {
-        let v: f64 = num
-            .parse()
-            .map_err(|_| format!("invalid memory value: '{s}'"))?;
-        return Ok((v * 1_000_000_000.0) as u64);
-    }
-    if let Some(num) = s.strip_suffix('M') {
-        let v: f64 = num
-            .parse()
-            .map_err(|_| format!("invalid memory value: '{s}'"))?;
-        return Ok((v * 1_000_000.0) as u64);
-    }
-    if let Some(num) = s.strip_suffix('k') {
-        let v: f64 = num
-            .parse()
-            .map_err(|_| format!("invalid memory value: '{s}'"))?;
-        return Ok((v * 1000.0) as u64);
-    }
-
-    // Plain bytes
     s.parse()
         .map_err(|_| format!("invalid memory value: '{s}'"))
 }

@@ -15,6 +15,7 @@ pub struct AwsArtifactRegistryEmitter;
 impl CfEmitter for AwsArtifactRegistryEmitter {
     fn emit_resources(&self, ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         let registry = resource_config::<ArtifactRegistry>(ctx, ArtifactRegistry::RESOURCE_TYPE)?;
+        registry.validate_aws_replication()?;
         let logical_id = required_logical_id(ctx)?;
         let repository_id = format!("{logical_id}Repository");
         let pull_role_id = format!("{logical_id}PullRole");

@@ -15,6 +15,7 @@ use crate::traits::PostgresConnectionParams;
 use alien_aws_clients::secrets_manager::{GetSecretValueRequest, SecretsManagerApi};
 use alien_core::bindings::AuroraPostgresBinding;
 use alien_error::{AlienError, Context};
+use serde::Deserialize;
 use std::sync::Arc;
 
 /// Reads the password from Secrets Manager and resolves the connection parameters.
@@ -45,6 +46,52 @@ pub(crate) async fn resolve(
             database: &binding.database,
             username: &binding.username,
             password: &password,
+            tls: aws_rds_tls_policy(),
+        },
+    )
+}
+
+/// RDS owns both database password changes and the matching secret version.
+/// Read AWSCURRENT for every binding load; never cache a password across rotation.
+pub(crate) async fn resolve_managed(
+    binding_name: &str,
+    binding: &AuroraPostgresBinding,
+    secrets: Arc<dyn SecretsManagerApi>,
+) -> Result<PostgresConnectionParams> {
+    let secret_arn = resolve_secret_locator(
+        binding_name,
+        "passwordSecretArn",
+        &binding.password_secret_arn,
+    )?;
+    let username = resolve_secret_locator(binding_name, "username", &binding.username)?;
+    let document = read_password(binding_name, &secret_arn, secrets.as_ref()).await?;
+    // Do not attach serde errors or the response to diagnostics: either can
+    // contain secret material. A malformed document is a nonretryable value error.
+    #[derive(Deserialize)]
+    struct ManagedCredentials {
+        username: String,
+        password: String,
+    }
+    let credentials = serde_json::from_str::<ManagedCredentials>(&document)
+        .ok()
+        .filter(|value| value.username == username && !value.password.is_empty())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::PostgresSecretValueInvalid {
+                binding_name: binding_name.to_string(),
+                secret: secret_arn,
+                reason:
+                    "Managed credentials require the configured username and a nonempty password"
+                        .to_string(),
+            })
+        })?;
+    resolve_params(
+        binding_name,
+        PostgresConnectionInput {
+            host: &binding.cluster_endpoint,
+            port: &binding.port,
+            database: &binding.database,
+            username: &binding.username,
+            password: &credentials.password,
             tls: aws_rds_tls_policy(),
         },
     )
@@ -157,6 +204,73 @@ mod tests {
             "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@\
              cluster.cluster-abc.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full"
         );
+    }
+
+    #[tokio::test]
+    async fn managed_credentials_follow_rotation_without_changing_connection_identity() {
+        let mut secrets = MockSecretsManagerApi::new();
+        let mut passwords = ["first-password", "rotated-password"].into_iter();
+        secrets
+            .expect_get_secret_value()
+            .times(2)
+            .withf(|request| {
+                request.secret_id == SECRET_ARN
+                    && request.version_id.is_none()
+                    && request.version_stage.is_none()
+            })
+            .returning(move |_| {
+                Ok(response(Some(
+                    &serde_json::json!({"username":"alien", "password":passwords.next().unwrap()})
+                        .to_string(),
+                )))
+            });
+        let secrets = Arc::new(secrets);
+        for password in ["first-password", "rotated-password"] {
+            let params = resolve_managed("db", &binding(), secrets.clone())
+                .await
+                .unwrap();
+            assert_eq!(params.password, password);
+            assert_eq!(params.username, "alien");
+            assert_eq!(
+                params.host,
+                "cluster.cluster-abc.us-east-1.rds.amazonaws.com"
+            );
+            assert_eq!(params.sslmode(), SslMode::VerifyFull);
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_credentials_reject_malformed_or_mismatched_documents_without_secret_diagnostics(
+    ) {
+        for document in [
+            "private-marker",
+            r#"{"username":"other","password":"private-marker"}"#,
+            r#"{"username":"alien","password":""}"#,
+            r#"{"username":"alien","password":{"private-marker":true}}"#,
+            r#"{"username":"alien","password":"private-marker","password":"duplicate"}"#,
+        ] {
+            let mut secrets = MockSecretsManagerApi::new();
+            secrets
+                .expect_get_secret_value()
+                .times(1)
+                .returning(move |_| Ok(response(Some(document))));
+            let error = resolve_managed("db", &binding(), Arc::new(secrets))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "POSTGRES_SECRET_VALUE_INVALID");
+            assert!(!error.retryable);
+            assert!(!format!("{error:?}").contains("private-marker"));
+        }
+        // Existing raw passwords can themselves be JSON. The legacy binding
+        // must keep using the entire value, with no content-based autodetection.
+        let document = r#"{"username":"alien","password":"private-marker"}"#;
+        let mut secrets = MockSecretsManagerApi::new();
+        secrets
+            .expect_get_secret_value()
+            .times(1)
+            .returning(move |_| Ok(response(Some(document))));
+        let params = resolve("db", &binding(), Arc::new(secrets)).await.unwrap();
+        assert_eq!(params.password, document);
     }
 
     /// A failed secret read is upstream/transient — it must stay retryable so an

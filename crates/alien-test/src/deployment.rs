@@ -358,7 +358,7 @@ impl TestDeployment {
             .delete_deployment()
             .id(&self.id)
             .body(alien_manager_api::types::DeleteDeploymentRequest {
-                action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+                action: alien_manager_api::types::DeleteDeploymentAction::Erase,
             })
             .send()
             .await
@@ -423,7 +423,9 @@ impl TestDeployment {
 fn deletion_outcome(status: &str) -> Result<Option<DeletionOutcome>, Box<dyn std::error::Error>> {
     match status {
         "deleted" | "destroyed" => Ok(Some(DeletionOutcome::Deleted)),
-        "teardown-required" | "teardown-failed" => Ok(Some(DeletionOutcome::SetupTeardownRequired)),
+        "retention-required" | "retained" | "teardown-required" | "teardown-failed" => {
+            Ok(Some(DeletionOutcome::SetupTeardownRequired))
+        }
         "delete-failed" => {
             Err(format!("Deployment deletion reached terminal status: {status}").into())
         }

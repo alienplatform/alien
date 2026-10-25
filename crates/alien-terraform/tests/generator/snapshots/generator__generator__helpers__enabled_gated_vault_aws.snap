@@ -9,11 +9,11 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 5.0"
+      version = ">= 6.70"
     }
     random = {
       source  = "hashicorp/random"
-      version = ">= 3.6"
+      version = ">= 3.7.2"
     }
   }
 }
@@ -186,6 +186,237 @@ locals {
   deployment_resources         = concat(var.input_fixture_enabled ? [{ id = "fixture", type = "vault", importData = { accountId = data.aws_caller_identity.current.account_id, region = data.aws_region.current.region, parameterPrefix = "${local.resource_prefix}-fixture" } }] : [])
 }
 
+=== retained-data.json ===
+[]
+
+=== retain-data.py ===
+#!/usr/bin/env python3
+"""Detach the generated setup's retained resources, keeping a recovery receipt."""
+import argparse
+import json
+import os
+import re
+from pathlib import Path
+import subprocess
+import tempfile
+
+
+def tf(*args):
+    return subprocess.check_output([CLI, *args], text=True)
+
+
+def save(path, value):
+    # Publish only a complete, durable record, without replacing an earlier one.
+    # An interrupted write must not leave an empty intent that cannot be recovered.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(value, output, indent=2)
+            output.flush()
+            os.fsync(output.fileno())
+        os.link(temporary, path)
+        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if temporary is not None:
+            temporary.unlink()
+
+
+
+def protect_dynamodb_ttl(state, selected):
+    """Use the installer's AWS credentials; never detach while TTL can still run."""
+    addresses = {item['address'] for item in selected}
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed' or resource.get('type') != 'aws_dynamodb_table':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            if base + suffix not in addresses:
+                continue
+            attributes = instance.get('attributes', {})
+            arn = attributes.get('arn', '')
+            match = re.fullmatch(r'arn:(aws(?:-us-gov|-cn)?):dynamodb:([a-z0-9-]+):([0-9]{12}):table/([a-zA-Z0-9_.-]+)', arn)
+            if not match or attributes.get('id') != match[4]:
+                raise RuntimeError('Refresh the exact DynamoDB table ARN before retention; nothing detached')
+            def aws(operation, *arguments):
+                try:
+                    result = subprocess.check_output(
+                        ['aws', 'dynamodb', operation, '--region', match[2], '--table-name', arn,
+                         *arguments, '--output', 'json', '--no-cli-pager'], text=True)
+                except (FileNotFoundError, subprocess.CalledProcessError) as error:
+                    raise RuntimeError('DynamoDB retention requires AWS CLI with the installer credentials and DescribeTable, DescribeTimeToLive and UpdateTimeToLive permissions; nothing detached') from error
+                return json.loads(result)
+            observed = aws('describe-table').get('Table', {})
+            if observed.get('TableArn') != arn:
+                raise RuntimeError('DynamoDB account/table identity changed; nothing detached')
+            ttl = aws('describe-time-to-live').get('TimeToLiveDescription', {})
+            if ttl.get('TimeToLiveStatus') == 'ENABLED':
+                attribute = ttl.get('AttributeName')
+                if not isinstance(attribute, str) or not attribute:
+                    raise RuntimeError('DynamoDB TTL attribute is unknown; nothing detached')
+                aws('update-time-to-live', '--time-to-live-specification',
+                    json.dumps({'Enabled': False, 'AttributeName': attribute}))
+                ttl = aws('describe-time-to-live').get('TimeToLiveDescription', {})
+            if ttl.get('TimeToLiveStatus') != 'DISABLED':
+                raise RuntimeError('DynamoDB TTL is not confirmed DISABLED. Wait for its transition and rerun this retention command; nothing detached')
+
+
+def installed_inventory(state, module):
+    markers = [resource for resource in state.get('resources', [])
+               if resource.get('mode') == 'managed'
+               and resource.get('type') == 'terraform_data'
+               and resource.get('name') == 'retention_inventory'
+               and resource.get('module', '') == module]
+    if len(markers) != 1 or len(markers[0].get('instances', [])) != 1:
+        raise RuntimeError('Installed retention inventory is unavailable. Upgrade the original resource configuration in place before whole-setup teardown; nothing detached')
+    instance = markers[0]['instances'][0]
+    inventory = instance.get('attributes', {}).get('input', {}).get('value')
+    if (instance.get('deposed') or not isinstance(inventory, dict)
+            or inventory.get('version') != 1
+            or not isinstance(inventory.get('addresses'), list)
+            or not all(isinstance(address, str) for address in inventory['addresses'])):
+        raise RuntimeError('Invalid installed retention inventory; nothing detached')
+    return inventory['addresses']
+
+
+def verify_installed_inventory(state, manifest, module):
+    if installed_inventory(state, module) != manifest:
+        raise RuntimeError('Generated manifest does not match the installed retention inventory; nothing detached')
+
+
+def azure_expiry_guard(state, selected):
+    """Only delete actions that may affect detached blob data block retention."""
+    accounts = set()
+    containers = {}
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            if base + suffix not in selected:
+                continue
+            attributes = instance['attributes']
+            if resource['type'] == 'azurerm_storage_account':
+                accounts.add(attributes['id'].lower())
+            elif resource['type'] == 'azurerm_storage_container':
+                account = attributes.get('storage_account_id')
+                name = attributes.get('name')
+                if not account or not name:
+                    raise RuntimeError('Cannot identify retained Azure container account/name; refresh or upgrade the installed package before detachment')
+                containers.setdefault(account.lower(), set()).add(name)
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed' or resource['type'] != 'azurerm_storage_management_policy':
+            continue
+        for instance in resource.get('instances', []):
+            attributes = instance['attributes']
+            account = attributes.get('storage_account_id', '').lower()
+            if account not in accounts and account not in containers:
+                continue
+            for rule in attributes.get('rule', []):
+                if not rule.get('enabled', True):
+                    continue
+                filters = rule.get('filters') or []
+                prefixes = [prefix for entry in filters for prefix in entry.get('prefix_match') or []]
+                if (account not in accounts and prefixes
+                        and not any(prefix.startswith(name + '/') or (name + '/').startswith(prefix)
+                                    for name in containers[account] for prefix in prefixes)):
+                    continue
+                # Provider state uses -1/null for unset age fields. Tag filters
+                # cannot prove safety: retained blobs may acquire matching tags.
+                actions = rule.get('actions')
+                if not isinstance(actions, list) or not actions:
+                    raise RuntimeError('Unknown applicable Azure lifecycle action; nothing detached')
+                for action in actions:
+                    for kind, blocks in action.items():
+                        if kind not in ('base_blob', 'snapshot', 'version'):
+                            raise RuntimeError('Unknown applicable Azure lifecycle action; nothing detached')
+                        for block in blocks or []:
+                            if any(key.startswith('delete') and value is not None and value != -1
+                                   for key, value in block.items()):
+                                raise RuntimeError('Disable Azure storage lifecycle delete rules affecting retained data, apply; nothing detached')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--detach', action='store_true', help='confirm detachment before whole-setup teardown')
+    parser.add_argument('--module-address', default='', help='exact installed child module address')
+    parser.add_argument('--receipt-dir', type=Path, required=True, help='private recovery directory outside the module')
+    args = parser.parse_args()
+    if os.name != "posix":
+        raise RuntimeError("Use Linux, macOS, or a WSL Linux filesystem for private recovery receipts; native Windows is not supported")
+    manifest_path = Path(__file__).with_name('retained-data.json')
+    manifest = json.loads(manifest_path.read_text())
+    if not isinstance(manifest, list) or not all(isinstance(address, str) for address in manifest):
+        raise RuntimeError('Invalid recovery inventory; nothing detached')
+    prefix = args.module_address + '.' if args.module_address else ''
+    addresses = {prefix + address for address in manifest}
+    # A failed read must abort, never masquerade as an empty installation.
+    state = json.loads(tf('state', 'pull'))
+    if state.get('version') != 4 or not state.get('lineage') or not isinstance(state.get('serial'), int):
+        raise RuntimeError('Unsupported or incomplete Terraform state; nothing detached')
+    verify_installed_inventory(state, manifest, args.module_address)
+    selected = []
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        if base not in addresses:
+            continue
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            resource_id = instance['attributes'].get('id')
+            if not resource_id:
+                raise RuntimeError('Cannot detach a resource without a recovery ID: ' + base + suffix)
+            if resource['type'] == 'google_storage_bucket':
+                rules = instance['attributes'].get('lifecycle_rule') or []
+                if any(action.get('type') == 'Delete' for rule in rules for action in rule.get('action', [])):
+                    raise RuntimeError('Remove Cloud Storage delete lifecycle rules and apply before retaining ' + base + suffix + '; nothing detached')
+            if resource['type'] == 'azurerm_storage_container':
+                if instance['attributes'].get('container_access_type') != 'private':
+                    raise RuntimeError('Set Azure container publicRead=false and apply before retaining ' + base + suffix + '; nothing detached')
+            selected.append({'address': base + suffix, 'id': resource_id})
+    azure_expiry_guard(state, {item['address'] for item in selected})
+    print(json.dumps(selected, indent=2))
+    if not args.detach:
+        return
+    os.umask(0o077)
+    args.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if args.receipt_dir.stat().st_mode & 0o077:
+        raise RuntimeError('Receipt directory must be private (mode 0700)')
+    # One immutable receipt per attempt preserves IDs across partial failures/retries.
+    attempt = Path(tempfile.mkdtemp(prefix='detach-', dir=args.receipt_dir))
+    save(attempt / 'state-before.json', state)
+    save(attempt / 'retained.json', selected)
+    save(attempt / 'manifest.json', manifest)
+    save(attempt / 'source.json', {'directory': str(Path.cwd()), 'lineage': state.get('lineage'), 'serial': state.get('serial'), 'module': args.module_address})
+    # Keep the exact inventory before touching cloud expiry, and stop before any state
+    # removal until every selected table confirms DISABLED. A retry re-reads AWS.
+    protect_dynamodb_ttl(state, selected)
+    # Check for a concurrent writer between inventory and mutation. Terraform locks
+    # the state mutation itself. Operators must serialize this entire teardown with
+    # other Terraform runs, just as they do for a multi-command import procedure.
+    current = json.loads(tf('state', 'pull'))
+    if (current.get('lineage'), current.get('serial')) != (state.get('lineage'), state.get('serial')):
+        raise RuntimeError('Terraform state changed; no resources detached. Retry after the other run finishes.')
+    if selected:
+        subprocess.run([CLI, 'state', 'rm', '-lock-timeout=60s', *[item['address'] for item in selected]], check=True)
+    save(attempt / 'state-after.json', json.loads(tf('state', 'pull')))
+    print('Recovery receipt: ' + str(attempt))
+    print('Data is retained. Access has NOT yet been revoked. Run and review terraform plan -destroy, then apply that destroy plan. Do not run an ordinary apply after detaching.')
+
+
+if __name__ == '__main__':
+    CLI = os.environ.get('TF_CLI', 'terraform')
+    if CLI not in ('terraform', 'tofu'):
+        raise SystemExit('TF_CLI must be terraform or tofu')
+    main()
+
 === registration.tf ===
 resource "terraform_data" "deployment_registration" {
   input = {
@@ -327,3 +558,35 @@ This module exposes `deployment_management_config`, `deployment_stack_settings`,
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
 - `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.
+## Retain AWS setup data during uninstall
+
+Setup-owned S3 buckets, DynamoDB tables, ECR repositories and Aurora PostgreSQL databases are protected against replacement and destroy. This includes empty resources. Their KMS keys survive with them. Aurora retention also keeps the writer instance, password secret and secret version, TLS parameter group, database security group, subnet group, and any setup-created VPC and private subnets. Database ingress rules, workload roles, routes, internet gateways and NAT gateways remain managed and are removed during teardown. Apply this package to the existing installation before teardown; older state may still allow destructive deletion. Removing data declarations from an installed configuration is not supported by this helper. `prevent_destroy` protection disappears when a block is removed; keep the installed declarations until whole-setup detachment. Never bypass protection to force a replacement.
+
+Use Python 3 on Linux or macOS (on Windows, use WSL with receipts on its Linux filesystem) and the same Terraform backend, workspace and working directory used to install this setup. Stop deployment workloads first. Serialize the following procedure with all other Terraform runs. For a child module, add `--module-address 'module.<name>'` (including any module instance index).
+
+```bash
+# Preview exactly which addresses and cloud IDs will be retained.
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup
+# Save private recovery state and detach only the generated retention inventory.
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup --detach
+terraform plan -destroy -out=uninstall.tfplan
+terraform apply uninstall.tfplan
+```
+
+Review the destroy plan before applying: it must remove this setup's application/management roles and bucket policies, while the retained resources stay absent from the delete list. Detachment alone does not revoke access. Retained bucket encryption, object ownership, public-access-block and versioning settings stay in place; lifecycle-expiration configuration remains managed and is removed during destroy. Existing external grants are outside this setup's ownership and require a separate access review.
+
+The receipt contains exact addresses, cloud IDs, state lineage and full before/after state. Keep it private and backed up: Terraform state can contain secrets. A retry creates a new receipt without overwriting earlier IDs. The helper fails on state-read errors and keeps Terraform locking enabled. Do not run ordinary `terraform apply` after whole-setup detachment: it would try to recreate the resources. To resume management, restore their declarations and use `terraform import ADDRESS ID` for each retained instance, then review an in-place plan. Do not restore a full old state over newer state.
+
+
+
+Retained resources continue to incur cloud charges, including database compute/storage and Secrets Manager. Retained databases remain private, with their application ingress removed; the cloud administrator must deliberately grant new access to reconnect. To explicitly erase data, first finish access revocation, then use the cloud's deletion operations on the exact IDs in the receipt, including stored versions/images, only after confirming that no retained data depends on a key. This workflow covers the AWS setup resources listed above; other database backends, other data types, runtime-owned resources and other clouds require their own retention procedure.
+
+When retaining DynamoDB tables, install AWS CLI and use the same target-account installer credentials as Terraform. The helper verifies the recorded table ARN, disables its observed TTL attribute and requires AWS to report `DISABLED` before removing any selected resource from state. If TTL is transitioning, wait and rerun the same command; no resources are detached. Required metadata/control permissions are `DescribeTable`, `DescribeTimeToLive` and `UpdateTimeToLive`.
+
+=== retention-inventory.tf ===
+resource "terraform_data" "retention_inventory" {
+  input = {
+    version   = 1
+    addresses = []
+  }
+}

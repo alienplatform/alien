@@ -86,7 +86,10 @@ mod kv;
 pub use kv::AwsKvImporter;
 #[cfg(feature = "local")]
 pub use kv::LocalKvController;
-pub use kv::{AwsKvController, AzureKvController, AzureKvImporter, GcpKvController, GcpKvImporter};
+pub use kv::{
+    protect_retained_kv, retained_kv_requires_runtime_protection, AwsKvController,
+    AzureKvController, AzureKvImporter, GcpKvController, GcpKvImporter,
+};
 
 mod key;
 pub use key::*;

@@ -27,6 +27,21 @@ export type UserProfileSetupRequestAcquisitionSource = ClosedEnum<
   typeof UserProfileSetupRequestAcquisitionSource
 >;
 
+export const UserProfileSetupRequestUseCaseTag = {
+  Byoc: "byoc",
+  Byok: "byok",
+  ByoLlm: "byo-llm",
+  ByoBucket: "byo-bucket",
+  SingleTenant: "single-tenant",
+  OnPrem: "on-prem",
+  PrivateNetworks: "private-networks",
+  RemoteOps: "remote-ops",
+  Other: "other",
+} as const;
+export type UserProfileSetupRequestUseCaseTag = ClosedEnum<
+  typeof UserProfileSetupRequestUseCaseTag
+>;
+
 export type UserProfileSetupRequest = {
   /**
    * Display name
@@ -44,9 +59,7 @@ export type UserProfileSetupRequest = {
    * Required when acquisitionSource is other
    */
   acquisitionSourceDetail?: string | undefined;
-  /**
-   * What the user is hoping to use Alien for
-   */
+  useCaseTags?: Array<UserProfileSetupRequestUseCaseTag> | undefined;
   useCases?: string | undefined;
 };
 
@@ -56,11 +69,17 @@ export const UserProfileSetupRequestAcquisitionSource$outboundSchema: z.ZodEnum<
 > = z.enum(UserProfileSetupRequestAcquisitionSource);
 
 /** @internal */
+export const UserProfileSetupRequestUseCaseTag$outboundSchema: z.ZodEnum<
+  typeof UserProfileSetupRequestUseCaseTag
+> = z.enum(UserProfileSetupRequestUseCaseTag);
+
+/** @internal */
 export type UserProfileSetupRequest$Outbound = {
   name: string;
   company: string;
   acquisitionSource: string;
   acquisitionSourceDetail?: string | undefined;
+  useCaseTags?: Array<string> | undefined;
   useCases?: string | undefined;
 };
 
@@ -73,6 +92,8 @@ export const UserProfileSetupRequest$outboundSchema: z.ZodType<
   company: z.string(),
   acquisitionSource: UserProfileSetupRequestAcquisitionSource$outboundSchema,
   acquisitionSourceDetail: z.string().optional(),
+  useCaseTags: z.array(UserProfileSetupRequestUseCaseTag$outboundSchema)
+    .optional(),
   useCases: z.string().optional(),
 });
 

@@ -14,7 +14,7 @@ let value: SyncReconcileRequest = {
   state: {
     platform: "azure",
     protocolVersion: 583290,
-    status: "delete-failed",
+    status: "teardown-required",
   },
 };
 ```

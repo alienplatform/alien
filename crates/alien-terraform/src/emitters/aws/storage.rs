@@ -46,6 +46,11 @@ impl TfEmitter for AwsStorageEmitter {
             .push(public_access_block(label, !storage.public_read));
         fragment.resource_blocks.push(bucket_policy(label, storage));
 
+        if !storage.cors_allowed_origins.is_empty() {
+            fragment
+                .resource_blocks
+                .push(cors(label, &storage.cors_allowed_origins));
+        }
         if storage.versioning {
             fragment.resource_blocks.push(versioning(label));
         }
@@ -102,8 +107,9 @@ fn emit_storage_key_iam(
     let Some(permission_set) = alien_permissions::get_permission_set("key/native-storage") else {
         return Ok(());
     };
-    let context = aws_terraform_permission_context()
-        .with_resource_name(format!("${{terraform_data.{key_label}_key_identity.output}}"));
+    let context = aws_terraform_permission_context().with_resource_name(format!(
+        "${{terraform_data.{key_label}_key_identity.output}}"
+    ));
 
     // Only object readers and writers use the bucket key. A health check or provisioning
     // grant must not turn into kms:Decrypt on the deployment's key.
@@ -135,11 +141,12 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> Block {
         label,
         [
             attr("bucket", resource_prefix_template(storage.id())),
-            attr(
-                "force_destroy",
-                Expression::Bool(!ctx.resource.has_remote_bindings()),
-            ),
+            attr("force_destroy", Expression::Bool(false)),
             attr("tags", tags(ctx, "storage")),
+            nested(block(
+                "lifecycle",
+                [attr("prevent_destroy", Expression::Bool(true))],
+            )),
         ],
     )
 }
@@ -157,10 +164,7 @@ fn encryption(label: &str, key_label: Option<&str>) -> Block {
         ),
     )];
     if let Some(key_label) = key_label {
-        encryption.push(attr(
-            "kms_master_key_id",
-            super::key::key_arn(key_label),
-        ));
+        encryption.push(attr("kms_master_key_id", super::key::key_arn(key_label)));
     }
     let inner = block("apply_server_side_encryption_by_default", encryption);
     let rule = block("rule", [nested(inner)]);
@@ -252,6 +256,42 @@ fn bucket_policy(label: &str, storage: &Storage) -> Block {
         [
             attr("bucket", bucket_id(label)),
             attr("policy", crate::emitters::aws::helpers::jsonencode(policy)),
+        ],
+    )
+}
+
+fn cors(label: &str, origins: &[String]) -> Block {
+    let strings = |values: &[&str]| {
+        Expression::Array(
+            values
+                .iter()
+                .map(|v| Expression::String((*v).to_string()))
+                .collect(),
+        )
+    };
+    resource_block(
+        "aws_s3_bucket_cors_configuration",
+        label,
+        [
+            attr("bucket", bucket_id(label)),
+            nested(block(
+                "cors_rule",
+                [
+                    attr(
+                        "allowed_origins",
+                        Expression::Array(
+                            origins.iter().cloned().map(Expression::String).collect(),
+                        ),
+                    ),
+                    attr("allowed_methods", strings(&["GET", "HEAD"])),
+                    attr("allowed_headers", strings(&["*"])),
+                    attr(
+                        "expose_headers",
+                        strings(&["ETag", "Content-Range", "Accept-Ranges"]),
+                    ),
+                    attr("max_age_seconds", Expression::from(3600)),
+                ],
+            )),
         ],
     )
 }

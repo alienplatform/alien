@@ -30,7 +30,7 @@ impl TfEmitter for AzureResourceGroupEmitter {
         let _ = downcast::<AzureResourceGroup>(ctx, AzureResourceGroup::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
-        Ok(TfFragment::default().with_resource(resource_block(
+        let mut fragment = TfFragment::default().with_resource(resource_block(
             "azurerm_resource_group",
             label,
             [
@@ -38,7 +38,10 @@ impl TfEmitter for AzureResourceGroupEmitter {
                 attr("location", expr::raw("var.azure_location")),
                 attr("tags", tags(ctx, "resource-group")),
             ],
-        )))
+        ));
+        // Deleting the group cascades to retained children, including runtime-created data.
+        fragment.retain_resources(|kind, _| kind == "azurerm_resource_group");
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {

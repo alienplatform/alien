@@ -26,7 +26,7 @@ import {
   DeploymentStatePlatform,
   DeploymentStatePlatform$inboundSchema,
   DeploymentStatePlatform$outboundSchema,
-} from "./deploymentstatependingpreparedstackdefaultstringlist.js";
+} from "./deploymentstatependingpreparedstacktypestringlist.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   DeploymentStateStatus,
@@ -44,9 +44,6 @@ import {
   TargetReleaseApprovalPlugins$inboundSchema,
   TargetReleaseApprovalPlugins$Outbound,
   TargetReleaseApprovalPlugins$outboundSchema,
-  TargetReleaseApprovalPluginsEnum,
-  TargetReleaseApprovalPluginsEnum$inboundSchema,
-  TargetReleaseApprovalPluginsEnum$outboundSchema,
   TargetReleaseCustom,
   TargetReleaseCustom$inboundSchema,
   TargetReleaseCustom$Outbound,
@@ -55,7 +52,21 @@ import {
   TargetReleaseInput$inboundSchema,
   TargetReleaseInput$Outbound,
   TargetReleaseInput$outboundSchema,
-} from "./targetreleaseapprovalpluginsenum.js";
+} from "./targetreleaseapprovalplugins.js";
+
+/**
+ * Whether matching operations run without approval.
+ */
+export const TargetReleaseApprovalPluginsEnum = {
+  Auto: "auto",
+  Manual: "manual",
+} as const;
+/**
+ * Whether matching operations run without approval.
+ */
+export type TargetReleaseApprovalPluginsEnum = ClosedEnum<
+  typeof TargetReleaseApprovalPluginsEnum
+>;
 
 /**
  * Approval rule for the operations a pattern matches.
@@ -1473,6 +1484,15 @@ export type DeploymentState = {
   status: DeploymentStateStatus;
   targetRelease?: TargetRelease | string | null | undefined;
 };
+
+/** @internal */
+export const TargetReleaseApprovalPluginsEnum$inboundSchema: z.ZodEnum<
+  typeof TargetReleaseApprovalPluginsEnum
+> = z.enum(TargetReleaseApprovalPluginsEnum);
+/** @internal */
+export const TargetReleaseApprovalPluginsEnum$outboundSchema: z.ZodEnum<
+  typeof TargetReleaseApprovalPluginsEnum
+> = TargetReleaseApprovalPluginsEnum$inboundSchema;
 
 /** @internal */
 export const TargetReleasePluginsApprovalUnion$inboundSchema: z.ZodType<

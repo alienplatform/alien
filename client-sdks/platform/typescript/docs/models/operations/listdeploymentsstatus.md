@@ -11,11 +11,11 @@ resource health comes from inventory and resource heartbeat data.
 ```typescript
 import { ListDeploymentsStatus } from "@alienplatform/platform-api/models/operations";
 
-let value: ListDeploymentsStatus = "delete-failed";
+let value: ListDeploymentsStatus = "teardown-required";
 ```
 
 ## Values
 
 ```typescript
-"pending" | "preflights-failed" | "initial-setup" | "initial-setup-failed" | "provisioning" | "waiting-for-machines" | "waiting-for-secrets" | "provisioning-failed" | "running" | "refresh-failed" | "update-pending" | "updating" | "update-failed" | "delete-pending" | "deleting" | "delete-failed" | "teardown-required" | "teardown-failed" | "deleted" | "error"
+"pending" | "preflights-failed" | "initial-setup" | "initial-setup-failed" | "provisioning" | "waiting-for-machines" | "waiting-for-secrets" | "provisioning-failed" | "running" | "refresh-failed" | "update-pending" | "updating" | "update-failed" | "delete-pending" | "deleting" | "delete-failed" | "teardown-required" | "teardown-failed" | "retention-required" | "retained" | "deleted" | "error"
 ```

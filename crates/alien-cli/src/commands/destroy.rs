@@ -63,6 +63,11 @@ pub struct DestroyArgs {
     #[arg(long)]
     pub force: bool,
 
+    /// Permanently erase durable data instead of retaining it. Also erases data an
+    /// earlier destroy kept.
+    #[arg(long, conflicts_with = "force")]
+    pub erase_data: bool,
+
     /// Skip the destruction confirmation prompt
     #[arg(long)]
     pub yes: bool,
@@ -80,8 +85,16 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
                     "Forget deployment '{}' and leave its resources running?",
                     args.name
                 )
+            } else if args.erase_data {
+                format!(
+                    "Destroy deployment '{}' and permanently erase its data?",
+                    args.name
+                )
             } else {
-                format!("Destroy deployment '{}' and its resources?", args.name)
+                format!(
+                    "Stop deployment '{}' and retain its durable data?",
+                    args.name
+                )
             },
             false,
         )?
@@ -468,6 +481,7 @@ pub(crate) async fn destroy_local_target(
         platform: Some("local".to_string()),
         token: None,
         force: false,
+        erase_data: false,
         yes: true,
     };
     let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
@@ -532,25 +546,19 @@ async fn destroy_tracked_deployment(
         })?
         .into_inner();
 
-    if matches!(
-        pre_delete_deployment.status.as_str(),
-        "teardown-required" | "teardown-failed"
-    ) {
-        steps.activate(2, Some("Setup teardown required".to_string()));
-    } else {
-        // Request deletion
+    if let Some(action) = deletion_request(&pre_delete_deployment.status, args.erase_data) {
         operator_client
             .delete_deployment()
             .id(&tracked_deployment.deployment_id)
-            .body(alien_manager_api::types::DeleteDeploymentRequest {
-                action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
-            })
+            .body(alien_manager_api::types::DeleteDeploymentRequest { action })
             .send()
             .await
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
                 message: "Failed to request deployment deletion".to_string(),
             })?;
+    } else {
+        steps.activate(2, Some("Setup teardown required".to_string()));
     }
 
     // Run the deletion step loop
@@ -690,6 +698,15 @@ async fn destroy_tracked_deployment(
             .context(ErrorData::ConfigurationError {
                 message: "Failed to deserialize stack_state".to_string(),
             })?;
+        // The deletion request recorded the retain or erase choice after the first read.
+        current.runtime_metadata = deployment
+            .runtime_metadata
+            .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize runtime_metadata".to_string(),
+            })?;
 
         Ok(())
     }
@@ -720,35 +737,70 @@ async fn destroy_tracked_deployment(
         delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
-    let runner_result = match alien_deployment::runner::run_step_loop(
-        &mut current,
-        &mut config,
-        &client_config,
-        &tracked_deployment.deployment_id,
-        &policy,
-        &transport,
-        None,
-        None,
-    )
-    .await
-    {
-        Ok(result)
-            if result.loop_result.outcome == LoopOutcome::Success
-                && current.status == DeploymentStatus::TeardownRequired =>
+    // A deployment already handed to setup teardown (including one whose setup teardown failed
+    // and is being retried) resumes there: the runtime loop has nothing left to run for it.
+    let resumes_setup_teardown = matches!(
+        current.status,
+        DeploymentStatus::TeardownRequired
+            | DeploymentStatus::RetentionRequired
+            | DeploymentStatus::TeardownFailed
+    );
+    let runner_result = if resumes_setup_teardown {
+        alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+            &mut current,
+            &mut config,
+            &client_config,
+            &tracked_deployment.deployment_id,
+            &policy,
+            &transport,
+            None,
+        )
+        .await
+        .map(|setup_result| {
+            setup_result.unwrap_or_else(|| RunnerResult {
+                loop_result: alien_deployment::loop_contract::LoopResult {
+                    stop_reason: alien_deployment::loop_contract::LoopStopReason::Synced,
+                    outcome: LoopOutcome::Neutral,
+                    final_status: current.status,
+                },
+                steps_executed: 0,
+                state_persisted: true,
+            })
+        })
+    } else {
+        match alien_deployment::runner::run_step_loop(
+            &mut current,
+            &mut config,
+            &client_config,
+            &tracked_deployment.deployment_id,
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
         {
-            alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
-                &mut current,
-                &mut config,
-                &client_config,
-                &tracked_deployment.deployment_id,
-                &policy,
-                &transport,
-                None,
-            )
-            .await
-            .map(|setup_result| setup_result.unwrap_or(result))
+            // Runtime cleanup hands off at TeardownRequired, or at RetentionRequired when data is
+            // kept; this CLI holds the setup credentials that finish either.
+            Ok(result)
+                if (result.loop_result.outcome == LoopOutcome::Success
+                    && current.status == DeploymentStatus::TeardownRequired)
+                    || current.status == DeploymentStatus::RetentionRequired =>
+            {
+                alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+                    &mut current,
+                    &mut config,
+                    &client_config,
+                    &tracked_deployment.deployment_id,
+                    &policy,
+                    &transport,
+                    None,
+                )
+                .await
+                .map(|setup_result| setup_result.unwrap_or(result))
+            }
+            other => other,
         }
-        other => other,
     };
     let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
         (result.loop_result.outcome == LoopOutcome::Failure)
@@ -786,6 +838,15 @@ async fn destroy_tracked_deployment(
     );
 
     match loop_result.outcome {
+        LoopOutcome::Success if loop_result.final_status == DeploymentStatus::Retained => {
+            steps.complete(2, Some("Data retained".to_string()));
+            println!(
+                "{}",
+                success_line(
+                    "Deployment destroyed. Its data was kept in your cloud account; run destroy again with --erase-data to remove it."
+                )
+            );
+        }
         LoopOutcome::Success => {
             steps.complete(2, Some("Deleted".to_string()));
             println!("{}", success_line("Deployment destroyed."));
@@ -833,6 +894,21 @@ async fn destroy_tracked_deployment(
     }
 
     Ok(())
+}
+
+/// The deletion request this run sends, if any. A deletion already under way keeps its
+/// recorded choice, and kept data stays kept unless this run asks to erase it.
+fn deletion_request(
+    status: &str,
+    erase_data: bool,
+) -> Option<alien_manager_api::types::DeleteDeploymentAction> {
+    use alien_manager_api::types::DeleteDeploymentAction;
+    match status {
+        "teardown-required" | "teardown-failed" | "delete-pending" | "deleting" => None,
+        "retention-required" | "retained" if !erase_data => None,
+        _ if erase_data => Some(DeleteDeploymentAction::Erase),
+        _ => Some(DeleteDeploymentAction::Retain),
+    }
 }
 
 /// The deployer secret slots, all of them: a report can predate the deployer
@@ -1039,6 +1115,28 @@ mod tests {
     }
 
     #[cfg(feature = "platform")]
+    #[test]
+    fn destroy_requests_erase_only_when_asked_and_resumes_deletions_in_progress() {
+        use alien_manager_api::types::DeleteDeploymentAction::{Erase, Retain};
+        assert_eq!(deletion_request("running", false), Some(Retain));
+        assert_eq!(deletion_request("running", true), Some(Erase));
+        // Kept data can be erased later; without the flag a rerun only finishes retention.
+        for status in ["retention-required", "retained"] {
+            assert_eq!(deletion_request(status, false), None);
+            assert_eq!(deletion_request(status, true), Some(Erase));
+        }
+        // The manager refuses a second request while one is under way; the run resumes it.
+        for status in [
+            "delete-pending",
+            "deleting",
+            "teardown-required",
+            "teardown-failed",
+        ] {
+            assert_eq!(deletion_request(status, false), None);
+            assert_eq!(deletion_request(status, true), None);
+        }
+    }
+
     #[tokio::test]
     async fn logged_in_destroy_mints_a_scoped_token_without_local_tracking() {
         const ID: &str = "dep_0000000000000000000000000000";
@@ -1068,7 +1166,7 @@ mod tests {
             Json(body): Json<serde_json::Value>,
         ) -> (StatusCode, Json<serde_json::Value>) {
             assert_eq!(headers["authorization"], "Bearer user-session");
-            assert_eq!(body["action"], "cleanup");
+            assert_eq!(body["action"], "retain");
             state
                 .lock()
                 .unwrap()
@@ -1077,7 +1175,7 @@ mod tests {
             (
                 StatusCode::ACCEPTED,
                 Json(
-                    serde_json::json!({ "action": "cleanup", "cleanupRequired": true, "message": "Deployment deletion accepted" }),
+                    serde_json::json!({ "action": "retain", "cleanupRequired": true, "message": "Deployment deletion accepted" }),
                 ),
             )
         }
@@ -1126,6 +1224,7 @@ mod tests {
             name: ID.to_string(),
             platform: Some("test".to_string()),
             force: false,
+            erase_data: false,
             yes: true,
         };
         let (target, manager) = resolve_destroy_target(&args, &ctx, "test", None, None)
@@ -1202,7 +1301,7 @@ mod tests {
             (
                 StatusCode::ACCEPTED,
                 Json(
-                    serde_json::json!({ "action": "cleanup", "cleanupRequired": true, "message": "Deployment deletion accepted" }),
+                    serde_json::json!({ "action": "retain", "cleanupRequired": true, "message": "Deployment deletion accepted" }),
                 ),
             )
         }
@@ -1287,6 +1386,7 @@ mod tests {
             name: ID.to_string(),
             platform: Some("test".to_string()),
             force: false,
+            erase_data: false,
             yes: true,
         };
         let (target, manager) = resolve_destroy_target(
@@ -1434,6 +1534,7 @@ mod tests {
             name: "dep_test".to_string(),
             platform: Some("test".to_string()),
             force: true,
+            erase_data: false,
             yes: true,
         };
         let (target, _) = resolve_destroy_target(&args, &ctx, "test", None, None)
@@ -1465,6 +1566,7 @@ mod tests {
             name: "dep_test".to_string(),
             platform: Some("test".to_string()),
             force: false,
+            erase_data: false,
             yes: true,
         };
         let (target, manager) = resolve_destroy_target(&args, &ctx, "test", None, None)
@@ -1514,6 +1616,7 @@ mod tests {
                 name: name.to_string(),
                 platform: Some(platform.to_string()),
                 force: false,
+                erase_data: false,
                 yes: true,
             };
             let error = resolve_destroy_target(&args, &ctx, platform, None, None)
@@ -1598,6 +1701,7 @@ mod tests {
                 name: name.to_string(),
                 platform: Some("test".to_string()),
                 force: false,
+                erase_data: false,
                 yes: true,
             };
             let (target, _) = resolve_destroy_target(&args, &ctx, "test", None, None)
@@ -1620,6 +1724,7 @@ mod tests {
                 name: PLATFORM_DEPLOYMENT.to_string(),
                 platform: Some("test".to_string()),
                 force,
+                erase_data: false,
                 yes: true,
             };
             let error = resolve_destroy_target(&args, &ctx, "test", None, None)
@@ -1679,6 +1784,7 @@ mod tests {
             name: "test".to_string(),
             platform: Some("local".to_string()),
             force: false,
+            erase_data: false,
             yes: true,
         };
 
@@ -1743,6 +1849,7 @@ mod tests {
             name: "test".to_string(),
             platform: Some("local".to_string()),
             force: false,
+            erase_data: false,
             yes: true,
         };
 
@@ -1763,5 +1870,91 @@ mod tests {
             state.lock().unwrap().acquire_authorizations,
             vec![format!("Bearer {DEPLOYMENT_TOKEN}")]
         );
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn destroy_retries_a_failed_setup_teardown_in_setup_teardown() {
+        fn teardown_failed_record() -> serde_json::Value {
+            let mut record = deployment_record();
+            record["status"] = serde_json::json!("teardown-failed");
+            record
+        }
+        async fn get_failed() -> Json<serde_json::Value> {
+            Json(teardown_failed_record())
+        }
+        async fn acquire_failed(headers: HeaderMap) -> Response {
+            let authorization = headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            if authorization != format!("Bearer {DEPLOYMENT_TOKEN}") {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+            Json(serde_json::json!({
+                "deployments": [{ "deployment": teardown_failed_record() }]
+            }))
+            .into_response()
+        }
+
+        let state = Shared::default();
+        let app = Router::new()
+            .route("/v1/deployments/{id}", get(get_failed))
+            .route("/v1/sync/acquire", post(acquire_failed))
+            .route("/v1/sync/release", post(release_after_preparation_failure))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind manager");
+        let manager_url = format!("http://{}", listener.local_addr().expect("manager address"));
+        tokio::spawn(async move { axum::serve(listener, app).await.expect("serve manager") });
+
+        let http_client =
+            crate::auth::client_with_auth_and_workspace("Bearer user-session", "ws-name")
+                .expect("user client");
+        let manager_ctx = ManagerContext {
+            manager_url: manager_url.clone(),
+            manager_name: None,
+            manager_is_system: None,
+            manager_cloud: None,
+            client: alien_manager_api::Client::new_with_client(&manager_url, http_client.clone()),
+            http_client,
+            auth_token: Some("user-session".to_string()),
+            repository_name: None,
+            repository_uri: None,
+            workspace: Some("ws-name".to_string()),
+        };
+        let tracked = TrackedDeployment {
+            name: "test".to_string(),
+            deployment_id: "dep_test".to_string(),
+            api_key: DEPLOYMENT_TOKEN.to_string(),
+            workspace_id: "ws_test".to_string(),
+            project_id: "proj_test".to_string(),
+        };
+        let args = DestroyArgs {
+            token: None,
+            name: "test".to_string(),
+            platform: Some("local".to_string()),
+            force: false,
+            erase_data: false,
+            yes: true,
+        };
+
+        // The record carries no stack state, so reaching setup teardown is observable as its
+        // own refusal; the runtime loop would instead stop at the failed status.
+        let error = destroy_tracked_deployment(
+            &args,
+            Platform::Local,
+            &tracked,
+            manager_ctx,
+            FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]),
+        )
+        .await
+        .expect_err("a record without stack state cannot finish setup teardown");
+        assert!(
+            format!("{error:?}").contains("Stack state required for setup teardown"),
+            "destroy must retry setup teardown, got: {error:?}"
+        );
+        assert_eq!(state.lock().unwrap().release_count, 1);
     }
 }

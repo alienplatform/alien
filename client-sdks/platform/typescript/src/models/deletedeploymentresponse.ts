@@ -10,6 +10,8 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const DeleteDeploymentResponseAction = {
   Cleanup: "cleanup",
+  Retain: "retain",
+  Erase: "erase",
   Detach: "detach",
   Forget: "forget",
 } as const;

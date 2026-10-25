@@ -39,6 +39,15 @@ impl ArtifactRegistry {
     /// The resource type identifier for ArtifactRegistry
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("artifact-registry");
 
+    /// Account-wide ECR configuration must have one infrastructure owner. A deployment
+    /// cannot safely merge its rules with other deployments or external account writers.
+    pub fn validate_aws_replication(&self) -> Result<()> {
+        if !self.replication_regions.is_empty() {
+            tracing::warn!(resource_id = %self.id, "Per-deployment ECR replicationRegions is ignored; configure replication through the registry account's infrastructure. Existing account replication rules remain unchanged.");
+        }
+        Ok(())
+    }
+
     /// Returns the artifact registry's unique identifier.
     pub fn id(&self) -> &str {
         &self.id
@@ -170,6 +179,14 @@ mod tests {
     fn test_artifact_registry_creation() {
         let registry = ArtifactRegistry::new("my-registry".to_string()).build();
         assert_eq!(registry.id, "my-registry");
+    }
+
+    #[test]
+    fn aws_registry_does_not_promise_per_deployment_replication() {
+        let mut registry = ArtifactRegistry::new("images".to_string()).build();
+        assert!(registry.validate_aws_replication().is_ok());
+        registry.replication_regions = vec!["us-west-2".to_string()];
+        assert!(registry.validate_aws_replication().is_ok());
     }
 
     #[test]

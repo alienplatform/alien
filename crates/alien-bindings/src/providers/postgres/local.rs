@@ -56,6 +56,7 @@ impl ResolvedPostgres {
             // `load_postgres` dispatched a cloud binding to the wrong provider — a bug here,
             // not bad user configuration.
             PostgresBinding::Aurora(_)
+            | PostgresBinding::AuroraManaged(_)
             | PostgresBinding::CloudSql(_)
             | PostgresBinding::FlexibleServer(_) => {
                 return Err(AlienError::new(ErrorData::config_invalid(

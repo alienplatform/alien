@@ -14,13 +14,16 @@ use super::up::{create_manager_client, push_deletion, read_token_file};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    about = "Destroy a deployment and its resources",
+    about = "Remove deployment access and retain durable data by default",
     after_help = "EXAMPLES:
     # Destroy a tracked deployment
     alien-deploy destroy --name production
 
     # Resume direct-setup teardown from a fresh machine
     alien-deploy destroy --deployment-id dep_123 --token-file /run/secrets/deployment-token --manager-url https://manager.example.com
+
+    # Explicitly erase durable data
+    alien-deploy destroy --name production --erase-data
 
     # Force-delete an imported deployment record
     alien-deploy destroy --name production --force-delete-record
@@ -57,12 +60,21 @@ pub struct DownArgs {
     #[arg(long = "force-delete-record", alias = "force")]
     pub force_delete_record: bool,
 
+    /// Permanently erase durable data instead of retaining it
+    #[arg(long, conflicts_with = "force_delete_record")]
+    pub erase_data: bool,
+
     /// Skip confirmation prompt
     #[arg(long, short = 'y')]
     pub yes: bool,
 }
 
 pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
+    let delete_action = if args.erase_data {
+        alien_manager_api::types::DeleteDeploymentAction::Erase
+    } else {
+        alien_manager_api::types::DeleteDeploymentAction::Retain
+    };
     // ID-only recovery must not depend on the fresh runner having a usable
     // config directory or deployments.json file.
     let mut tracker = args
@@ -221,6 +233,12 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         return Ok(());
     }
 
+    if deployment_status == "deleted" {
+        finish_tracked_deletion(tracker.as_mut(), args.name.as_deref(), true)?;
+        output::success("Deployment data was already erased.");
+        return Ok(());
+    }
+
     if args.deployment_id.is_some() && matches!(platform, Platform::Local | Platform::Machines) {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "deployment_id".to_string(),
@@ -233,7 +251,12 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     let total_steps = if run_client_side_deletion { 3 } else { 2 };
 
     if !run_client_side_deletion {
-        if deployment_status == "teardown-required" {
+        if !args.erase_data
+            && matches!(
+                deployment_status,
+                "teardown-required" | "retention-required" | "retained"
+            )
+        {
             output::step(
                 1,
                 total_steps,
@@ -246,7 +269,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
                 .delete_deployment()
                 .id(&deployment_id)
                 .body(alien_manager_api::types::DeleteDeploymentRequest {
-                    action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+                    action: delete_action,
                 })
                 .send()
                 .await
@@ -256,7 +279,9 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
                 })?;
         }
 
-        remove_tracked_deployment(tracker.as_mut(), args.name.as_deref())?;
+        // Machines cleanup is asynchronous. Keep recovery authority until a later
+        // read confirms erasure; a successful request alone does not erase data.
+        finish_tracked_deletion(tracker.as_mut(), args.name.as_deref(), false)?;
 
         output::step(total_steps, total_steps, "Done!");
         output::success("Deployment deletion requested.");
@@ -266,6 +291,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
 
     run_setup_owned_deletion(
         deployment_status,
+        args.erase_data,
         || async {
             output::step(1, total_steps, "Requesting deployment deletion...");
 
@@ -273,7 +299,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
                 .delete_deployment()
                 .id(&deployment_id)
                 .body(alien_manager_api::types::DeleteDeploymentRequest {
-                    action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+                    action: delete_action,
                 })
                 .send()
                 .await
@@ -324,11 +350,28 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         )?;
     }
 
-    remove_tracked_deployment(tracker.as_mut(), args.name.as_deref())?;
+    finish_tracked_deletion(tracker.as_mut(), args.name.as_deref(), args.erase_data)?;
 
     output::step(total_steps, total_steps, "Done!");
-    output::success("Deployment destroyed successfully.");
+    if args.erase_data {
+        output::success("Deployment and its durable data erased successfully.");
+    } else {
+        output::success("Deployment stopped. Durable data and recovery tracking retained; use --erase-data to erase later.");
+    }
 
+    Ok(())
+}
+
+/// Retained data still needs its original credentials and local state directory
+/// for a later explicit erase. Do not discard them after a retain or queued delete.
+fn finish_tracked_deletion(
+    tracker: Option<&mut DeploymentTracker>,
+    tracked_name: Option<&str>,
+    erasure_completed: bool,
+) -> Result<()> {
+    if erasure_completed {
+        remove_tracked_deployment(tracker, tracked_name)?;
+    }
     Ok(())
 }
 
@@ -404,6 +447,7 @@ fn requires_client_side_deletion(platform: Platform) -> bool {
 
 async fn run_setup_owned_deletion<Request, RequestFuture, Acquire, AcquireFuture>(
     status: &str,
+    erase_data: bool,
     request_deletion: Request,
     acquire_and_delete: Acquire,
 ) -> Result<()>
@@ -415,11 +459,15 @@ where
 {
     // Teardown-required already has active setup-owned work. A teardown-failed delete operation is
     // terminal, so the manager API must re-arm that canonical operation before the CLI acquires it.
-    let cleanup_required = if status == "teardown-required" {
-        true
-    } else {
-        request_deletion().await?
-    };
+    if status == "retained" && !erase_data {
+        return Ok(());
+    }
+    let cleanup_required =
+        if !erase_data && matches!(status, "teardown-required" | "retention-required") {
+            true
+        } else {
+            request_deletion().await?
+        };
 
     if cleanup_required {
         acquire_and_delete().await?;
@@ -448,6 +496,53 @@ fn resolve_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn retained_local_deployment_can_reload_original_authority_for_later_erase() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deployments.json");
+        let local = TrackedLocalDeployment {
+            data_dir: dir.path().join("durable-data").display().to_string(),
+            service_managed: false,
+        };
+        let mut tracker = DeploymentTracker::with_path(path.clone()).unwrap();
+        tracker
+            .track(
+                "uploads".into(),
+                "dep_uploads".into(),
+                "original-token".into(),
+                "https://manager.example.com".into(),
+                "local".into(),
+                Some(local.clone()),
+            )
+            .unwrap();
+        finish_tracked_deletion(Some(&mut tracker), Some("uploads"), false).unwrap();
+        drop(tracker);
+
+        // A subsequent CLI process must recover the same identity, credentials,
+        // and data directory before it can reopen retained deletion as erase.
+        let mut recovered = DeploymentTracker::with_path(path.clone()).unwrap();
+        let tracked = recovered.get("uploads").expect("retained recovery entry");
+        assert_eq!(tracked.deployment_id, "dep_uploads");
+        assert_eq!(tracked.token, "original-token");
+        assert_eq!(tracked.manager_url, "https://manager.example.com");
+        assert_eq!(
+            destroy_client_config(Platform::Local, tracked.local.as_ref())
+                .await
+                .unwrap(),
+            ClientConfig::Local {
+                state_directory: local.data_dir
+            }
+        );
+        run_setup_owned_deletion("retained", true, || async { Ok(true) }, || async { Ok(()) })
+            .await
+            .unwrap();
+        finish_tracked_deletion(Some(&mut recovered), Some("uploads"), true).unwrap();
+        assert!(DeploymentTracker::with_path(path)
+            .unwrap()
+            .get("uploads")
+            .is_none());
+    }
 
     #[test]
     fn destroy_accepts_explicit_recovery_selector_without_name() {
@@ -537,6 +632,7 @@ mod tests {
 
         run_setup_owned_deletion(
             "teardown-failed",
+            false,
             || async {
                 actions.lock().unwrap().push("request");
                 Ok(true)
@@ -557,7 +653,8 @@ mod tests {
         let actions = std::sync::Mutex::new(Vec::new());
 
         run_setup_owned_deletion(
-            "teardown-required",
+            "retention-required",
+            false,
             || async {
                 actions.lock().unwrap().push("request");
                 Ok(true)
@@ -574,11 +671,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_erase_reopens_a_retained_deployment() {
+        let actions = std::sync::Mutex::new(Vec::new());
+        run_setup_owned_deletion(
+            "retained",
+            true,
+            || async {
+                actions.lock().unwrap().push("request-erase");
+                Ok(true)
+            },
+            || async {
+                actions.lock().unwrap().push("acquire");
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(*actions.lock().unwrap(), ["request-erase", "acquire"]);
+    }
+
+    #[tokio::test]
     async fn completed_manager_cleanup_skips_setup_teardown() {
         let actions = std::sync::Mutex::new(Vec::new());
 
         run_setup_owned_deletion(
             "preflights-failed",
+            false,
             || async {
                 actions.lock().unwrap().push("request");
                 Ok(false)

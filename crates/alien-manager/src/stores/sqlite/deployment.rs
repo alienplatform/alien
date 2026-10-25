@@ -66,7 +66,8 @@ impl SqliteDeploymentStore {
         "update-failed",
         "delete-failed",
     ];
-    const SETUP_TEARDOWN_STATUSES: [&'static str; 2] = ["teardown-required", "teardown-failed"];
+    const SETUP_TEARDOWN_STATUSES: [&'static str; 3] =
+        ["retention-required", "teardown-required", "teardown-failed"];
     const RUNTIME_DELETE_STATUSES: [&'static str; 3] =
         ["delete-pending", "deleting", "delete-failed"];
     const RUNNING_STATUS: &'static str = "running";
@@ -325,6 +326,8 @@ impl SqliteDeploymentStore {
                 | DeploymentStatus::Deleting
                 | DeploymentStatus::DeleteFailed
                 | DeploymentStatus::TeardownRequired
+                | DeploymentStatus::RetentionRequired
+                | DeploymentStatus::Retained
                 | DeploymentStatus::TeardownFailed
                 | DeploymentStatus::Deleted
         )
@@ -332,7 +335,9 @@ impl SqliteDeploymentStore {
 
     fn acquire_status_condition(statuses: Option<&Vec<String>>) -> sea_query::Condition {
         Cond::all()
-            .add(Expr::cust(format!("NOT ({UNREGISTERED_SETUP_RESERVATION})")))
+            .add(Expr::cust(format!(
+                "NOT ({UNREGISTERED_SETUP_RESERVATION})"
+            )))
             .add(Self::unreserved_acquire_status_condition(statuses))
     }
 
@@ -1135,29 +1140,90 @@ impl DeploymentStore for SqliteDeploymentStore {
         _caller: &crate::auth::Subject,
         id: &str,
     ) -> Result<(), AlienError> {
+        // Hold the database connection across inspection and deletion so a
+        // registration/reconcile cannot install data between these operations.
+        let conn = self.db.conn().lock().await;
+        let query = Query::select()
+            .columns(Self::DEPLOYMENT_COLUMNS)
+            .from(Deployments::Table)
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .to_string(SqliteQueryBuilder);
+        let mut rows = conn
+            .query(&query, ())
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to inspect deployment recovery inventory".to_string(),
+            })?;
+        if let Some(row) = rows.next().await.into_alien_error().context(GenericError {
+            message: "Failed to read deployment recovery inventory".to_string(),
+        })? {
+            let deployment = Self::parse_deployment(&row)?;
+            if deployment.locked_by.is_some() && deployment.status != "deleted" {
+                return Err(AlienError::new(ErrorData::DeploymentLocked {
+                    deployment_id: id.to_string(),
+                    locked_by: deployment.locked_by,
+                })
+                .into_generic());
+            }
+            if matches!(
+                deployment.status.as_str(),
+                "retention-required" | "retained"
+            ) || deployment.stack_state.as_ref().is_some_and(|stack| {
+                !alien_deployment::installed_durable_resource_ids(stack).is_empty()
+            }) {
+                return Err(ErrorData::bad_request(
+                    "Recovery metadata is required by retained durable data; complete explicit erase before forgetting this deployment",
+                ).into_generic());
+            }
+        }
+        drop(rows);
         let sql = Query::delete()
             .from_table(Deployments::Table)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
-        self.db.execute(&sql).await
+        conn.execute(&sql, ())
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to remove deployment metadata".to_string(),
+            })?;
+        Ok(())
     }
 
-    async fn set_delete_pending(
+    async fn set_delete_pending_with_policy(
         &self,
         caller: &crate::auth::Subject,
         id: &str,
+        policy: alien_core::DeletionPolicy,
     ) -> Result<(), AlienError> {
         let deployment = self
             .get_deployment(caller, id)
             .await?
             .ok_or_else(|| db_error(&format!("Deployment {} not found", id)))?;
 
-        if deployment.status == "teardown-required" || deployment.status == "teardown-failed" {
+        let installed_policy = deployment
+            .runtime_metadata
+            .as_ref()
+            .map(|metadata| metadata.deletion_policy)
+            .unwrap_or_default();
+        let handoff = matches!(
+            deployment.status.as_str(),
+            "teardown-required" | "teardown-failed" | "retention-required" | "retained"
+        );
+        let legacy_retained_handoff = matches!(
+            deployment.status.as_str(),
+            "teardown-required" | "teardown-failed"
+        ) && installed_policy == alien_core::DeletionPolicy::Retain;
+        if handoff && installed_policy == policy && !legacy_retained_handoff {
             return Ok(());
         }
-
-        let rejection_statuses = ["delete-pending", "deleting", "deleted"];
-        if rejection_statuses.contains(&deployment.status.as_str()) {
+        if matches!(
+            deployment.status.as_str(),
+            "delete-pending" | "deleting" | "deleted"
+        ) || (deployment.status == "delete-failed" && installed_policy != policy)
+            || (handoff && policy != alien_core::DeletionPolicy::Erase && !legacy_retained_handoff)
+        {
             return Err(AlienError::new(ErrorData::DeploymentAlreadyDeleting {
                 deployment_id: id.to_string(),
                 status: deployment.status,
@@ -1172,27 +1238,44 @@ impl DeploymentStore for SqliteDeploymentStore {
             .from_table(Deployments::Table)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .and_where(Expr::cust(UNREGISTERED_SETUP_RESERVATION))
+            .and_where(Expr::col(Deployments::LockedBy).is_null())
             .to_string(SqliteQueryBuilder);
         if self.db.execute_returning_rows_affected(&sql).await? > 0 {
             return Ok(());
         }
 
-        // FUTURE: reject or queue delete requests when another session currently owns the deployment lock.
-        let runtime_metadata = deployment.runtime_metadata.unwrap_or_default();
-        let runtime_metadata_json = serde_json::to_string(&runtime_metadata)
-            .into_alien_error()
-            .context(GenericError {
-                message: "Failed to serialize delete runtime metadata".to_string(),
-            })?;
-
+        // Patch only the intent, and fence both active actors and concurrent requests.
+        // Retained checkpoints remain available for a separate explicit erase.
+        let policy_json = match policy {
+            alien_core::DeletionPolicy::Retain => "retain",
+            alien_core::DeletionPolicy::Erase => "erase",
+        };
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::Status, "delete-pending")
-            .value(Deployments::RuntimeMetadata, runtime_metadata_json)
+            .value(
+                Deployments::RuntimeMetadata,
+                Expr::cust_with_values(
+                    "json_set(COALESCE(runtime_metadata, '{}'), '$.deletionPolicy', ?)",
+                    [policy_json],
+                ),
+            )
+            .value(
+                Deployments::DeploymentProtocolVersion,
+                alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION as i64,
+            )
             .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
+            .and_where(Expr::col(Deployments::Status).eq(deployment.status))
+            .and_where(Expr::col(Deployments::LockedBy).is_null())
             .to_string(SqliteQueryBuilder);
-        self.db.execute(&sql).await
+        if self.db.execute_returning_rows_affected(&sql).await? != 1 {
+            return Err(ErrorData::bad_request(
+                "Deployment is executing or changed; retry deletion after it checkpoints",
+            )
+            .into_generic());
+        }
+        Ok(())
     }
 
     async fn set_quota_warning_overrides(
@@ -1411,6 +1494,17 @@ impl DeploymentStore for SqliteDeploymentStore {
             }
             if let Some(max_version) = filter.max_deployment_protocol_version {
                 query.and_where(Expr::col(Deployments::DeploymentProtocolVersion).lte(max_version));
+                if max_version < alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION {
+                    query.and_where(Expr::col(Deployments::Status).is_not_in([
+                        "delete-pending",
+                        "deleting",
+                        "delete-failed",
+                        "teardown-required",
+                        "teardown-failed",
+                        "retention-required",
+                        "retained",
+                    ]));
+                }
             }
             if let Some(platforms) = &filter.platforms {
                 let platform_strs: Vec<&str> = platforms.iter().map(|p| p.as_str()).collect();
@@ -1632,6 +1726,67 @@ impl DeploymentStore for SqliteDeploymentStore {
         mut data: ReconcileData,
     ) -> Result<ReconcileOutcome, AlienError> {
         let deployment = self.get_deployment(caller, &data.deployment_id).await?;
+        let installed_record = deployment
+            .as_ref()
+            .ok_or_else(|| db_error("Deployment not found during reconcile"))?;
+        let registered_protocol = installed_record.required_deployment_protocol_version();
+        // The row may still hold an older protocol while a deletion upgrades it, so the
+        // write guard compares against the stored value, not the required one.
+        let stored_protocol = installed_record.deployment_protocol_version;
+        let stored_deletion_policy = installed_record
+            .runtime_metadata
+            .as_ref()
+            .map(|metadata| metadata.deletion_policy)
+            .unwrap_or_default();
+        if !alien_core::accepts_deployment_protocol_report(
+            registered_protocol,
+            data.state.protocol_version,
+        ) || deployment.as_ref().is_some_and(|deployment| {
+            deployment.base_platform.unwrap_or(deployment.platform) == Platform::Gcp
+                && registered_protocol < alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
+                && data.state.protocol_version != registered_protocol
+        }) {
+            return Err(ErrorData::bad_request(
+                "A deployment report cannot downgrade or use an unsupported protocol",
+            )
+            .into_generic());
+        }
+        if let Some(installed) = deployment.as_ref() {
+            let policy = installed
+                .runtime_metadata
+                .as_ref()
+                .map(|metadata| metadata.deletion_policy)
+                .unwrap_or_default();
+            let reported = data
+                .state
+                .runtime_metadata
+                .as_ref()
+                .map(|metadata| metadata.deletion_policy)
+                .unwrap_or_default();
+            if policy != reported {
+                return Err(ErrorData::bad_request(
+                    "A deployment report cannot change the authorized deletion policy",
+                )
+                .into_generic());
+            }
+        }
+        // Pull reports own runtime progress, not setup-owned identity cleanup.
+        // Retained/deleted snapshots are final until an explicit delete request
+        // reopens the row. A setup checkpoint may only be advanced by its lease owner.
+        let setup_owned = Self::SETUP_TEARDOWN_STATUSES.contains(&installed_record.status.as_str());
+        if setup_owned && installed_record.locked_by.as_deref() != Some(data.session.as_str()) {
+            return Err(ErrorData::bad_request(
+                "Setup cleanup requires its active lease; reload before retrying",
+            )
+            .into_generic());
+        }
+        if matches!(installed_record.status.as_str(), "retained" | "deleted") {
+            return Ok(ReconcileOutcome {
+                record: installed_record.clone(),
+                target_operations_bundle_set: None,
+                target_dynamic_containers: None,
+            });
+        }
         let installed_grant = deployment
             .as_ref()
             .and_then(|deployment| deployment.runtime_metadata.as_ref())
@@ -1802,17 +1957,33 @@ impl DeploymentStore for SqliteDeploymentStore {
             };
             query.value(Deployments::DesiredReleaseId, desired_release);
 
-            // Match by `Id` only. Authz at the route layer (`can_sync_deployment`)
-            // gates who may call `reconcile`; race protection between competing
-            // legitimate writers lives at the `acquire` lock. A `LockedBy = session`
-            // WHERE clause adds no additional security guarantee here, and breaks
-            // pull-mode `agent_sync` which writes state without holding the lock.
+            // Runtime pull reports do not hold a lease. Setup cleanup does:
+            // protect its checkpoint if ownership or lifecycle changes after the read.
+            if setup_owned {
+                query.and_where(Expr::col(Deployments::LockedBy).eq(data.session.as_str()));
+            }
             query
                 .and_where(Expr::col(Deployments::Id).eq(&data.deployment_id as &str))
+                .and_where(Expr::col(Deployments::Status).eq(installed_record.status.as_str()))
+                .and_where(
+                    Expr::col(Deployments::DeploymentProtocolVersion).eq(stored_protocol as i64),
+                )
+                .and_where(Expr::cust_with_values(
+                    "COALESCE(json_extract(runtime_metadata, '$.deletionPolicy'), 'retain') = ?",
+                    [match stored_deletion_policy {
+                        alien_core::DeletionPolicy::Retain => "retain",
+                        alien_core::DeletionPolicy::Erase => "erase",
+                    }],
+                ))
                 .to_string(SqliteQueryBuilder)
         };
 
-        self.db.execute(&sql).await?;
+        if self.db.execute_returning_rows_affected(&sql).await? != 1 {
+            return Err(ErrorData::bad_request(
+                "Deployment lifecycle, protocol, deletion policy or cleanup ownership changed during reconcile; reload before retrying",
+            )
+            .into_generic());
+        }
 
         // Keep the active lease alive while a caller is making progress.
         // Long cloud waits can legitimately exceed the stale-lock window; a
@@ -2363,6 +2534,9 @@ mod gcp_project_consumer_tests {
             "teardown-required",
         )
         .await;
+        for status in ["retention-required", "retained"] {
+            create_gcp_deployment(&store, &group.id, status, SHARED_PROJECT, status).await;
+        }
 
         assert!(
             !store

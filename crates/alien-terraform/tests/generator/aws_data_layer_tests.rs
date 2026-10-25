@@ -7,9 +7,9 @@
 
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
-    Ai, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile, Queue, RemoteBindings,
-    ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
-    ServiceAccount, Stack, StackSettings, Storage, Vault,
+    Ai, ArtifactRegistry, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile,
+    Queue, RemoteBindings, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress,
+    SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -43,72 +43,10 @@ fn aws_key_package_is_valid_and_retained() {
     assert!(rendered.contains("\"kms:Encrypt\""));
     assert!(rendered.contains("\"kms:Decrypt\""));
     assert!(rendered.contains("terraform_data.customer_key_key_identity.output"));
-    let detach = module
-        .get("detach-retained-keys.sh")
-        .expect("retained Key detach operation");
-    assert!(detach.contains("detach_if_present 'aws_kms_key.customer_key[0]'"));
-    assert!(module
-        .get("README.md")
-        .unwrap()
-        .contains("terraform destroy"));
+    let inventory: Vec<String> =
+        serde_json::from_str(module.get("retained-data.json").unwrap()).unwrap();
+    assert_eq!(inventory, vec!["aws_kms_key.customer_key"]);
     assert_terraform_valid(&module, "aws_key_package");
-}
-
-#[cfg(unix)]
-#[test]
-fn retained_key_detach_operation_is_idempotent_and_narrow() {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
-
-    let stack = Stack::new("enterprise-key".to_string())
-        .add(
-            Key::new("customer-key".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
-    let temp = tempfile::tempdir().unwrap();
-    let detach_path = temp.path().join("detach-retained-keys.sh");
-    fs::write(&detach_path, module.get("detach-retained-keys.sh").unwrap()).unwrap();
-    fs::write(
-        temp.path().join("state"),
-        "aws_kms_key.customer_key\naws_kms_key.customer_key[0]\naws_iam_role.unrelated\n",
-    )
-    .unwrap();
-    let terraform_path = temp.path().join("terraform");
-    fs::write(
-        &terraform_path,
-        "#!/bin/sh\nset -eu\nif [ \"$1 $2\" = \"state list\" ]; then cat \"$TEST_STATE\"; exit 0; fi\nif [ \"$1 $2\" = \"state rm\" ]; then\n  grep -F -x -v \"$3\" \"$TEST_STATE\" > \"$TEST_STATE.next\"\n  mv \"$TEST_STATE.next\" \"$TEST_STATE\"\n  echo \"$3\" >> \"$TEST_LOG\"\n  exit 0\nfi\nexit 2\n",
-    )
-    .unwrap();
-    fs::set_permissions(&terraform_path, fs::Permissions::from_mode(0o755)).unwrap();
-
-    for _ in 0..2 {
-        let path = format!(
-            "{}:{}",
-            temp.path().display(),
-            std::env::var("PATH").unwrap_or_default()
-        );
-        let status = Command::new("sh")
-            .arg(&detach_path)
-            .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes")
-            .env("PATH", path)
-            .env("TEST_STATE", temp.path().join("state"))
-            .env("TEST_LOG", temp.path().join("log"))
-            .status()
-            .unwrap();
-        assert!(status.success());
-    }
-
-    assert_eq!(
-        fs::read_to_string(temp.path().join("state")).unwrap(),
-        "aws_iam_role.unrelated\n"
-    );
-    assert_eq!(
-        fs::read_to_string(temp.path().join("log")).unwrap(),
-        "aws_kms_key.customer_key\naws_kms_key.customer_key[0]\n"
-    );
 }
 
 #[test]
@@ -147,20 +85,63 @@ fn aws_storage_uses_customer_managed_key() {
         )
         .build();
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
-    let rendered = module
-        .files
-        .values()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    assert!(rendered.contains("sse_algorithm     = \"aws:kms\""));
-    assert!(
-        rendered.contains("kms_master_key_id = terraform_data.customer_key_key_identity.output")
+    let mut files = super::helpers::linter_files(&module);
+    let policy_references: Vec<_> = module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .flat_map(|(_, contents)| {
+            let body = hcl::parse(contents).unwrap();
+            body.blocks()
+                .filter(|block| {
+                    block.identifier.as_str() == "resource"
+                        && block
+                            .labels
+                            .first()
+                            .is_some_and(|label| label.as_str() == "aws_iam_role_policy")
+                })
+                .map(|block| format!("aws_iam_role_policy.{}[*].policy", block.labels[1].as_str()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    files.insert(
+        "key-policy-qualification.tf".to_string(),
+        format!(
+            "output \"qualification_policy_documents\" {{\n value = flatten([{}])\n}}\n",
+            policy_references.join(", ")
+        ),
     );
-    assert!(rendered.contains("kms:GenerateDataKey"));
-    assert!(rendered.contains("kms:Decrypt"));
-    assert_terraform_valid(&module, "aws_encrypted_storage");
+    files.insert("key-qualification.tftest.hcl".to_string(), r#"
+mock_provider "aws" {
+  mock_data "aws_caller_identity" { defaults = { account_id = "123456789012" } }
+  mock_data "aws_region" { defaults = { region = "us-east-1" } }
+  mock_resource "aws_kms_key" {
+    defaults = { arn = "arn:aws:kms:us-east-1:123456789012:key/selected", id = "selected" }
+  }
+}
+mock_provider "random" {}
+variables {
+  name = "encrypted-storage"
+  token = "synthetic-setup-token"
+  region = "us-east-1"
+}
+run "storage_and_workload_use_the_selected_key" {
+  command = apply
+  assert {
+    condition = one(one(aws_s3_bucket_server_side_encryption_configuration.data.rule).apply_server_side_encryption_by_default).kms_master_key_id == "arn:aws:kms:us-east-1:123456789012:key/selected"
+    error_message = "Bucket encryption must select the intended key ARN"
+  }
+  assert {
+    condition = alltrue([for action in ["kms:GenerateDataKey", "kms:Decrypt"] : anytrue(flatten([
+      for document in output.qualification_policy_documents : [
+        for statement in jsondecode(document).Statement : statement.Effect == "Allow" && contains(try(tolist(statement.Action), [statement.Action]), action) && contains(try(tolist(statement.Resource), [statement.Resource]), "arn:aws:kms:us-east-1:123456789012:key/selected")
+      ]
+    ]))])
+    error_message = "The workload must receive encryption and decryption grants for the selected key"
+  }
+}
+"#.to_string());
+    super::helpers::test_utils::terraform_test(&files)
+        .assert_ok("storage encryption and workload grants use the selected key");
 }
 
 #[test]
@@ -744,5 +725,61 @@ fn automatic_key_packages_are_refused_on_all_clouds() {
         )
         .expect_err("automatic packages cannot hand off setup-owned keys");
         assert!(error.to_string().contains("manual setup"), "{error}");
+    }
+}
+
+#[test]
+fn aws_storage_browser_cors() {
+    let stack = Stack::new("browser-storage".to_string())
+        .add(
+            Storage::new("assets".to_string())
+                .cors_allowed_origins(vec![
+                    "https://app.example.com".to_string(),
+                    "https://preview.example.com".to_string(),
+                ])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    snapshot_module("aws_storage_browser_cors", &module);
+    assert_terraform_valid(&module, "aws_storage_browser_cors");
+}
+
+#[test]
+fn aws_retained_data_setup() {
+    for encrypted in [false, true] {
+        let mut storage = Storage::new("data".to_string()).versioning(true).build();
+        if encrypted {
+            storage.encryption_key = Some(ResourceRef::new(Key::RESOURCE_TYPE, "key"));
+        }
+        let mut stack = Stack::new("retained-data".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(
+                Kv::new("rows".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ArtifactRegistry::new("images".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+        if encrypted {
+            stack = stack.add(
+                Key::new("key".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+        }
+        let module = render(
+            &stack.build(),
+            TerraformTarget::Aws,
+            StackSettings::default(),
+        );
+        let name = if encrypted {
+            "aws_retained_encrypted_data_setup"
+        } else {
+            "aws_retained_data_setup"
+        };
+        snapshot_module(name, &module);
+        assert_terraform_valid(&module, name);
     }
 }

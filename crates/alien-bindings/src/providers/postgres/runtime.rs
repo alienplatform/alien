@@ -100,8 +100,17 @@ impl PostgresRuntime {
                     aurora::resolve(binding_name, config, self.aws_secrets().await?).await?;
                 Ok(Arc::new(ResolvedPostgres::new(params)))
             }
+            #[cfg(feature = "aws")]
+            PostgresBinding::AuroraManaged(config) => {
+                let params =
+                    aurora::resolve_managed(binding_name, config, self.aws_secrets().await?)
+                        .await?;
+                Ok(Arc::new(ResolvedPostgres::new(params)))
+            }
             #[cfg(not(feature = "aws"))]
-            PostgresBinding::Aurora(_) => Err(feature_not_enabled("aws")),
+            PostgresBinding::Aurora(_) | PostgresBinding::AuroraManaged(_) => {
+                Err(feature_not_enabled("aws"))
+            }
             #[cfg(feature = "gcp")]
             PostgresBinding::CloudSql(config) => {
                 let params =

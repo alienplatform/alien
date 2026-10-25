@@ -24,6 +24,35 @@ const value: models.ExternalBindingAurora = {
 };
 ```
 
+### `models.ExternalBindingAuroraManaged`
+
+```typescript
+const value: models.ExternalBindingAuroraManaged = {
+  clusterEndpoint: "<value>",
+  database: "<value>",
+  passwordSecretArn: {
+    "secretRef": {
+      "key": "<key>",
+      "name": "<value>",
+    },
+  },
+  port: {
+    "secretRef": {
+      "key": "<key>",
+      "name": "<value>",
+    },
+  },
+  username: {
+    "secretRef": {
+      "key": "<key>",
+      "name": "<value>",
+    },
+  },
+  service: "aurora-managed",
+  type: "postgres",
+};
+```
+
 ### `models.ExternalBindingCloudSQL`
 
 ```typescript
@@ -90,4 +119,3 @@ const value: models.ExternalBindingLocalPostgres = {
   type: "postgres",
 };
 ```
-

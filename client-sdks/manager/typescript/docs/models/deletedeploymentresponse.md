@@ -6,7 +6,7 @@
 import { DeleteDeploymentResponse } from "@alienplatform/manager-api/models";
 
 let value: DeleteDeploymentResponse = {
-  action: "detach",
+  action: "erase",
   message: "<value>",
 };
 ```

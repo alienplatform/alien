@@ -1103,7 +1103,7 @@ storageSecret = "canary-secret"
             when.method(GET).path("/v1/deployments/dep_demo");
             then.status(200).json_body(json!({
                 "id":"dep_demo", "name":"demo", "platform":"machines", "status":"running",
-                "deploymentGroupId":"dg_demo", "deploymentProtocolVersion":1,
+                "deploymentGroupId":"dg_demo", "deploymentProtocolVersion":alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 "projectId":"prj_demo", "workspaceId":"ws_demo", "retryRequested":false,
                 "createdAt":"2026-01-01T00:00:00Z", "currentReleaseId":"rel_installed", "desiredReleaseId":"rel_target",
                 "stackSettings":{}, "stackState":StackState::new(Platform::Machines),

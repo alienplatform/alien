@@ -17,6 +17,10 @@ use mockall::automock;
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait DynamoDbApi: Send + Sync + std::fmt::Debug {
     async fn create_table(&self, request: CreateTableRequest) -> Result<CreateTableResponse>;
+    async fn list_tags_of_resource(
+        &self,
+        request: ListTagsOfResourceRequest,
+    ) -> Result<ListTagsOfResourceResponse>;
     async fn delete_table(&self, request: DeleteTableRequest) -> Result<DeleteTableResponse>;
     async fn describe_table(&self, request: DescribeTableRequest) -> Result<DescribeTableResponse>;
     async fn get_item(&self, request: GetItemRequest) -> Result<GetItemResponse>;
@@ -414,6 +418,23 @@ impl DynamoDbApi for DynamoDbClient {
             Some(body),
             "DescribeTimeToLive",
             &request.table_name,
+        )
+        .await
+    }
+    async fn list_tags_of_resource(
+        &self,
+        request: ListTagsOfResourceRequest,
+    ) -> Result<ListTagsOfResourceResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: "Failed to serialize DynamoDB tag lookup".into(),
+            },
+        )?;
+        self.send_json(
+            "DynamoDB_20120810.ListTagsOfResource",
+            Some(body),
+            "ListTagsOfResource",
+            &request.resource_arn,
         )
         .await
     }
@@ -1173,4 +1194,21 @@ pub struct DescribeTimeToLiveRequest {
 pub struct DescribeTimeToLiveResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_to_live_description: Option<TimeToLiveDescription>,
+}
+
+/// Reads one page of resource ownership tags.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListTagsOfResourceRequest {
+    pub resource_arn: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListTagsOfResourceResponse {
+    #[serde(default)]
+    pub tags: Vec<Tag>,
+    pub next_token: Option<String>,
 }

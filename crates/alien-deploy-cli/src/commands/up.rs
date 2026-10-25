@@ -1228,6 +1228,8 @@ mod tests {
     async fn setup_retries_a_failed_first_install_from_the_claimed_status() {
         let server = MockServer::start_async().await;
         let mut detail = installed_deployment("preflights-failed", Some("rel_target"));
+        detail["deploymentProtocolVersion"] =
+            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION.into();
         detail["currentReleaseId"] = serde_json::Value::Null;
         let deployment = server
             .mock_async(|when, then| {
@@ -1524,20 +1526,21 @@ mod tests {
         (result, kept.hits_async().await, changed.hits_async().await)
     }
 
-    /// A GCP deployment registered at the federation protocol is torn down at that protocol.
-    /// Reporting the default protocol made the step refuse the deployment and the manager
-    /// refuse the report.
+    /// An older manager must acknowledge retention support before teardown executes.
     #[tokio::test]
-    async fn teardown_of_a_federated_gcp_deployment_reports_its_recorded_protocol() {
+    async fn teardown_of_a_federated_gcp_deployment_requires_retention_acknowledgement() {
         let (result, kept, changed) = run_teardown(
             Platform::Gcp,
             gcp_client_config(),
             alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION,
         )
         .await;
-        result.expect("a teardown with nothing left to delete finishes");
-        assert!(kept >= 1, "the teardown reported progress at protocol 2");
-        assert_eq!(changed, 0, "no report changed the recorded protocol");
+        result.expect_err("old manager must refuse the retention checkpoint");
+        assert_eq!(
+            kept, 1,
+            "only final error reporting uses the old checkpoint"
+        );
+        assert_eq!(changed, 1, "upgrade is checkpointed before teardown");
     }
 
     /// Deployments on the default protocol keep reporting it.
@@ -1561,25 +1564,22 @@ mod tests {
         }
     }
 
-    /// A GCP deployment from before federation can still be torn down, and every report
-    /// keeps its protocol 1. The recorded protocol is never upgraded on the way.
+    /// Legacy managers must not authorize a destructive protocol-1 teardown.
     #[tokio::test]
-    async fn teardown_of_a_pre_federation_gcp_deployment_keeps_protocol_1() {
-        let (result, kept, changed) = run_teardown(
-            Platform::Gcp,
-            gcp_client_config(),
-            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
-        )
-        .await;
-        result.expect("a teardown with nothing left to delete finishes");
-        assert!(kept >= 1, "the teardown reported progress at protocol 1");
-        assert_eq!(changed, 0, "every report kept protocol 1");
+    async fn teardown_of_a_pre_federation_gcp_deployment_requires_retention_acknowledgement() {
+        let (result, kept, changed) = run_teardown(Platform::Gcp, gcp_client_config(), 1).await;
+        result.expect_err("old manager must refuse the retention checkpoint");
+        assert_eq!(
+            kept, 1,
+            "only final error reporting uses the old checkpoint"
+        );
+        assert_eq!(changed, 1);
     }
 
-    /// Setup of a GCP deployment registered at the federation protocol runs and checkpoints
-    /// at that protocol. The first checkpoint is refused here only to end the test there.
+    /// Existing federation setup needs a separate protocol upgrade before new
+    /// controller states. An old manager refuses it before any controller work.
     #[tokio::test]
-    async fn setup_of_a_federated_gcp_deployment_checkpoints_its_recorded_protocol() {
+    async fn setup_of_a_federated_gcp_deployment_requires_a_protocol_upgrade() {
         let server = MockServer::start_async().await;
         let mut record = recorded_deployment(
             "preflights-failed",
@@ -1627,7 +1627,8 @@ mod tests {
         let changed = server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::POST)
-                    .path("/v1/sync/reconcile");
+                    .path("/v1/sync/reconcile")
+                    .json_body_partial(serde_json::json!({"state":{"protocolVersion":alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION}}).to_string());
                 then.status(409).json_body(serde_json::json!({
                     "code": "DEPLOYMENT_PROTOCOL_MISMATCH",
                     "message": "A deployment report must preserve its registered protocol version.",
@@ -1686,7 +1687,7 @@ mod tests {
             "the step accepted the recorded protocol: {error:?}"
         );
         assert!(kept.hits_async().await >= 1, "{error:?}");
-        changed.assert_hits_async(0).await;
+        changed.assert_hits_async(1).await;
     }
 
     #[test]
@@ -4045,8 +4046,8 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         Err(error) => {
             if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
                 output::warn(&format!(
-                        "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
-                    ));
+                    "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
+                ));
             }
             (Vec::new(), args.setup_item)
         }
@@ -4126,7 +4127,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         output::label_value("Name", &name);
         output::label_value("Compute", &effective_compute_summary(&stack_settings));
         if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
-            output::info("Infrastructure management: Alien can create, change, and remove infrastructure for this installation, including resources added by future releases. New cloud permissions can require an explicit setup update.");
+            output::info(
+                "Infrastructure management: Alien can create, change, and remove infrastructure for this installation, including resources added by future releases. New cloud permissions can require an explicit setup update.",
+            );
         }
         if let Some(public_endpoints) = public_endpoints.as_ref() {
             let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
@@ -4236,7 +4239,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                         message: "Failed to save quota warning overrides".into(),
                     })?;
                 if current_deployment.status == "running" {
-                    output::success("Quota warning overrides saved. Redeploy to apply them to the running deployment.");
+                    output::success(
+                        "Quota warning overrides saved. Redeploy to apply them to the running deployment.",
+                    );
                     return Ok(());
                 }
             } else {
@@ -6610,6 +6615,8 @@ fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
         "delete-pending" => Ok(DeploymentStatus::DeletePending),
         "deleting" => Ok(DeploymentStatus::Deleting),
         "delete-failed" => Ok(DeploymentStatus::DeleteFailed),
+        "retention-required" => Ok(DeploymentStatus::RetentionRequired),
+        "retained" => Ok(DeploymentStatus::Retained),
         "teardown-required" => Ok(DeploymentStatus::TeardownRequired),
         "teardown-failed" => Ok(DeploymentStatus::TeardownFailed),
         "deleted" => Ok(DeploymentStatus::Deleted),
@@ -6638,6 +6645,8 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::DeletePending => "delete-pending",
         DeploymentStatus::Deleting => "deleting",
         DeploymentStatus::DeleteFailed => "delete-failed",
+        DeploymentStatus::RetentionRequired => "retention-required",
+        DeploymentStatus::Retained => "retained",
         DeploymentStatus::TeardownRequired => "teardown-required",
         DeploymentStatus::TeardownFailed => "teardown-failed",
         DeploymentStatus::Deleted => "deleted",
@@ -8302,7 +8311,9 @@ pub async fn push_deletion(
     if platform == Platform::Local
         && !matches!(
             state.status,
-            DeploymentStatus::TeardownRequired | DeploymentStatus::TeardownFailed
+            DeploymentStatus::TeardownRequired
+                | DeploymentStatus::TeardownFailed
+                | DeploymentStatus::RetentionRequired
         )
     {
         run_runtime_deletion(
@@ -8563,6 +8574,10 @@ async fn run_setup_deletion(
     })?;
 
     match result.loop_result.outcome {
+        LoopOutcome::Success if result.loop_result.final_status == DeploymentStatus::Retained => {
+            output::success("Deployment deleted. Its data was kept in your cloud account.");
+            Ok(())
+        }
         LoopOutcome::Success => {
             output::success("Deployment deleted successfully.");
             Ok(())

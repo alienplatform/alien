@@ -1,4 +1,4 @@
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -13,13 +13,31 @@ use alien_core::{
     Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
 };
 use alien_gcp_clients::gcs::{
-    Bucket, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition, LifecycleRule,
-    UniformBucketLevelAccess, Versioning,
+    Bucket, CorsRule, GcsApi, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition,
+    LifecycleRule, UniformBucketLevelAccess, Versioning,
 };
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_macros::controller;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+
+fn read_cors(origins: &[String]) -> Vec<CorsRule> {
+    if origins.is_empty() {
+        return Vec::new();
+    }
+    vec![CorsRule {
+        origin: origins.to_vec(),
+        method: vec!["GET".into(), "HEAD".into()],
+        response_header: vec![
+            "ETag".into(),
+            "Content-Range".into(),
+            "Accept-Ranges".into(),
+            "Range".into(),
+            "If-Range".into(),
+        ],
+        max_age_seconds: 3600,
+    }]
+}
 
 /// Generates the full, prefixed GCP bucket name.
 fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
@@ -38,6 +56,12 @@ pub struct GcpStorageController {
     /// for removing every rule left the old rules in place.
     #[serde(default)]
     pub(crate) lifecycle_revision: Option<String>,
+
+    /// A create/update response confirmed the full browser-read CORS contract. Older
+    /// controllers ignored declared origins; repair their nonempty declarations once.
+    /// This is a capability receipt, not a copy of desired configuration.
+    #[serde(default)]
+    pub(crate) read_cors_applied: bool,
 }
 
 #[controller]
@@ -70,6 +94,24 @@ impl GcpStorageController {
 
         // Set location from GCP config
         bucket.location = Some(gcp_config.region.clone());
+        bucket.iam_configuration = Some(IamConfiguration {
+            uniform_bucket_level_access: Some(UniformBucketLevelAccess {
+                enabled: true,
+                locked_time: None,
+            }),
+            public_access_prevention: Some(
+                if config.public_read {
+                    "inherited"
+                } else {
+                    "enforced"
+                }
+                .to_string(),
+            ),
+        });
+
+        if !config.cors_allowed_origins.is_empty() {
+            bucket.cors = Some(read_cors(&config.cors_allowed_origins));
+        }
 
         // Configure versioning if enabled
         if config.versioning {
@@ -93,6 +135,8 @@ impl GcpStorageController {
 
         info!(bucket = %bucket_name, "GCS bucket created successfully");
 
+        self.read_cors_applied = created_bucket.cors.as_deref().unwrap_or_default()
+            == read_cors(&config.cors_allowed_origins);
         let lifecycle_confirmed =
             gcs_lifecycle_matches(created_bucket.lifecycle.as_ref(), &lifecycle);
         self.bucket_name = Some(created_bucket.name.unwrap_or_else(|| bucket_name.clone()));
@@ -200,51 +244,7 @@ impl GcpStorageController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            // Then add public read binding via read-modify-write to preserve existing bindings
-            let mut existing_policy = client
-                .get_bucket_iam_policy(bucket_name.clone())
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to get bucket IAM policy for '{}' before setting public read. Refusing to proceed to avoid overwriting existing bindings.", bucket_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            let public_viewer_role = "roles/storage.objectViewer";
-            let all_users = "allUsers".to_string();
-
-            // Only add if not already present
-            let already_has_public = existing_policy
-                .bindings
-                .iter()
-                .any(|b| b.role == public_viewer_role && b.members.contains(&all_users));
-
-            if !already_has_public {
-                if let Some(binding) = existing_policy
-                    .bindings
-                    .iter_mut()
-                    .find(|b| b.role == public_viewer_role)
-                {
-                    if !binding.members.contains(&all_users) {
-                        binding.members.push(all_users);
-                    }
-                } else {
-                    existing_policy.bindings.push(Binding {
-                        role: public_viewer_role.to_string(),
-                        members: vec![all_users],
-                        condition: None,
-                    });
-                }
-
-                existing_policy.version = Some(3);
-
-                client
-                    .set_bucket_iam_policy(bucket_name.clone(), existing_policy)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to set IAM policy for bucket '{}'", bucket_name),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-            }
+            update_public_viewer(&*client, bucket_name, &config.id, true).await?;
 
             info!(bucket = %bucket_name, "IAM policy for public read access set successfully");
         } else {
@@ -316,6 +316,21 @@ impl GcpStorageController {
         let mut bucket_patch = Bucket::default();
         let mut needs_update = false;
 
+        let cors_changed = config.cors_allowed_origins != prev_config.cors_allowed_origins
+            || (may_repair_lifecycle(ctx, &config.id)
+                && !self.read_cors_applied
+                && !config.cors_allowed_origins.is_empty());
+        if cors_changed {
+            if !may_repair_lifecycle(ctx, &config.id) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    resource_id: Some(config.id.clone()),
+                    message: "Storage CORS is setup-owned; apply the updated setup package to change this Frozen bucket".into(),
+                }));
+            }
+            bucket_patch.cors = Some(read_cors(&config.cors_allowed_origins));
+            needs_update = true;
+        }
+
         // Check versioning changes
         if config.versioning != prev_config.versioning {
             info!(bucket = %bucket_name, current = %config.versioning, previous = %prev_config.versioning, "Updating versioning");
@@ -348,6 +363,20 @@ impl GcpStorageController {
                     message: format!("Failed to update GCS bucket '{}'", bucket_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+            if cors_changed
+                && updated_bucket.cors.as_deref().unwrap_or_default()
+                    != read_cors(&config.cors_allowed_origins)
+            {
+                return Err(AlienError::new(ErrorData::ResourceDrift {
+                    resource_id: config.id.clone(),
+                    message: format!(
+                        "GCS bucket '{bucket_name}' returned different CORS rules than requested"
+                    ),
+                }));
+            }
+            if cors_changed {
+                self.read_cors_applied = true;
+            }
             if write_lifecycle {
                 if !gcs_lifecycle_matches(updated_bucket.lifecycle.as_ref(), &lifecycle) {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
@@ -437,119 +466,40 @@ impl GcpStorageController {
             let gcp_config = ctx.get_gcp_config()?;
             let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
 
-            if config.public_read {
-                // Enable public read access
-                info!(bucket = %bucket_name, "Setting IAM policy for public read access");
-
-                // First set uniform bucket-level access
-                let mut bucket_patch = Bucket::default();
-                bucket_patch.iam_configuration = Some(IamConfiguration {
-                    uniform_bucket_level_access: Some(UniformBucketLevelAccess {
-                        enabled: true,
-                        locked_time: None,
-                    }),
-                    public_access_prevention: Some("inherited".to_string()),
-                });
-
-                client
-                    .update_bucket(bucket_name.clone(), bucket_patch)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to enable uniform bucket-level access for bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-
-                // Then set IAM policy
-                let iam_policy = IamPolicy {
-                    version: Some(1),
-                    bindings: vec![Binding {
-                        role: "roles/storage.objectViewer".to_string(),
-                        members: vec!["allUsers".to_string()],
-                        condition: None,
-                    }],
-                    etag: None,
-                    kind: Some("storage#policy".to_string()),
-                    resource_id: Some(bucket_name.clone()),
-                };
-
-                client
-                    .set_bucket_iam_policy(bucket_name.clone(), iam_policy)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to set IAM policy for bucket '{}'", bucket_name),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-
-                info!(bucket = %bucket_name, "IAM policy for public read access set successfully");
-            } else {
-                // Remove public read access
-                info!(bucket = %bucket_name, "Removing public read access");
-
-                // First disable uniform bucket-level access
-                let mut bucket_patch = Bucket::default();
-                bucket_patch.iam_configuration = Some(IamConfiguration {
-                    uniform_bucket_level_access: Some(UniformBucketLevelAccess {
-                        enabled: false,
-                        locked_time: None,
-                    }),
-                    public_access_prevention: Some("enforced".to_string()),
-                });
-
-                client
-                    .update_bucket(bucket_name.clone(), bucket_patch)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to disable uniform bucket-level access for bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-
-                // Then remove allUsers from IAM policy
-                match client.get_bucket_iam_policy(bucket_name.clone()).await {
-                    Ok(mut current_policy) => {
-                        current_policy.bindings.retain(|binding| {
-                            !(binding.role == "roles/storage.objectViewer"
-                                && binding.members.contains(&"allUsers".to_string()))
-                        });
-
-                        client
-                            .set_bucket_iam_policy(bucket_name.clone(), current_policy)
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to update IAM policy for bucket '{}'",
-                                    bucket_name
-                                ),
-                                resource_id: Some(config.id.clone()),
-                            })?;
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        // Policy doesn't exist, nothing to remove
-                        debug!(bucket = %bucket_name, "No IAM policy found to remove");
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to get IAM policy for bucket '{}'",
-                                bucket_name
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        }));
-                    }
-                }
-
-                info!(bucket = %bucket_name, "Public read access removed successfully");
+            if !may_repair_lifecycle(ctx, &config.id) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    resource_id: Some(config.id.clone()),
+                    message: "Public access on a Frozen bucket must be changed through setup"
+                        .to_string(),
+                }));
             }
+
+            // Privacy does not change the ACL model. In particular, never disable locked
+            // UBLA, or silently disable existing ACL grants while making a bucket public.
+            let bucket_patch = Bucket {
+                iam_configuration: Some(IamConfiguration {
+                    uniform_bucket_level_access: None,
+                    public_access_prevention: Some(
+                        if config.public_read {
+                            "inherited"
+                        } else {
+                            "enforced"
+                        }
+                        .to_string(),
+                    ),
+                }),
+                ..Default::default()
+            };
+            client
+                .update_bucket(bucket_name.clone(), bucket_patch)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to update public access prevention for bucket '{bucket_name}'"
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            update_public_viewer(&*client, bucket_name, &config.id, config.public_read).await?;
         } else {
             info!(bucket = %bucket_name, "No IAM policy changes needed");
         }
@@ -716,9 +666,9 @@ impl GcpStorageController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
-    /// Schedules a lifecycle rewrite when GCS has not confirmed the desired rules from this
-    /// controller, such as on a bucket an older version configured (see `lifecycle_revision`).
-    /// The storage config of such a deployment is unchanged, so nothing else would rewrite it.
+    /// Repairs lifecycle rules and declared browser CORS that older controllers did not
+    /// apply correctly. These declarations can be unchanged, so config diffing alone
+    /// would leave them unapplied. Imported Frozen buckets remain setup-owned.
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let config = ctx.desired_resource_config::<Storage>()?;
         if !may_repair_lifecycle(ctx, &config.id) {
@@ -726,7 +676,8 @@ impl GcpStorageController {
         }
         let lifecycle = gcs_lifecycle(&config.id, &config.lifecycle_rules)?;
         let desired = gcs_lifecycle_revision(&config.id, &lifecycle)?;
-        Ok(self.lifecycle_revision.as_deref() != Some(desired.as_str()))
+        Ok(self.lifecycle_revision.as_deref() != Some(desired.as_str())
+            || (!self.read_cors_applied && !config.cors_allowed_origins.is_empty()))
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -755,6 +706,72 @@ impl GcpStorageController {
         } else {
             Ok(None)
         }
+    }
+}
+
+/// Change only public object-viewer membership. Every retry reads a fresh policy, so an
+/// etag conflict cannot overwrite a concurrent grant. Conditions and other roles survive.
+pub(super) async fn update_public_viewer(
+    client: &dyn GcsApi,
+    bucket_name: &str,
+    resource_id: &str,
+    public: bool,
+) -> Result<()> {
+    let mut policy = client
+        .get_bucket_iam_policy(bucket_name.to_string())
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to read IAM policy for bucket '{bucket_name}'"),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+    if !set_public_viewer(&mut policy, public) {
+        return Ok(());
+    }
+    client
+        .set_bucket_iam_policy(bucket_name.to_string(), policy)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to update public viewer for bucket '{bucket_name}'"),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+    Ok(())
+}
+
+fn set_public_viewer(policy: &mut IamPolicy, public: bool) -> bool {
+    const ROLE: &str = "roles/storage.objectViewer";
+    const MEMBER: &str = "allUsers";
+    if public {
+        // A conditional grant is not an unconditional public-read grant.
+        if let Some(binding) = policy
+            .bindings
+            .iter_mut()
+            .find(|binding| binding.role == ROLE && binding.condition.is_none())
+        {
+            if binding.members.iter().any(|member| member == MEMBER) {
+                return false;
+            }
+            binding.members.push(MEMBER.to_string());
+        } else {
+            policy.bindings.push(Binding {
+                role: ROLE.to_string(),
+                members: vec![MEMBER.to_string()],
+                condition: None,
+            });
+        }
+        true
+    } else {
+        let mut changed = false;
+        policy.bindings.retain_mut(|binding| {
+            if binding.role != ROLE {
+                return true;
+            }
+            let before = binding.members.len();
+            binding.members.retain(|member| member != MEMBER);
+            let removed = before != binding.members.len();
+            changed |= removed;
+            !removed || !binding.members.is_empty()
+        });
+        changed
     }
 }
 
@@ -1027,6 +1044,7 @@ impl GcpStorageController {
             state: GcpStorageState::Ready,
             bucket_name: Some(get_gcp_bucket_name("test-stack", storage_name)),
             lifecycle_revision: None,
+            read_cors_applied: false,
             _internal_stay_count: None,
         }
     }
@@ -1767,6 +1785,14 @@ mod lifecycle_prefix_tests {
         bodies: Arc<Mutex<Vec<Value>>>,
         respond: fn(Bucket) -> Bucket,
     ) -> Arc<dyn PlatformServiceProvider> {
+        gcs_with_lost_response(bodies, respond, false)
+    }
+
+    fn gcs_with_lost_response(
+        bodies: Arc<Mutex<Vec<Value>>>,
+        respond: fn(Bucket) -> Bucket,
+        mut lose_first_response: bool,
+    ) -> Arc<dyn PlatformServiceProvider> {
         let mut gcs = MockGcsApi::new();
         let created = bodies.clone();
         gcs.expect_create_bucket().returning(move |name, bucket| {
@@ -1785,6 +1811,13 @@ mod lifecycle_prefix_tests {
                 .lock()
                 .unwrap()
                 .push(serde_json::to_value(&bucket).unwrap());
+            if std::mem::take(&mut lose_first_response) {
+                return Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::Timeout {
+                        message: "patch applied but its response was lost".into(),
+                    },
+                ));
+            }
             Ok(Bucket {
                 name: Some(name),
                 ..respond(bucket)
@@ -1818,11 +1851,76 @@ mod lifecycle_prefix_tests {
             state: GcpStorageState::Ready,
             bucket_name: Some(BUCKET.to_string()),
             lifecycle_revision: Some("unused".to_string()),
+            read_cors_applied: false,
             _internal_stay_count: None,
         })
         .unwrap();
         saved.as_object_mut().unwrap().remove("lifecycleRevision");
+        saved.as_object_mut().unwrap().remove("readCorsApplied");
         serde_json::from_value(saved).unwrap()
+    }
+
+    #[tokio::test]
+    async fn browser_cors_create_replace_clear_and_frozen_gate() {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let mut config = storage(vec![]);
+        config.cors_allowed_origins =
+            vec!["https://one.example".into(), "https://two.example".into()];
+        let mut run = SingleControllerExecutor::builder()
+            .resource(config.clone())
+            .controller(GcpStorageController::default())
+            .platform(Platform::Gcp)
+            .service_provider(gcs(bodies.clone(), echo))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert_eq!(
+            bodies.lock().unwrap()[0]["cors"],
+            json!([{
+                "origin": config.cors_allowed_origins, "method": ["GET", "HEAD"],
+                "responseHeader": ["ETag", "Content-Range", "Accept-Ranges", "Range", "If-Range"], "maxAgeSeconds": 3600
+            }])
+        );
+        config.cors_allowed_origins = vec!["https://three.example".into()];
+        run.update(config.clone()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(
+            bodies.lock().unwrap().last().unwrap()["cors"][0]["origin"],
+            json!(["https://three.example"])
+        );
+        config.cors_allowed_origins.clear();
+        run.update(config.clone()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(bodies.lock().unwrap().last().unwrap()["cors"], json!([]));
+        let previous = config.clone();
+        config.cors_allowed_origins = vec!["https://four.example".into()];
+        let mut controller = previous_version_ready_controller();
+        controller.state = crate::GcpStorageState::UpdateStart;
+        let controller: GcpStorageController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let mut frozen = SingleControllerExecutor::builder()
+            .resource(config)
+            .previous_resource(previous)
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .service_provider(gcs(bodies.clone(), echo))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let count = bodies.lock().unwrap().len();
+        assert!(frozen
+            .step()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("setup-owned"));
+        assert_eq!(bodies.lock().unwrap().len(), count);
     }
 
     #[tokio::test]
@@ -1929,7 +2027,13 @@ mod lifecycle_prefix_tests {
     /// only `needs_update` can schedule the rewrite. This drives the executor's own plan and
     /// step, as a deployment update does, and returns the bodies sent to GCS.
     async fn repair_bucket_from_older_version(rules: Vec<LifecycleRule>) -> Vec<Value> {
-        let desired = storage(rules);
+        repair_storage_from_older_version(storage(rules), false).await
+    }
+
+    async fn repair_storage_from_older_version(
+        desired: Storage,
+        lose_response: bool,
+    ) -> Vec<Value> {
         let stack = Stack::new("test".to_string())
             .add(desired.clone(), ResourceLifecycle::Live)
             .build();
@@ -1947,7 +2051,7 @@ mod lifecycle_prefix_tests {
         let executor =
             StackExecutor::builder(&stack, ClientConfig::Gcp(Box::new(GcpClientConfig::mock())))
                 .deployment_config(&config)
-                .service_provider(gcs(bodies.clone(), echo))
+                .service_provider(gcs_with_lost_response(bodies.clone(), echo, lose_response))
                 .build()
                 .unwrap();
         let mut state = StackState::with_resource_prefix(Platform::Gcp, "test".to_string());
@@ -1970,6 +2074,8 @@ mod lifecycle_prefix_tests {
             .contains_key("tmp-storage"));
         for _ in 0..10 {
             state = executor.step(state).await.unwrap().next_state;
+            // Each pass represents a fresh owner loading the persisted checkpoint.
+            state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
             if state.resources["tmp-storage"].status == ResourceStatus::Running {
                 break;
             }
@@ -1989,6 +2095,82 @@ mod lifecycle_prefix_tests {
         );
         let bodies = bodies.lock().unwrap().clone();
         bodies
+    }
+
+    #[tokio::test]
+    async fn unchanged_legacy_cors_is_repaired_after_a_lost_response_and_reload() {
+        let mut desired = storage(vec![]);
+        desired.cors_allowed_origins = vec!["https://app.example.com".into()];
+        let bodies = repair_storage_from_older_version(desired.clone(), true).await;
+        assert_eq!(
+            bodies.len(),
+            2,
+            "exactly one retry after the applied patch lost its response"
+        );
+        assert_eq!(
+            bodies[0], bodies[1],
+            "retry sends the same idempotent patch"
+        );
+        assert_eq!(
+            bodies[0]["cors"],
+            serde_json::to_value(super::read_cors(&desired.cors_allowed_origins)).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_cors_repair_respects_frozen_ownership_and_response_confirmation() {
+        let mut desired = storage(vec![]);
+        desired.cors_allowed_origins = vec!["https://app.example.com".into()];
+        for authority in [
+            InitialSetupAuthority::ImportedHandoff,
+            InitialSetupAuthority::DirectSetup,
+        ] {
+            let bodies = Arc::new(Mutex::new(Vec::new()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(desired.clone())
+                .controller(previous_version_ready_controller())
+                .platform(Platform::Gcp)
+                .resource_lifecycle(ResourceLifecycle::Frozen)
+                .initial_setup_authority(authority)
+                .service_provider(gcs(bodies.clone(), echo))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            executor.update(desired.clone()).unwrap();
+            executor.run_until_terminal().await.unwrap();
+            let applied = executor
+                .internal_state::<GcpStorageController>()
+                .unwrap()
+                .read_cors_applied;
+            assert_eq!(applied, authority == InitialSetupAuthority::DirectSetup);
+            assert_eq!(bodies.lock().unwrap().len(), usize::from(applied));
+        }
+
+        fn omit_cors(mut bucket: Bucket) -> Bucket {
+            bucket.cors = None;
+            bucket
+        }
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(desired.clone())
+            .controller(previous_version_ready_controller())
+            .platform(Platform::Gcp)
+            .service_provider(gcs(Arc::default(), omit_cors))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.update(desired).unwrap();
+        assert_eq!(
+            executor.run_until_terminal().await.unwrap_err().code,
+            "RESOURCE_DRIFT"
+        );
+        assert!(
+            !executor
+                .internal_state::<GcpStorageController>()
+                .unwrap()
+                .read_cors_applied
+        );
     }
 
     #[tokio::test]
@@ -2099,5 +2281,199 @@ mod lifecycle_prefix_tests {
             .lifecycle_revision
             .is_none());
         assert!(executor.needs_update().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod public_access_tests {
+    use std::sync::{Arc, Mutex};
+
+    use alien_core::{InitialSetupAuthority, Platform, ResourceLifecycle, ResourceStatus, Storage};
+    use alien_gcp_clients::{gcs::MockGcsApi, iam::MockIamApi};
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+
+    fn policy() -> IamPolicy {
+        serde_json::from_value(json!({
+            "version": 3, "etag": "original", "kind": "storage#policy",
+            "bindings": [
+                {"role": "roles/storage.objectViewer", "members": ["allUsers", "user:reader@example.com"],
+                 "condition": {"title": "prefix", "expression": "resource.name.startsWith('projects/_/buckets/test/objects/public/')"}},
+                {"role": "roles/storage.objectAdmin", "members": ["serviceAccount:writer@example.iam.gserviceaccount.com"]},
+                {"role": "roles/storage.objectViewer", "members": ["user:other@example.com"]}
+            ]
+        })).unwrap()
+    }
+
+    #[test]
+    fn toggles_preserve_conditions_members_version_and_etag() {
+        let mut current = policy();
+        let original = serde_json::to_value(&current).unwrap();
+        assert!(set_public_viewer(&mut current, true));
+        assert!(!set_public_viewer(&mut current, true));
+        let public = serde_json::to_value(&current).unwrap();
+        assert_eq!(public["bindings"][0], original["bindings"][0]);
+        assert_eq!(public["bindings"][1], original["bindings"][1]);
+        assert_eq!(
+            public["bindings"][2]["members"],
+            json!(["user:other@example.com", "allUsers"])
+        );
+        assert!(set_public_viewer(&mut current, false));
+        assert!(!set_public_viewer(&mut current, false));
+        let mut expected = original;
+        expected["bindings"][0]["members"] = json!(["user:reader@example.com"]);
+        assert_eq!(serde_json::to_value(current).unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn policy_conflict_rereads_and_lost_response_retry_is_noop() {
+        let stored = Arc::new(Mutex::new(policy()));
+        let reads = stored.clone();
+        let mut client = MockGcsApi::new();
+        client
+            .expect_get_bucket_iam_policy()
+            .times(3)
+            .returning(move |_| Ok(reads.lock().unwrap().clone()));
+        let writes = stored.clone();
+        let mut attempt = 0;
+        client
+            .expect_set_bucket_iam_policy()
+            .times(2)
+            .returning(move |_, desired| {
+                attempt += 1;
+                let mut current = writes.lock().unwrap();
+                if attempt == 1 {
+                    assert_eq!(desired.etag.as_deref(), Some("original"));
+                    current.etag = Some("concurrent".into());
+                    current.bindings.push(Binding {
+                        role: "roles/storage.legacyBucketReader".into(),
+                        members: vec!["user:concurrent@example.com".into()],
+                        condition: None,
+                    });
+                } else {
+                    assert_eq!(desired.etag.as_deref(), Some("concurrent"));
+                    assert_eq!(
+                        desired.bindings.last().unwrap().members,
+                        ["user:concurrent@example.com"]
+                    );
+                    *current = desired;
+                }
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "bucket".into(),
+                        resource_name: "test".into(),
+                        message: "retry".into(),
+                    },
+                ))
+            });
+        assert!(update_public_viewer(&client, "test", "storage", true)
+            .await
+            .is_err());
+        assert!(update_public_viewer(&client, "test", "storage", true)
+            .await
+            .is_err());
+        update_public_viewer(&client, "test", "storage", true)
+            .await
+            .unwrap();
+        assert_eq!(stored.lock().unwrap().bindings.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn saved_privacy_handler_keeps_locked_ubla_and_other_members() {
+        let old = Storage::new("storage".into()).public_read(true).build();
+        let new = Storage::new("storage".into()).build();
+        // Use the actual serializer for the state spelling; omit newly defaulted fields as
+        // older checkpoints do, and resume directly at the mutating handler.
+        let mut checkpoint = serde_json::to_value(GcpStorageController {
+            state: GcpStorageState::UpdateIamPolicy,
+            bucket_name: Some("test-storage".into()),
+            lifecycle_revision: None,
+            read_cors_applied: false,
+            _internal_stay_count: None,
+        })
+        .unwrap();
+        checkpoint
+            .as_object_mut()
+            .unwrap()
+            .remove("lifecycleRevision");
+        let controller: GcpStorageController = serde_json::from_value(checkpoint).unwrap();
+        assert_eq!(controller.bucket_name.as_deref(), Some("test-storage"));
+        let resulting = Arc::new(Mutex::new(Value::Null));
+        let written = resulting.clone();
+        let mut gcs = MockGcsApi::new();
+        gcs.expect_update_bucket().times(1).returning(|_, patch| {
+            let iam = patch.iam_configuration.as_ref().unwrap();
+            assert!(
+                iam.uniform_bucket_level_access.is_none(),
+                "privacy must not change locked UBLA"
+            );
+            assert_eq!(iam.public_access_prevention.as_deref(), Some("enforced"));
+            Ok(patch)
+        });
+        gcs.expect_get_bucket_iam_policy()
+            .times(1)
+            .returning(|_| Ok(policy()));
+        gcs.expect_set_bucket_iam_policy()
+            .times(1)
+            .returning(move |_, policy| {
+                *written.lock().unwrap() = serde_json::to_value(&policy).unwrap();
+                Ok(policy)
+            });
+        let gcs = Arc::new(gcs);
+        let iam = Arc::new(MockIamApi::new());
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_gcs_client()
+            .returning(move |_| Ok(gcs.clone()));
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(new)
+            .previous_resource(old)
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let mut expected = serde_json::to_value(policy()).unwrap();
+        expected["bindings"][0]["members"] = json!(["user:reader@example.com"]);
+        assert_eq!(*resulting.lock().unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn resumed_frozen_public_change_requires_setup_before_writes() {
+        let client = Arc::new(MockGcsApi::new());
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_gcs_client()
+            .returning(move |_| Ok(client.clone()));
+        let controller = GcpStorageController {
+            state: GcpStorageState::UpdateIamPolicy,
+            bucket_name: Some("test-storage".into()),
+            lifecycle_revision: None,
+            read_cors_applied: false,
+            _internal_stay_count: None,
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Storage::new("storage".into()).public_read(true).build())
+            .previous_resource(Storage::new("storage".into()).build())
+            .controller(controller)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let err = executor.step().await.unwrap_err();
+        assert!(format!("{err:?}").contains("must be changed through setup"));
     }
 }

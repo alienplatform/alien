@@ -318,6 +318,27 @@
       }
     ],
     "azure": [
+      {
+        // Async server updates return location-level operation URLs. Tracking them needs
+        // resource-group scope even when the mutation is scoped to one server. These
+        // operations return control-plane status, never database or secret contents.
+        "label": "read-flexible-server-operations",
+        "description": "Track asynchronous Flexible Server settings updates.",
+        "grant": {
+          "actions": [
+            "Microsoft.DBforPostgreSQL/locations/azureAsyncOperation/read",
+            "Microsoft.DBforPostgreSQL/locations/operationResults/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      },
       // No Key Vault secret grant here: the Azure controller stores the generated password in the
       // shared deployment "secrets" vault, whose data-plane writes are authored (vault-scoped) by
       // the secrets-vault preflight (management gets vault/data-write on it). A separate per-secret

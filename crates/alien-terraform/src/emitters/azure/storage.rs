@@ -13,13 +13,11 @@
 //!   [`super::storage_account::AzureStorageAccountEmitter`] when any
 //!   container opted in (Azure scopes the toggle to the account, not
 //!   the container — see that file's doc comment).
-//! * `lifecycle_rules` translate to a sibling `azurerm_storage_management_policy`
-//!   referencing the storage account; the policy lives next to the
-//!   container so the customer reads "what's the retention policy on
-//!   `data`?" by opening `data.tf`.
+//! * Lifecycle rules belong to the shared account emitter, which owns the
+//!   single account-wide management policy.
 
 use crate::{
-    block::{attr, block, nested, resource_block},
+    block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, emit_remote_bindings_role_definitions, permission_context,
@@ -29,13 +27,13 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, AzureStorageAccount, ErrorData, LifecycleRule, PermissionProfile,
-    PermissionSet, PermissionSetReference, Result, Storage,
+    AzureStorageAccount, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
+    Result, Storage, import::EmitContext,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
-    generators::{AzureCustomRole, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
     BindingTarget,
+    generators::{AzureCustomRole, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
 };
 use hcl::expr::Expression;
 
@@ -73,16 +71,9 @@ impl TfEmitter for AzureStorageEmitter {
         );
         fragment.resource_blocks.push(container);
 
-        if !storage.lifecycle_rules.is_empty() {
-            fragment.resource_blocks.push(lifecycle_policy(
-                label,
-                &parent_label,
-                &storage.lifecycle_rules,
-            ));
-        }
-
         emit_storage_permissions(ctx, label, &parent_label, &mut fragment)?;
 
+        fragment.retain_resources(|kind, _| kind == "azurerm_storage_container");
         Ok(fragment)
     }
 
@@ -142,7 +133,7 @@ fn parent_storage_account_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
     }))
 }
 
-fn container_name_expr(storage_id: &str) -> Expression {
+pub(super) fn container_name_expr(storage_id: &str) -> Expression {
     // `replace(lower("${local.resource_prefix}-{id}"), "_", "-")` — match
     // runtime's `get_azure_container_name` so push and pull resolve to
     // the same physical container.
@@ -150,26 +141,6 @@ fn container_name_expr(storage_id: &str) -> Expression {
         "replace(lower(\"${{local.resource_prefix}}-{}\"), \"_\", \"-\")",
         storage_id
     ))
-}
-
-fn lifecycle_policy(
-    storage_label: &str,
-    parent_label: &str,
-    rules: &[LifecycleRule],
-) -> hcl::structure::Block {
-    let rule_blocks: Vec<hcl::structure::Structure> = rules
-        .iter()
-        .enumerate()
-        .map(|(index, rule)| nested(rule_block(storage_label, index, rule)))
-        .collect();
-
-    let mut body: Vec<hcl::structure::Structure> = vec![attr(
-        "storage_account_id",
-        expr::traversal(["azurerm_storage_account", parent_label, "id"]),
-    )];
-    body.extend(rule_blocks);
-
-    resource_block("azurerm_storage_management_policy", storage_label, body)
 }
 
 fn emit_storage_permissions(
@@ -514,120 +485,18 @@ fn sanitize_role_label(input: &str) -> String {
         .collect()
 }
 
-fn rule_block(storage_label: &str, index: usize, rule: &LifecycleRule) -> hcl::structure::Block {
-    // Azure lifecycle filters are account-wide and match `container/blob`.
-    // Even an unfiltered Storage rule must stay inside this Storage container.
-    let prefix_match = Expression::Array(vec![Expression::FuncCall(Box::new(
-        hcl::expr::FuncCall::builder(hcl::Identifier::sanitized("format"))
-            .arg(Expression::String("%s/%s".to_string()))
-            .arg(expr::traversal([
-                "azurerm_storage_container",
-                storage_label,
-                "name",
-            ]))
-            .arg(Expression::String(rule.prefix.clone().unwrap_or_default()))
-            .build(),
-    ))]);
-
-    block(
-        "rule",
-        [
-            attr(
-                "name",
-                Expression::String(format!("{storage_label}-rule-{}", index + 1)),
-            ),
-            attr("enabled", Expression::Bool(true)),
-            nested(block(
-                "filters",
-                [
-                    attr(
-                        "blob_types",
-                        Expression::Array(vec![Expression::String("blockBlob".to_string())]),
-                    ),
-                    attr("prefix_match", prefix_match),
-                ],
-            )),
-            nested(block(
-                "actions",
-                [nested(block(
-                    "base_blob",
-                    [attr(
-                        "delete_after_days_since_modification_greater_than",
-                        Expression::Number(hcl::Number::from(i64::from(rule.days))),
-                    )],
-                ))],
-            )),
-        ],
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
+    use crate::{TerraformOptions, TerraformTarget, TfRegistry, generate_terraform_module};
     use alien_core::{
         AzureResourceGroup, ManagementPermissions, RemoteBindings, RemoteStackManagement,
         ResourceLifecycle, ServiceAccount, Stack, StackSettings,
     };
 
     const STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID: &str = "ba92f5b4-2d11-453d-a403-e96b0029c9fe";
-    const RESOURCE_GROUP_SCOPE: &str =
-        "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"";
-    const STORAGE_CONTAINER_SCOPE: &str =
-        "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}/blobServices/default/containers/${replace(lower(\"${local.resource_prefix}-files\"), \"_\", \"-\")}\"";
-
-    #[test]
-    fn lifecycle_rules_target_only_the_generated_container() {
-        let storage = Storage::new("files".to_string())
-            .lifecycle_rules(vec![
-                LifecycleRule {
-                    days: 1,
-                    prefix: Some("scratch/".to_string()),
-                },
-                LifecycleRule {
-                    days: 7,
-                    prefix: None,
-                },
-            ])
-            .build();
-        let stack = Stack::new("azure-storage-lifecycle".to_string())
-            .add(
-                AzureResourceGroup::new("default-resource-group".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .add(
-                AzureStorageAccount::new("default-storage-account".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .add(storage, ResourceLifecycle::Frozen)
-            .build();
-        let registry = TfRegistry::built_in();
-        let module = generate_terraform_module(
-            &stack,
-            TerraformTarget::Azure,
-            TerraformOptions {
-                display_name: None,
-                registry: &registry,
-                stack_settings: StackSettings::default(),
-                registration: None,
-                helm_install: None,
-                supported_aws_regions: Vec::new(),
-            },
-        )
-        .expect("Azure Terraform module should render");
-        let storage_module = module.get("files.tf").expect("storage resource module");
-
-        assert_eq!(
-            storage_module
-                .matches("azurerm_storage_container.files.name, ")
-                .count(),
-            2,
-            "both lifecycle rules must use the generated container name"
-        );
-        assert!(storage_module.contains("azurerm_storage_container.files.name, \"scratch/\""));
-        assert!(storage_module.contains("azurerm_storage_container.files.name, \"\""));
-        assert!(!storage_module.contains("prefix_match = []"));
-    }
+    const RESOURCE_GROUP_SCOPE: &str = "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"";
+    const STORAGE_CONTAINER_SCOPE: &str = "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}/blobServices/default/containers/${replace(lower(\"${local.resource_prefix}-files\"), \"_\", \"-\")}\"";
 
     #[test]
     fn generated_storage_assignments_preserve_each_permission_binding_scope() {

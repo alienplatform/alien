@@ -98,6 +98,20 @@ pub fn classify_status(status: &DeploymentStatus, operation: LoopOperation) -> O
                 final_status: *status,
             });
         }
+        (DeploymentStatus::Retained, LoopOperation::Delete) => {
+            return Some(LoopResult {
+                stop_reason: LoopStopReason::Synced,
+                outcome: LoopOutcome::Success,
+                final_status: *status,
+            });
+        }
+        (DeploymentStatus::RetentionRequired, LoopOperation::Delete) => {
+            return Some(LoopResult {
+                stop_reason: LoopStopReason::Handoff,
+                outcome: LoopOutcome::Neutral,
+                final_status: *status,
+            });
+        }
         (DeploymentStatus::TeardownRequired, LoopOperation::Delete) => {
             return Some(LoopResult {
                 stop_reason: LoopStopReason::Synced,
@@ -148,7 +162,7 @@ pub fn classify_status(status: &DeploymentStatus, operation: LoopOperation) -> O
 mod tests {
     use super::*;
 
-    const ALL_STATUSES: [DeploymentStatus; 20] = [
+    const ALL_STATUSES: [DeploymentStatus; 22] = [
         DeploymentStatus::Pending,
         DeploymentStatus::PreflightsFailed,
         DeploymentStatus::InitialSetup,
@@ -166,6 +180,8 @@ mod tests {
         DeploymentStatus::Deleting,
         DeploymentStatus::DeleteFailed,
         DeploymentStatus::TeardownRequired,
+        DeploymentStatus::RetentionRequired,
+        DeploymentStatus::Retained,
         DeploymentStatus::TeardownFailed,
         DeploymentStatus::Deleted,
         DeploymentStatus::Error,

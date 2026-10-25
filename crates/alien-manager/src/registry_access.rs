@@ -493,6 +493,8 @@ pub(crate) fn holds_step_for_missing_replica(persisted_status: &str) -> bool {
                 | DeploymentStatus::Deleting
                 | DeploymentStatus::DeleteFailed
                 | DeploymentStatus::TeardownRequired
+                | DeploymentStatus::RetentionRequired
+                | DeploymentStatus::Retained
                 | DeploymentStatus::TeardownFailed
                 | DeploymentStatus::Deleted
         )
@@ -633,7 +635,7 @@ pub async fn cleanup_deleted_registry_access(
     match (state.status, state.environment_info.as_ref()) {
         (DeploymentStatus::Deleted, _)
         | (
-            DeploymentStatus::TeardownRequired,
+            DeploymentStatus::TeardownRequired | DeploymentStatus::RetentionRequired,
             Some(EnvironmentInfo::Aws(_) | EnvironmentInfo::Gcp(_)),
         ) => {}
         _ => return Ok(()),
@@ -818,7 +820,10 @@ pub async fn revoke_before_persisting(
 ) -> Result<DeploymentState> {
     if !matches!(state.environment_info, Some(EnvironmentInfo::Aws(_)))
         && !(matches!(state.environment_info, Some(EnvironmentInfo::Gcp(_)))
-            && state.status == DeploymentStatus::TeardownRequired)
+            && matches!(
+                state.status,
+                DeploymentStatus::TeardownRequired | DeploymentStatus::RetentionRequired
+            ))
     {
         return Ok(state);
     }
@@ -3937,6 +3942,7 @@ mod tests {
                     }
                     _ => aws_state_with_stack(worker_stack(IMAGE)),
                 };
+                state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
                 state.status = status;
                 state
             }
@@ -4159,6 +4165,7 @@ mod tests {
 
         for status in [
             DeploymentStatus::TeardownRequired,
+            DeploymentStatus::RetentionRequired,
             DeploymentStatus::Deleted,
         ] {
             let written: Policies = Arc::default();
@@ -4210,10 +4217,13 @@ mod tests {
                 .expect_has_other_gcp_project_deployment()
                 .returning(|_, _, _, _| Ok(false));
             let targets = HashMap::new();
-            let result = if status == DeploymentStatus::TeardownRequired {
+            let result = if matches!(
+                status,
+                DeploymentStatus::TeardownRequired | DeploymentStatus::RetentionRequired
+            ) {
                 revoke_before_persisting(&store, &providers, &targets, "dep_old", PROJECT, state)
                     .await
-                    .map(|state| assert_eq!(state.status, DeploymentStatus::TeardownRequired))
+                    .map(|state| assert_eq!(state.status, status))
             } else {
                 revoke_after_persisting(&store, &providers, &targets, "dep_old", PROJECT, &state)
                     .await

@@ -43,11 +43,21 @@ fn gcp_key_package_is_valid_and_retained() {
     assert!(rendered.contains("random_id.customer_key_ring_suffix.hex"));
     assert!(rendered.contains("prevent_destroy = true"));
     assert!(rendered.contains("roles/cloudkms.cryptoKeyEncrypterDecrypter"));
-    let detach = module
-        .get("detach-retained-keys.sh")
-        .expect("retained Key detach operation");
-    assert!(detach.contains("google_kms_crypto_key.customer_key"));
-    assert!(detach.contains("google_kms_key_ring.customer_key_ring"));
+    let inventory: Vec<String> =
+        serde_json::from_str(module.get("retained-data.json").unwrap()).unwrap();
+    assert_eq!(
+        inventory
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "google_kms_crypto_key.customer_key",
+            "google_kms_key_ring.customer_key_ring",
+            "random_id.customer_key_ring_suffix"
+        ]
+        .into_iter()
+        .collect()
+    );
     assert_terraform_valid(&module, "gcp_key_package");
 }
 
@@ -579,4 +589,31 @@ fn explicit_management_storage_signing_uses_the_management_account_policy() {
         "\"serviceAccount:${google_service_account.management.email}\""
     );
     assert_terraform_valid(&module, "explicit management storage signing");
+}
+
+#[test]
+fn gcp_storage_browser_cors() {
+    let stack = Stack::new("browser-storage".to_string())
+        .permissions(PermissionsConfig::new().with_profile(
+            "execution",
+            PermissionProfile::new().resource("assets", ["storage/data-read"]),
+        ))
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("assets".to_string())
+                .versioning(true)
+                .cors_allowed_origins(vec![
+                    "https://app.example.com".to_string(),
+                    "https://preview.example.com".to_string(),
+                ])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    snapshot_module("gcp_storage_browser_cors", &module);
+    assert_terraform_valid(&module, "gcp_storage_browser_cors");
 }

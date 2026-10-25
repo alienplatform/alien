@@ -330,6 +330,20 @@ async fn sync_with_manager(
             None
         };
 
+    // Propose a protocol-only upgrade through the manager first. The deployment
+    // loop cannot persist or execute the upgrade locally until its acknowledgement.
+    // Legacy GCP federation needs a setup upgrade and must not be inferred here.
+    let effective_platform = state
+        .config
+        .base_platform
+        .unwrap_or(deployment_state.platform);
+    if deployment_state.protocol_version < alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+        && (effective_platform != Platform::Gcp
+            || deployment_state.protocol_version
+                >= alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION)
+    {
+        deployment_state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+    }
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         session: sync_session.clone(),
@@ -551,13 +565,11 @@ pub(crate) async fn accept_target(
                 ),
             });
 
-    deployment_state.protocol_version = alien_core::deployment_protocol_version_for_platform(
-        state.config.platform,
-        target_deployment
-            .config
-            .base_platform
-            .or(state.config.base_platform),
-    );
+    // Online upgrades come only from the manager's persisted acknowledgement.
+    // Air-gapped state has no remote manager to fence.
+    if state.config.sync.is_none() {
+        deployment_state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+    }
 
     let refresh = maintenance
         && refreshes_installed_release(&deployment_state, &target_deployment.release_info);
@@ -828,6 +840,32 @@ fn apply_manager_control_state(
     local_state: &mut alien_core::DeploymentState,
     manager_state: &alien_core::DeploymentState,
 ) -> bool {
+    // Setup can remove identities and complete retention after the runtime has
+    // stopped. Adopt its whole checkpoint, including cleaned resource state,
+    // rather than repeatedly reporting the old runtime handoff over it.
+    if alien_core::accepts_deployment_protocol_report(
+        local_state.protocol_version,
+        manager_state.protocol_version,
+    ) && matches!(
+        manager_state.status,
+        alien_core::DeploymentStatus::RetentionRequired
+            | alien_core::DeploymentStatus::Retained
+            | alien_core::DeploymentStatus::TeardownRequired
+            | alien_core::DeploymentStatus::TeardownFailed
+            | alien_core::DeploymentStatus::Deleted
+    ) {
+        *local_state = manager_state.clone();
+        return true;
+    }
+    let protocol_changed = manager_state.protocol_version > local_state.protocol_version
+        && alien_core::accepts_deployment_protocol_report(
+            local_state.protocol_version,
+            manager_state.protocol_version,
+        );
+    if protocol_changed {
+        local_state.protocol_version = manager_state.protocol_version;
+    }
+    let policy_changed = apply_manager_deletion_policy(local_state, manager_state);
     if manager_state_is_delete_command(manager_state)
         && !local_state_is_delete_or_deleted(local_state)
     {
@@ -856,7 +894,26 @@ fn apply_manager_control_state(
         return true;
     }
 
-    false
+    protocol_changed || policy_changed
+}
+
+/// The manager authorizes the deletion policy. The operator keeps its own resource
+/// checkpoints but must act on the manager's retain or erase choice.
+fn apply_manager_deletion_policy(
+    local_state: &mut alien_core::DeploymentState,
+    manager_state: &alien_core::DeploymentState,
+) -> bool {
+    let (Some(local), Some(manager)) = (
+        local_state.runtime_metadata.as_mut(),
+        manager_state.runtime_metadata.as_ref(),
+    ) else {
+        return false;
+    };
+    if local.deletion_policy == manager.deletion_policy {
+        return false;
+    }
+    local.deletion_policy = manager.deletion_policy;
+    true
 }
 
 fn manager_state_is_delete_command(state: &alien_core::DeploymentState) -> bool {
@@ -1868,6 +1925,223 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn completed_retention_survives_operator_restart_and_later_erase() {
+        type Exchange = Arc<Mutex<(Value, Vec<Value>)>>;
+        async fn serve(
+            State(exchange): State<Exchange>,
+            Json(request): Json<Value>,
+        ) -> Json<Value> {
+            let mut exchange = exchange.lock().unwrap();
+            exchange.1.push(request["currentState"].clone());
+            Json(exchange.0.clone())
+        }
+        let local = DeploymentState {
+            platform: Platform::Test,
+            status: DeploymentStatus::RetentionRequired,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata::default()),
+            error: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let mut completed = local.clone();
+        completed.status = DeploymentStatus::Retained;
+        completed
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .vault_credentials_revoked = true;
+        let exchange: Exchange =
+            Arc::new(Mutex::new((json!({"currentState": completed}), Vec::new())));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .with_state(exchange.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let dir = tempfile::tempdir().unwrap();
+        let sync = SyncConfig {
+            url: format!("http://{address}").parse().unwrap(),
+            token: "ax_dep_test".into(),
+        };
+        let config = OperatorConfig::builder()
+            .platform(Platform::Test)
+            .sync(sync.clone())
+            .data_dir(dir.path().to_str().unwrap())
+            .encryption_key(TEST_ENCRYPTION_KEY)
+            .build();
+        let db = Arc::new(
+            OperatorDb::new(&config.data_dir, TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("dep_retained").await.unwrap();
+        db.set_deployment_state(&local).await.unwrap();
+        let state = OperatorState {
+            config,
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client(&sync.token).unwrap();
+        sync_with_manager(&state, &client, sync.url.as_str(), false, None)
+            .await
+            .unwrap();
+        let reopened = OperatorDb::new(&state.config.data_dir, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(reopened.get_deployment_state().await.unwrap().unwrap()).unwrap(),
+            serde_json::to_value(&completed).unwrap()
+        );
+        let restarted = OperatorState {
+            db: Arc::new(reopened),
+            ..state
+        };
+        sync_with_manager(&restarted, &client, sync.url.as_str(), false, None)
+            .await
+            .unwrap();
+        {
+            let exchange = exchange.lock().unwrap();
+            assert_eq!(exchange.1.len(), 2);
+            assert_eq!(exchange.1[0]["status"], "retention-required");
+            assert_eq!(exchange.1[1], serde_json::to_value(&completed).unwrap());
+        }
+        let mut erase = completed;
+        erase.status = DeploymentStatus::DeletePending;
+        erase.runtime_metadata.as_mut().unwrap().deletion_policy =
+            alien_core::DeletionPolicy::Erase;
+        exchange.lock().unwrap().0 = json!({"currentState": erase});
+        sync_with_manager(&restarted, &client, sync.url.as_str(), false, None)
+            .await
+            .unwrap();
+        let current = restarted.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(current.status, DeploymentStatus::DeletePending);
+        let metadata = current.runtime_metadata.unwrap();
+        assert_eq!(metadata.deletion_policy, alien_core::DeletionPolicy::Erase);
+        assert!(metadata.vault_credentials_revoked);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn protocol_upgrade_waits_for_persisted_manager_acknowledgement_across_restart() {
+        type Response = Arc<Mutex<Value>>;
+        async fn serve(
+            State(response): State<Response>,
+            Json(request): Json<Value>,
+        ) -> Json<Value> {
+            assert_eq!(
+                request["currentState"]["protocolVersion"],
+                alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+            );
+            assert_eq!(
+                request["maxSupportedDeploymentProtocolVersion"],
+                alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+            );
+            Json(response.lock().unwrap().clone())
+        }
+        let response: Response = Arc::new(Mutex::new(json!({})));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/v1/sync", post(serve))
+            .with_state(response.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let dir = tempfile::tempdir().unwrap();
+        let sync = SyncConfig {
+            url: format!("http://{address}").parse().unwrap(),
+            token: "ax_dep_test".into(),
+        };
+        let config = OperatorConfig::builder()
+            .platform(Platform::Test)
+            .sync(sync.clone())
+            .data_dir(dir.path().to_str().unwrap())
+            .encryption_key(TEST_ENCRYPTION_KEY)
+            .build();
+        let db = Arc::new(
+            OperatorDb::new(&config.data_dir, TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("dep_protocol").await.unwrap();
+        let mut checkpoint = DeploymentState {
+            platform: Platform::Test,
+            status: DeploymentStatus::Provisioning,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: 1,
+        };
+        db.set_deployment_state(&checkpoint).await.unwrap();
+        let state = OperatorState {
+            config,
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let client = create_authenticated_client(&sync.token).unwrap();
+        // A successful HTTP response with no acknowledgement cannot enable writers.
+        sync_with_manager(&state, &client, sync.url.as_str(), false, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .protocol_version,
+            1
+        );
+        checkpoint.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+        *response.lock().unwrap() = json!({"currentState": checkpoint});
+        sync_with_manager(&state, &client, sync.url.as_str(), false, None)
+            .await
+            .unwrap();
+        let reopened = OperatorDb::new(&state.config.data_dir, TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened
+                .get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .protocol_version,
+            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+        );
+        // A delayed reply from an old manager cannot lower the durable version.
+        checkpoint.protocol_version = 1;
+        *response.lock().unwrap() = json!({"currentState": checkpoint});
+        sync_with_manager(&state, &client, sync.url.as_str(), false, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .protocol_version,
+            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+        );
+        server.abort();
+    }
+
     /// The `logs` capability describes the Kubernetes log collector. Operators
     /// on other platforms have none, and their workloads send logs without the
     /// Operator, so they must not report it: clients read `unavailable` as "this
@@ -1999,6 +2273,46 @@ mod tests {
             &manager_state
         ));
         assert!(local_state.retry_requested);
+    }
+
+    #[test]
+    fn copies_manager_erase_policy_into_existing_runtime_metadata() {
+        let local_metadata = alien_core::RuntimeMetadata {
+            last_synced_env_vars_hash: Some("local-checkpoint".to_string()),
+            ..Default::default()
+        };
+        let mut local_state = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(local_metadata),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let manager_state = DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                deletion_policy: alien_core::DeletionPolicy::Erase,
+                ..Default::default()
+            }),
+            ..local_state.clone()
+        };
+
+        assert!(apply_manager_control_state(
+            &mut local_state,
+            &manager_state
+        ));
+        assert_eq!(local_state.status, DeploymentStatus::DeletePending);
+        let metadata = local_state.runtime_metadata.unwrap();
+        assert_eq!(metadata.deletion_policy, alien_core::DeletionPolicy::Erase);
+        assert_eq!(
+            metadata.last_synced_env_vars_hash.as_deref(),
+            Some("local-checkpoint")
+        );
     }
 
     #[test]

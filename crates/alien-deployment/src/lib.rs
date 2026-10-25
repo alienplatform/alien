@@ -5,7 +5,7 @@
 //! deployment steps.
 
 mod deleting;
-pub use deleting::destroy_without_runtime;
+pub use deleting::{destroy_without_runtime, installed_durable_resource_ids};
 mod error;
 mod helpers;
 mod initial_setup;
@@ -126,6 +126,58 @@ pub async fn step(
                         .to_string(),
             },
         ));
+    }
+
+    // This step does no discovery, controller deserialization or mutation. The
+    // runner must durably reconcile it before executing the next step. An old
+    // manager rejects the report, leaving the old checkpoint usable by old actors.
+    if current.protocol_version < alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION {
+        current.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+        return Ok(DeploymentStepResult {
+            state: current,
+            suggested_delay_ms: None,
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
+
+    // If a deployment resumes after cleanup, invalidate the receipt durably
+    // before any handler can restore public access or lifecycle rules. Clearing
+    // it inside a mutating handler would lose the reset when that handler fails.
+    if matches!(
+        current.status,
+        DeploymentStatus::Pending
+            | DeploymentStatus::InitialSetup
+            | DeploymentStatus::InitialSetupFailed
+            | DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::Provisioning
+            | DeploymentStatus::ProvisioningFailed
+            | DeploymentStatus::WaitingForMachines
+            | DeploymentStatus::WaitingForSecrets
+            | DeploymentStatus::Running
+            | DeploymentStatus::RefreshFailed
+            | DeploymentStatus::UpdatePending
+            | DeploymentStatus::Updating
+            | DeploymentStatus::UpdateFailed
+    ) {
+        if let Some(metadata) = current.runtime_metadata.as_mut() {
+            if metadata.retained_storage_protection_hash.is_some()
+                || metadata.retained_storage_protection_confirmed_at.is_some()
+                || metadata.retained_data_protection_started_at.is_some()
+            {
+                metadata.retained_data_protection_started_at = None;
+                metadata.retained_storage_protection_hash = None;
+                metadata.retained_storage_protection_confirmed_at = None;
+                return Ok(DeploymentStepResult {
+                    state: current,
+                    suggested_delay_ms: None,
+                    update_heartbeat: false,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                });
+            }
+        }
     }
 
     if current.status == DeploymentStatus::Running
@@ -314,7 +366,9 @@ pub async fn step(
         DeploymentStatus::RefreshFailed => {
             running::handle_refresh_failed(current, config, client_config, service_provider).await?
         }
-        DeploymentStatus::Deleted => {
+        DeploymentStatus::RetentionRequired
+        | DeploymentStatus::Retained
+        | DeploymentStatus::Deleted => {
             debug!("Deployment is deleted, no action");
             DeploymentStepResult {
                 state: current,

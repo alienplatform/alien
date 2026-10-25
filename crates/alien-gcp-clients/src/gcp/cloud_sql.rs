@@ -86,6 +86,14 @@ pub struct IpMapping {
 #[serde(rename_all = "camelCase")]
 pub struct InstanceSettings {
     pub tier: String,
+    /// Provider int64 values are encoded as JSON strings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_disk_size_gb: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_auto_resize: Option<bool>,
+    /// Optimistic concurrency token returned by the provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings_version: Option<String>,
     pub ip_configuration: IpConfiguration,
     pub backup_configuration: BackupConfiguration,
     /// REGIONAL for highAvailability(), else ZONAL.
@@ -96,20 +104,26 @@ pub struct InstanceSettings {
     pub edition: Option<String>,
 }
 
-/// Partial body for `instances.patch` — only the fields a day-2 resize changes. Cloud SQL merges
-/// the provided settings, so a tier-only patch preserves networking, backups, the database, and the
-/// master password (the full instance body, with its `root_password`, is never re-sent).
+/// Partial body for `instances.patch`. Cloud SQL merges supplied settings, preserving omitted
+/// networking, backup, and auto-growth configuration. The master password is never re-sent.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstancePatch {
     pub settings: InstanceSettingsPatch,
 }
 
-/// The patchable subset of `InstanceSettings`. Only `tier` today (cpu/memory map to it).
-#[derive(Debug, Clone, Serialize)]
+/// Partial settings: omitted fields preserve the current provider configuration.
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstanceSettingsPatch {
-    pub tier: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_disk_size_gb: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings_version: Option<String>,
 }
 
 /// Body for the Cloud SQL users create/update calls — sets a SQL user's password. Request-only;
@@ -175,6 +189,14 @@ impl SqlOperation {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SqlOperationsPage {
+    #[serde(default)]
+    items: Vec<SqlOperation>,
+    next_page_token: Option<String>,
+}
+
 /// Status of a Cloud SQL operation.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -217,8 +239,8 @@ pub struct Database {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait CloudSqlApi: Send + Sync + Debug {
     async fn create_instance(&self, instance: DatabaseInstance) -> Result<SqlOperation>;
-    /// Patches an instance in place (currently the machine `tier` for a day-2 resize), returning the
-    /// long-running operation to poll.
+    /// Patches instance settings in place, returning the long-running operation to poll.
+    /// Callers must reread settings after conflicts before retrying.
     async fn patch_instance(&self, instance: &str, patch: InstancePatch) -> Result<SqlOperation>;
     async fn get_instance(&self, instance: &str) -> Result<DatabaseInstance>;
     async fn delete_instance(&self, instance: &str) -> Result<()>;
@@ -233,6 +255,8 @@ pub trait CloudSqlApi: Send + Sync + Debug {
         -> Result<SqlOperation>;
     /// Fetches a long-running operation so a poller can read its `status`/`error`.
     async fn get_operation(&self, operation: &str) -> Result<SqlOperation>;
+    /// Returns unfinished operations for this instance, including a patch whose response was lost.
+    async fn pending_instance_operations(&self, instance: &str) -> Result<Vec<SqlOperation>>;
 }
 
 #[derive(Debug)]
@@ -267,10 +291,11 @@ impl CloudSqlApi for CloudSqlClient {
     }
 
     async fn patch_instance(&self, instance: &str, patch: InstancePatch) -> Result<SqlOperation> {
-        // The patch body carries only the machine tier — no password — so no redaction is needed.
+        // Settings patches contain no password. Conflicts must return to the caller to reread
+        // settingsVersion; never retry an outdated concurrency token inside the transport.
         let path = format!("projects/{}/instances/{}", self.project_id, instance);
         self.base
-            .execute_request(Method::PATCH, &path, None, Some(patch), instance)
+            .execute_request_once(Method::PATCH, &path, None, Some(patch), instance)
             .await
     }
 
@@ -347,6 +372,40 @@ impl CloudSqlApi for CloudSqlClient {
         )
     }
 
+    async fn pending_instance_operations(&self, instance: &str) -> Result<Vec<SqlOperation>> {
+        let path = format!("projects/{}/operations", self.project_id);
+        let mut pending = Vec::new();
+        let mut page_token = None;
+        loop {
+            let mut query = vec![
+                ("instance", instance.to_string()),
+                ("maxResults", "100".into()),
+            ];
+            if let Some(token) = page_token {
+                query.push(("pageToken", token));
+            }
+            let page: SqlOperationsPage = self
+                .base
+                .execute_request(
+                    Method::GET,
+                    &path,
+                    Some(query),
+                    Option::<()>::None,
+                    instance,
+                )
+                .await?;
+            pending.extend(
+                page.items
+                    .into_iter()
+                    .filter(|operation| !operation.is_done()),
+            );
+            match page.next_page_token.filter(|token| !token.is_empty()) {
+                Some(token) => page_token = Some(token),
+                None => return Ok(pending),
+            }
+        }
+    }
+
     async fn get_operation(&self, operation: &str) -> Result<SqlOperation> {
         let path = format!("projects/{}/operations/{}", self.project_id, operation);
         self.base
@@ -366,6 +425,9 @@ mod tests {
             region: Some("us-east1".into()),
             settings: InstanceSettings {
                 tier: "db-g1-small".into(),
+                data_disk_size_gb: None,
+                storage_auto_resize: None,
+                settings_version: None,
                 ip_configuration: IpConfiguration {
                     ipv4_enabled: false,
                     psc_config: Some(PscConfig {
@@ -444,7 +506,8 @@ mod tests {
         // The patch body must carry only the tier — never the password or any other setting.
         let patch = InstancePatch {
             settings: InstanceSettingsPatch {
-                tier: "db-custom-2-7680".into(),
+                tier: Some("db-custom-2-7680".into()),
+                ..Default::default()
             },
         };
         let json = serde_json::to_value(&patch).unwrap();

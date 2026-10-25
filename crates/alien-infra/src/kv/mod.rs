@@ -24,3 +24,6 @@ mod azure_import;
 pub use azure_import::AzureKvImporter;
 #[cfg(feature = "local")]
 pub use local::LocalKvController;
+
+mod retention;
+pub use retention::{protect_retained_kv, retained_kv_requires_runtime_protection};

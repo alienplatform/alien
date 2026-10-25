@@ -19,6 +19,8 @@ import {
   PersistImportedDeploymentRequestCredentialRetryUnion,
   PersistImportedDeploymentRequestCredentialRetryUnion$Outbound,
   PersistImportedDeploymentRequestCredentialRetryUnion$outboundSchema,
+  PersistImportedDeploymentRequestDeletionPolicy,
+  PersistImportedDeploymentRequestDeletionPolicy$outboundSchema,
   PersistImportedDeploymentRequestDeployerSecret,
   PersistImportedDeploymentRequestDeployerSecret$Outbound,
   PersistImportedDeploymentRequestDeployerSecret$outboundSchema,
@@ -32,7 +34,7 @@ import {
   PersistImportedDeploymentRequestStackSettings,
   PersistImportedDeploymentRequestStackSettings$Outbound,
   PersistImportedDeploymentRequestStackSettings$outboundSchema,
-} from "./persistimporteddeploymentrequestpendingpreparedstackvalidationunion.js";
+} from "./persistimporteddeploymentrequestpendingpreparedstackvalidation.js";
 import {
   PersistImportedDeploymentRequestPendingPreparedStackUnion,
   PersistImportedDeploymentRequestPendingPreparedStackUnion$Outbound,
@@ -48,15 +50,23 @@ import {
   PersistImportedDeploymentRequestPreparedStackOverrideAw,
   PersistImportedDeploymentRequestPreparedStackOverrideAw$Outbound,
   PersistImportedDeploymentRequestPreparedStackOverrideAw$outboundSchema,
-  PersistImportedDeploymentRequestPreparedStackOverrideAzureResource,
-  PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$Outbound,
-  PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$outboundSchema,
-} from "./persistimporteddeploymentrequestpreparedstackoverrideazureresource.js";
+} from "./persistimporteddeploymentrequestpreparedstackoverrideaw.js";
 import {
   StackInputValueRequest,
   StackInputValueRequest$Outbound,
   StackInputValueRequest$outboundSchema,
 } from "./stackinputvaluerequest.js";
+
+/**
+ * Azure-specific binding specification
+ */
+export type PersistImportedDeploymentRequestPreparedStackOverrideAzureResource =
+  {
+    /**
+     * Scope (subscription/resource group/resource level)
+     */
+    scope: string;
+  };
 
 /**
  * Azure-specific binding specification
@@ -1451,6 +1461,13 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
     | null
     | undefined;
   /**
+   * Explicit disposition of durable data when deleting a deployment.
+   *
+   * @remarks
+   * Missing values from older checkpoints always preserve data.
+   */
+  deletionPolicy?: PersistImportedDeploymentRequestDeletionPolicy | undefined;
+  /**
    * Whether each vault-native deployer secret is in the customer's secret
    *
    * @remarks
@@ -1534,6 +1551,29 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
    */
   registryAccessGranted?: boolean | undefined;
   /**
+   * Start of the bounded wait for retained data's expiry controls to disable.
+   *
+   * @remarks
+   * Cleared on confirmation, explicit retry, or returning to normal execution.
+   */
+  retainedDataProtectionStartedAt?: Date | null | undefined;
+  /**
+   * UTC API-confirmation time for the matching data protection digest.
+   *
+   * @remarks
+   * Provider propagation must be qualified separately before final retention.
+   */
+  retainedStorageProtectionConfirmedAt?: Date | null | undefined;
+  /**
+   * Digest of the installed data inventory whose runtime public-access and
+   *
+   * @remarks
+   * expiry configuration was protected before cleanup. The serialized field
+   * name is retained for compatibility. This is not a
+   * receipt for effective expiry propagation or privileged setup teardown.
+   */
+  retainedStorageProtectionHash?: string | null | undefined;
+  /**
    * What a direct setup created for resources it does not own, keyed by resource id. Setup
    *
    * @remarks
@@ -1547,6 +1587,14 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
     | string
     | null
     | undefined;
+  /**
+   * Credential revocation completed before resource teardown. A delete retry
+   *
+   * @remarks
+   * can use this receipt after the vault or its binding is gone. Secret sync
+   * clears it before a deployment can write runtime credentials again.
+   */
+  vaultCredentialsRevoked?: boolean | undefined;
 };
 
 /**
@@ -1577,6 +1625,8 @@ export const PersistImportedDeploymentRequestStatus = {
   DeleteFailed: "delete-failed",
   TeardownRequired: "teardown-required",
   TeardownFailed: "teardown-failed",
+  RetentionRequired: "retention-required",
+  Retained: "retained",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -1783,6 +1833,33 @@ export type PersistImportedDeploymentRequest = {
 };
 
 /** @internal */
+export type PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$Outbound =
+  {
+    scope: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$Outbound,
+    PersistImportedDeploymentRequestPreparedStackOverrideAzureResource
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function persistImportedDeploymentRequestPreparedStackOverrideAzureResourceToJSON(
+  persistImportedDeploymentRequestPreparedStackOverrideAzureResource:
+    PersistImportedDeploymentRequestPreparedStackOverrideAzureResource,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$outboundSchema
+      .parse(
+        persistImportedDeploymentRequestPreparedStackOverrideAzureResource,
+      ),
+  );
+}
+
+/** @internal */
 export type PersistImportedDeploymentRequestPreparedStackOverrideAzureStack$Outbound =
   {
     scope: string;
@@ -1824,9 +1901,9 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding$o
     PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding$Outbound,
     PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding
   > = z.object({
-    resource:
+    resource: z.lazy(() =>
       PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$outboundSchema
-        .optional(),
+    ).optional(),
     stack: z.lazy(() =>
       PersistImportedDeploymentRequestPreparedStackOverrideAzureStack$outboundSchema
     ).optional(),
@@ -4383,6 +4460,7 @@ export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
     | PersistImportedDeploymentRequestCredentialRetryUnion$Outbound
     | null
     | undefined;
+  deletionPolicy?: string | undefined;
   deployerSecrets?:
     | Array<PersistImportedDeploymentRequestDeployerSecret$Outbound>
     | undefined;
@@ -4407,6 +4485,9 @@ export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
     | null
     | undefined;
   registryAccessGranted?: boolean | undefined;
+  retainedDataProtectionStartedAt?: string | null | undefined;
+  retainedStorageProtectionConfirmedAt?: string | null | undefined;
+  retainedStorageProtectionHash?: string | null | undefined;
   setupScaffolding?: {
     [k: string]: PersistImportedDeploymentRequestSetupScaffolding$Outbound;
   } | undefined;
@@ -4415,6 +4496,7 @@ export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
     | string
     | null
     | undefined;
+  vaultCredentialsRevoked?: boolean | undefined;
 };
 
 /** @internal */
@@ -4427,6 +4509,8 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
     credentialRetry: z.nullable(
       PersistImportedDeploymentRequestCredentialRetryUnion$outboundSchema,
     ).optional(),
+    deletionPolicy:
+      PersistImportedDeploymentRequestDeletionPolicy$outboundSchema.optional(),
     deployerSecrets: z.array(
       PersistImportedDeploymentRequestDeployerSecret$outboundSchema,
     ).optional(),
@@ -4458,6 +4542,13 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
       ]),
     ).optional(),
     registryAccessGranted: z.boolean().optional(),
+    retainedDataProtectionStartedAt: z.nullable(
+      z.date().transform(v => v.toISOString()),
+    ).optional(),
+    retainedStorageProtectionConfirmedAt: z.nullable(
+      z.date().transform(v => v.toISOString()),
+    ).optional(),
+    retainedStorageProtectionHash: z.nullable(z.string()).optional(),
     setupScaffolding: z.record(
       z.string(),
       z.lazy(() =>
@@ -4472,6 +4563,7 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
         z.string(),
       ]),
     ).optional(),
+    vaultCredentialsRevoked: z.boolean().optional(),
   });
 
 export function persistImportedDeploymentRequestRuntimeMetadataToJSON(

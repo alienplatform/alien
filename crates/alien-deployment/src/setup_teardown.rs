@@ -21,8 +21,13 @@ use crate::{
 /// point.
 ///
 /// This is intentionally separate from the normal deployment step machine:
-/// managers and agents stop at `TeardownRequired`, while setup-authority
-/// callers such as the CLI can continue with their own credentials.
+/// managers and agents stop at `TeardownRequired` or `RetentionRequired`, while
+/// setup-authority callers such as the CLI can continue with their own credentials.
+///
+/// When the deployment keeps its data, this finishes retention: it stops expiry and
+/// public reads on every retained store, then removes everything else the setup owns,
+/// including the management identity and service accounts, and ends at `Retained`.
+/// The retained resources keep their installed checkpoints for a later explicit erase.
 ///
 /// When the `Deleted` checkpoint fails, the result reports
 /// `state_persisted: false` and callers must finish with a final reconcile of
@@ -65,7 +70,9 @@ async fn run_setup_teardown_after_handoff_inner(
 ) -> Result<Option<RunnerResult>> {
     if !matches!(
         state.status,
-        DeploymentStatus::TeardownRequired | DeploymentStatus::TeardownFailed
+        DeploymentStatus::TeardownRequired
+            | DeploymentStatus::TeardownFailed
+            | DeploymentStatus::RetentionRequired
     ) {
         return Ok(None);
     }
@@ -83,12 +90,142 @@ async fn run_setup_teardown_after_handoff_inner(
         }));
     }
 
-    info!(deployment_id = %deployment_id, "Starting setup-owned teardown");
-    state.status = DeploymentStatus::TeardownRequired;
+    if state.protocol_version < alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION {
+        let mut upgraded = state.clone();
+        upgraded.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+        checkpoint_setup_teardown_state(
+            deployment_id,
+            &mut upgraded,
+            config,
+            transport,
+            None,
+            Vec::new(),
+        )
+        .await?;
+        *state = upgraded;
+    }
+
+    // Legacy TeardownRequired checkpoints may predate retention: absence of an
+    // explicit choice keeps their installed data, so only an explicit erase
+    // leaves nothing to preserve here.
+    let retained = state
+        .stack_state
+        .as_ref()
+        .map(|stack| crate::deleting::retained_resource_ids(state, stack))
+        .unwrap_or_default();
+
+    info!(
+        deployment_id = %deployment_id,
+        retained = ?retained,
+        "Starting setup-owned teardown"
+    );
+    state.status = if retained.is_empty() {
+        DeploymentStatus::TeardownRequired
+    } else {
+        DeploymentStatus::RetentionRequired
+    };
     state.error = None;
 
     let service_provider = service_provider
         .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+
+    // Expiry must be off before the identities that could turn it back on, or
+    // that a later erase would use, are removed.
+    if !retained.is_empty() {
+        let mut protection_steps = 0;
+        loop {
+            let stack_state = state.stack_state.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::MissingConfiguration {
+                    message: "Stack state required for setup teardown".to_string(),
+                })
+            })?;
+            let ready = match crate::deleting::protect_retained_data_for_handoff(
+                state,
+                stack_state,
+                config,
+                client_config,
+                service_provider.as_ref(),
+            )
+            .await
+            {
+                Ok(ready) => ready,
+                Err(error) => {
+                    return failed_setup_teardown(
+                        deployment_id,
+                        state,
+                        config,
+                        transport,
+                        error,
+                        protection_steps,
+                    )
+                    .await;
+                }
+            };
+            if ready {
+                break;
+            }
+            protection_steps += 1;
+            if protection_steps >= policy.max_steps {
+                let error = AlienError::new(ErrorData::StackExecutionFailed {
+                    message: format!(
+                        "Retained data expiry controls did not finish disabling within {} checks. Inspect DynamoDB TTL status and retry deletion; data and access are unchanged.",
+                        policy.max_steps
+                    ),
+                });
+                fail_setup_teardown(deployment_id, state, config, transport, error).await?;
+                return Ok(Some(RunnerResult {
+                    loop_result: LoopResult {
+                        stop_reason: LoopStopReason::BudgetExceeded,
+                        outcome: LoopOutcome::Failure,
+                        final_status: state.status,
+                    },
+                    steps_executed: protection_steps,
+                    state_persisted: true,
+                }));
+            }
+            checkpoint_setup_teardown_state(
+                deployment_id,
+                state,
+                config,
+                transport,
+                Some(RETAINED_PROTECTION_DELAY_MS),
+                Vec::new(),
+            )
+            .await?;
+            if policy.delay_strategy == DelayStrategy::Yield {
+                return Ok(Some(RunnerResult {
+                    loop_result: LoopResult {
+                        stop_reason: LoopStopReason::Delayed,
+                        outcome: LoopOutcome::Neutral,
+                        final_status: state.status,
+                    },
+                    steps_executed: protection_steps,
+                    state_persisted: true,
+                }));
+            }
+            sleep(Duration::from_millis(RETAINED_PROTECTION_DELAY_MS)).await;
+        }
+    }
+
+    // Retention revokes the identities of a kept GCP registry.
+    let registry_cleanup = match state.stack_state.as_ref() {
+        Some(stack_state) => {
+            alien_infra::revoke_retained_registry_identities(
+                stack_state,
+                &retained,
+                client_config,
+                service_provider.as_ref(),
+            )
+            .await
+        }
+        None => Ok(()),
+    }
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to clean up artifact registries during setup teardown".to_string(),
+    });
+    if let Err(error) = registry_cleanup {
+        return failed_setup_teardown(deployment_id, state, config, transport, error, 0).await;
+    }
 
     // Frozen teardown waits for this: the network cannot go while the scaffolding's group and
     // connector still hold interfaces in its subnets.
@@ -171,11 +308,31 @@ async fn run_setup_teardown_after_handoff_inner(
         })
     })?;
 
-    let prepared = match stack_state
-        .prepare_for_teardown_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
-        .context(ErrorData::StackExecutionFailed {
-            message: "Failed to prepare setup-owned resources for teardown".to_string(),
-        }) {
+    let executor = match StackExecutor::for_deletion_with_service_provider(
+        client_config.clone(),
+        config,
+        service_provider,
+        Some(vec![ResourceLifecycle::Frozen]),
+    )
+    .and_then(|executor| executor.preserving_resources(&stack_state, retained.clone()))
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to create stack executor for setup teardown".to_string(),
+    }) {
+        Ok(executor) => executor,
+        Err(error) => {
+            state.stack_state = Some(stack_state);
+            return Err(error);
+        }
+    };
+
+    let prepared = if retained.is_empty() {
+        stack_state.prepare_for_teardown_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+    } else {
+        executor.prepare_for_deletion(&mut stack_state)
+    };
+    let prepared = match prepared.context(ErrorData::StackExecutionFailed {
+        message: "Failed to prepare setup-owned resources for teardown".to_string(),
+    }) {
         Ok(prepared) => prepared,
         Err(error) => {
             state.stack_state = Some(stack_state);
@@ -193,24 +350,45 @@ async fn run_setup_teardown_after_handoff_inner(
     checkpoint_setup_teardown_state(deployment_id, state, config, transport, None, Vec::new())
         .await?;
 
-    let executor = StackExecutor::for_deletion_with_service_provider(
-        client_config.clone(),
-        config,
-        service_provider,
-        Some(vec![ResourceLifecycle::Frozen]),
-    )
-    .context(ErrorData::StackExecutionFailed {
-        message: "Failed to create stack executor for setup teardown".to_string(),
-    })?;
-
     for step_count in 1..=policy.max_steps {
-        let status = setup_teardown_status(state.stack_state.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::MissingConfiguration {
-                message: "Stack state required during setup teardown".to_string(),
-            })
-        })?)?;
+        let status = setup_teardown_status(
+            state.stack_state.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::MissingConfiguration {
+                    message: "Stack state required during setup teardown".to_string(),
+                })
+            })?,
+            |resource_id| executor.preserves_resource(resource_id),
+        )?;
 
         match status {
+            StackStatus::Deleted if !retained.is_empty() => {
+                // The record stays, so this checkpoint decides the outcome.
+                state.status = DeploymentStatus::Retained;
+                state.error = None;
+                checkpoint_setup_teardown_state(
+                    deployment_id,
+                    state,
+                    config,
+                    transport,
+                    None,
+                    Vec::new(),
+                )
+                .await?;
+                info!(
+                    deployment_id = %deployment_id,
+                    retained = ?retained,
+                    "Setup teardown finished; data retained"
+                );
+                return Ok(Some(RunnerResult {
+                    loop_result: LoopResult {
+                        stop_reason: LoopStopReason::Synced,
+                        outcome: LoopOutcome::Success,
+                        final_status: state.status,
+                    },
+                    steps_executed: step_count - 1,
+                    state_persisted: true,
+                }));
+            }
             StackStatus::Deleted => {
                 state.status = DeploymentStatus::Deleted;
                 state.error = None;
@@ -380,6 +558,9 @@ fn outstanding_scaffolding(state: &DeploymentState) -> String {
     }
 }
 
+/// How long to wait before reading DynamoDB TTL status again while it is disabling.
+const RETAINED_PROTECTION_DELAY_MS: u64 = 30_000;
+
 /// How long to wait before asking again whether AWS has released what holds a scaffolding object.
 const SCAFFOLDING_TEARDOWN_DELAY_MS: u64 = 15_000;
 
@@ -446,7 +627,8 @@ async fn teardown_setup_scaffolding(
 
 /// Records a failed setup teardown and reports the failure as persisted.
 ///
-/// Persisting `TeardownFailed` ends the execution attempt on the manager. The caller must then
+/// Persisting the failure (keeping `RetentionRequired` when data remains) ends this attempt.
+/// The caller must then
 /// only release its lease: a further reconcile addresses an attempt that no longer exists, is
 /// refused, and that refusal would be reported in place of `error`. With `state_persisted` set,
 /// the caller releases the lease and reports `state.error`.
@@ -503,7 +685,11 @@ async fn fail_setup_teardown(
     transport: &dyn DeploymentLoopTransport,
     error: AlienError<ErrorData>,
 ) -> Result<()> {
-    state.status = DeploymentStatus::TeardownFailed;
+    state.status = if state.status == DeploymentStatus::RetentionRequired {
+        DeploymentStatus::RetentionRequired
+    } else {
+        DeploymentStatus::TeardownFailed
+    };
     state.error = Some(error.into_generic());
     checkpoint_setup_teardown_state(deployment_id, state, config, transport, None, Vec::new()).await
 }
@@ -546,9 +732,15 @@ async fn checkpoint_setup_teardown_state(
     }
 }
 
-fn setup_teardown_status(stack_state: &StackState) -> Result<StackStatus> {
+fn setup_teardown_status(
+    stack_state: &StackState,
+    preserved: impl Fn(&str) -> bool,
+) -> Result<StackStatus> {
     let mut statuses = Vec::new();
-    for resource in stack_state.resources.values() {
+    for (resource_id, resource) in &stack_state.resources {
+        if preserved(resource_id) {
+            continue;
+        }
         match resource.lifecycle {
             Some(ResourceLifecycle::Frozen) => statuses.push(resource.status),
             Some(ResourceLifecycle::Live) => {}
@@ -578,8 +770,7 @@ fn setup_teardown_status(stack_state: &StackState) -> Result<StackStatus> {
 mod tests {
     use super::*;
     use crate::transport::StepReconcileResult;
-    use alien_aws_clients::iam::MockIamApi;
-    use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
+    use alien_aws_clients::{iam::MockIamApi, AwsClientConfig, AwsClientConfigExt as _};
     use alien_core::{EnvironmentVariablesSnapshot, Platform, SetupScaffolding, StackSettings};
     use alien_infra::MockPlatformServiceProvider;
     use std::collections::BTreeMap;
@@ -801,6 +992,303 @@ mod tests {
             Some(Arc::new(provider)),
         )
         .await
+    }
+
+    const TABLE_ARN: &str = "arn:aws:dynamodb:us-east-1:123456789012:table/test-ledger";
+
+    /// A legacy (no recorded choice) deletion that runtime cleanup handed off with setup-owned
+    /// data: a bucket with an expiry rule, a table with TTL, and the sandbox build role.
+    fn legacy_retained_handoff() -> DeploymentState {
+        let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+        state.protocol_version = 3;
+        let stack = state.stack_state.as_mut().unwrap();
+        let mut data = alien_core::StackResourceState::new_pending(
+            "storage".to_string(),
+            alien_core::Resource::new(alien_core::Storage::new("data".to_string()).build()),
+            None,
+            Vec::new(),
+        );
+        data.lifecycle = Some(ResourceLifecycle::Frozen);
+        data.status = ResourceStatus::Running;
+        data.internal_state = Some(serde_json::json!({
+            "type": "AwsStorageController",
+            "_controllerStateVersion": 1,
+            "state": "ready",
+            "bucketName": "test-data",
+        }));
+        stack.resources.insert("data".into(), data);
+        let mut ledger = alien_core::StackResourceState::new_pending(
+            "kv".to_string(),
+            alien_core::Resource::new(alien_core::Kv::new("ledger".to_string()).build()),
+            None,
+            Vec::new(),
+        );
+        ledger.lifecycle = Some(ResourceLifecycle::Frozen);
+        ledger.status = ResourceStatus::Running;
+        ledger.internal_state = Some(serde_json::json!({
+            "type": "AwsKvController",
+            "_controllerStateVersion": 1,
+            "state": "ready",
+            "tableName": "test-ledger",
+            "tableArn": TABLE_ARN,
+        }));
+        stack.resources.insert("ledger".into(), ledger);
+        let mut old = serde_json::to_value(state).unwrap();
+        old["runtimeMetadata"]
+            .as_object_mut()
+            .unwrap()
+            .remove("deletionPolicy");
+        serde_json::from_value(old).unwrap()
+    }
+
+    /// S3 with one expiry rule until it is deleted.
+    fn s3_with_expiry(lifecycle_deletes: usize) -> alien_aws_clients::s3::MockS3Api {
+        let mut s3 = alien_aws_clients::s3::MockS3Api::new();
+        s3.expect_get_bucket_tagging().returning(|bucket| {
+            assert_eq!(bucket, "test-data");
+            Ok(alien_core::standard_resource_tags("test", "data"))
+        });
+        let rules = Arc::new(Mutex::new(true));
+        let read = rules.clone();
+        s3.expect_get_bucket_lifecycle_configuration()
+            .returning(move |_| {
+                if *read.lock().unwrap() {
+                    Ok(alien_aws_clients::s3::LifecycleConfiguration {
+                        rules: vec![alien_aws_clients::s3::LifecycleRule {
+                            id: Some("expire".into()),
+                            status: alien_aws_clients::s3::LifecycleRuleStatus::Enabled,
+                            filter: alien_aws_clients::s3::LifecycleRuleFilter { prefix: None },
+                            expiration: Some(alien_aws_clients::s3::LifecycleExpiration {
+                                days: Some(1),
+                            }),
+                        }],
+                    })
+                } else {
+                    Ok(alien_aws_clients::s3::LifecycleConfiguration { rules: vec![] })
+                }
+            });
+        s3.expect_delete_bucket_lifecycle()
+            .times(lifecycle_deletes)
+            .returning(move |bucket| {
+                assert_eq!(bucket, "test-data");
+                *rules.lock().unwrap() = false;
+                Ok(())
+            });
+        s3
+    }
+
+    fn dynamodb_with_ttl(
+        status: Arc<Mutex<&'static str>>,
+        disables: usize,
+    ) -> alien_aws_clients::dynamodb::MockDynamoDbApi {
+        let mut dynamodb = alien_aws_clients::dynamodb::MockDynamoDbApi::new();
+        dynamodb.expect_describe_table().returning(|request| {
+            assert_eq!(request.table_name, "test-ledger");
+            Ok(
+                serde_json::from_value(serde_json::json!({"Table":{"TableArn":TABLE_ARN}}))
+                    .unwrap(),
+            )
+        });
+        dynamodb.expect_list_tags_of_resource().returning(|_| {
+            let tags: Vec<serde_json::Value> = alien_core::standard_resource_tags("test", "ledger")
+                .into_iter()
+                .map(|(key, value)| serde_json::json!({"Key":key,"Value":value}))
+                .collect();
+            Ok(serde_json::from_value(serde_json::json!({"Tags":tags})).unwrap())
+        });
+        let read = status.clone();
+        dynamodb.expect_describe_time_to_live().returning(move |_| {
+            Ok(serde_json::from_value(serde_json::json!({"TimeToLiveDescription":{"TimeToLiveStatus":*read.lock().unwrap(),"AttributeName":"expiresAt"}})).unwrap())
+        });
+        dynamodb
+            .expect_update_time_to_live()
+            .times(disables)
+            .returning(move |request| {
+                assert!(!request.time_to_live_specification.enabled);
+                *status.lock().unwrap() = "DISABLING";
+                Ok(alien_aws_clients::dynamodb::UpdateTimeToLiveResponse {
+                    time_to_live_specification: None,
+                })
+            });
+        dynamodb
+    }
+
+    fn data_provider(
+        s3: alien_aws_clients::s3::MockS3Api,
+        dynamodb: alien_aws_clients::dynamodb::MockDynamoDbApi,
+        iam: Option<MockIamApi>,
+    ) -> MockPlatformServiceProvider {
+        let s3 = Arc::new(s3);
+        let dynamodb = Arc::new(dynamodb);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_s3_client()
+            .returning(move |_| Ok(s3.clone()));
+        provider
+            .expect_get_aws_dynamodb_client()
+            .returning(move |_| Ok(dynamodb.clone()));
+        if let Some(iam) = iam {
+            let iam = Arc::new(iam);
+            provider
+                .expect_get_aws_iam_client()
+                .returning(move |_| Ok(iam.clone()));
+        }
+        provider
+    }
+
+    fn build_role_deleted_once() -> MockIamApi {
+        let mut iam = MockIamApi::new();
+        iam.expect_delete_role_policy()
+            .withf(|role, policy| role == BUILD_ROLE && policy == "sandbox-image-build")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        iam.expect_delete_role()
+            .withf(|role| role == BUILD_ROLE)
+            .times(1)
+            .returning(|_| Ok(()));
+        iam
+    }
+
+    /// Retention ends at `Retained`: expiry is off on setup-owned data, the access setup made is
+    /// gone, and the data keeps its installed checkpoints for a later explicit erase.
+    #[tokio::test]
+    async fn legacy_retained_teardown_stops_expiry_removes_access_and_keeps_data() {
+        let transport = RecordingTransport::default();
+        let mut state = legacy_retained_handoff();
+        let before = state.stack_state.as_ref().unwrap().resources.clone();
+        let ttl = Arc::new(Mutex::new("DISABLED"));
+        let provider = data_provider(
+            s3_with_expiry(1),
+            dynamodb_with_ttl(ttl, 0),
+            Some(build_role_deleted_once()),
+        );
+
+        let result = run(&mut state, provider, &transport)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result.loop_result.outcome, LoopOutcome::Success);
+        assert_eq!(result.loop_result.stop_reason, LoopStopReason::Synced);
+        assert_eq!(state.status, DeploymentStatus::Retained);
+        assert!(state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .setup_scaffolding
+            .is_empty());
+        for id in ["data", "ledger"] {
+            assert_eq!(
+                serde_json::to_value(&state.stack_state.as_ref().unwrap().resources[id]).unwrap(),
+                serde_json::to_value(&before[id]).unwrap(),
+                "{id} keeps its installed checkpoint"
+            );
+        }
+        let checkpoints = transport.checkpoints.lock().unwrap();
+        assert_eq!(
+            checkpoints[0].protocol_version,
+            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+        );
+        // After the protocol upgrade, which rewrites the record as it was, no checkpoint offers
+        // the legacy teardown state that cached clients would destroy.
+        assert!(checkpoints[1..]
+            .iter()
+            .all(|checkpoint| checkpoint.status != DeploymentStatus::TeardownRequired));
+        assert_eq!(
+            checkpoints.last().unwrap().status,
+            DeploymentStatus::Retained
+        );
+        drop(checkpoints);
+
+        // Finished retention is not run again.
+        assert!(
+            run(&mut state, MockPlatformServiceProvider::new(), &transport)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn retained_teardown_failure_keeps_retention_required_with_error() {
+        let transport = RecordingTransport::default();
+        let mut state = legacy_retained_handoff();
+        let mut iam = MockIamApi::new();
+        iam.expect_delete_role_policy()
+            .times(1)
+            .returning(|role, _| {
+                Err(AlienError::new(
+                    alien_aws_clients::ErrorData::RemoteAccessDenied {
+                        resource_type: "IAM role".to_string(),
+                        resource_name: role.to_string(),
+                    },
+                ))
+            });
+        let provider = data_provider(
+            s3_with_expiry(1),
+            dynamodb_with_ttl(Arc::new(Mutex::new("DISABLED")), 0),
+            Some(iam),
+        );
+        let result = run(&mut state, provider, &transport)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.loop_result.outcome, LoopOutcome::Failure);
+        assert_eq!(state.status, DeploymentStatus::RetentionRequired);
+        assert!(state
+            .error
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains(BUILD_ROLE));
+        let checkpoints = transport.checkpoints.lock().unwrap();
+        let last = checkpoints.last().unwrap();
+        assert_eq!(last.status, DeploymentStatus::RetentionRequired);
+        assert!(last.error.is_some());
+        assert!(checkpoints
+            .iter()
+            .all(|checkpoint| checkpoint.status != DeploymentStatus::TeardownFailed));
+    }
+
+    /// TTL takes time to turn off. Nothing is removed until it is off, and a reloaded record
+    /// resumes without disabling it twice.
+    #[tokio::test]
+    async fn retained_teardown_waits_for_ttl_and_resumes_after_reload() {
+        let transport = RecordingTransport::default();
+        let mut state = legacy_retained_handoff();
+        let ttl = Arc::new(Mutex::new("ENABLED"));
+        // No IAM client: removing access before expiry is off fails this run.
+        let provider = data_provider(s3_with_expiry(0), dynamodb_with_ttl(ttl.clone(), 1), None);
+
+        let result = run_with(&mut state, provider, &transport, DelayStrategy::Yield)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.loop_result.stop_reason, LoopStopReason::Delayed);
+        assert_eq!(state.status, DeploymentStatus::RetentionRequired);
+        assert_eq!(
+            state
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .setup_scaffolding
+                .len(),
+            1
+        );
+
+        let mut reloaded: DeploymentState =
+            serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        *ttl.lock().unwrap() = "DISABLED";
+        let provider = data_provider(
+            s3_with_expiry(1),
+            dynamodb_with_ttl(ttl, 0),
+            Some(build_role_deleted_once()),
+        );
+        run(&mut reloaded, provider, &transport)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.status, DeploymentStatus::Retained);
     }
 
     #[tokio::test]
@@ -1656,6 +2144,66 @@ mod tests {
                 format!("iam:DeleteRolePolicy {BUILD_ROLE}"),
                 format!("iam:DeleteRole {BUILD_ROLE}"),
             ]
+        );
+    }
+
+    /// Runtime repositories remain until the separate ownership/erase feature is enabled.
+    #[tokio::test]
+    async fn explicit_erase_leaves_runtime_registry_repositories() {
+        // The registry never created its roles; its delete finds none to remove.
+        let mut iam = build_role_deleted_once();
+        iam.expect_get_role().returning(|role| {
+            Err(AlienError::new(
+                alien_aws_clients::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Role".to_string(),
+                    resource_name: role.to_string(),
+                },
+            ))
+        });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+
+        let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+        state.runtime_metadata.as_mut().unwrap().deletion_policy =
+            alien_core::DeletionPolicy::Erase;
+        let mut registry = alien_core::StackResourceState::new_pending(
+            "artifact-registry".to_string(),
+            alien_core::Resource::new(
+                alien_core::ArtifactRegistry::new("images".to_string()).build(),
+            ),
+            None,
+            Vec::new(),
+        );
+        registry.lifecycle = Some(ResourceLifecycle::Frozen);
+        registry.status = ResourceStatus::Running;
+        registry.internal_state = Some(serde_json::json!({
+            "type": "AwsArtifactRegistryController",
+            "_controllerStateVersion": 1,
+            "state": "ready",
+            "accountId": "123456789012",
+            "region": "us-east-1",
+            "repositoryPrefix": "test-images",
+        }));
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("images".into(), registry);
+        let transport = RecordingTransport::default();
+
+        let result = run(&mut state, provider, &transport)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            result.loop_result.outcome,
+            LoopOutcome::Success,
+            "{state:?}"
         );
     }
 }

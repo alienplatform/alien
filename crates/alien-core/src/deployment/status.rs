@@ -31,6 +31,12 @@ pub enum DeploymentStatus {
     DeleteFailed,
     TeardownRequired,
     TeardownFailed,
+    /// Runtime cleanup finished with retained data and recovery inventory.
+    /// The setup owner must remove remaining access; Alien has not verified removal.
+    RetentionRequired,
+    /// The actor removing setup-owned access observed its completion.
+    /// Durable data and recovery inventory remain; only setup teardown writes this status.
+    Retained,
     Deleted,
     Error,
 }
@@ -57,6 +63,8 @@ impl DeploymentStatus {
                 | DeploymentStatus::TeardownRequired
                 | DeploymentStatus::TeardownFailed
                 | DeploymentStatus::RefreshFailed
+                | DeploymentStatus::RetentionRequired
+                | DeploymentStatus::Retained
                 | DeploymentStatus::Deleted
                 | DeploymentStatus::Error
         )

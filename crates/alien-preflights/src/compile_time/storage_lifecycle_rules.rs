@@ -21,8 +21,8 @@
 //!   first midnight UTC after creation): <https://cloud.google.com/storage/docs/lifecycle>.
 //!   A bucket's rules hold at most 1,000 prefixes and suffixes in total:
 //!   <https://cloud.google.com/storage/quotas>.
-//! - **Azure Blob Storage** (the Terraform management policy, so Frozen storage only: the Azure
-//!   controller ignores lifecycle rules on Live storage): 0 is valid, the provider accepts
+//! - **Azure Blob Storage**: account-wide policies include declarations from Frozen and Live
+//!   containers. Validate every declaration before setup: 0 is valid, the provider accepts
 //!   0-99999 days for `delete_after_days_since_modification_greater_than`, and a policy holds
 //!   at most 100 rules:
 //!   <https://learn.microsoft.com/en-us/azure/storage/blobs/lifecycle-management-policy-structure>.
@@ -32,7 +32,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, ResourceLifecycle, Stack, Storage};
+use alien_core::{Platform, Stack, Storage};
 
 /// S3 lifecycle `Days` and Cloud Storage `age` are 32-bit signed integers.
 const INT32_MAX_DAYS: u32 = i32::MAX as u32;
@@ -67,6 +67,23 @@ impl CompileTimeCheck for StorageLifecycleRulesCheck {
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let mut result = CheckResult::success();
 
+        // All containers share one account policy, including disabled rules. Count
+        // declarations before setup so multiple individually valid containers cannot
+        // exceed the account quota. enabledWhen does not remove this rule budget.
+        if platform == Platform::Azure {
+            let count: usize = stack
+                .resources
+                .values()
+                .filter_map(|entry| entry.config.downcast_ref::<Storage>())
+                .map(|storage| storage.lifecycle_rules.len())
+                .sum();
+            if count > AZURE_MAX_RULES {
+                result.add_error(format!(
+                    "Azure Storage account lifecycle policy has {count} declared rules; at most {AZURE_MAX_RULES} are supported across all containers"
+                ));
+            }
+        }
+
         for (id, entry) in &stack.resources {
             let Some(storage) = entry.config.downcast_ref::<Storage>() else {
                 continue;
@@ -74,11 +91,7 @@ impl CompileTimeCheck for StorageLifecycleRulesCheck {
             let errors = match platform {
                 Platform::Aws => s3_errors(storage),
                 Platform::Gcp => gcs_errors(storage),
-                // Only setup's Terraform sends Azure lifecycle rules, and setup creates Frozen
-                // resources only.
-                Platform::Azure if entry.lifecycle == ResourceLifecycle::Frozen => {
-                    azure_errors(storage)
-                }
+                Platform::Azure => azure_errors(storage),
                 _ => Vec::new(),
             };
             for error in errors {
@@ -160,13 +173,6 @@ fn azure_errors(storage: &Storage) -> Vec<String> {
     let rules = &storage.lifecycle_rules;
     let mut errors = Vec::new();
 
-    if rules.len() > AZURE_MAX_RULES {
-        errors.push(format!(
-            "lifecycleRules has {} rules; an Azure Storage lifecycle policy allows at most {AZURE_MAX_RULES}",
-            rules.len()
-        ));
-    }
-
     for (index, rule) in rules.iter().enumerate() {
         if rule.days > AZURE_MAX_DAYS {
             errors.push(format!(
@@ -189,7 +195,7 @@ fn is_xml_char(c: char) -> bool {
 mod tests {
     use super::*;
     use crate::{error::ErrorData, runner::PreflightRunner};
-    use alien_core::LifecycleRule;
+    use alien_core::{LifecycleRule, ResourceLifecycle};
 
     fn rule(days: u32, prefix: Option<&str>) -> LifecycleRule {
         LifecycleRule {
@@ -419,23 +425,21 @@ mod tests {
         );
 
         assert_eq!(
-            errors(
-                vec![rule(INT32_MAX_DAYS + 1, None)],
-                Platform::Gcp
-            )
-            .await,
-            vec!["Storage 'st': lifecycleRules[0].days is 2147483648; GCP Cloud Storage accepts at most 2147483647"]
+            errors(vec![rule(INT32_MAX_DAYS + 1, None)], Platform::Gcp).await,
+            vec![
+                "Storage 'st': lifecycleRules[0].days is 2147483648; GCP Cloud Storage accepts at most 2147483647"
+            ]
         );
         assert_eq!(
             errors(prefixed_rules(GCS_MAX_PREFIXES + 1), Platform::Gcp).await,
-            vec!["Storage 'st': lifecycleRules has 1001 prefixes; GCP Cloud Storage allows at most 1000 per bucket"]
+            vec![
+                "Storage 'st': lifecycleRules has 1001 prefixes; GCP Cloud Storage allows at most 1000 per bucket"
+            ]
         );
     }
 
-    /// Azure rules reach the provider only through setup's Terraform management policy, which
-    /// covers Frozen storage. The Azure controller ignores rules on Live storage.
     #[tokio::test]
-    async fn azure_checks_frozen_storage_rules_and_accepts_a_zero_day_rule() {
+    async fn azure_checks_account_rules_and_accepts_a_zero_day_rule() {
         let frozen = ResourceLifecycle::Frozen;
         assert_eq!(
             errors_with(
@@ -452,25 +456,92 @@ mod tests {
         );
 
         assert_eq!(
-            errors_with(vec![rule(AZURE_MAX_DAYS + 1, None)], frozen, Platform::Azure).await,
-            vec!["Storage 'st': lifecycleRules[0].days is 100000; Azure Storage accepts at most 99999"]
+            errors_with(
+                vec![rule(AZURE_MAX_DAYS + 1, None)],
+                frozen,
+                Platform::Azure
+            )
+            .await,
+            vec![
+                "Storage 'st': lifecycleRules[0].days is 100000; Azure Storage accepts at most 99999"
+            ]
         );
         assert_eq!(
             errors_with(prefixed_rules(AZURE_MAX_RULES + 1), frozen, Platform::Azure).await,
-            vec!["Storage 'st': lifecycleRules has 101 rules; an Azure Storage lifecycle policy allows at most 100"]
+            vec![
+                "Azure Storage account lifecycle policy has 101 declared rules; at most 100 are supported across all containers"
+            ]
         );
 
         let mut unused = prefixed_rules(AZURE_MAX_RULES + 1);
         unused.push(rule(AZURE_MAX_DAYS + 1, None));
-        assert_eq!(errors(unused, Platform::Azure).await, Vec::<String>::new());
+        assert_eq!(
+            errors(unused, Platform::Azure).await,
+            vec![
+                "Azure Storage account lifecycle policy has 102 declared rules; at most 100 are supported across all containers",
+                "Storage 'st': lifecycleRules[101].days is 100000; Azure Storage accepts at most 99999",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn azure_accounts_for_frozen_live_and_conditionally_enabled_siblings() {
+        for count in [50, 51] {
+            let stack = Stack::new("shared".to_string())
+                .add(
+                    Storage::new("frozen".to_string())
+                        .lifecycle_rules(prefixed_rules(50))
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add_enabled_when(
+                    Storage::new("live".to_string())
+                        .lifecycle_rules(prefixed_rules(count))
+                        .build(),
+                    ResourceLifecycle::Live,
+                    "includeLive",
+                )
+                .build();
+            let result = StorageLifecycleRulesCheck
+                .check(&stack, Platform::Azure)
+                .await
+                .unwrap();
+            if count == 50 {
+                assert!(result.errors.is_empty(), "{:?}", result.errors);
+            } else {
+                assert_eq!(
+                    result.errors,
+                    vec![
+                        "Azure Storage account lifecycle policy has 101 declared rules; at most 100 are supported across all containers",
+                    ]
+                );
+            }
+            for platform in [Platform::Aws, Platform::Gcp] {
+                assert!(
+                    StorageLifecycleRulesCheck
+                        .check(&stack, platform)
+                        .await
+                        .unwrap()
+                        .errors
+                        .is_empty()
+                );
+            }
+        }
     }
 
     /// AWS and GCP controllers send the rules of Live storage too.
     #[tokio::test]
     async fn aws_and_gcp_check_frozen_storage_like_live_storage() {
         assert_eq!(
-            errors_with(vec![rule(0, None)], ResourceLifecycle::Frozen, Platform::Aws).await,
-            vec!["Storage 'st': lifecycleRules[0].days is 0; AWS S3 requires an expiration of at least 1 day"]
+            errors_with(
+                vec![rule(0, None)],
+                ResourceLifecycle::Frozen,
+                Platform::Aws
+            )
+            .await,
+            vec![
+                "Storage 'st': lifecycleRules[0].days is 0; AWS S3 requires an expiration of at least 1 day"
+            ]
         );
         assert_eq!(
             errors_with(
@@ -479,7 +550,9 @@ mod tests {
                 Platform::Gcp
             )
             .await,
-            vec!["Storage 'st': lifecycleRules[0].days is 2147483648; GCP Cloud Storage accepts at most 2147483647"]
+            vec![
+                "Storage 'st': lifecycleRules[0].days is 2147483648; GCP Cloud Storage accepts at most 2147483647"
+            ]
         );
     }
 

@@ -24,6 +24,30 @@ const value: models.ExternalBindingAurora = {
 };
 ```
 
+### `models.ExternalBindingAuroraManaged`
+
+```typescript
+const value: models.ExternalBindingAuroraManaged = {
+  clusterEndpoint: {
+    secretRef: {
+      key: "<key>",
+      name: "<value>",
+    },
+  },
+  database: "<value>",
+  passwordSecretArn: "<value>",
+  port: "<value>",
+  username: {
+    secretRef: {
+      key: "<key>",
+      name: "<value>",
+    },
+  },
+  service: "aurora-managed",
+  type: "postgres",
+};
+```
+
 ### `models.ExternalBindingCloudSQL`
 
 ```typescript

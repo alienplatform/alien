@@ -142,6 +142,7 @@ pub struct StackExecutor {
     step_out_of_scope_resources: bool,
     resume_unchanged_failed_resources: bool,
     desired_stack: Stack,
+    preserved_resources: HashSet<String>,
 
     // --- Stored from config for use during step() ---
     client_config: ClientConfig,
@@ -695,6 +696,7 @@ impl StackExecutor {
             step_out_of_scope_resources,
             resume_unchanged_failed_resources,
             desired_stack: stack.clone(),
+            preserved_resources: HashSet::new(),
             client_config,
             resource_registry,
             service_provider,
@@ -756,6 +758,143 @@ impl StackExecutor {
             .step_out_of_scope_resources(false)
             .runtime_cleanup_filter(true)
             .build()
+    }
+
+    /// Keep exact resource checkpoints and their dependencies during deletion.
+    ///
+    /// This is a deletion-only scope, not a policy decision: callers must supply
+    /// the durable resources required by their persisted deletion intent. It
+    /// keeps structural dependencies, including the previous configuration during
+    /// an interrupted update. Permission-only identity dependencies do not
+    /// keep access identities alive. Access revocation must happen
+    /// separately before treating the resulting deployment as deleted.
+    pub fn preserving_resources(
+        mut self,
+        state: &StackState,
+        resource_ids: impl IntoIterator<Item = String>,
+    ) -> Result<Self> {
+        if !self.desired_stack.resources.is_empty() {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Resource preservation requires a deletion-only executor".to_string(),
+                resource_id: None,
+            }));
+        }
+        let mut pending: Vec<_> = resource_ids.into_iter().collect();
+        while let Some(id) = pending.pop() {
+            if !self.preserved_resources.insert(id.clone()) {
+                continue;
+            }
+            let resource = state.resources.get(&id).ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Cannot preserve a resource missing from the installed inventory"
+                        .to_string(),
+                    resource_id: Some(id.clone()),
+                })
+            })?;
+            pending.extend(
+                resource
+                    .dependencies
+                    .iter()
+                    .filter(|dependency| {
+                        !Self::permission_only_dependency(resource, dependency.id(), state)
+                    })
+                    .map(|dependency| dependency.id().to_string()),
+            );
+            pending.extend(
+                resource
+                    .config
+                    .get_dependencies()
+                    .iter()
+                    .map(|dependency| dependency.id().to_string()),
+            );
+            if let Some(previous) = &resource.previous_config {
+                pending.extend(
+                    previous
+                        .get_dependencies()
+                        .iter()
+                        .map(|dependency| dependency.id().to_string()),
+                );
+            }
+        }
+        Ok(self)
+    }
+
+    // Preflights order resource-scoped grants after access-identity creation.
+    // Data does not need that grantee to continue existing. Config dependencies
+    // (including an interrupted update's old config) still describe actual use.
+    fn permission_only_dependency(
+        resource: &StackResourceState,
+        dependency_id: &str,
+        state: &StackState,
+    ) -> bool {
+        matches!(
+            resource.config.resource_type().as_ref(),
+            "storage"
+                | "kv"
+                | "queue"
+                | "vault"
+                | "postgres"
+                | "key"
+                | "artifact-registry"
+                | "experimental/aws-opensearch"
+        ) && state
+            .resources
+            .get(dependency_id)
+            .is_some_and(|dependency| {
+                matches!(
+                    dependency.config.resource_type().as_ref(),
+                    "service-account" | "remote-stack-management" | "resource-access"
+                )
+            })
+            && !resource
+                .config
+                .get_dependencies()
+                .iter()
+                .any(|dependency| dependency.id() == dependency_id)
+            && !resource.previous_config.as_ref().is_some_and(|previous| {
+                previous
+                    .get_dependencies()
+                    .iter()
+                    .any(|dependency| dependency.id() == dependency_id)
+            })
+    }
+
+    fn releases_permission_dependency(
+        &self,
+        resource_id: &str,
+        dependency_id: &str,
+        state: &StackState,
+    ) -> bool {
+        self.preserved_resources.contains(resource_id)
+            && state.resources.get(resource_id).is_some_and(|resource| {
+                Self::permission_only_dependency(resource, dependency_id, state)
+            })
+    }
+
+    /// Whether a recorded resource is protected by this deletion scope.
+    pub fn preserves_resource(&self, resource_id: &str) -> bool {
+        self.preserved_resources.contains(resource_id)
+    }
+
+    /// Prepare only resources this deletion executor owns, without changing
+    /// preserved checkpoints. Use the same executor for subsequent steps.
+    pub fn prepare_for_deletion(&self, state: &mut StackState) -> Result<Vec<String>> {
+        if !self.desired_stack.resources.is_empty() {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Deletion preparation requires a deletion-only executor".to_string(),
+                resource_id: None,
+            }));
+        }
+        let mode = if self.runtime_cleanup_filter {
+            super::state_utils::DestroyPreparationMode::Delete
+        } else {
+            super::state_utils::DestroyPreparationMode::Teardown
+        };
+        super::state_utils::prepare_for_destroy_matching(
+            state,
+            |resource| self.resource_matches_deletion_scope(resource.config.id(), resource),
+            mode,
+        )
     }
 
     fn is_external_binding_resource(&self, resource_id: &str) -> bool {
@@ -825,6 +964,9 @@ impl StackExecutor {
         resource_id: &str,
         resource_state: &StackResourceState,
     ) -> Result<bool> {
+        if self.preserved_resources.contains(resource_id) {
+            return Ok(false);
+        }
         if self.runtime_cleanup_filter {
             return self.resource_matches_runtime_cleanup(resource_id, resource_state);
         }
@@ -906,7 +1048,10 @@ impl StackExecutor {
     /// Map of resource id to the ids still depending on it, for deletion safety checks.
     fn deletion_dependents(&self, state: &StackState) -> HashMap<String, Vec<String>> {
         let mut has_dependents: HashMap<String, Vec<String>> = HashMap::new();
-        if self.lifecycle_filter.is_none() && !self.runtime_cleanup_filter {
+        if self.lifecycle_filter.is_none()
+            && !self.runtime_cleanup_filter
+            && self.preserved_resources.is_empty()
+        {
             return has_dependents;
         }
 
@@ -919,6 +1064,9 @@ impl StackExecutor {
             // State dependencies, not config ones: they record what the deployed resource
             // still holds, which is what makes deleting its target unsafe.
             for dependency in &resource_state.dependencies {
+                if self.releases_permission_dependency(res_id, dependency.id(), state) {
+                    continue;
+                }
                 has_dependents
                     .entry(dependency.id().to_string())
                     .or_default()
@@ -938,6 +1086,9 @@ impl StackExecutor {
         has_dependents: &HashMap<String, Vec<String>>,
         state: &StackState,
     ) -> Result<bool> {
+        if self.preserved_resources.contains(resource_id) {
+            return Ok(false);
+        }
         // A failed delete of a resource the stack no longer declares resumes when the executor
         // resumes unchanged failures (an update or its retry); otherwise only an explicit
         // retry of the failure resumes it.
@@ -952,7 +1103,10 @@ impl StackExecutor {
             return Ok(false);
         }
 
-        if self.lifecycle_filter.is_none() && !self.runtime_cleanup_filter {
+        if self.lifecycle_filter.is_none()
+            && !self.runtime_cleanup_filter
+            && self.preserved_resources.is_empty()
+        {
             return Ok(true);
         }
 
@@ -1666,8 +1820,10 @@ impl StackExecutor {
         let mut state = state;
         // Repair checkpoints written before interrupted controllers were settled, including
         // ones whose interruption error was overwritten by a rejected update transition.
-        for resource in state.resources.values_mut() {
-            resource.settle_failed_controller()?;
+        for (id, resource) in &mut state.resources {
+            if !self.preserved_resources.contains(id) {
+                resource.settle_failed_controller()?;
+            }
         }
         if apply_plan && self.resume_unchanged_failed_resources {
             for (resource_id, resource_state) in &mut state.resources {
@@ -2173,8 +2329,10 @@ impl StackExecutor {
         // Apply the calculated initial transitions for Creates/Updates
         next_state.resources.extend(initial_transitions);
         // A rejected transition must not leave a failed record with a runnable controller.
-        for resource in next_state.resources.values_mut() {
-            resource.settle_failed_controller()?;
+        for (id, resource) in &mut next_state.resources {
+            if !self.preserved_resources.contains(id) {
+                resource.settle_failed_controller()?;
+            }
         }
         // --- Planning Phase End ---
 
@@ -2187,6 +2345,9 @@ impl StackExecutor {
         let mut ready_resource_ids = Vec::new();
         // Use the keys from the state *after* applying the plan
         for resource_id in next_state.resources.keys() {
+            if self.preserved_resources.contains(resource_id) {
+                continue;
+            }
             // Check status and terminal state using next_state
             let current_resource_view = next_state.resources.get(resource_id).unwrap(); // Should always exist
                                                                                         // Check terminality based on *desired* state + current status
@@ -2880,6 +3041,7 @@ impl StackExecutor {
             // Deleting is still active because delete handlers often need
             // dependency outputs such as resource group names or bucket names.
             if dependent_id == resource_id
+                || self.releases_permission_dependency(dependent_id, resource_id, state)
                 || matches!(
                     dependent_state.status,
                     ResourceStatus::Deleted | ResourceStatus::TeardownRequired
@@ -3027,6 +3189,9 @@ impl StackExecutor {
         let filter_set_opt = &self.lifecycle_filter;
 
         let deleting_resources_are_synced = state.resources.iter().all(|(res_id, view)| {
+            if self.preserved_resources.contains(res_id) {
+                return true;
+            }
             // Skip resources that are part of the desired stack – they were already handled above.
             if self.resources.contains_key(res_id) {
                 return true;
@@ -3035,7 +3200,8 @@ impl StackExecutor {
             // Helper to check if this resource still has active dependents outside the deletion scope.
             let has_active_dependents_outside_filter = || {
                 state.resources.iter().any(|(dep_id, dep_view)| {
-                    if dep_view.status == ResourceStatus::Deleting
+                    if self.releases_permission_dependency(dep_id, res_id, state)
+                        || dep_view.status == ResourceStatus::Deleting
                         || dep_view.status == ResourceStatus::Deleted
                         || dep_view.status == ResourceStatus::TeardownRequired
                     {

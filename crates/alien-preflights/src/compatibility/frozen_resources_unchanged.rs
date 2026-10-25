@@ -2,9 +2,9 @@ use crate::error::{ErrorData, Result};
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::{find_instance_type, is_same_architecture_machine};
 use alien_core::{
-    permissions::PermissionSet, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
+    AzureStorageAccount, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
     ComputePoolSelection, Platform, Resource, ResourceLifecycle, Sandbox, SandboxCode,
-    ServiceAccount, Stack,
+    ServiceAccount, Stack, permissions::PermissionSet,
 };
 use alien_error::Context;
 use std::borrow::Cow;
@@ -267,6 +267,16 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
             .map(|(id, entry)| (id.as_str(), entry))
             .collect();
 
+        if self.platform == Platform::Azure
+            && old_frozen
+                .values()
+                .any(|entry| entry.config.downcast_ref::<AzureStorageAccount>().is_some())
+            && AzureStorageAccount::setup_settings_digest(old_stack)
+                != AzureStorageAccount::setup_settings_digest(new_stack)
+        {
+            errors.push("Azure shared storage account settings changed through container declarations. Rerun setup to apply public capability, versioning, CORS or lifecycle changes before updating Live containers.".to_string());
+        }
+
         // Collect frozen resources from new stack
         let new_frozen: HashMap<_, _> = new_stack
             .resources()
@@ -482,7 +492,11 @@ mod tests {
             .await
             .unwrap();
         assert!(!removed.success);
-        assert!(removed.errors[0].contains("'reader-sa' was modified"), "{:?}", removed.errors);
+        assert!(
+            removed.errors[0].contains("'reader-sa' was modified"),
+            "{:?}",
+            removed.errors
+        );
         let uncaptured = check
             .check(
                 &account_stack(with_grant.clone(), true),
@@ -1272,5 +1286,141 @@ mod tests {
             "an image change must not carry another field past setup"
         );
         assert!(with_other_field.errors[0].contains("Rerun setup"));
+    }
+}
+
+#[cfg(test)]
+mod azure_storage_settings_tests {
+    use super::*;
+    #[cfg(feature = "runtime-checks")]
+    use alien_core::SetupUpdateAuthorization;
+    use alien_core::{LifecycleRule, Storage};
+    #[cfg(feature = "runtime-checks")]
+    use alien_permissions::generators::azure_setup_owned::azure_setup_update_digest;
+
+    fn stack(storage: Storage) -> Stack {
+        Stack::new("shared".to_string())
+            .add(
+                AzureStorageAccount::new("default-storage-account".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(storage, ResourceLifecycle::Live)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn live_shared_settings_changes_require_setup_but_unchanged_settings_do_not() {
+        let baseline = stack(Storage::new("files".to_string()).build());
+        let check = FrozenResourcesUnchangedCheck {
+            platform: Platform::Azure,
+        };
+        assert!(check.check(&baseline, &baseline).await.unwrap().success);
+        for config in [
+            Storage::new("files".to_string()).public_read(true).build(),
+            Storage::new("files".to_string()).versioning(true).build(),
+            Storage::new("files".to_string())
+                .cors_allowed_origins(vec!["https://example.test".to_string()])
+                .build(),
+            Storage::new("files".to_string())
+                .lifecycle_rules(vec![LifecycleRule {
+                    days: 1,
+                    prefix: None,
+                }])
+                .build(),
+        ] {
+            let target = stack(config);
+            assert_ne!(baseline.setup_update_digest(), target.setup_update_digest());
+            let result = check.check(&baseline, &target).await.unwrap();
+            assert!(!result.success);
+            assert_eq!(result.errors.len(), 1);
+            assert!(result.errors[0].contains("Rerun setup"));
+            assert!(!check.check(&target, &baseline).await.unwrap().success);
+            assert!(check.check(&target, &target).await.unwrap().success);
+            assert!(
+                FrozenResourcesUnchangedCheck {
+                    platform: Platform::Gcp
+                }
+                .check(&baseline, &target)
+                .await
+                .unwrap()
+                .success
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "runtime-checks")]
+    fn setup_authority_cannot_be_reused_after_live_account_settings_change() {
+        let baseline = stack(Storage::new("files".to_string()).build());
+        let target = stack(Storage::new("files".to_string()).versioning(true).build());
+        let authorization = SetupUpdateAuthorization {
+            nonce: "revision".to_string(),
+            baseline_frozen_digest: azure_setup_update_digest(&baseline).unwrap(),
+            target_frozen_digest: azure_setup_update_digest(&target).unwrap(),
+            release_id: "release".to_string(),
+            setup_target: "azure".to_string(),
+            setup_fingerprint: "artifact".to_string(),
+            setup_fingerprint_version: 1,
+        };
+        let saved = serde_json::to_vec(&authorization).unwrap();
+        let reloaded = serde_json::from_slice(&saved).unwrap();
+        assert!(
+            crate::compatibility::azure_setup::authorization_matches(&baseline, &target, &reloaded)
+                .unwrap()
+        );
+        let changed = stack(
+            Storage::new("files".to_string())
+                .versioning(true)
+                .public_read(true)
+                .build(),
+        );
+        assert!(
+            !crate::compatibility::azure_setup::authorization_matches(
+                &baseline, &changed, &reloaded
+            )
+            .unwrap()
+        );
+        let mut gated = target.clone();
+        gated.resources.get_mut("files").unwrap().enabled_when = Some("includeFiles".to_string());
+        assert!(
+            !crate::compatibility::azure_setup::authorization_matches(&baseline, &gated, &reloaded)
+                .unwrap()
+        );
+        assert!(AzureStorageAccount::setup_settings_digest(&baseline).is_none());
+        let mut reordered = target.clone();
+        reordered.resources.reverse();
+        assert_eq!(
+            target.setup_update_digest(),
+            reordered.setup_update_digest()
+        );
+    }
+
+    #[tokio::test]
+    async fn redundant_live_capabilities_do_not_require_setup() {
+        let storage = Storage::new("files".to_string())
+            .public_read(true)
+            .versioning(true)
+            .cors_allowed_origins(vec!["https://example.test".to_string()])
+            .build();
+        let mut old = stack(storage.clone());
+        let mut sibling = storage;
+        sibling.id = "sibling".to_string();
+        let mut entry = old.resources["files"].clone();
+        entry.config = Resource::new(sibling.clone());
+        old.resources.insert("sibling".to_string(), entry);
+        let mut new = old.clone();
+        sibling.public_read = false;
+        sibling.versioning = false;
+        sibling.cors_allowed_origins.clear();
+        new.resources.get_mut("sibling").unwrap().config = Resource::new(sibling);
+        assert!(
+            FrozenResourcesUnchangedCheck {
+                platform: Platform::Azure
+            }
+            .check(&old, &new)
+            .await
+            .unwrap()
+            .success
+        );
     }
 }

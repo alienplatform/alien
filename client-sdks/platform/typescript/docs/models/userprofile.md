@@ -15,9 +15,11 @@ let value: UserProfile = {
   company: "Shields Group",
   acquisitionSource: "event-or-community",
   acquisitionSourceDetail: "<value>",
-  useCases: "<value>",
-  profileSetupCompletedAt: null,
-  profileSetupVersion: null,
+  accessStatus: "declined",
+  useCaseTags: [],
+  useCases: null,
+  profileSetupCompletedAt: new Date("2026-04-05T00:34:40.716Z"),
+  profileSetupVersion: 837513,
 };
 ```
 
@@ -34,6 +36,8 @@ let value: UserProfile = {
 | `company`                                                                                                           | *string*                                                                                                            | :heavy_check_mark:                                                                                                  | Company name collected during profile setup.                                                                        |
 | `acquisitionSource`                                                                                                 | [models.UserProfileAcquisitionSource](../models/userprofileacquisitionsource.md)                                    | :heavy_check_mark:                                                                                                  | How the user heard about Alien.                                                                                     |
 | `acquisitionSourceDetail`                                                                                           | *string*                                                                                                            | :heavy_check_mark:                                                                                                  | Additional acquisition source detail when the source is other.                                                      |
+| `accessStatus`                                                                                                      | [models.UserProfileAccessStatus](../models/userprofileaccessstatus.md)                                              | :heavy_check_mark:                                                                                                  | N/A                                                                                                                 |
+| `useCaseTags`                                                                                                       | [models.UserProfileUseCaseTag](../models/userprofileusecasetag.md)[]                                                | :heavy_check_mark:                                                                                                  | N/A                                                                                                                 |
 | `useCases`                                                                                                          | *string*                                                                                                            | :heavy_check_mark:                                                                                                  | What the user is hoping to use Alien for.                                                                           |
 | `profileSetupCompletedAt`                                                                                           | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)                       | :heavy_check_mark:                                                                                                  | When the user completed the required profile setup dialog.                                                          |
 | `profileSetupVersion`                                                                                               | *number*                                                                                                            | :heavy_check_mark:                                                                                                  | Version of the required profile setup dialog the user completed.                                                    |

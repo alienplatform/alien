@@ -9,6 +9,14 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type HealthResponse = {
   /**
+   * Newest setup registration format accepted by this manager.
+   */
+  maxSetupImportFormatVersion?: number | undefined;
+  /**
+   * Oldest setup registration format accepted by this manager.
+   */
+  minSetupImportFormatVersion?: number | undefined;
+  /**
    * True when operation result contracts are persisted before commands
    *
    * @remarks
@@ -21,6 +29,8 @@ export type HealthResponse = {
 /** @internal */
 export const HealthResponse$inboundSchema: z.ZodType<HealthResponse, unknown> =
   z.object({
+    maxSetupImportFormatVersion: z.int().optional(),
+    minSetupImportFormatVersion: z.int().optional(),
     operationResultContract: z.boolean().optional(),
     status: z.string(),
   });

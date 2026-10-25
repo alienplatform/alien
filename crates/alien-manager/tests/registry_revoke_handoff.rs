@@ -413,16 +413,55 @@ async fn handed_off_deployment(answer: Answer) -> Fixture {
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),
     };
 
-    Fixture {
+    let fixture = Fixture {
         state,
         store,
         registry,
         admin_token,
         deployment_id: deployment.id,
-    }
+    };
+    fixture.acquire_setup_teardown().await;
+    fixture
 }
 
 impl Fixture {
+    /// The deploy CLI acquires the setup-teardown lease before its first checkpoint.
+    async fn acquire_setup_teardown(&self) {
+        let body = serde_json::json!({
+            "session": SESSION,
+            "maxSupportedDeploymentProtocolVersion": alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
+            "acquireMode": "setup-teardown",
+            "deploymentIds": [self.deployment_id],
+            "setupMethod": "cli",
+            "statuses": ["retention-required", "teardown-required", "teardown-failed"],
+            "deploymentModel": "push",
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/sync/acquire")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(
+                header::AUTHORIZATION,
+                format!("Bearer {}", self.admin_token),
+            )
+            .body(Body::from(serde_json::to_vec(&body).expect("body")))
+            .expect("request");
+        let response = alien_manager::routes::sync::router()
+            .with_state(self.state.clone())
+            .oneshot(request)
+            .await
+            .expect("response");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("body bytes");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("acquire response");
+        assert_eq!(status, StatusCode::OK, "body = {body:#}");
+        let deployments = body["deployments"].as_array().expect("deployments");
+        assert_eq!(deployments.len(), 1, "body = {body:#}");
+        assert_eq!(deployments[0]["deployment"]["id"], self.deployment_id);
+    }
+
     /// One setup-teardown checkpoint, as the deploy CLI's transport sends it.
     async fn reconcile(&self, status: DeploymentStatus) -> (StatusCode, serde_json::Value) {
         let body = serde_json::json!({

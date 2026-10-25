@@ -147,6 +147,10 @@ pub struct AwsStorageController {
     /// region or another account.
     #[serde(default)]
     pub(crate) ownership_verified: bool,
+    /// S3 acknowledged the browser-read CORS operation. Old checkpoints and imports
+    /// do not prove that an unchanged declaration was applied.
+    #[serde(default)]
+    pub(crate) read_cors_applied: bool,
 }
 
 #[controller]
@@ -501,6 +505,25 @@ impl AwsStorageController {
         }
 
         Ok(HandlerAction::Continue {
+            state: ConfiguringCors,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = ConfiguringCors,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn configuring_cors(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        if !config.cors_allowed_origins.is_empty() {
+            self.apply_read_cors(ctx).await?;
+        }
+        Ok(HandlerAction::Continue {
             state: ApplyingResourcePermissions,
             suggested_delay: None,
         })
@@ -676,6 +699,10 @@ impl AwsStorageController {
                 state: Ready,
                 suggested_delay: None,
             });
+        }
+
+        if config.cors_allowed_origins != prev_config.cors_allowed_origins {
+            self.require_cors_authority(ctx)?;
         }
 
         let aws_cfg = ctx.get_aws_config()?;
@@ -979,6 +1006,35 @@ impl AwsStorageController {
             info!(name=%config.id, "Skipping lifecycle update (no changes needed)");
         }
 
+        Ok(HandlerAction::Continue {
+            state: UpdatingCors,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = UpdatingCors,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn updating_cors(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        let changed = ctx
+            .state
+            .resources
+            .get(&config.id)
+            .and_then(|resource| resource.previous_config.as_ref())
+            .is_none()
+            || config.cors_allowed_origins
+                != ctx
+                    .previous_resource_config::<Storage>()?
+                    .cors_allowed_origins;
+        if changed {
+            self.apply_read_cors(ctx).await?;
+        }
         Ok(HandlerAction::Continue {
             state: UpdatingResourcePermissions,
             suggested_delay: None,
@@ -1329,6 +1385,41 @@ impl AwsStorageController {
 }
 
 impl AwsStorageController {
+    fn require_cors_authority(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+            && ctx
+                .desired_stack
+                .resources
+                .get(&config.id)
+                .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Frozen)
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "Storage CORS is setup-owned; apply the updated setup package to change this Frozen bucket".into(),
+            }));
+        }
+        Ok(())
+    }
+
+    async fn apply_read_cors(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        self.require_cors_authority(ctx)?;
+        let config = ctx.desired_resource_config::<Storage>()?;
+        let bucket = self.bucket_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "Bucket name missing while configuring CORS".into(),
+            })
+        })?;
+        ctx.service_provider.get_aws_s3_client(ctx.get_aws_config()?).await?
+            .set_bucket_read_cors(bucket, &config.cors_allowed_origins).await
+            .context(ErrorData::CloudPlatformError {
+                resource_id: Some(config.id.clone()), message: format!("Failed to configure browser-read CORS for bucket '{bucket}'; a setup update is needed to grant s3:PutBucketCORS before changing CORS"),
+            })?;
+        self.read_cors_applied = true;
+        Ok(())
+    }
+
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(storage_name: &str) -> Self {
@@ -1337,6 +1428,7 @@ impl AwsStorageController {
             bucket_name: Some(aws_prefixed_resource_name("test-stack", storage_name)),
             requested_bucket_name: None,
             ownership_verified: true,
+            read_cors_applied: false,
             _internal_stay_count: None,
         }
     }
@@ -1361,12 +1453,14 @@ mod tests {
             ListObjectsV2Output, ListVersionsOutput, MockS3Api, PublicAccessBlockConfiguration,
             S3Api, S3Client, VersioningStatus,
         },
-        AwsCredentialProvider,
+        AwsClientConfigExt, AwsCredentialProvider,
     };
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
-        standard_resource_tags, AwsClientConfig, AwsCredentials, AwsServiceOverrides,
-        LifecycleRule as AlienLifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs,
+        standard_resource_tags, AwsClientConfig, AwsCredentials, AwsServiceOverrides, ClientConfig,
+        DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority,
+        LifecycleRule as AlienLifecycleRule, Platform, Resource, ResourceLifecycle, ResourceStatus,
+        Stack, StackResourceState, StackSettings, StackState, Storage, StorageOutputs,
     };
     use alien_error::AlienError;
     use httpmock::{Method::PUT, MockServer};
@@ -1374,7 +1468,7 @@ mod tests {
 
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        MockPlatformServiceProvider, PlatformServiceProvider, StackResourceStateExt,
+        MockPlatformServiceProvider, PlatformServiceProvider, StackExecutor, StackResourceStateExt,
     };
     use crate::storage::AwsStorageController;
     use crate::AwsStorageState;
@@ -1955,6 +2049,7 @@ mod tests {
             bucket_name: Some(format!("test-{storage_id}")),
             requested_bucket_name: None,
             ownership_verified: false,
+            read_cors_applied: false,
             _internal_stay_count: None,
         }
     }
@@ -2095,6 +2190,253 @@ mod tests {
             .build()
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn unchanged_legacy_cors_does_not_plan_cloud_writes() {
+        let desired = Storage::new("cors".into())
+            .cors_allowed_origins(vec!["https://app.example".into()])
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
+            let stack = Stack::new("test".into())
+                .add(desired.clone(), lifecycle)
+                .build();
+            let executor = StackExecutor::builder(
+                &stack,
+                ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            )
+            .deployment_config(&config)
+            .service_provider(setup_mock_service_provider(Arc::new(MockS3Api::new())))
+            .build()
+            .unwrap();
+            // Old roles lack PutBucketCORS and old checkpoints lack its acknowledgement.
+            let mut old = serde_json::to_value(legacy_recorded("cors")).unwrap();
+            old.as_object_mut().unwrap().remove("readCorsApplied");
+            let controller: AwsStorageController = serde_json::from_value(old).unwrap();
+            assert!(!controller.read_cors_applied);
+            let mut state = StackState::with_resource_prefix(Platform::Aws, "test".into());
+            let mut resource = StackResourceState::new_pending(
+                Storage::RESOURCE_TYPE.into(),
+                Resource::new(desired.clone()),
+                Some(lifecycle),
+                vec![],
+            );
+            resource.status = ResourceStatus::Running;
+            resource
+                .set_internal_controller(Some(Box::new(controller)))
+                .unwrap();
+            state.resources.insert("cors".into(), resource);
+            assert!(!executor.plan(&state).unwrap().updates.contains_key("cors"));
+            assert_eq!(state.resources["cors"].status, ResourceStatus::Running);
+        }
+    }
+
+    #[tokio::test]
+    async fn cors_create_replace_clear_and_delete_preserve_bucket_identity() {
+        let account = Arc::new(Mutex::new(None));
+        let cors = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut client = fake_s3(account.clone(), Fault::None);
+        let observed = cors.clone();
+        client
+            .expect_set_bucket_read_cors()
+            .times(3)
+            .returning(move |bucket, origins| {
+                assert_eq!(bucket, "test-cors");
+                *observed.lock().unwrap() = origins.to_vec();
+                Ok(())
+            });
+        let mut storage = Storage::new("cors".into())
+            .cors_allowed_origins(vec!["https://one.example".into()])
+            .build();
+        let mut run = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .controller(AwsStorageController::default())
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(client)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert_eq!(*cors.lock().unwrap(), storage.cors_allowed_origins);
+        storage.cors_allowed_origins = vec!["https://two.example".into()];
+        run.update(storage.clone()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(*cors.lock().unwrap(), storage.cors_allowed_origins);
+        assert!(account.lock().unwrap().is_some());
+        run.update(storage.clone()).unwrap();
+        run.run_until_terminal().await.unwrap();
+        storage.cors_allowed_origins.clear();
+        run.update(storage).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert!(cors.lock().unwrap().is_empty());
+        assert_eq!(run.status(), ResourceStatus::Running);
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Deleted);
+        assert!(account.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn cors_saved_handlers_refuse_frozen_mutations_before_cloud_access() {
+        for state in [
+            AwsStorageState::ConfiguringCors,
+            AwsStorageState::UpdatingCors,
+        ] {
+            let previous = Storage::new("cors".into()).build();
+            let storage = Storage::new("cors".into())
+                .cors_allowed_origins(vec!["https://one.example".into()])
+                .build();
+            let mut controller = AwsStorageController::mock_ready("cors");
+            controller.state = state;
+            let controller: AwsStorageController =
+                serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+            let mut run = SingleControllerExecutor::builder()
+                .resource(storage)
+                .previous_resource(previous)
+                .controller(controller)
+                .platform(Platform::Aws)
+                .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+                .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+                .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            let error = run.step().await.unwrap_err();
+            assert!(error.to_string().contains("setup-owned"));
+        }
+    }
+
+    #[tokio::test]
+    async fn unchanged_cors_checkpoint_preserves_old_roles() {
+        let storage = Storage::new("cors".into())
+            .cors_allowed_origins(vec!["https://app.example".into()])
+            .build();
+        for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+            let mut controller = legacy_recorded("cors");
+            controller.state = AwsStorageState::UpdatingCors;
+            let mut run = SingleControllerExecutor::builder()
+                .resource(storage.clone())
+                .previous_resource(storage.clone())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .resource_lifecycle(lifecycle)
+                .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+                .service_provider(setup_mock_service_provider(Arc::new(MockS3Api::new())))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            run.run_until_terminal().await.unwrap();
+            assert_eq!(run.status(), ResourceStatus::Running);
+            let controller = run.internal_state::<AwsStorageController>().unwrap();
+            assert!(!controller.read_cors_applied);
+            assert_eq!(controller.bucket_name.as_deref(), Some("test-cors"));
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_cors_denied_requires_setup_update() {
+        let previous = Storage::new("cors".into()).build();
+        let desired = Storage::new("cors".into())
+            .cors_allowed_origins(vec!["https://app.example".into()])
+            .build();
+        let mut client = MockS3Api::new();
+        client
+            .expect_set_bucket_read_cors()
+            .times(1)
+            .returning(|bucket, _| {
+                Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                    resource_type: "Bucket".into(),
+                    resource_name: bucket.into(),
+                }))
+            });
+        let mut controller = legacy_recorded("cors");
+        controller.state = AwsStorageState::UpdatingCors;
+        let mut run = SingleControllerExecutor::builder()
+            .resource(desired)
+            .previous_resource(previous)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_lifecycle(ResourceLifecycle::Live)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .service_provider(setup_mock_service_provider(Arc::new(client)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let error = run.step().await.unwrap_err();
+        assert!(
+            error.to_string().contains("setup update is needed"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("s3:PutBucketCORS"), "{error}");
+        let controller = run.internal_state::<AwsStorageController>().unwrap();
+        assert!(!controller.read_cors_applied);
+        assert_eq!(controller.bucket_name.as_deref(), Some("test-cors"));
+    }
+
+    #[tokio::test]
+    async fn cors_checkpoint_retry_after_lost_response_replaces_same_policy() {
+        let account = Arc::new(Mutex::new(Some(FakeBucket {
+            tags: standard_resource_tags("test", "cors"),
+            objects: 1,
+        })));
+        let cors = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut client = fake_s3(account.clone(), Fault::None);
+        let observed = cors.clone();
+        let first = Arc::new(Mutex::new(true));
+        client
+            .expect_set_bucket_read_cors()
+            .times(2)
+            .returning(move |bucket, origins| {
+                assert_eq!(bucket, "test-cors");
+                *observed.lock().unwrap() = origins.to_vec();
+                if std::mem::take(&mut *first.lock().unwrap()) {
+                    return Err(lost_response());
+                }
+                Ok(())
+            });
+        let storage = Storage::new("cors".into())
+            .cors_allowed_origins(vec!["https://one.example".into()])
+            .build();
+        let mut controller = AwsStorageController::mock_ready("cors");
+        controller.bucket_name = Some("test-cors".into());
+        controller.ownership_verified = true;
+        controller.state = AwsStorageState::UpdatingCors;
+        let controller: AwsStorageController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let mut run = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .previous_resource(Storage::new("cors".into()).build())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(client)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        assert!(run.step().await.is_err());
+        assert_eq!(*cors.lock().unwrap(), storage.cors_allowed_origins);
+        run.step().await.unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert_eq!(account.lock().unwrap().as_ref().unwrap().objects, 1);
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert!(account.lock().unwrap().is_none());
     }
 
     // ─────────────── UPDATE FLOW TESTS ────────────────────────────────
@@ -2621,6 +2963,7 @@ mod tests {
             bucket_name: None, // This is the key - no bucket name set
             requested_bucket_name: None,
             ownership_verified: false,
+            read_cors_applied: false,
             _internal_stay_count: None,
         };
 
@@ -2700,6 +3043,7 @@ mod tests {
                 bucket_name: Some("test-lifecycle-storage".to_string()),
                 requested_bucket_name: None,
                 ownership_verified: true,
+                read_cors_applied: false,
                 _internal_stay_count: None,
             })
             .platform(Platform::Aws)

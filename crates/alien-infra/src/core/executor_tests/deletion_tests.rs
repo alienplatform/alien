@@ -1,8 +1,23 @@
 //! Tests for resource deletion flows and ordering.
 
+use std::sync::{Arc, Mutex};
+
 use super::helpers::*;
-use crate::error::Result;
-use alien_core::{ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage};
+use crate::{
+    error::Result,
+    remote_bindings::{AwsRemoteBindingsController, AwsRemoteBindingsState},
+    state_utils::{StackResourceStateExt, StackStateExt},
+    storage::{test_storage_deletes_issued, SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN},
+    MockPlatformServiceProvider, StackExecutor,
+};
+use alien_aws_clients::iam::{
+    ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames,
+};
+use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
+use alien_core::{
+    ClientConfig, RemoteBindings, RemoteStackManagement, Resource, ResourceLifecycle, ResourceRef,
+    ResourceStatus, ServiceAccount, Stack, Storage,
+};
 
 /// Tests basic deletion of a single resource.
 #[tokio::test]
@@ -546,5 +561,489 @@ async fn test_deletion_with_filtered_dependencies() -> Result<()> {
         "Dependent func should remain"
     );
 
+    Ok(())
+}
+
+/// Preservation must freeze even an already-prepared delete checkpoint. A caller
+/// can resume a legacy deletion after upgrading without advancing its data delete.
+#[tokio::test]
+async fn preserved_checkpoints_survive_reload_while_workloads_are_deleted() -> Result<()> {
+    for (lifecycle, checkpoint) in [ResourceLifecycle::Live, ResourceLifecycle::Frozen]
+        .into_iter()
+        .flat_map(|lifecycle| {
+            [
+                ResourceStatus::Running,
+                ResourceStatus::Deleting,
+                ResourceStatus::UpdateFailed,
+            ]
+            .into_iter()
+            .map(move |checkpoint| (lifecycle, checkpoint))
+        })
+    {
+        let stack = Stack::new("preserve-data".to_owned())
+            .add(test_storage("dependency"), ResourceLifecycle::Frozen)
+            .add_with_dependencies(
+                test_storage("data"),
+                lifecycle,
+                vec![ResourceRef::new(Storage::RESOURCE_TYPE, "dependency")],
+            )
+            .add_with_dependencies(
+                test_function("worker"),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Storage::RESOURCE_TYPE, "data")],
+            )
+            .build();
+        let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+        if checkpoint == ResourceStatus::Deleting {
+            state.prepare_for_destroy()?;
+        } else if checkpoint == ResourceStatus::UpdateFailed {
+            let data = state.resources.get_mut("data").unwrap();
+            data.status = checkpoint;
+            data.last_failed_state = data.internal_state.clone();
+        }
+        let data = serde_json::to_value(&state.resources["data"]).unwrap();
+        let dependency = serde_json::to_value(&state.resources["dependency"]).unwrap();
+        for _ in 0..20 {
+            // Rebuild both the executor and its installed state, as a manager
+            // does after a checkpoint/restart, rather than reuse an in-memory scope.
+            state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            let executor =
+                new_deletion_executor()?.preserving_resources(&state, ["data".to_string()])?;
+            let plan = executor.plan(&state)?;
+            assert!(!plan.deletes.contains(&"data".to_string()));
+            assert!(!plan.deletes.contains(&"dependency".to_string()));
+            state = executor.step(state).await?.next_state;
+            assert_eq!(
+                serde_json::to_value(&state.resources["data"]).unwrap(),
+                data
+            );
+            assert_eq!(
+                serde_json::to_value(&state.resources["dependency"]).unwrap(),
+                dependency
+            );
+            if executor.is_synced(&state) {
+                break;
+            }
+        }
+        assert_deleted(&state, &["worker"]);
+        let executor =
+            new_deletion_executor()?.preserving_resources(&state, ["data".to_string()])?;
+        assert!(executor.is_synced(&state));
+        assert!(executor.pending_deletions(&state)?.is_empty());
+        let before = serde_json::to_value(&state).unwrap();
+        state = executor.step(state).await?.next_state;
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+
+        // A separate explicit erase can still finish from the original retained
+        // IDs and controller checkpoints, without creating another resource.
+        let erase = new_deletion_executor()?;
+        erase.prepare_for_deletion(&mut state)?;
+        state = run_to_synced(&erase, state).await?;
+        assert_deleted(&state, &["data", "dependency", "worker"]);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn preservation_refuses_missing_inventory_and_non_deletion_executor() -> Result<()> {
+    let stack = Stack::new("preserve-validation".to_owned())
+        .add(test_storage("data"), ResourceLifecycle::Live)
+        .build();
+    let state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    assert!(new_executor(&stack)?
+        .preserving_resources(&state, ["data".to_string()])
+        .is_err());
+    assert!(new_deletion_executor()?
+        .preserving_resources(&state, ["missing".to_string()])
+        .is_err());
+    let mut incomplete = state;
+    incomplete
+        .resources
+        .get_mut("data")
+        .unwrap()
+        .dependencies
+        .push(ResourceRef::new(
+            Storage::RESOURCE_TYPE,
+            "missing-dependency",
+        ));
+    assert!(new_deletion_executor()?
+        .preserving_resources(&incomplete, ["data".to_string()])
+        .is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn preservation_keeps_failed_create_identity_until_explicit_erase() -> Result<()> {
+    let id = "preservation-failed-create";
+    let storage = Storage::new(id.to_string())
+        .cors_allowed_origins(vec![SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN.to_string()])
+        .build();
+    let stack = Stack::new("failed-retention".to_string())
+        .add(storage, ResourceLifecycle::Live)
+        .build();
+    let created = new_executor(&stack)?
+        .run_until_synced(new_test_state())
+        .await;
+    assert!(!created.success);
+    let mut state = created.final_state;
+    assert_eq!(state.resources[id].status, ResourceStatus::ProvisionFailed);
+    assert!(state.resources[id]
+        .get_internal_controller_typed::<crate::storage::TestStorageController>()?
+        .bucket_name
+        .is_some());
+    let checkpoint = serde_json::to_value(&state.resources[id]).unwrap();
+    for _ in 0..3 {
+        state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        let executor = new_deletion_executor()?.preserving_resources(&state, [id.to_string()])?;
+        assert!(executor.prepare_for_deletion(&mut state)?.is_empty());
+        state = executor.step(state).await?.next_state;
+        assert_eq!(
+            serde_json::to_value(&state.resources[id]).unwrap(),
+            checkpoint
+        );
+        assert!(test_storage_deletes_issued(id).is_empty());
+        assert!(executor.is_synced(&state));
+    }
+    let erase = new_deletion_executor()?;
+    erase.prepare_for_deletion(&mut state)?;
+    state = run_to_synced(&erase, state).await?;
+    assert_deleted(&state, &[id]);
+    assert_eq!(test_storage_deletes_issued(id).len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn preservation_follows_previous_config_dependencies_during_interrupted_update() -> Result<()>
+{
+    let storage = test_storage("previous-data");
+    let old_worker = test_function_linked("retained-dependent", &storage);
+    let stack = Stack::new("previous-dependency".to_string())
+        .add(storage, ResourceLifecycle::Live)
+        .add(old_worker.clone(), ResourceLifecycle::Live)
+        .build();
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    let dependent = state.resources.get_mut("retained-dependent").unwrap();
+    dependent.previous_config = Some(alien_core::Resource::new(old_worker));
+    dependent.config = alien_core::Resource::new(test_function("retained-dependent"));
+    dependent.dependencies.clear();
+    dependent.status = ResourceStatus::Updating;
+    let before = serde_json::to_value(&state).unwrap();
+    let executor = new_deletion_executor()?
+        .preserving_resources(&state, ["retained-dependent".to_string()])?;
+    assert!(executor.prepare_for_deletion(&mut state)?.is_empty());
+    assert!(executor.plan(&state)?.deletes.is_empty());
+    state = executor.step(state).await?.next_state;
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    assert!(executor.is_synced(&state));
+    Ok(())
+}
+
+#[tokio::test]
+async fn retained_data_releases_grantees_after_workload_cleanup() -> Result<()> {
+    for (legacy_deleting, runtime_first) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let stack = Stack::new("retain-with-grants".to_string())
+            .add(
+                ServiceAccount::new("reader".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                test_storage("encryption-dependency"),
+                ResourceLifecycle::Frozen,
+            )
+            .add_with_dependencies(
+                test_storage("retained"),
+                ResourceLifecycle::Live,
+                vec![
+                    ResourceRef::new(ServiceAccount::RESOURCE_TYPE, "reader"),
+                    ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management"),
+                    ResourceRef::new(Storage::RESOURCE_TYPE, "encryption-dependency"),
+                ],
+            )
+            .add_with_dependencies(
+                test_function("consumer"),
+                ResourceLifecycle::Live,
+                vec![
+                    ResourceRef::new(ServiceAccount::RESOURCE_TYPE, "reader"),
+                    ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management"),
+                    ResourceRef::new(Storage::RESOURCE_TYPE, "retained"),
+                ],
+            )
+            .build();
+        let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+        if legacy_deleting {
+            state.prepare_for_destroy()?;
+        }
+        let data = serde_json::to_value(&state.resources["retained"]).unwrap();
+        let dependency = serde_json::to_value(&state.resources["encryption-dependency"]).unwrap();
+        // Runtime cannot delete the setup-owned identity, even when retained
+        // data no longer holds it. Its recorded identity survives the handoff.
+        if runtime_first {
+            let runtime = new_deletion_executor_with_filter(vec![ResourceLifecycle::Live])?
+                .preserving_resources(&state, ["retained".to_string()])?;
+            runtime.prepare_for_deletion(&mut state)?;
+            state = run_to_synced(&runtime, state).await?;
+            assert_deleted(&state, &["consumer"]);
+            assert_ne!(get_status(&state, "reader"), Some(ResourceStatus::Deleted));
+            assert_ne!(
+                get_status(&state, "management"),
+                Some(ResourceStatus::Deleted)
+            );
+        }
+        for _ in 0..30 {
+            state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            let executor =
+                new_deletion_executor()?.preserving_resources(&state, ["retained".to_string()])?;
+            assert!(!executor.preserves_resource("reader"));
+            assert!(!executor.preserves_resource("management"));
+            executor.prepare_for_deletion(&mut state)?;
+            let waiting_for_workload =
+                get_status(&state, "consumer") != Some(ResourceStatus::Deleted);
+            let identity_before = serde_json::to_value(&state.resources["reader"]).unwrap();
+            let management_before = serde_json::to_value(&state.resources["management"]).unwrap();
+            state = executor.step(state).await?.next_state;
+            if waiting_for_workload {
+                assert_eq!(
+                    serde_json::to_value(&state.resources["reader"]).unwrap(),
+                    identity_before
+                );
+                assert_eq!(
+                    serde_json::to_value(&state.resources["management"]).unwrap(),
+                    management_before
+                );
+            }
+            assert_eq!(
+                serde_json::to_value(&state.resources["retained"]).unwrap(),
+                data
+            );
+            assert_eq!(
+                serde_json::to_value(&state.resources["encryption-dependency"]).unwrap(),
+                dependency
+            );
+            if executor.is_synced(&state) {
+                break;
+            }
+        }
+        assert_deleted(&state, &["consumer", "reader", "management"]);
+        let executor =
+            new_deletion_executor()?.preserving_resources(&state, ["retained".to_string()])?;
+        assert!(executor.is_synced(&state));
+        assert!(executor.pending_deletions(&state)?.is_empty());
+        let before = serde_json::to_value(&state).unwrap();
+        state = executor.step(state).await?.next_state;
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        let erase = new_deletion_executor()?;
+        erase.prepare_for_deletion(&mut state)?;
+        state = run_to_synced(&erase, state).await?;
+        assert_deleted(
+            &state,
+            &[
+                "retained",
+                "encryption-dependency",
+                "consumer",
+                "reader",
+                "management",
+            ],
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn retention_keeps_workload_identity_dependencies() -> Result<()> {
+    let stack = Stack::new("retain-workload".to_string())
+        .add(
+            ServiceAccount::new("identity".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            test_function("workload"),
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(ServiceAccount::RESOURCE_TYPE, "identity")],
+        )
+        .build();
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    let before = serde_json::to_value(&state).unwrap();
+    let executor =
+        new_deletion_executor()?.preserving_resources(&state, ["workload".to_string()])?;
+    assert!(executor.preserves_resource("identity"));
+    assert!(executor.prepare_for_deletion(&mut state)?.is_empty());
+    assert!(executor.plan(&state)?.deletes.is_empty());
+    state = executor.step(state).await?.next_state;
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn retained_data_keeps_an_identity_used_by_previous_configuration() -> Result<()> {
+    let identity = ServiceAccount::new("previous-identity".to_string()).build();
+    let stack = Stack::new("retained-previous-identity".to_string())
+        .add(identity.clone(), ResourceLifecycle::Frozen)
+        .add(test_storage("data"), ResourceLifecycle::Live)
+        .build();
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    let data = state.resources.get_mut("data").unwrap();
+    data.previous_config = Some(alien_core::Resource::new(test_function_linked(
+        "data", &identity,
+    )));
+    data.status = ResourceStatus::Updating;
+    data.dependencies.push(ResourceRef::new(
+        ServiceAccount::RESOURCE_TYPE,
+        "previous-identity",
+    ));
+    state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    let before = serde_json::to_value(&state).unwrap();
+    let executor = new_deletion_executor()?.preserving_resources(&state, ["data".to_string()])?;
+    assert!(executor.preserves_resource("previous-identity"));
+    assert!(executor.prepare_for_deletion(&mut state)?.is_empty());
+    assert!(executor.plan(&state)?.deletes.is_empty());
+    state = executor.step(state).await?.next_state;
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn retained_data_releases_published_access_only_during_setup_and_retries_denial() -> Result<()>
+{
+    let stack = Stack::new("retained-published-data".to_string())
+        .add(
+            ServiceAccount::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            test_storage("data"),
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")],
+        )
+        .build();
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    // Install the real AWS controller checkpoint. Data is modeled by the test
+    // storage controller; any unexpected call to it still changes its checkpoint.
+    let access = state.resources.get_mut("access").unwrap();
+    access.config = Resource::new(RemoteBindings::new("access".to_string()).build());
+    access.controller_platform = Some(alien_core::Platform::Aws);
+    access.resource_type = RemoteBindings::RESOURCE_TYPE.to_string();
+    access.outputs = Some(alien_core::ResourceOutputs::new(
+        alien_core::RemoteBindingsOutputs {
+            resource_id: "arn:aws:iam::123456789012:role/owned-access".to_string(),
+            access_configuration: "arn:aws:iam::123456789012:role/owned-access".to_string(),
+        },
+    ));
+    access.set_internal_controller(Some(Box::new(AwsRemoteBindingsController {
+        state: AwsRemoteBindingsState::Ready,
+        role_name: Some("owned-access".to_string()),
+        role_arn: Some("arn:aws:iam::123456789012:role/owned-access".to_string()),
+        ..Default::default()
+    })))?;
+    let data = serde_json::to_value(&state.resources["data"]).unwrap();
+    let access_before = serde_json::to_value(&state.resources["access"]).unwrap();
+    let runtime = new_deletion_executor_with_filter(vec![ResourceLifecycle::Live])?
+        .preserving_resources(&state, ["data".to_string()])?;
+    runtime.prepare_for_deletion(&mut state)?;
+    state = run_to_synced(&runtime, state).await?;
+    assert_eq!(
+        serde_json::to_value(&state.resources["access"]).unwrap(),
+        access_before
+    );
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut iam = MockIamApi::new();
+    iam.expect_list_role_policies()
+        .withf(|name| name == "owned-access")
+        .returning(|_| {
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: Some(PolicyNames {
+                        member: vec!["published-data".to_string()],
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+    let seen = calls.clone();
+    iam.expect_delete_role_policy()
+        .returning(move |role, policy| {
+            assert_eq!((role, policy), ("owned-access", "published-data"));
+            let mut calls = seen.lock().unwrap();
+            calls.push("policy");
+            if calls.len() == 1 {
+                return Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RemoteAccessDenied {
+                        resource_type: "role policy".to_string(),
+                        resource_name: policy.to_string(),
+                    },
+                ));
+            }
+            Ok(())
+        });
+    let seen = calls.clone();
+    iam.expect_delete_role()
+        .withf(|role| role == "owned-access")
+        .times(1)
+        .returning(move |_| {
+            seen.lock().unwrap().push("role");
+            Ok(())
+        });
+    let iam = Arc::new(iam);
+    let mut provider = MockPlatformServiceProvider::new();
+    provider
+        .expect_get_aws_iam_client()
+        .returning(move |_| Ok(iam.clone()));
+    let provider = Arc::new(provider);
+    for attempt in 0..2 {
+        state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        if attempt == 1 {
+            assert!(state.resources.get_mut("access").unwrap().retry_failed()?);
+        }
+        let setup = StackExecutor::for_deletion_with_service_provider(
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &default_deployment_config(),
+            provider.clone(),
+            Some(vec![ResourceLifecycle::Frozen]),
+        )?
+        .preserving_resources(&state, ["data".to_string()])?;
+        assert!(!setup.preserves_resource("access"));
+        setup.prepare_for_deletion(&mut state)?;
+        if attempt == 0 {
+            // Resume the final automatic attempt so this exercises the durable
+            // failure/retry boundary without waiting through exponential backoff.
+            let access = state.resources.get_mut("access").unwrap();
+            let mut controller = access.get_internal_controller()?.unwrap();
+            controller.transition_to_delete_start()?;
+            access.status = controller.get_status();
+            access.set_internal_controller(Some(controller))?;
+            access.retry_attempt = 9;
+        }
+        for _ in 0..10 {
+            state = setup.step(state).await?.next_state;
+            if matches!(
+                get_status(&state, "access"),
+                Some(ResourceStatus::Deleted | ResourceStatus::DeleteFailed)
+            ) {
+                break;
+            }
+        }
+        assert_eq!(
+            serde_json::to_value(&state.resources["data"]).unwrap(),
+            data
+        );
+        if attempt == 0 {
+            assert_eq!(
+                get_status(&state, "access"),
+                Some(ResourceStatus::DeleteFailed)
+            );
+            assert_eq!(*calls.lock().unwrap(), ["policy"]);
+            // Synced includes terminal failures; the status above must remain failed.
+        } else {
+            assert_deleted(&state, &["access"]);
+            assert!(setup.is_synced(&state));
+            assert_eq!(*calls.lock().unwrap(), ["policy", "policy", "role"]);
+        }
+    }
     Ok(())
 }

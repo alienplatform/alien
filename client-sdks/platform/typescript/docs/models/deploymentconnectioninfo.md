@@ -11,7 +11,7 @@ let value: DeploymentConnectionInfo = {
     deploymentId: "<id>",
   },
   resources: {},
-  status: "refresh-failed",
+  status: "update-pending",
   platform: "<value>",
 };
 ```

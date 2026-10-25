@@ -1796,48 +1796,23 @@ async fn test_delete_failed_retry_gate_returns_to_deleting() {
 /// E) Delete flow tests
 
 #[tokio::test]
-async fn test_delete_flow_happy_path_reaches_teardown_required() {
+async fn default_delete_stops_software_and_hands_off_retained_data() {
     let _vault = test_vault_env().await;
-
     let stack = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
-    let mut state = create_initial_state(stack);
-
-    // Get to Running
-    state = run_to_completion(state, config.clone()).await;
+    let mut state = run_to_completion(create_initial_state(stack), config.clone()).await;
     assert_eq!(state.status, DeploymentStatus::Running);
-
-    // Start delete
+    let vault =
+        serde_json::to_value(&state.stack_state.as_ref().unwrap().resources["secrets"]).unwrap();
     start_delete(&mut state);
-
-    // Normal manager/agent deletion removes runtime-owned resources and then
-    // stops at setup-owned teardown handoff.
-    state = run_until_status(state, config, &[DeploymentStatus::TeardownRequired]).await;
-
-    assert_eq!(state.status, DeploymentStatus::TeardownRequired);
-}
-
-#[tokio::test]
-async fn test_delete_runtime_cleanup_reaches_teardown_required() {
-    // Create a minimal test for delete retry pattern
-    // In practice, TestWorkerController doesn't easily simulate delete failures,
-    // but we can test the pattern conceptually by checking the handler exists
-
-    let _vault = test_vault_env().await;
-
-    let stack = create_test_stack("test-stack", "test-function");
-    let config = create_test_config("hash_v1", false);
-    let mut state = create_initial_state(stack);
-
-    // Get to Running
-    state = run_to_completion(state, config.clone()).await;
-
-    // Start delete
-    start_delete(&mut state);
-
-    // Runtime delete should succeed and stop at setup-owned teardown handoff.
-    state = run_until_status(state, config, &[DeploymentStatus::TeardownRequired]).await;
-    assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+    let state = run_until_status(state, config, &[DeploymentStatus::RetentionRequired]).await;
+    assert_eq!(state.status, DeploymentStatus::RetentionRequired);
+    let resources = &state.stack_state.unwrap().resources;
+    assert_eq!(
+        resources["test-function"].status,
+        alien_core::ResourceStatus::Deleted
+    );
+    assert_eq!(serde_json::to_value(&resources["secrets"]).unwrap(), vault);
 }
 
 /// A running automatic-setup deployment with Frozen storage the runtime created and a Live
@@ -1867,6 +1842,7 @@ async fn delete_until_setup_teardown(
     mut state: DeploymentState,
     config: DeploymentConfig,
 ) -> DeploymentState {
+    state.runtime_metadata.get_or_insert_default().deletion_policy = alien_core::DeletionPolicy::Erase;
     start_delete(&mut state);
     let state = run_until_status(
         state,
@@ -1883,7 +1859,7 @@ async fn delete_until_setup_teardown(
 
 /// An automatic setup package creates only its scaffolding types, vaults among them. The
 /// runtime created the Frozen storage, and the package's teardown cannot see it, so runtime
-/// cleanup must delete it before handing off. A vault belongs to the package even when Live, so
+/// explicit erase must delete it before handing off. A vault belongs to the package even when Live, so
 /// it stays for that teardown: deleting it here makes the package's destroy fail on a missing
 /// resource.
 #[tokio::test]

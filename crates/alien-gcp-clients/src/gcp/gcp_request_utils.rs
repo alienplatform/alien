@@ -139,7 +139,7 @@ pub fn map_gcp_error(
             resource_type,
             resource_name,
         },
-        409 => ErrorData::RemoteResourceConflict {
+        409 | 412 => ErrorData::RemoteResourceConflict {
             message: gcp_error_message.unwrap_or_else(|| {
                 format!(
                     "Conflict during {} for {}: {}",
@@ -321,6 +321,47 @@ mod iam_policy_write_error_tests {
                 project_number: None,
             },
         )
+    }
+
+    #[tokio::test]
+    async fn bucket_policy_read_requests_conditions_and_preserves_etag() {
+        let server = MockServer::start_async().await;
+        let body = serde_json::json!({
+            "version": 3, "etag": "concurrent-write-token",
+            "bindings": [{"role": "roles/storage.objectViewer", "members": ["user:reader@example.com"],
+                "condition": {"title": "temporary", "expression": "request.time < timestamp('2030-01-01T00:00:00Z')"}}]
+        });
+        let read = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/b/test-bucket/iam")
+                    .query_param("optionsRequestedPolicyVersion", "3");
+                then.status(200).json_body(body.clone());
+            })
+            .await;
+        let observed = client(&server)
+            .get_bucket_iam_policy(BUCKET.into())
+            .await
+            .unwrap();
+        assert_eq!(serde_json::to_value(observed).unwrap(), body);
+        read.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn bucket_policy_etag_conflict_is_retryable() {
+        let server = MockServer::start_async().await;
+        let write = server.mock_async(|when, then| {
+            when.method(PUT).path("/b/test-bucket/iam");
+            then.status(412).json_body(serde_json::json!({
+                "error": {"code": 412, "message": "At least one of the pre-conditions you specified did not hold."}
+            }));
+        }).await;
+        let error = client(&server)
+            .set_bucket_iam_policy(BUCKET.into(), policy_granting_custom_role())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "REMOTE_RESOURCE_CONFLICT");
+        write.assert_async().await;
     }
 
     fn policy_granting_custom_role() -> IamPolicy {

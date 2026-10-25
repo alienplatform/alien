@@ -108,6 +108,27 @@ pub struct DeploymentRecord {
     pub error: Option<serde_json::Value>,
 }
 
+impl DeploymentRecord {
+    /// Legacy deletion checkpoints still require a retention-aware actor.
+    pub fn required_deployment_protocol_version(&self) -> u32 {
+        if matches!(
+            self.status.as_str(),
+            "delete-pending"
+                | "deleting"
+                | "delete-failed"
+                | "teardown-required"
+                | "teardown-failed"
+                | "retention-required"
+                | "retained"
+        ) {
+            self.deployment_protocol_version
+                .max(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION)
+        } else {
+            self.deployment_protocol_version
+        }
+    }
+}
+
 impl std::fmt::Debug for DeploymentRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeploymentRecord")
@@ -672,7 +693,10 @@ pub trait DeploymentStore: Send + Sync {
                 && project_id
                     .as_deref()
                     .is_none_or(|project_id| deployment.project_id == project_id)
-                && !matches!(deployment.status.as_str(), "deleted" | "teardown-required")
+                && !matches!(
+                    deployment.status.as_str(),
+                    "deleted" | "teardown-required" | "retention-required" | "retained"
+                )
                 && matches!(
                     &deployment.environment_info,
                     Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
@@ -689,10 +713,21 @@ pub trait DeploymentStore: Send + Sync {
         id: &str,
     ) -> Result<(), AlienError>;
 
+    /// Internal cleanup defaults to preserving durable data.
     async fn set_delete_pending(
         &self,
         caller: &crate::auth::Subject,
         id: &str,
+    ) -> Result<(), AlienError> {
+        self.set_delete_pending_with_policy(caller, id, alien_core::DeletionPolicy::Retain)
+            .await
+    }
+
+    async fn set_delete_pending_with_policy(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+        policy: alien_core::DeletionPolicy,
     ) -> Result<(), AlienError>;
 
     async fn set_retry_requested(

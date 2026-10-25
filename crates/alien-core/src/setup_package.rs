@@ -76,9 +76,9 @@ fn automatic_setup_unsupported_resource(
     ) {
         return Some(resource_type.as_ref().to_string());
     }
-    // Only the CloudFormation template applies S3 CORS rules. The runtime storage
-    // controller would create the bucket without them, so browser reads would fail.
-    if platform == Platform::Aws
+    // Azure CORS belongs to the shared account blob service; the container
+    // controller cannot apply it independently.
+    if platform == Platform::Azure
         && entry
             .config
             .downcast_ref::<Storage>()
@@ -146,4 +146,32 @@ pub fn removed_by_runtime_cleanup(
     }
     lifecycle == ResourceLifecycle::Live
         || ownership_policy_for_resource_type(resource_type).has_runtime_cleanup_before_teardown()
+}
+
+#[cfg(test)]
+mod cors_tests {
+    use super::*;
+
+    #[test]
+    fn automatic_cors_requires_an_implementing_controller() {
+        let stack = Stack::new("browser-storage".into())
+            .add(
+                Storage::new("assets".into())
+                    .cors_allowed_origins(vec!["https://app.example.com".into()])
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        for platform in [Platform::Aws, Platform::Gcp] {
+            validate_automatic_setup_resources(&stack, platform, SetupManagement::Automatic)
+                .unwrap();
+        }
+        let error =
+            validate_automatic_setup_resources(&stack, Platform::Azure, SetupManagement::Automatic)
+                .unwrap_err();
+        assert!(matches!(
+            error.error,
+            Some(ErrorData::AutomaticSetupResourceUnsupported { .. })
+        ));
+    }
 }

@@ -2,11 +2,13 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ownership_policy_for_resource_type, InitialSetupAuthority, Platform, ResourceLifecycle,
-    ResourceStatus, SetupManagement, StackState, StackStatus,
+    ownership_policy_for_resource_type, DeletionPolicy, InitialSetupAuthority, Platform,
+    ResourceLifecycle, ResourceStatus, SetupManagement, StackState, StackStatus,
 };
-use alien_error::{AlienError, Context};
-use alien_infra::{state_utils::StackStateExt, PlatformServiceProvider, StackExecutor};
+use alien_error::{AlienError, Context, IntoAlienError};
+use alien_infra::{PlatformServiceProvider, StackExecutor};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use tracing::info;
 
 /// Handle DeletePending → Deleting transition.
@@ -29,14 +31,19 @@ pub async fn handle_delete_pending(
         })
     })?;
 
-    if stack_state.resources.contains_key("secrets") {
+    if stack_state.resources.contains_key("secrets")
+        && !next
+            .runtime_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.vault_credentials_revoked)
+    {
         let runtime_metadata = next.runtime_metadata.get_or_insert_default();
         let prepared_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
             AlienError::new(ErrorData::MissingConfiguration {
-                message: "Prepared stack required for vault secret deletion".to_string(),
+                message: "Prepared stack required for vault credential revocation".to_string(),
             })
         })?;
-        crate::helpers::delete_deployment_vault_secrets(
+        let revoked = crate::helpers::revoke_deployment_vault_credentials(
             &prepared_stack,
             &stack_state,
             &client_config,
@@ -46,8 +53,9 @@ pub async fn handle_delete_pending(
         .await
         .context(ErrorData::SecretSyncFailed {
             vault_name: "secrets".to_string(),
-            reason: "Failed to delete deployment-owned secrets before runtime cleanup".to_string(),
+            reason: "Failed to revoke deployment credentials before runtime cleanup".to_string(),
         })?;
+        runtime_metadata.vault_credentials_revoked = revoked;
         // Deployer secrets hold values the deployer wrote; Alien never owned
         // them, so they stay. Their reports carry the command that deletes them.
         for report in &runtime_metadata.deployer_secrets {
@@ -59,15 +67,41 @@ pub async fn handle_delete_pending(
         }
     }
 
-    let prepared = prepare_resources_for_destroy(
-        &mut stack_state,
-        next.platform,
-        config.stack_settings.setup_management,
+    if ensure_data_protection(
+        &mut next,
+        &stack_state,
+        &config,
+        &client_config,
         service_provider.as_ref(),
     )
-    .context(ErrorData::StackExecutionFailed {
-        message: "Failed to prepare runtime resources for destroy".to_string(),
-    })?;
+    .await?
+        == ProtectionProgress::Pending
+    {
+        // A retry enters here with DeleteFailed; resume the prerequisite wait
+        // instead of returning a failed state with retry_requested cleared.
+        next.status = DeploymentStatus::DeletePending;
+        next.error = None;
+        return Ok(DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: Some(30_000),
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
+
+    let executor = deletion_executor(
+        &next,
+        &stack_state,
+        &config,
+        client_config,
+        service_provider,
+    )?;
+    let prepared = executor.prepare_for_deletion(&mut stack_state).context(
+        ErrorData::StackExecutionFailed {
+            message: "Failed to prepare runtime resources for destroy".to_string(),
+        },
+    )?;
 
     info!(
         "Prepared {} runtime resources for destroy: {:?}",
@@ -100,32 +134,42 @@ pub async fn handle_deleting(
 ) -> Result<DeploymentStepResult> {
     info!("Handling Deleting status");
 
-    let current_cloned = current.clone();
+    let mut current_cloned = current.clone();
     let stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for deletion".to_string(),
         })
     })?;
 
+    // Old Deleting checkpoints have no receipt. Persist protection before an
+    // executor step can remove the grants required to confirm it again.
+    let protection = ensure_data_protection(
+        &mut current_cloned,
+        &stack_state,
+        &config,
+        &client_config,
+        service_provider.as_ref(),
+    )
+    .await?;
+    if protection != ProtectionProgress::Unchanged {
+        return Ok(DeploymentStepResult {
+            state: current_cloned,
+            suggested_delay_ms: (protection == ProtectionProgress::Pending).then_some(30_000),
+            update_heartbeat: false,
+            heartbeats: vec![],
+            observed_inventory_batches: vec![],
+        });
+    }
+
     let owns_setup = owns_runtime_setup(current_cloned.platform, service_provider.as_ref());
     let management = config.stack_settings.setup_management;
-    let executor = if owns_setup {
-        StackExecutor::for_deletion_with_service_provider(
-            client_config,
-            &config,
-            service_provider,
-            None,
-        )
-    } else {
-        StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
-            client_config,
-            &config,
-            service_provider,
-        )
-    }
-    .context(ErrorData::StackExecutionFailed {
-        message: "Failed to create stack executor for runtime cleanup".to_string(),
-    })?;
+    let executor = deletion_executor(
+        &current_cloned,
+        &stack_state,
+        &config,
+        client_config,
+        service_provider,
+    )?;
 
     let step_result =
         executor
@@ -135,26 +179,37 @@ pub async fn handle_deleting(
                 message: "Failed to execute runtime cleanup step".to_string(),
             })?;
 
-    let stack_status = if owns_setup && !step_result.next_state.resources.is_empty() {
-        step_result
-            .next_state
+    // Completion concerns only deleted resources; retained checkpoints remain
+    // byte-for-byte recoverable and must never be relabeled as deleted.
+    let mut cleanup_state = step_result.next_state.clone();
+    cleanup_state
+        .resources
+        .retain(|id, _| !executor.preserves_resource(id));
+    let has_retained = cleanup_state.resources.len() != step_result.next_state.resources.len();
+    let stack_status = if owns_setup && !cleanup_state.resources.is_empty() {
+        cleanup_state
             .compute_stack_status()
             .context(ErrorData::StackExecutionFailed {
                 message: "Failed to compute local teardown status".to_string(),
             })
     } else {
-        compute_runtime_cleanup_status(&step_result.next_state, management)
+        compute_runtime_cleanup_status(&cleanup_state, management)
     }
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to compute runtime cleanup status".to_string(),
     })?;
 
     let result = if stack_status == StackStatus::Deleted {
-        let next_status = if has_remaining_setup_resources(&step_result.next_state, management)
+        let next_status = if has_retained {
+            // Privileged revocation is a separate handoff. It must not expose
+            // the legacy teardown state to clients that run raw destroy.
+            DeploymentStatus::RetentionRequired
+        } else if has_remaining_setup_resources(&step_result.next_state, management)
             || crate::setup_teardown::has_setup_scaffolding(
                 current_cloned.runtime_metadata.as_ref(),
                 current_cloned.platform,
-            ) {
+            )
+        {
             DeploymentStatus::TeardownRequired
         } else {
             DeploymentStatus::Deleted
@@ -206,6 +261,182 @@ pub async fn handle_deleting(
     };
 
     Ok(result)
+}
+
+#[derive(PartialEq)]
+enum ProtectionProgress {
+    Unchanged,
+    Confirmed,
+    Pending,
+}
+
+/// Confirmed receipts must be persisted before resource cleanup; Pending yields without cleanup.
+async fn ensure_data_protection(
+    current: &mut DeploymentState,
+    state: &StackState,
+    config: &DeploymentConfig,
+    client_config: &alien_core::ClientConfig,
+    provider: &dyn PlatformServiceProvider,
+) -> Result<ProtectionProgress> {
+    let retained = retained_resource_ids(current, state);
+    let needs_kv = |id: &str| {
+        alien_infra::retained_kv_requires_runtime_protection(state, id, &config.external_bindings)
+    };
+    let data: BTreeMap<_, _> = retained
+        .iter()
+        .filter_map(|id| {
+            state
+                .resources
+                .get(id)
+                .filter(|resource| {
+                    needs_kv(id)
+                        || std::iter::once(&resource.config)
+                            .chain(resource.previous_config.iter())
+                            .any(|config| config.downcast_ref::<alien_core::Storage>().is_some())
+                })
+                .map(|resource| (id, resource))
+        })
+        .collect();
+    if data.is_empty() {
+        return Ok(ProtectionProgress::Unchanged);
+    }
+    // Version the proof when protection semantics change. Bind it to exact
+    // installed identities, ownership, current/previous declarations and adopted
+    // bindings, never a loose resource-name list. Only the digest is persisted.
+    let bindings: BTreeMap<_, _> = config
+        .external_bindings
+        .0
+        .iter()
+        .filter(|(id, _)| data.contains_key(id))
+        .collect();
+    // Preserve existing storage-only receipts after their grants have gone.
+    // Only deployments with retained Live AWS KV need the additional proof.
+    let has_kv = data.keys().any(|id| needs_kv(id));
+    let has_azure_storage = data.values().any(|resource| {
+        resource.controller_platform.unwrap_or(state.platform) == alien_core::Platform::Azure
+            && resource.lifecycle == Some(ResourceLifecycle::Live)
+    });
+    let has_gcp_storage = data.values().any(|resource| {
+        resource.controller_platform.unwrap_or(state.platform) == alien_core::Platform::Gcp
+            && resource.lifecycle == Some(ResourceLifecycle::Live)
+    });
+    let proof_version = if has_azure_storage || has_gcp_storage {
+        "storage-cloud-expiry-protection-v4"
+    } else if has_kv {
+        "storage-and-kv-protection-v2"
+    } else {
+        "storage-protection-v1"
+    };
+    let mut encoded = serde_json::to_value(&(
+        proof_version,
+        state.platform,
+        &state.resource_prefix,
+        data,
+        bindings,
+    ))
+    .into_alien_error()
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to identify retained data protection inventory".into(),
+    })?;
+    // JSONB stores and HashMaps can reorder keys across a restart.
+    encoded.sort_all_objects();
+    let digest = format!("{:x}", Sha256::digest(encoded.to_string().as_bytes()));
+    if current.runtime_metadata.as_ref().is_some_and(|metadata| {
+        metadata.retained_storage_protection_hash.as_ref() == Some(&digest)
+            && metadata.retained_storage_protection_confirmed_at.is_some()
+    }) {
+        return Ok(ProtectionProgress::Unchanged);
+    }
+    if current
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.retained_data_protection_started_at)
+        .is_some_and(|started| {
+            chrono::Utc::now().signed_duration_since(started) >= chrono::Duration::hours(2)
+        })
+    {
+        return Err(AlienError::new(ErrorData::StackExecutionFailed {
+            message: "Retained data expiry controls did not finish disabling within two hours. Inspect DynamoDB TTL status and retry deletion; data and access checkpoints are preserved.".into(),
+        }));
+    }
+    if !alien_infra::protect_retained_kv(
+        state,
+        &retained,
+        client_config,
+        provider,
+        &config.external_bindings,
+        &[ResourceLifecycle::Live],
+    )
+    .await
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to protect retained KV before runtime cleanup".into(),
+    })? {
+        current
+            .runtime_metadata
+            .get_or_insert_default()
+            .retained_data_protection_started_at
+            .get_or_insert_with(chrono::Utc::now);
+        return Ok(ProtectionProgress::Pending);
+    }
+    alien_infra::protect_retained_storage(
+        state,
+        &retained,
+        client_config,
+        provider,
+        &config.external_bindings,
+        &[ResourceLifecycle::Live],
+    )
+    .await
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to protect retained storage before runtime cleanup".into(),
+    })?;
+    let metadata = current.runtime_metadata.get_or_insert_default();
+    metadata.retained_data_protection_started_at = None;
+    metadata.retained_storage_protection_hash = Some(digest);
+    metadata.retained_storage_protection_confirmed_at = Some(chrono::Utc::now());
+    Ok(ProtectionProgress::Confirmed)
+}
+
+/// Stops expiry and public reads on every retained store before the setup authority removes the
+/// remaining access, including setup-owned (Frozen) stores that runtime cleanup leaves alone.
+/// Every call re-reads provider state. Returns false while DynamoDB TTL is still transitioning;
+/// the caller waits and calls again before deleting anything.
+pub(crate) async fn protect_retained_data_for_handoff(
+    current: &DeploymentState,
+    state: &StackState,
+    config: &DeploymentConfig,
+    client_config: &alien_core::ClientConfig,
+    provider: &dyn PlatformServiceProvider,
+) -> Result<bool> {
+    let retained = retained_resource_ids(current, state);
+    let lifecycles = [ResourceLifecycle::Live, ResourceLifecycle::Frozen];
+    if !alien_infra::protect_retained_kv(
+        state,
+        &retained,
+        client_config,
+        provider,
+        &config.external_bindings,
+        &lifecycles,
+    )
+    .await
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to protect retained KV before removing access".into(),
+    })? {
+        return Ok(false);
+    }
+    alien_infra::protect_retained_storage(
+        state,
+        &retained,
+        client_config,
+        provider,
+        &config.external_bindings,
+        &lifecycles,
+    )
+    .await
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to protect retained storage before removing access".into(),
+    })?;
+    Ok(true)
 }
 
 /// Where a destroy goes when the runtime never started, or `None` when runtime cleanup has work.
@@ -282,6 +513,9 @@ pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentSt
             return None;
         }
     }
+    if !retained_resource_ids(current, stack_state).is_empty() {
+        return Some(DeploymentStatus::RetentionRequired);
+    }
     Some(
         // A direct setup's own teardown removes every resource that is not Live.
         if has_remaining_setup_resources(stack_state, SetupManagement::Manual)
@@ -312,17 +546,12 @@ pub async fn handle_teardown_required(current: DeploymentState) -> Result<Deploy
 pub async fn handle_delete_failed(
     current: DeploymentState,
     config: DeploymentConfig,
-    _client_config: alien_core::ClientConfig,
+    client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling DeleteFailed status");
 
-    // Clone current first before moving any fields
-    let mut next = current.clone();
-
-    // Check if retry was requested
     if !current.retry_requested {
-        info!("No retry requested, staying in DeleteFailed status");
         return Ok(DeploymentStepResult {
             state: current,
             suggested_delay_ms: None,
@@ -332,57 +561,102 @@ pub async fn handle_delete_failed(
         });
     }
 
-    let mut stack_state = current.stack_state.ok_or_else(|| {
-        AlienError::new(ErrorData::MissingConfiguration {
-            message: "Stack state required for delete retry".to_string(),
+    // DeleteFailed can be checkpointed before credential revocation completes.
+    // Retry the same prerequisites before preparing any resource for cleanup.
+    let mut current = current;
+    current
+        .runtime_metadata
+        .get_or_insert_default()
+        .retained_data_protection_started_at = None;
+    let mut result =
+        handle_delete_pending(current, config, client_config, service_provider).await?;
+    result.state.retry_requested = false;
+    Ok(result)
+}
+
+/// Durable roots are selected from installed state, including interrupted updates.
+/// Their structural dependencies are preserved by the executor. This does not
+/// certify that access has been revoked; that requires the retention handoff.
+pub(crate) fn retained_resource_ids(current: &DeploymentState, state: &StackState) -> Vec<String> {
+    if current
+        .runtime_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.deletion_policy == DeletionPolicy::Erase)
+    {
+        return Vec::new();
+    }
+    installed_durable_resource_ids(state)
+}
+
+/// Installed durable roots whose recovery metadata must survive deletion.
+/// Empty declarations without evidence of installation do not own data.
+///
+/// An AWS artifact registry is not one: its controller owns only the pull and push roles, and
+/// deleting it removes that access while the repositories and their images stay in the account.
+/// GCP and Azure registries delete their repository or registry, so they are retained.
+pub fn installed_durable_resource_ids(state: &StackState) -> Vec<String> {
+    state
+        .resources
+        .iter()
+        .filter_map(|(id, resource)| {
+            let platform = resource.controller_platform.unwrap_or(state.platform);
+            let durable = |resource: &alien_core::Resource| match resource.resource_type().as_ref()
+            {
+                "storage"
+                | "kv"
+                | "queue"
+                | "vault"
+                | "postgres"
+                | "key"
+                | "experimental/aws-opensearch" => true,
+                "artifact-registry" => platform != Platform::Aws,
+                _ => false,
+            };
+            (resource.status != ResourceStatus::Deleted
+                && !(resource.status == ResourceStatus::Pending
+                    && resource.internal_state.is_none()
+                    && resource.outputs.is_none()
+                    && resource.previous_config.is_none())
+                && (durable(&resource.config)
+                    || resource.previous_config.as_ref().is_some_and(durable)))
+            .then(|| id.clone())
         })
-    })?;
+        .collect()
+}
 
-    let prepared = prepare_resources_for_destroy(
-        &mut stack_state,
-        next.platform,
-        config.stack_settings.setup_management,
-        service_provider.as_ref(),
-    )
+fn deletion_executor(
+    current: &DeploymentState,
+    state: &StackState,
+    config: &DeploymentConfig,
+    client_config: alien_core::ClientConfig,
+    service_provider: std::sync::Arc<dyn PlatformServiceProvider>,
+) -> Result<StackExecutor> {
+    let executor = if owns_runtime_setup(current.platform, service_provider.as_ref()) {
+        StackExecutor::for_deletion_with_service_provider(
+            client_config,
+            config,
+            service_provider,
+            None,
+        )
+    } else {
+        StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
+            client_config,
+            config,
+            service_provider,
+        )
+    }
     .context(ErrorData::StackExecutionFailed {
-        message: "Failed to prepare runtime resources for delete retry".to_string(),
+        message: "Failed to create runtime cleanup executor".to_string(),
     })?;
-
-    info!(
-        "Prepared {} runtime resources for delete retry: {:?}",
-        prepared.len(),
-        prepared
-    );
-
-    next.status = DeploymentStatus::Deleting;
-    next.stack_state = Some(stack_state);
-    next.error = None;
-    next.retry_requested = false;
-
-    Ok(DeploymentStepResult {
-        state: next,
-        suggested_delay_ms: None,
-        update_heartbeat: false,
-        heartbeats: vec![],
-        observed_inventory_batches: vec![],
-    })
+    executor
+        .preserving_resources(state, retained_resource_ids(current, state))
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to preserve installed data and dependencies".to_string(),
+        })
 }
 
 fn owns_runtime_setup(platform: Platform, service_provider: &dyn PlatformServiceProvider) -> bool {
     service_provider.runtime_setup_authority(platform) == Some(InitialSetupAuthority::DirectSetup)
-}
-
-fn prepare_resources_for_destroy(
-    stack_state: &mut StackState,
-    platform: Platform,
-    management: SetupManagement,
-    service_provider: &dyn PlatformServiceProvider,
-) -> alien_infra::Result<Vec<String>> {
-    if owns_runtime_setup(platform, service_provider) {
-        stack_state.prepare_for_destroy()
-    } else {
-        stack_state.prepare_for_runtime_cleanup_destroy(management)
-    }
 }
 
 fn compute_runtime_cleanup_status(
@@ -589,7 +863,177 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_manager_destroy_removes_frozen_storage_with_its_own_services() {
+    async fn executor_preserves_real_storage_across_restart_then_explicitly_erases_it() {
+        let fixture = local_storage_fixture().await;
+        let mut state = fixture.state;
+        let original = serde_json::to_value(&state.resources["data"]).unwrap();
+        for _ in 0..16 {
+            state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            let executor = StackExecutor::for_deletion_with_service_provider(
+                fixture.client.clone(),
+                &fixture.config,
+                fixture.services.clone(),
+                None,
+            )
+            .unwrap()
+            .preserving_resources(&state, ["data".to_string()])
+            .unwrap();
+            let prepared = executor.prepare_for_deletion(&mut state).unwrap();
+            assert!(!prepared.contains(&"data".to_string()));
+            state = executor.step(state).await.unwrap().next_state;
+            assert_eq!(
+                serde_json::to_value(&state.resources["data"]).unwrap(),
+                original
+            );
+            assert_eq!(
+                std::fs::read(fixture.directory.path().join("storage/data/retained.txt")).unwrap(),
+                b"stored data"
+            );
+            if state.resources["evidence"].status == ResourceStatus::Deleted {
+                break;
+            }
+        }
+        assert_eq!(state.resources["evidence"].status, ResourceStatus::Deleted);
+        assert!(!fixture.directory.path().join("storage/evidence").exists());
+        let executor = StackExecutor::for_deletion_with_service_provider(
+            fixture.client,
+            &fixture.config,
+            fixture.services,
+            None,
+        )
+        .unwrap();
+        let erased = executor.run_until_synced(state).await;
+        assert!(erased.success, "{:?}", erased.error);
+        assert_eq!(
+            erased.final_state.resources["data"].status,
+            ResourceStatus::Deleted
+        );
+        assert!(!fixture.directory.path().join("storage/data").exists());
+    }
+
+    /// The real deployment handlers must preserve existing imported data even
+    /// without a successful release, through reloads and a later explicit erase.
+    #[tokio::test]
+    async fn legacy_delete_retains_installed_data_then_explicit_erase_uses_same_ids() {
+        let fixture = local_storage_fixture().await;
+        let original = serde_json::to_value(&fixture.state).unwrap();
+        let state = DeploymentState::builder()
+            .status(DeploymentStatus::DeletePending)
+            .platform(Platform::Local)
+            .stack_state(fixture.state)
+            .runtime_metadata(RuntimeMetadata {
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                prepared_stack: Some(fixture.prepared),
+                ..Default::default()
+            })
+            .retry_requested(false)
+            .protocol_version(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION)
+            .build();
+        let mut old = serde_json::to_value(state).unwrap();
+        old["runtimeMetadata"]
+            .as_object_mut()
+            .unwrap()
+            .remove("deletionPolicy");
+        let mut state: DeploymentState = serde_json::from_value(old).unwrap();
+        assert!(state.current_release.is_none());
+        state = handle_delete_pending(
+            state,
+            fixture.config.clone(),
+            fixture.client.clone(),
+            fixture.services.clone(),
+        )
+        .await
+        .unwrap()
+        .state;
+        for _ in 0..16 {
+            state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+            if state.status == DeploymentStatus::RetentionRequired {
+                break;
+            }
+            state = handle_deleting(
+                state,
+                fixture.config.clone(),
+                fixture.client.clone(),
+                fixture.services.clone(),
+            )
+            .await
+            .unwrap()
+            .state;
+        }
+        assert_eq!(state.status, DeploymentStatus::RetentionRequired);
+        assert_eq!(
+            serde_json::to_value(state.stack_state.as_ref().unwrap()).unwrap(),
+            original
+        );
+        for id in ["data", "evidence"] {
+            assert_eq!(
+                std::fs::read(
+                    fixture
+                        .directory
+                        .path()
+                        .join(format!("storage/{id}/retained.txt"))
+                )
+                .unwrap(),
+                b"stored data"
+            );
+        }
+        // The handoff never says Deleted: access revocation has not been proven.
+        let handoff = crate::step(
+            state.clone(),
+            fixture.config.clone(),
+            fixture.client.clone(),
+            Some(fixture.services.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(handoff.state).unwrap(),
+            serde_json::to_value(&state).unwrap()
+        );
+        state.runtime_metadata.as_mut().unwrap().deletion_policy =
+            alien_core::DeletionPolicy::Erase;
+        state.status = DeploymentStatus::DeletePending;
+        state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        state = handle_delete_pending(
+            state,
+            fixture.config.clone(),
+            fixture.client.clone(),
+            fixture.services.clone(),
+        )
+        .await
+        .unwrap()
+        .state;
+        for _ in 0..16 {
+            if state.status == DeploymentStatus::Deleted {
+                break;
+            }
+            state = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+            state = handle_deleting(
+                state,
+                fixture.config.clone(),
+                fixture.client.clone(),
+                fixture.services.clone(),
+            )
+            .await
+            .unwrap()
+            .state;
+        }
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        for id in ["data", "evidence"] {
+            assert!(!fixture
+                .directory
+                .path()
+                .join(format!("storage/{id}"))
+                .exists());
+            assert_eq!(
+                state.stack_state.as_ref().unwrap().resources[id].status,
+                ResourceStatus::Deleted
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn local_manager_explicit_erase_removes_frozen_storage_with_its_own_services() {
         let mut fixture = local_storage_fixture().await;
         let mut failed = StackResourceState::new_pending(
             "storage".to_string(),
@@ -610,6 +1054,7 @@ mod tests {
             .platform(Platform::Local)
             .stack_state(fixture.state)
             .runtime_metadata(RuntimeMetadata {
+                deletion_policy: alien_core::DeletionPolicy::Erase,
                 initial_setup_authority: InitialSetupAuthority::DirectSetup,
                 prepared_stack: Some(fixture.prepared),
                 ..Default::default()
@@ -754,6 +1199,10 @@ mod tests {
             .status(DeploymentStatus::DeleteFailed)
             .platform(Platform::Local)
             .stack_state(retry_state)
+            .runtime_metadata(RuntimeMetadata {
+                deletion_policy: alien_core::DeletionPolicy::Erase,
+                ..Default::default()
+            })
             .retry_requested(true)
             .protocol_version(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION)
             .build();
@@ -1190,7 +1639,7 @@ mod tests {
             let state = installed_gcp(1, authority, ResourceStatus::Pending);
             assert_eq!(
                 super::destroy_without_runtime(&state),
-                Some(DeploymentStatus::TeardownRequired),
+                Some(DeploymentStatus::RetentionRequired),
                 "{authority:?}"
             );
         }

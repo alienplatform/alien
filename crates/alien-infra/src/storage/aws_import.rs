@@ -31,6 +31,7 @@ impl ResourceImporter for AwsStorageImporter {
             requested_bucket_name: None,
             // Setup created this bucket; its tags (set by the template) were not checked here.
             ownership_verified: false,
+            read_cors_applied: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

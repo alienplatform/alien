@@ -16,10 +16,7 @@ use alien_core::{
     ResourceStatus,
 };
 
-use alien_aws_clients::aws::ecr::{
-    DescribeRepositoriesRequest, PutReplicationConfigurationRequest, ReplicationConfiguration,
-    ReplicationDestination, ReplicationRule, Repository,
-};
+use alien_aws_clients::aws::ecr::{DescribeRepositoriesRequest, Repository};
 use chrono::Utc;
 
 fn role_name_from_arn(arn: &str) -> Option<&str> {
@@ -131,6 +128,7 @@ impl AwsArtifactRegistryController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
 
         info!(
             registry_id = %config.id,
@@ -171,6 +169,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "pull");
@@ -209,6 +208,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "pull");
@@ -247,6 +247,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "push");
@@ -285,6 +286,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "push");
@@ -322,6 +324,7 @@ impl AwsArtifactRegistryController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
 
         info!(registry=%config.id, "Applying resource-scoped permissions for ECR repository");
 
@@ -356,32 +359,7 @@ impl AwsArtifactRegistryController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-
-        if config.replication_regions.is_empty() {
-            info!(registry=%config.id, "No replication regions configured, skipping");
-            return Ok(HandlerAction::Continue {
-                state: Ready,
-                suggested_delay: None,
-            });
-        }
-
-        let aws_cfg = ctx.get_aws_config()?;
-        let ecr_client = ctx.service_provider.get_aws_ecr_client(aws_cfg).await?;
-        let account_id = self
-            .account_id
-            .as_deref()
-            .unwrap_or(&aws_cfg.account_id.to_string())
-            .to_string();
-
-        self.apply_replication_config(
-            &*ecr_client,
-            &account_id,
-            &aws_cfg.region,
-            &config.replication_regions,
-            &config.id,
-        )
-        .await?;
-
+        Self::validate_replication(config)?;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -397,6 +375,7 @@ impl AwsArtifactRegistryController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
 
         info!(
             registry_id = %config.id,
@@ -422,6 +401,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "pull");
@@ -462,6 +442,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let pull_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "pull");
@@ -500,6 +481,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "push");
@@ -540,6 +522,7 @@ impl AwsArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
+        Self::validate_replication(config)?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
         let push_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "push");
@@ -577,32 +560,7 @@ impl AwsArtifactRegistryController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-
-        if config.replication_regions.is_empty() {
-            info!(registry=%config.id, "No replication regions configured, skipping");
-            return Ok(HandlerAction::Continue {
-                state: Ready,
-                suggested_delay: None,
-            });
-        }
-
-        let aws_cfg = ctx.get_aws_config()?;
-        let ecr_client = ctx.service_provider.get_aws_ecr_client(aws_cfg).await?;
-        let account_id = self
-            .account_id
-            .as_deref()
-            .unwrap_or(&aws_cfg.account_id.to_string())
-            .to_string();
-
-        self.apply_replication_config(
-            &*ecr_client,
-            &account_id,
-            &aws_cfg.region,
-            &config.replication_regions,
-            &config.id,
-        )
-        .await?;
-
+        Self::validate_replication(config)?;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -754,7 +712,7 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        self.push_role_arn = owned_role_arn(
+        let owned_push_role_arn = owned_role_arn(
             &*iam_client,
             self.push_role_arn.clone(),
             ctx.resource_prefix,
@@ -762,7 +720,10 @@ impl AwsArtifactRegistryController {
             "push",
         )
         .await?;
-        let Some(push_role_arn) = self.push_role_arn.as_deref() else {
+        if owned_push_role_arn.is_some() {
+            self.push_role_arn = owned_push_role_arn.clone();
+        }
+        let Some(push_role_arn) = owned_push_role_arn.as_deref() else {
             return Ok(HandlerAction::Continue {
                 state: Deleted,
                 suggested_delay: None,
@@ -792,7 +753,7 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        self.push_role_arn = owned_role_arn(
+        let owned_push_role_arn = owned_role_arn(
             &*iam_client,
             self.push_role_arn.clone(),
             ctx.resource_prefix,
@@ -800,7 +761,10 @@ impl AwsArtifactRegistryController {
             "push",
         )
         .await?;
-        let Some(push_role_arn) = self.push_role_arn.as_deref() else {
+        if owned_push_role_arn.is_some() {
+            self.push_role_arn = owned_push_role_arn.clone();
+        }
+        let Some(push_role_arn) = owned_push_role_arn.as_deref() else {
             return Ok(HandlerAction::Continue {
                 state: Deleted,
                 suggested_delay: None,
@@ -844,8 +808,8 @@ impl AwsArtifactRegistryController {
             }
         }
 
-        self.push_role_arn = None;
-
+        // Keep the authenticated creation-owner identity as recovery metadata. Deleted
+        // state proves the role is gone; erasing retained repositories still needs its ARN.
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -1021,6 +985,13 @@ impl AwsArtifactRegistryController {
     /// Creates a role with this deployment's tags and returns its ARN. A role that already has
     /// the name is used only if it carries those tags: an earlier attempt created it and its
     /// response was lost. Any other role is refused and left untouched.
+    fn validate_replication(config: &ArtifactRegistry) -> Result<()> {
+        config.validate_aws_replication().context(ErrorData::ResourceConfigInvalid {
+            resource_id: Some(config.id.clone()),
+            message: "Per-deployment ECR replicationRegions is unsupported; shared account rules are left unchanged".to_string(),
+        })
+    }
+
     async fn create_or_resume_role(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -1205,83 +1176,6 @@ impl AwsArtifactRegistryController {
                 }));
             }
         }
-
-        Ok(())
-    }
-
-    /// Configure ECR private image replication to the specified destination regions.
-    ///
-    /// ECR replication is configured at the registry level (per account). This method
-    /// reads the current replication configuration, merges the desired destination
-    /// regions, and writes back the updated configuration.
-    async fn apply_replication_config(
-        &self,
-        ecr_client: &dyn alien_aws_clients::aws::ecr::EcrApi,
-        account_id: &str,
-        home_region: &str,
-        replication_regions: &[String],
-        registry_id: &str,
-    ) -> Result<()> {
-        // Build the set of desired destinations (same account, different regions)
-        let desired_destinations: Vec<ReplicationDestination> = replication_regions
-            .iter()
-            .filter(|r| r.as_str() != home_region)
-            .map(|region| ReplicationDestination {
-                region: region.clone(),
-                registry_id: account_id.to_string(),
-            })
-            .collect();
-
-        if desired_destinations.is_empty() {
-            info!(
-                registry = %registry_id,
-                "All replication regions match the home region, skipping"
-            );
-            return Ok(());
-        }
-
-        // Read the current replication configuration so we don't clobber existing rules
-        let current =
-            ecr_client
-                .describe_registry()
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to describe ECR registry for replication config".to_string(),
-                    resource_id: Some(registry_id.to_string()),
-                })?;
-
-        // Merge: find or create a rule whose destinations include ours
-        let mut rules = current.replication_configuration.rules;
-        if rules.is_empty() {
-            rules.push(ReplicationRule {
-                destinations: desired_destinations.clone(),
-                repository_filters: vec![],
-            });
-        } else {
-            // Merge into the first rule's destinations
-            let first_rule = &mut rules[0];
-            for dest in &desired_destinations {
-                if !first_rule.destinations.contains(dest) {
-                    first_rule.destinations.push(dest.clone());
-                }
-            }
-        }
-
-        ecr_client
-            .put_replication_configuration(PutReplicationConfigurationRequest {
-                replication_configuration: ReplicationConfiguration { rules },
-            })
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to configure ECR replication".to_string(),
-                resource_id: Some(registry_id.to_string()),
-            })?;
-
-        info!(
-            registry = %registry_id,
-            destinations = ?desired_destinations,
-            "ECR replication configured successfully"
-        );
 
         Ok(())
     }
@@ -1649,6 +1543,47 @@ mod tests {
                 is_truncated: Some(false),
                 marker: None,
             },
+        }
+    }
+
+    #[tokio::test]
+    async fn replication_settings_leave_account_configuration_unchanged() {
+        for state in [
+            AwsArtifactRegistryState::ConfiguringReplication,
+            AwsArtifactRegistryState::UpdatingReplication,
+        ] {
+            let mut registry = ArtifactRegistry::new("images".to_string()).build();
+            registry.replication_regions = vec!["us-west-2".to_string()];
+            let saved = AwsArtifactRegistryController {
+                state: state.clone(),
+                account_id: Some("123456789012".to_string()),
+                region: Some("us-east-1".to_string()),
+                repository_prefix: Some("test-images".to_string()),
+                pull_role_arn: Some("arn:aws:iam::123456789012:role/test-images-pull".to_string()),
+                push_role_arn: Some("arn:aws:iam::123456789012:role/test-images-push".to_string()),
+                ..Default::default()
+            };
+            let controller: AwsArtifactRegistryController =
+                serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+            // No client expectations: the compatibility transition never writes account replication.
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(registry)
+                .controller(controller)
+                .platform(Platform::Aws)
+                .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                .build()
+                .await
+                .unwrap();
+            executor
+                .step()
+                .await
+                .expect("legacy replication settings warn and continue without account writes");
+            let saved = executor
+                .internal_state::<AwsArtifactRegistryController>()
+                .unwrap();
+            assert_eq!(saved.repository_prefix.as_deref(), Some("test-images"));
+            assert!(saved.pull_role_arn.is_some());
+            assert!(saved.push_role_arn.is_some());
         }
     }
 
@@ -2062,9 +1997,56 @@ mod tests {
             }
         }
 
+        let owner = executor
+            .internal_state::<AwsArtifactRegistryController>()
+            .unwrap()
+            .push_role_arn
+            .clone()
+            .unwrap();
         executor.delete().unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert!(account.lock().unwrap().is_empty());
+        let saved: AwsArtifactRegistryController = serde_json::from_value(
+            serde_json::to_value(
+                executor
+                    .internal_state::<AwsArtifactRegistryController>()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            saved.push_role_arn.as_deref(),
+            Some(owner.as_str()),
+            "retain must keep repository creation ownership after role deletion"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_saved_final_delete_keeps_repository_ownership_when_the_role_is_already_gone() {
+        let owner = "arn:aws:iam::123456789012:role/test-my-registry-push";
+        let controller = AwsArtifactRegistryController {
+            state: AwsArtifactRegistryState::DeletingPushRole,
+            account_id: Some("123456789012".into()),
+            region: Some("us-east-1".into()),
+            repository_prefix: Some("test-my-registry".into()),
+            push_role_arn: Some(owner.into()),
+            ..Default::default()
+        };
+        let controller = serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let account = account_with(&[]);
+        let mut executor = registry_executor(controller, &account, false).await;
+        executor.step().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            executor
+                .internal_state::<AwsArtifactRegistryController>()
+                .unwrap()
+                .push_role_arn
+                .as_deref(),
+            Some(owner)
+        );
         assert!(account.lock().unwrap().is_empty());
     }
 

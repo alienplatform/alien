@@ -66,7 +66,7 @@ impl TfEmitter for AwsKvEmitter {
                 attr("tags", tags(ctx, "kv")),
                 nested(crate::block::block(
                     "lifecycle",
-                    [attr("prevent_destroy", Expression::Bool(false))],
+                    [attr("prevent_destroy", Expression::Bool(true))],
                 )),
             ],
         );

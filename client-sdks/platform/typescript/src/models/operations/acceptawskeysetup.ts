@@ -126,3 +126,8 @@ export function acceptAwsKeySetupResponseFromJSON(
     `Failed to parse 'AcceptAwsKeySetupResponse' from JSON`,
   );
 }
+
+// Published CloudFormation key callback action exports.
+export const AcceptAwsKeySetupAction = Action;
+export type AcceptAwsKeySetupAction = Action;
+export const AcceptAwsKeySetupAction$outboundSchema = Action$outboundSchema;

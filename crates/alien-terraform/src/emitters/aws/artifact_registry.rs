@@ -18,6 +18,7 @@ pub struct AwsArtifactRegistryEmitter;
 impl TfEmitter for AwsArtifactRegistryEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let registry = downcast::<ArtifactRegistry>(ctx, ArtifactRegistry::RESOURCE_TYPE)?;
+        registry.validate_aws_replication()?;
         let label = required_label(ctx)?;
         let pull_label = format!("{label}_pull");
         let push_label = format!("{label}_push");
@@ -48,7 +49,7 @@ impl TfEmitter for AwsArtifactRegistryEmitter {
                 attr("tags", tags(ctx, "artifact-registry")),
                 nested(crate::block::block(
                     "lifecycle",
-                    [attr("prevent_destroy", Expression::Bool(false))],
+                    [attr("prevent_destroy", Expression::Bool(true))],
                 )),
             ],
         ));

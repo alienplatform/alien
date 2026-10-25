@@ -93,6 +93,9 @@ impl ResourceImporter for AzureStorageAccountImporter {
         let _ = data.resource_group;
         let controller = AzureStorageAccountController {
             state: AzureStorageAccountState::Ready,
+            lifecycle_rule_names: Default::default(),
+            capabilities_revision: None,
+            pending_capabilities_revision: None,
             account_name: Some(data.storage_account_name),
             resource_id: Some(data.resource_id),
             primary_blob_endpoint: Some(data.blob_endpoint),

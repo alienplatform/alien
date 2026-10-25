@@ -8,10 +8,13 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, Key, PermissionSetReference, RemoteBindings, RemoteStackManagement, Result,
+    Key, PermissionSetReference, RemoteBindings, RemoteStackManagement, Result, import::EmitContext,
 };
 use alien_permissions::BindingTarget;
-use hcl::{expr::Expression, structure::Block};
+use hcl::{
+    expr::{Conditional, Expression},
+    structure::Block,
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsKeyEmitter;
@@ -81,6 +84,14 @@ impl TfEmitter for AwsKeyEmitter {
             ])),
         ]));
 
+        fragment.locals.insert(
+            format!("{label}_selected_key"),
+            key_selection_local_value(
+                ctx,
+                expr::traversal(["terraform_data", &format!("{label}_key_identity"), "output"]),
+            )?,
+        );
+
         if let Some(management_label) = management_label(ctx) {
             let profile = ctx.stack.management().profile();
             for permission in profile
@@ -99,7 +110,7 @@ impl TfEmitter for AwsKeyEmitter {
                         })
                     })?;
                 let context = aws_terraform_permission_context()
-                    .with_resource_name(format!("${{terraform_data.{label}_key_identity.output}}"));
+                    .with_resource_name(format!("${{local.{label}_selected_key.arn}}"));
                 let suffix = iam_policy_name_sanitize(&permission_set.id);
                 emit_iam_role_policy_for_target_with_label(
                     &mut fragment,
@@ -122,7 +133,7 @@ impl TfEmitter for AwsKeyEmitter {
                 permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
             {
                 let context = aws_terraform_permission_context()
-                    .with_resource_name(format!("${{terraform_data.{label}_key_identity.output}}"));
+                    .with_resource_name(format!("${{local.{label}_selected_key.arn}}"));
                 emit_iam_role_policy_for_target_with_label(
                     &mut fragment,
                     access_label,
@@ -201,5 +212,22 @@ fn management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
 
 /// The setup-pinned AWS key identity used by imports and encrypted resources.
 pub fn key_arn(label: &str) -> Expression {
-    expr::traversal(["terraform_data", &format!("{label}_key_identity"), "output"])
+    expr::traversal(["local", &format!("{label}_selected_key"), "arn"])
+}
+
+/// Keep disabled keys out of global local evaluation. Consumers still fail if
+/// they require the ARN of a disabled key, rather than silently selecting a default key.
+pub fn key_selection_local_value(ctx: &EmitContext<'_>, arn: Expression) -> Result<Expression> {
+    let selection = expr::object([("arn", arn)]);
+    match ctx.resource.enabled_when.as_deref() {
+        Some(input_id) => Ok(Expression::Conditional(Box::new(Conditional::new(
+            expr::parse(&format!(
+                "var.{}",
+                crate::generator::stack_input_variable_name(input_id)
+            ))?,
+            selection,
+            Expression::Null,
+        )))),
+        None => Ok(selection),
+    }
 }

@@ -14,6 +14,8 @@ import {
   DeploymentBasePlatform$inboundSchema,
   DeploymentCredentialRetryUnion,
   DeploymentCredentialRetryUnion$inboundSchema,
+  DeploymentDeletionPolicy,
+  DeploymentDeletionPolicy$inboundSchema,
   DeploymentDeployerSecret,
   DeploymentDeployerSecret$inboundSchema,
   DeploymentEnvironmentInfoUnion,
@@ -28,17 +30,17 @@ import {
   DeploymentStackState$inboundSchema,
   DeploymentStatus,
   DeploymentStatus$inboundSchema,
-} from "./deploymentpendingpreparedstackdefaultstringlist.js";
+} from "./deploymentpendingpreparedstacktypestringlist.js";
 import {
   DeploymentPendingPreparedStackUnion,
   DeploymentPendingPreparedStackUnion$inboundSchema,
-  DeploymentPreparedStackApprovalPlugins,
-  DeploymentPreparedStackApprovalPlugins$inboundSchema,
   DeploymentPreparedStackCustom,
   DeploymentPreparedStackCustom$inboundSchema,
   DeploymentPreparedStackInput,
   DeploymentPreparedStackInput$inboundSchema,
-} from "./deploymentpreparedstackapprovalplugins.js";
+  DeploymentPreparedStackPluginsDecision,
+  DeploymentPreparedStackPluginsDecision$inboundSchema,
+} from "./deploymentpreparedstackpluginsdecision.js";
 import {
   DeploymentPurpose,
   DeploymentPurpose$inboundSchema,
@@ -56,6 +58,20 @@ import {
   ReportedOperation,
   ReportedOperation$inboundSchema,
 } from "./reportedoperation.js";
+
+export type DeploymentPreparedStackApprovalPlugins = {
+  /**
+   * Whether matching operations run without approval.
+   */
+  decision: DeploymentPreparedStackPluginsDecision;
+  /**
+   * Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard
+   *
+   * @remarks
+   * access request for these operations may cover.
+   */
+  maxRisk?: string | null | undefined;
+};
 
 /**
  * Whether matching operations run without approval.
@@ -1585,6 +1601,13 @@ export type DeploymentRuntimeMetadata = {
    */
   credentialRetry?: DeploymentCredentialRetryUnion | null | undefined;
   /**
+   * Explicit disposition of durable data when deleting a deployment.
+   *
+   * @remarks
+   * Missing values from older checkpoints always preserve data.
+   */
+  deletionPolicy?: DeploymentDeletionPolicy | undefined;
+  /**
    * Whether each vault-native deployer secret is in the customer's secret
    *
    * @remarks
@@ -1653,6 +1676,29 @@ export type DeploymentRuntimeMetadata = {
    */
   registryAccessGranted?: boolean | undefined;
   /**
+   * Start of the bounded wait for retained data's expiry controls to disable.
+   *
+   * @remarks
+   * Cleared on confirmation, explicit retry, or returning to normal execution.
+   */
+  retainedDataProtectionStartedAt?: Date | null | undefined;
+  /**
+   * UTC API-confirmation time for the matching data protection digest.
+   *
+   * @remarks
+   * Provider propagation must be qualified separately before final retention.
+   */
+  retainedStorageProtectionConfirmedAt?: Date | null | undefined;
+  /**
+   * Digest of the installed data inventory whose runtime public-access and
+   *
+   * @remarks
+   * expiry configuration was protected before cleanup. The serialized field
+   * name is retained for compatibility. This is not a
+   * receipt for effective expiry propagation or privileged setup teardown.
+   */
+  retainedStorageProtectionHash?: string | null | undefined;
+  /**
    * What a direct setup created for resources it does not own, keyed by resource id. Setup
    *
    * @remarks
@@ -1664,6 +1710,14 @@ export type DeploymentRuntimeMetadata = {
     | string
     | null
     | undefined;
+  /**
+   * Credential revocation completed before resource teardown. A delete retry
+   *
+   * @remarks
+   * can use this receipt after the vault or its binding is gone. Secret sync
+   * clears it before a deployment can write runtime credentials again.
+   */
+  vaultCredentialsRevoked?: boolean | undefined;
 };
 
 /**
@@ -1942,6 +1996,26 @@ export type Deployment = {
 };
 
 /** @internal */
+export const DeploymentPreparedStackApprovalPlugins$inboundSchema: z.ZodType<
+  DeploymentPreparedStackApprovalPlugins,
+  unknown
+> = z.object({
+  decision: DeploymentPreparedStackPluginsDecision$inboundSchema,
+  maxRisk: z.nullable(z.string()).optional(),
+});
+
+export function deploymentPreparedStackApprovalPluginsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPreparedStackApprovalPlugins, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentPreparedStackApprovalPlugins$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPreparedStackApprovalPlugins' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentPreparedStackApprovalPluginsEnum$inboundSchema:
   z.ZodEnum<typeof DeploymentPreparedStackApprovalPluginsEnum> = z.enum(
     DeploymentPreparedStackApprovalPluginsEnum,
@@ -1950,7 +2024,7 @@ export const DeploymentPreparedStackApprovalPluginsEnum$inboundSchema:
 /** @internal */
 export const DeploymentPreparedStackPluginsApprovalUnion$inboundSchema:
   z.ZodType<DeploymentPreparedStackPluginsApprovalUnion, unknown> = z.union([
-    DeploymentPreparedStackApprovalPlugins$inboundSchema,
+    z.lazy(() => DeploymentPreparedStackApprovalPlugins$inboundSchema),
     DeploymentPreparedStackApprovalPluginsEnum$inboundSchema,
   ]);
 
@@ -2075,7 +2149,7 @@ export const DeploymentPreparedStackPlugins$inboundSchema: z.ZodType<
   approval: z.record(
     z.string(),
     z.union([
-      DeploymentPreparedStackApprovalPlugins$inboundSchema,
+      z.lazy(() => DeploymentPreparedStackApprovalPlugins$inboundSchema),
       DeploymentPreparedStackApprovalPluginsEnum$inboundSchema,
     ]),
   ).optional(),
@@ -4191,6 +4265,7 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
   automaticSetup: z.boolean().optional(),
   credentialRetry: z.nullable(DeploymentCredentialRetryUnion$inboundSchema)
     .optional(),
+  deletionPolicy: DeploymentDeletionPolicy$inboundSchema.optional(),
   deployerSecrets: z.array(DeploymentDeployerSecret$inboundSchema).optional(),
   directSetupRevision: z.nullable(z.string()).optional(),
   initialSetupAuthority: DeploymentInitialSetupAuthority$inboundSchema
@@ -4209,6 +4284,13 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
     z.union([z.lazy(() => DeploymentRegistryAccess$inboundSchema), z.string()]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
+  retainedDataProtectionStartedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  retainedStorageProtectionConfirmedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  retainedStorageProtectionHash: z.nullable(z.string()).optional(),
   setupScaffolding: z.record(
     z.string(),
     z.lazy(() => DeploymentSetupScaffolding$inboundSchema),
@@ -4219,6 +4301,7 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  vaultCredentialsRevoked: z.boolean().optional(),
 });
 
 export function deploymentRuntimeMetadataFromJSON(
