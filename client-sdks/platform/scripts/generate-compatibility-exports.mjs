@@ -565,3 +565,13 @@ const preparationAliases = ["Linux", "Mac", "CommandVariants"].flatMap(name => {
   ];
 });
 await writeFile(preparationUrl, `${preparationSource}${preparationMarker}${preparationAliases.join("\n")}\n`);
+
+// Portal appearance now has a shared input model; retain the published update names.
+const appearanceUrl = new URL("updateproject.ts", models);
+const appearanceMarker = "\n// Published portal-appearance compatibility exports.\n";
+const appearanceSource = (await readFile(appearanceUrl, "utf8")).split(appearanceMarker)[0];
+await writeFile(appearanceUrl, `${appearanceSource}${appearanceMarker}export type { DeploymentPortalAppearanceInput as UpdateProjectDeploymentPortalAppearance } from "./deploymentportalappearanceinput.js";
+export type { DeploymentPortalAppearanceInput$Outbound as UpdateProjectDeploymentPortalAppearance$Outbound } from "./deploymentportalappearanceinput.js";
+export { DeploymentPortalAppearanceInput$outboundSchema as UpdateProjectDeploymentPortalAppearance$outboundSchema } from "./deploymentportalappearanceinput.js";
+export { deploymentPortalAppearanceInputToJSON as updateProjectDeploymentPortalAppearanceToJSON } from "./deploymentportalappearanceinput.js";
+`);

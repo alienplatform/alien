@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -558,5 +560,20 @@ test("published preparation imports parse command variants at root and deep path
       assert.deepEqual(exports[parser](JSON.stringify(value)), { ok: true, value });
       assert.equal(exports[parser]('{"install":123}').ok, false);
     }
+  }
+});
+
+
+test("published portal appearance types and serializers retain root and deep imports", async () => {
+  execFileSync(process.execPath, [
+    fileURLToPath(new URL("../typescript/node_modules/typescript/bin/tsc", import.meta.url)),
+    "--noEmit", "--strict", "--skipLibCheck", "--module", "nodenext",
+    fileURLToPath(new URL("./fixtures/portal-appearance-imports.ts", import.meta.url)),
+  ], { stdio: "inherit" });
+  const appearance = { title: "Acme", supportUrl: "https://example.test/support", preset: "clean", accentColor: "blue", density: "comfortable" };
+  for (const path of ["index", "updateproject"]) {
+    const models = await import(`../typescript/esm/models/${path}.js`);
+    assert.deepEqual(models.UpdateProjectDeploymentPortalAppearance$outboundSchema.parse(appearance), appearance);
+    assert.deepEqual(JSON.parse(models.updateProjectDeploymentPortalAppearanceToJSON(appearance)), appearance);
   }
 });
