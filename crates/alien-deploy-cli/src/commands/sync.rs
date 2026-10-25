@@ -33,6 +33,7 @@ use std::{
 use std::os::unix::fs::PermissionsExt as _;
 
 use alien_cli_common::airgap::{self, BundleManifest, RegistryAccess};
+use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::Engine as _;
 use clap::Parser;
@@ -76,7 +77,7 @@ pub struct SyncArgs {
     /// Deployment token from the vendor. Needed once on the online machine.
     #[arg(long, env = "ALIEN_SYNC_TOKEN")]
     pub token: Option<String>,
-    /// Manager URL from the vendor. Needed once on the online machine.
+    /// Manager URL from the vendor. Branded CLIs discover it automatically.
     #[arg(long)]
     pub manager: Option<String>,
     /// Site registry (and optional path) for the images. Needed once inside the site.
@@ -229,7 +230,18 @@ struct ManagerAccess {
     token: String,
 }
 
-pub async fn sync_command(args: SyncArgs) -> Result<()> {
+pub async fn sync_command(
+    mut args: SyncArgs,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<()> {
+    if let (Some(token), None, Some(base_url)) = (
+        args.token.as_deref(),
+        args.manager.as_ref(),
+        embedded_config.and_then(|config| config.api_base_url.as_deref()),
+    ) {
+        args.manager =
+            Some(super::up::resolve_manager_url_option(None, base_url, token, "kubernetes").await?);
+    }
     let (folder, mut site) = open_folder(&args).await?;
     let mut machine = load_machine(&site.deployment_id)?;
     let site_side = site_side_settings(&args, &mut machine)?;
@@ -2246,6 +2258,65 @@ mod tests {
     use httpmock::prelude::*;
 
     use super::*;
+
+    #[tokio::test]
+    async fn branded_sync_discovers_manager_only_when_registering_online() {
+        let api = MockServer::start_async().await;
+        let manager = MockServer::start_async().await;
+        let discovery = api
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/v1/resolve")
+                    .query_param("platform", "kubernetes")
+                    .header("authorization", "Bearer ax_site");
+                then.status(200).json_body(serde_json::json!({
+                    "managerUrl": manager.base_url()
+                }));
+            })
+            .await;
+        let whoami = manager
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/v1/whoami")
+                    .header("authorization", "Bearer ax_site");
+                // Stop before writing machine credentials.
+                then.status(403);
+            })
+            .await;
+        let config: DeployCliConfig = serde_json::from_value(serde_json::json!({
+            "apiBaseUrl": api.base_url(), "name": "acmectl"
+        }))
+        .unwrap();
+        let args = SyncArgs::try_parse_from(["sync", "--token", "ax_site"]).unwrap();
+        assert!(sync_command(args, Some(&config)).await.is_err());
+        discovery.assert_hits_async(1).await;
+        whoami.assert_hits_async(1).await;
+
+        let args = SyncArgs::try_parse_from([
+            "sync",
+            "--token",
+            "ax_site",
+            "--manager",
+            &manager.base_url(),
+        ])
+        .unwrap();
+        assert!(sync_command(args, Some(&config)).await.is_err());
+        discovery.assert_hits_async(1).await;
+        whoami.assert_hits_async(2).await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let args = SyncArgs::try_parse_from([
+            "sync",
+            "--folder",
+            dir.path().to_str().unwrap(),
+            "--registry",
+            "localhost:5001",
+        ])
+        .unwrap();
+        assert!(sync_command(args, Some(&config)).await.is_err());
+        discovery.assert_hits_async(1).await;
+        whoami.assert_hits_async(2).await;
+    }
 
     /// A transfer folder for `deployment` with one report from the site
     /// carrying telemetry batches 1 to 4.

@@ -184,7 +184,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Register(args) => register_command(args, embedded_config.as_ref()).await,
         Commands::Join(args) => join_command(args, embedded_config.as_ref()).await,
         Commands::Leave(args) => leave_command(args).await,
-        Commands::Sync(args) => commands::sync::sync_command(args).await,
+        Commands::Sync(args) => commands::sync::sync_command(args, embedded_config.as_ref()).await,
         Commands::Rollback(args) => commands::sync::rollback_command(args).await,
     }
 }
