@@ -842,16 +842,37 @@ async fn send_report(
 ) -> Result<()> {
     let last = report.telemetry.iter().map(|batch| batch.id).max();
     loop {
-        let fresh: Vec<serde_json::Value> = report
+        let mut body = serde_json::json!({
+            "state": report.state, "telemetry": [], "writtenAt": report.written_at
+        });
+        let mut bytes = serde_json::to_vec(&body)
+            .into_alien_error()
+            .context(config_error("encoding the report state"))?
+            .len();
+        let mut fresh = Vec::new();
+        for batch in report
             .telemetry
             .iter()
             .filter(|batch| batch.id > site.uploaded_through)
-            .map(|batch| {
-                serde_json::json!({ "id": batch.id, "signal": batch.signal, "data": batch.data })
-            })
-            .collect();
+        {
+            let value = serde_json::json!({
+                "id": batch.id, "signal": batch.signal, "data": batch.data
+            });
+            let batch_bytes = serde_json::to_vec(&value)
+                .into_alien_error()
+                .context(config_error("encoding a telemetry batch"))?
+                .len()
+                + 1;
+            // Keep the state and batches within a 1 MiB request. An individual
+            // larger batch is sent alone so its contents are never discarded.
+            if !fresh.is_empty() && bytes + batch_bytes > 1024 * 1024 {
+                break;
+            }
+            bytes += batch_bytes;
+            fresh.push(value);
+        }
         let sending = !fresh.is_empty();
-        let body = serde_json::json!({ "state": report.state, "telemetry": fresh, "writtenAt": report.written_at });
+        body["telemetry"] = serde_json::Value::Array(fresh);
         let path = format!("/v1/deployments/{}/status-report", site.deployment_id);
         let response = http()?
             .post(format!("{}{path}", token.url))
@@ -2716,7 +2737,9 @@ mod tests {
             }
         });
         assert!(!rollout_finished(&status, "rel_new", 11).unwrap());
-        let error = rollout_finished(&status, "rel_new", 10).unwrap_err().to_string();
+        let error = rollout_finished(&status, "rel_new", 10)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("Secret: app-password"));
         assert!(error.contains("kubectl create secret generic app-password"));
         assert!(error.contains("run sync again"));
@@ -3103,6 +3126,85 @@ mod tests {
             !report_path(dir.path()).exists(),
             "a sent report is removed"
         );
+    }
+
+    #[tokio::test]
+    async fn large_reports_keep_every_batch_within_bounded_requests() {
+        let server = MockServer::start_async().await;
+        let rejected = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/deployments/dep_1/status-report")
+                    .matches(|request| {
+                        request
+                            .body
+                            .as_ref()
+                            .is_some_and(|body| body.len() > 1024 * 1024)
+                    });
+                then.status(413);
+            })
+            .await;
+        let mut requests = Vec::new();
+        for first in [1, 3, 5, 7] {
+            requests.push(
+                server
+                    .mock_async(|when, then| {
+                        when.method(POST)
+                            .path("/v1/deployments/dep_1/status-report")
+                            .header("authorization", "Bearer ax_deploy_test")
+                            .body_contains(format!("\"id\":{first}"))
+                            .body_contains(format!("\"id\":{}", first + 1))
+                            .matches(|request| {
+                                let Some(bytes) = request.body.as_deref() else {
+                                    return false;
+                                };
+                                if bytes.len() > 1024 * 1024 {
+                                    return false;
+                                }
+                                let body: serde_json::Value =
+                                    serde_json::from_slice(bytes).unwrap();
+                                body["state"]["metadata"] == "y".repeat(220_000)
+                                    && body["writtenAt"] == "2026-01-01T00:00:00Z"
+                                    && body["telemetry"].as_array().is_some_and(|batches| {
+                                        batches.len() == 2
+                                            && batches.iter().all(|batch| {
+                                                batch["data"] == "x".repeat(300_000)
+                                                    && batch["signal"] == "logs"
+                                            })
+                                    })
+                            });
+                        then.status(200)
+                            .json_body(serde_json::json!({"telemetryThrough": first + 1}));
+                    })
+                    .await,
+            );
+        }
+        let (dir, mut site) = folder_with_report();
+        let mut report: SiteReport =
+            serde_json::from_slice(&std::fs::read(report_path(dir.path())).unwrap()).unwrap();
+        report.state["metadata"] = "y".repeat(220_000).into();
+        report.telemetry = (1..=8)
+            .map(|id| ReportedBatch {
+                id,
+                signal: "logs".into(),
+                data: "x".repeat(300_000),
+            })
+            .collect();
+        std::fs::write(
+            report_path(dir.path()),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        send_reports(dir.path(), &mut site, &access(&server), false)
+            .await
+            .unwrap();
+        rejected.assert_hits_async(0).await;
+        for request in requests {
+            request.assert_hits_async(1).await;
+        }
+        assert_eq!(site.uploaded_through, 8);
+        assert_eq!(load_site(dir.path()).unwrap().uploaded_through, 8);
+        assert!(!report_path(dir.path()).exists());
     }
 
     #[tokio::test]
