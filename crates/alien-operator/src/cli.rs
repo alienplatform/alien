@@ -61,11 +61,10 @@ struct OperatorCliArgs {
 #[derive(clap::Subcommand, Debug, PartialEq, Eq)]
 enum OperatorCommand {
     /// Ask the manager to forget this installation's deployment, because it is
-    /// being uninstalled. The Helm chart runs this from a pre-delete hook after
-    /// the Operator has stopped. It reads the Operator's own settings and state.
+    /// being uninstalled. The Helm cleanup Job runs this after the Operator has
+    /// stopped. It reads the Operator's own settings and state.
     /// It always exits 0: a manager that cannot be reached must not block the
-    /// uninstall. The deployment page lets the customer remove the record once
-    /// heartbeats stop.
+    /// uninstall. If reporting fails, the record can be removed separately.
     ReportUninstall,
 }
 
@@ -855,8 +854,8 @@ fn report_uninstall_main(args: Args) {
         }
         // Still exit 0: Helm stops the uninstall when a pre-delete hook fails.
         Err(error) => error!(
-            "Could not tell the manager about the uninstall: {error}. The deployment page \
-             can remove the deployment once its heartbeats stop."
+            "Could not tell the manager about the uninstall: {error}. \
+             Remove the deployment record separately if needed."
         ),
     }
 }

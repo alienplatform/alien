@@ -322,7 +322,7 @@ fn generate_helm_chart_internal(
     );
     files.insert("templates/cleanup-job.yaml".to_string(), cleanup_job_tpl());
     files.insert(
-        "templates/report-uninstall-job.yaml".to_string(),
+        "templates/_report-uninstall-job.tpl".to_string(),
         report_uninstall_job_tpl(),
     );
     files.insert(
@@ -6410,36 +6410,52 @@ spec:
                 sleep 1
               done
               trap - EXIT
+              {{- $reportJob := include "deployment.reportUninstallJob" . }}
+              {{- if $reportJob }}
+              # Reporting is optional. A Pod that cannot start must not stop
+              # Helm from removing the release after runtime cleanup succeeds.
+              # kubectl 1.32 loses its in-cluster configuration when
+              # --request-timeout is set, so bound the process instead.
+              if report_job="$(timeout 10 kubectl -n "$namespace" create -o name -f - <<'UNINSTALL_REPORT'
+              {{- $reportJob | nindent 14 }}
+              UNINSTALL_REPORT
+              )"; then
+                if ! timeout 80 kubectl -n "$namespace" wait --for=condition=complete --timeout=75s "$report_job"; then
+                  echo "Could not finish reporting the uninstall; continuing to remove the release." >&2
+                fi
+                timeout 10 kubectl -n "$namespace" delete "$report_job" --ignore-not-found=true --wait=false || true
+              else
+                echo "Could not start the uninstall report; continuing to remove the release." >&2
+              fi
+              {{- end }}
 {{- end }}
 "#
     .to_string()
 }
 
-/// Asks the manager to forget the deployment when the release is uninstalled. It
-/// runs after the cleanup Job has stopped the Operator, because the deployment
-/// credential returned at registration lives only in the Operator's state volume.
+/// The cleanup Job starts this report after stopping the Operator. The credential
+/// returned at registration lives only in the Operator's state volume.
 /// A configured `management.deploymentId` was registered by another tool
 /// (Terraform, CloudFormation), which removes the record itself.
 fn report_uninstall_job_tpl() -> String {
-    r#"{{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
+    r#"{{- define "deployment.reportUninstallJob" -}}
+{{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
 {{- if and (dig "enabled" true $cleanup) .Values.runtime.data.persistence.enabled (not .Values.management.deploymentId) }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "deployment.releaseScopedName" (dict "root" . "suffix" "-report-uninstall") }}
+  generateName: {{ include "deployment.releaseScopedName" (dict "root" . "suffix" "-report-uninstall") | trunc 57 | trimSuffix "-" }}-
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": pre-delete
-    "helm.sh/hook-weight": "-5"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 120
+  activeDeadlineSeconds: 60
+  ttlSecondsAfterFinished: 120
   template:
     metadata:
       labels:
         {{- include "deployment.hookLabels" . | nindent 8 }}
+        app.kubernetes.io/component: uninstall-report
     spec:
       automountServiceAccountToken: false
       restartPolicy: Never
@@ -6522,6 +6538,7 @@ spec:
         - name: runtime-data
           persistentVolumeClaim:
             claimName: {{ default (printf "%s-runtime-data" (include "deployment.fullname" .)) .Values.runtime.data.persistence.existingClaim }}
+{{- end }}
 {{- end }}
 "#
     .to_string()
@@ -7189,6 +7206,24 @@ spec:
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
     - {}
+  {{- if include "deployment.reportUninstallJob" . }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deployment.releaseScopedName" (dict "root" . "suffix" "-report-uninstall") }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: uninstall-report
+  policyTypes:
+    - Egress
+  egress:
+    - {}
+  {{- end }}
   {{- end }}
 {{- end }}
 "#
@@ -7749,17 +7784,20 @@ Use an Operator image built with this chart version for that transition.
 helm uninstall {chart_name} --namespace={namespace}
 ```
 
-Two pre-delete hooks run first. The cleanup Job stops the Operator and deletes
-the workloads it created. Then, when the Operator registered the deployment from
-a bootstrap token, a Job runs the Operator image with `report-uninstall`. It
+The pre-delete cleanup Job stops the Operator and deletes the workloads it
+created. Then, when the Operator registered the deployment from a bootstrap
+token, cleanup starts an optional Job with the Operator image and `report-uninstall`. It
 reads the deployment credential from the runtime volume and asks the management
-endpoint to forget the deployment. It gives up after 15 seconds and never fails
-the uninstall; if the endpoint can't be reached, the deployment page can remove
-the deployment once its heartbeats stop. An installation connected with
+endpoint to forget the deployment. The request gives up after 15 seconds, and
+cleanup waits at most 75 seconds for the Job. A report that cannot start or finish
+does not fail the uninstall. If reporting fails, the deployment record may need
+to be removed separately. A new bootstrap install that reuses a retained runtime
+volume must start with fresh Operator state after the old deployment is forgotten.
+An installation connected with
 `management.deploymentId` skips the report: the tool that registered the
 deployment removes it.
 
-`helm uninstall --no-hooks` skips both hooks, so the workloads stay and the
+`helm uninstall --no-hooks` skips cleanup and its report, so the workloads stay and the
 deployment is not reported. `runtime.cleanup.onUninstall.enabled: false` also
 skips the report, because the Operator holds the runtime volume until the
 cleanup Job stops it.
@@ -10816,7 +10854,7 @@ remoteOperator:
                     "duplicate Kubernetes resource: {resource:?}"
                 );
             }
-            let workloads: Vec<_> = docs
+            let mut workloads: Vec<_> = docs
                 .iter()
                 .filter(|doc| {
                     matches!(
@@ -10824,7 +10862,23 @@ remoteOperator:
                         Some("Deployment" | "DaemonSet" | "StatefulSet" | "Job")
                     )
                 })
+                .cloned()
                 .collect();
+            // The cleanup hook creates its report Job from an embedded manifest.
+            // Include that Pod template in the same selector isolation checks.
+            for doc in &docs {
+                let Some(script) =
+                    doc["spec"]["template"]["spec"]["containers"][0]["command"][2].as_str()
+                else {
+                    continue;
+                };
+                if let Some((_, report)) = script.split_once("<<'UNINSTALL_REPORT'\n") {
+                    let (report, _) = report
+                        .split_once("\nUNINSTALL_REPORT\n")
+                        .expect("end of report Job manifest");
+                    workloads.push(serde_yaml::from_str(report).expect("report Job manifest"));
+                }
+            }
             assert_eq!(docs_by_kind(&docs, "DaemonSet").len(), 1);
             for doc in &docs {
                 let selector = match yaml_str(doc, "kind") {
