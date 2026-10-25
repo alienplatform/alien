@@ -278,11 +278,6 @@ pub struct StackResourceState {
     /// High-level status derived from the internal state.
     pub status: ResourceStatus,
 
-    /// True when preflight added this resource, independent of its type or lifecycle.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[builder(default)]
-    pub added_by_alien: bool,
-
     /// Presentation metadata from the effective resource entry, outside runtime configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
@@ -357,7 +352,6 @@ impl StackResourceState {
             internal_state: None,
             status: ResourceStatus::Pending,
             progress: None,
-            added_by_alien: false,
             display_name: None,
             description: None,
             outputs: None,
@@ -651,7 +645,6 @@ mod tests {
 
         let resource_state = StackResourceState {
             progress: None,
-            added_by_alien: false,
             display_name: None,
             description: None,
             resource_type: "worker".to_string(),

@@ -8,7 +8,7 @@ use alien_core::{
 use alien_preflights::runner::PreflightRunner;
 
 #[tokio::test]
-async fn generated_resources_keep_names_and_origin_across_preparation() {
+async fn generated_resources_keep_names_across_preparation() {
     for platform in [
         Platform::Aws,
         Platform::Gcp,
@@ -110,11 +110,6 @@ async fn generated_resources_keep_names_and_origin_across_preparation() {
             .expect("real mutations prepare stack");
         assert!(prepared.resources.len() > stack.resources.len());
         for (id, entry) in &prepared.resources {
-            assert_eq!(
-                entry.added_by_alien,
-                !stack.resources.contains_key(id),
-                "{platform:?}/{id}"
-            );
             assert!(
                 entry
                     .display_name
@@ -122,7 +117,7 @@ async fn generated_resources_keep_names_and_origin_across_preparation() {
                     .is_some_and(|name| !name.is_empty()),
                 "{platform:?}/{id}"
             );
-            if entry.added_by_alien {
+            if !stack.resources.contains_key(id) {
                 assert!(
                     entry
                         .description
@@ -137,7 +132,6 @@ async fn generated_resources_keep_names_and_origin_across_preparation() {
             .await
             .expect("preparation can repeat");
         for (id, entry) in &prepared.resources {
-            assert_eq!(entry.added_by_alien, repeated.resources[id].added_by_alien);
             assert_eq!(entry.display_name, repeated.resources[id].display_name);
         }
         if let Ok(directory) = std::env::var("PREFLIGHT_EVIDENCE_DIR") {

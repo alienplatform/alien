@@ -240,9 +240,7 @@ pub(crate) fn replica_secret_read() -> Result<PermissionSet> {
         }]}
     }))
     .into_alien_error()
-    .context(invalid(
-        "Failed to construct the sandbox gateway replica secret grant",
-    ))
+    .context(invalid("Failed to construct the sandbox gateway replica secret grant"))
 }
 
 fn exact_read(key: &str) -> Result<PermissionSet> {

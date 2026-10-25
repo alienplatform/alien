@@ -17,7 +17,6 @@ import { ResourceStatusSchema } from "./resource-status-schema.js";
  */
 export const StackResourceStateSchema = z.object({
     "_internal": z.optional(z.any().describe("The platform-specific resource controller that manages this resource's lifecycle.\nThis is None when the resource status is Pending.\nStored as JSON to make the struct serializable and movable to alien-core.")),
-"addedByAlien": z.optional(z.boolean().describe("True when preflight added this resource, independent of its type or lifecycle.")),
 get "config"(){
                 return BaseResourceSchema.describe("Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.")
               },

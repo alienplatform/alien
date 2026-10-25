@@ -131,7 +131,6 @@ impl StackMutation for RemoteStackManagementMutation {
             config: alien_core::Resource::new(remote_stack_management),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(), // No dependencies on other resources
-            added_by_alien: true,
             display_name: Some("Management identity".to_string()),
             description: Some(
                 "Grants ongoing management access within the deployment boundary.".to_string(),

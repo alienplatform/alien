@@ -73,7 +73,6 @@ impl StackMutation for KubernetesClusterMutation {
                     config: alien_core::Resource::new(cluster),
                     lifecycle: ResourceLifecycle::Frozen,
                     dependencies,
-                    added_by_alien: true,
                     display_name: Some("Kubernetes cluster".to_string()),
                     description: Some(
                         "Provides the Kubernetes cluster used by application workloads."

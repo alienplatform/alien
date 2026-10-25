@@ -3724,7 +3724,6 @@ mod tests {
                     config: Resource::new(container),
                     lifecycle: ResourceLifecycle::Live,
                     dependencies: vec![],
-                    added_by_alien: false,
                     display_name: None,
                     description: None,
                     remote_access: false,

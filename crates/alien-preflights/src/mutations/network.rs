@@ -136,7 +136,6 @@ impl StackMutation for NetworkMutation {
             config: alien_core::Resource::new(network),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
-            added_by_alien: true,
             display_name: Some("Network".to_string()),
             description: Some(
                 "Provides the network and subnet connections used by application resources."
@@ -235,7 +234,6 @@ mod tests {
                 config: alien_core::Resource::new(container),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
-                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,
@@ -375,7 +373,6 @@ mod tests {
                 config: alien_core::Resource::new(network),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
-                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,
@@ -540,7 +537,6 @@ mod tests {
                 config: resource,
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
-                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,

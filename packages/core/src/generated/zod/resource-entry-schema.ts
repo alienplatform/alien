@@ -9,8 +9,7 @@ import { ResourceLifecycleSchema } from "./resource-lifecycle-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 
 export const ResourceEntrySchema = z.object({
-    "addedByAlien": z.optional(z.boolean().describe("True when preflight added this resource, independent of its type or lifecycle.")),
-get "config"(){
+    get "config"(){
                 return BaseResourceSchema.describe("Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.")
               },
 get "dependencies"(){

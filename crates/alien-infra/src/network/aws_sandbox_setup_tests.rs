@@ -1320,7 +1320,6 @@ async fn an_imported_cloudformation_network_is_updated_without_changing_its_subn
         config: alien_core::Resource::new(network()),
         lifecycle: alien_core::ResourceLifecycle::Frozen,
         dependencies: Vec::new(),
-        added_by_alien: false,
         display_name: None,
         description: None,
         remote_access: false,

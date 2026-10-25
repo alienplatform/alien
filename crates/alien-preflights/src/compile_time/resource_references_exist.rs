@@ -85,7 +85,6 @@ mod tests {
                 config: alien_core::Resource::new(storage),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
-                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,
@@ -98,7 +97,6 @@ mod tests {
                 config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
-                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,
@@ -141,7 +139,6 @@ mod tests {
                     alien_core::ResourceType::from("storage"),
                     "nonexistent-storage".to_string(), // Reference to non-existent resource
                 )],
-                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,

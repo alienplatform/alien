@@ -332,7 +332,6 @@ mod tests {
                 lifecycle: alien_core::ResourceLifecycle::Frozen,
                 enabled_when: None,
                 dependencies: Vec::new(),
-                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,

@@ -9,10 +9,6 @@ use sha2::{Digest, Sha256};
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceEntry {
-    /// True when preflight added this resource, independent of its type or lifecycle.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub added_by_alien: bool,
-
     /// Optional human-readable name. The stable resource ID is the display fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
@@ -210,7 +206,6 @@ impl Stack {
                 let mut value =
                     serde_json::to_value(entry).expect("resource entries always serialize to JSON");
                 let object = value.as_object_mut().expect("resource entry is an object");
-                object.remove("addedByAlien");
                 object.remove("displayName");
                 object.remove("description");
                 if let Some(sandbox) = entry.config.downcast_ref::<crate::Sandbox>() {
@@ -422,7 +417,6 @@ impl StackBuilder {
             config: Resource::new(resource),
             lifecycle,
             dependencies: Vec::new(),
-            added_by_alien: false,
             display_name: None,
             description: None,
             remote_access: false,
@@ -550,7 +544,6 @@ mod tests {
             config: Resource::new(resource),
             lifecycle,
             dependencies: Vec::new(),
-            added_by_alien: false,
             display_name: None,
             description: None,
             remote_access,
@@ -876,7 +869,6 @@ mod tests {
             .build();
         let mut documented = original.clone();
         let entry = documented.resources.get_mut("documents").unwrap();
-        entry.added_by_alien = true;
         entry.display_name = Some("Document storage".to_string());
         entry.description = Some("Uploaded documents and processed results.".to_string());
         assert_eq!(

@@ -1732,7 +1732,6 @@ mod tests {
             // Remote bindings exist for setup-owned resources.
             lifecycle: alien_core::ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
-            added_by_alien: false,
             display_name: None,
             description: None,
             remote_access,

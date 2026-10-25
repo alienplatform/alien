@@ -249,7 +249,6 @@ mod tests {
                 config: alien_core::Resource::new(manual_sa),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
-                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,

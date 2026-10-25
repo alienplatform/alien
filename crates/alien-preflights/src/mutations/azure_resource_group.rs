@@ -87,7 +87,6 @@ impl StackMutation for AzureResourceGroupMutation {
             config: alien_core::Resource::new(resource_group),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(), // No dependencies on other resources
-            added_by_alien: false,
             display_name: Some("Resource group".to_string()),
             description: Some(
                 "Groups the Azure resources created for this deployment.".to_string(),

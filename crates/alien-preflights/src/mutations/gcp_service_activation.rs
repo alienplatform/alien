@@ -119,7 +119,6 @@ impl StackMutation for GcpServiceActivationMutation {
                 config: alien_core::Resource::new(service_activation),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(), // GCP service activations don't depend on other resources
-                added_by_alien: true,
                 display_name: Some(api_display_name(&service_name).to_string()),
                 description: Some(format!(
                     "Enables {} for this deployment.",
