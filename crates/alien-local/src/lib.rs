@@ -61,6 +61,7 @@ mod error;
 mod kv_manager;
 mod local_bindings_provider;
 mod postgres_manager;
+mod postgres_runtime;
 mod queue_manager;
 mod queue_service;
 pub use queue_service::LocalQueueService;

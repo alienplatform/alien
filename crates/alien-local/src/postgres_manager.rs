@@ -12,6 +12,7 @@
 use crate::{
     docker_network::bindable_docker_bridge_gateway,
     error::{ErrorData, Result},
+    postgres_runtime::{native_postgres_runtime, previous_runtime_target},
 };
 use alien_core::bindings::PostgresBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -78,6 +79,9 @@ struct PostgresMetadata {
     /// Database created for this resource (named after the id).
     database: String,
     data_dir: PathBuf,
+    /// Runtime that initialized the cluster; changing libc can invalidate text indexes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_target: Option<String>,
 }
 
 // Hand-written so the persisted password can never reach a `{:?}` log, matching the redacting `Debug`
@@ -92,6 +96,7 @@ impl std::fmt::Debug for PostgresMetadata {
             .field("password", &"<redacted>")
             .field("database", &self.database)
             .field("data_dir", &self.data_dir)
+            .field("runtime_target", &self.runtime_target)
             .finish()
     }
 }
@@ -318,6 +323,16 @@ impl LocalPostgresManager {
         let mut configuration = HashMap::new();
         configuration.insert("listen_addresses".to_string(), listen_addresses);
 
+        let runtime = native_postgres_runtime().await?;
+        self.pin_runtime_target(metadata, runtime.archive_target)
+            .await?;
+        // Keep binaries from different libc families separate; resource data stays in place.
+        let installation_dir = if cfg!(target_os = "linux") {
+            self.install_cache_dir().join(runtime.archive_target)
+        } else {
+            self.install_cache_dir()
+        };
+
         let settings = Settings {
             version,
             // Connection host advertised to workloads; the server's actual bind is the
@@ -329,7 +344,7 @@ impl LocalPostgresManager {
             // keep the data directory across drops; recovery reattaches to it.
             temporary: false,
             data_dir: metadata.data_dir.clone(),
-            installation_dir: self.install_cache_dir(),
+            installation_dir,
             configuration,
             ..Default::default()
         };
@@ -384,6 +399,41 @@ impl LocalPostgresManager {
         Ok(postgres)
     }
 
+    /// Record the ABI before initdb; never silently reopen existing data with another libc.
+    async fn pin_runtime_target(&self, metadata: &PostgresMetadata, target: &str) -> Result<()> {
+        if !cfg!(target_os = "linux") {
+            return Ok(());
+        }
+        let initialized = tokio::fs::try_exists(metadata.data_dir.join("PG_VERSION"))
+            .await
+            .into_alien_error()
+            .context(ErrorData::LocalDirectoryError {
+                path: metadata.data_dir.display().to_string(),
+                operation: "stat".to_string(),
+                reason: "Failed to check whether PostgreSQL is initialized".to_string(),
+            })?;
+        if initialized {
+            let previous = match &metadata.runtime_target {
+                Some(target) => target.clone(),
+                None => previous_runtime_target(&metadata.data_dir).await?,
+            };
+            if previous != target {
+                return Err(AlienError::new(ErrorData::LocalPostgresRuntimeChanged {
+                    resource_id: metadata.resource_id.clone(),
+                    data_dir: metadata.data_dir.display().to_string(),
+                    previous_target: previous,
+                    selected_target: target.to_string(),
+                }));
+            }
+        }
+        if metadata.runtime_target.as_deref() != Some(target) {
+            let mut updated = metadata.clone();
+            updated.runtime_target = Some(target.to_string());
+            self.write_metadata(&updated).await?;
+        }
+        Ok(())
+    }
+
     /// Reads metadata from disk, generating it (password, port, paths) on first start.
     async fn load_or_init_metadata(&self, id: &str, version: &str) -> Result<PostgresMetadata> {
         if self.metadata_path(id).exists() {
@@ -398,6 +448,7 @@ impl LocalPostgresManager {
             password: generate_password(),
             database: id.to_string(),
             data_dir: self.resource_dir(id).join("data"),
+            runtime_target: None,
         };
         self.write_metadata(&metadata).await?;
         Ok(metadata)
@@ -636,21 +687,12 @@ fn pgvector_releases_url() -> String {
         .unwrap_or_else(|_| ALIEN_PGVECTOR_RELEASES_URL_DEFAULT.to_string())
 }
 
-/// Maps the compilation target to the release path, including the embedded server's libc family.
-/// Unsupported targets fail here rather than downloading an incompatible extension.
-fn pgvector_target() -> postgresql_extensions::Result<(&'static str, &'static str)> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") if cfg!(target_env = "gnu") => Ok(("linux-gnu", "x86_64")),
-        ("linux", "x86_64") if cfg!(target_env = "musl") => Ok(("linux-musl", "x86_64")),
-        ("linux", "aarch64") if cfg!(target_env = "gnu") => Ok(("linux-gnu", "aarch64")),
-        ("linux", "aarch64") if cfg!(target_env = "musl") => Ok(("linux-musl", "aarch64")),
-        ("macos", "aarch64") => Ok(("darwin", "aarch64")),
-        ("windows", "x86_64") => Ok(("windows", "x86_64")),
-        (os, arch) => Err(postgresql_extensions::Error::IoError(format!(
-            "pgvector: no published build for {os}-{arch}; the release host serves \
-             linux-{{gnu,musl}}-{{x86_64,aarch64}}, darwin-aarch64, windows-x86_64"
-        ))),
-    }
+/// Uses the same host runtime selected for the embedded server.
+async fn pgvector_target() -> postgresql_extensions::Result<(&'static str, &'static str)> {
+    let runtime = native_postgres_runtime()
+        .await
+        .map_err(|error| postgresql_extensions::Error::IoError(error.to_string()))?;
+    Ok((runtime.extension_os, std::env::consts::ARCH))
 }
 
 /// Overrides the `postgresql_extensions` "portal-corp" namespace to download pgvector from Alien's
@@ -707,7 +749,7 @@ impl Repository for AlienPgvectorRepository {
         _version: &VersionReq,
     ) -> postgresql_extensions::Result<(Version, Vec<u8>)> {
         let base = pgvector_releases_url();
-        let (os, arch) = pgvector_target()?;
+        let (os, arch) = pgvector_target().await?;
         // The embedded server reports a full version (e.g. "17.2.0"); the artifacts are
         // keyed by major within the matching OS, CPU architecture and libc family.
         let major = postgresql_version
@@ -830,6 +872,7 @@ mod tests {
             password: "s3cr3t".to_string(),
             database: "pgdb".to_string(),
             data_dir: tmp.path().join("data"),
+            runtime_target: None,
         };
         let dir = tmp.path().join("postgres").join(id);
         std::fs::create_dir_all(&dir).expect("mkdir");
