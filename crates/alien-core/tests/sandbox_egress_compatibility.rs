@@ -143,6 +143,7 @@ fn runtime_container_links_are_reachability_without_a_parent_lifecycle_cycle() {
             config: alien_core::Resource::new(caller),
             lifecycle: alien_core::ResourceLifecycle::Live,
             dependencies: vec![],
+            added_by_alien: false,
             display_name: None,
             description: None,
             remote_access: false,

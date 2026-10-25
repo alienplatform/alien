@@ -68,6 +68,7 @@ where
 
     Ok(StackResourceState::builder()
         .resource_type(resource_type)
+        .added_by_alien(ctx.resource.added_by_alien)
         .maybe_display_name(ctx.resource.display_name.clone())
         .maybe_description(ctx.resource.description.clone())
         .status(status)

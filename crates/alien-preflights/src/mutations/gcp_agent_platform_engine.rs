@@ -64,8 +64,11 @@ impl StackMutation for GcpAgentPlatformEngineMutation {
                     config: Resource::new(GcpAgentPlatformEngine::new(engine_id.clone()).build()),
                     lifecycle,
                     dependencies: Vec::new(),
-                    display_name: None,
-                    description: None,
+                    added_by_alien: true,
+                    display_name: Some(format!("Agent Platform engine ({sandbox_id})")),
+                    description: Some(
+                        "Hosts this sandbox in Google Cloud Agent Platform.".to_string(),
+                    ),
                     remote_access: false,
                 });
 

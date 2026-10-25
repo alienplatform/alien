@@ -9,6 +9,10 @@ use sha2::{Digest, Sha256};
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceEntry {
+    /// True when preflight added this resource, independent of its type or lifecycle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub added_by_alien: bool,
+
     /// Optional human-readable name. The stable resource ID is the display fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
@@ -417,6 +421,7 @@ impl StackBuilder {
             config: Resource::new(resource),
             lifecycle,
             dependencies: Vec::new(),
+            added_by_alien: false,
             display_name: None,
             description: None,
             remote_access: false,
@@ -544,6 +549,7 @@ mod tests {
             config: Resource::new(resource),
             lifecycle,
             dependencies: Vec::new(),
+            added_by_alien: false,
             display_name: None,
             description: None,
             remote_access,

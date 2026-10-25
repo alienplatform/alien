@@ -271,6 +271,7 @@ mod tests {
                 config: alien_core::Resource::new(caller),
                 lifecycle: alien_core::ResourceLifecycle::Live,
                 dependencies: vec![],
+                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,

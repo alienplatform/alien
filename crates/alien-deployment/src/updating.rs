@@ -408,6 +408,7 @@ pub async fn handle_updating(
             if keep_installed {
                 let mut retained = entry.clone();
                 if let Some(target) = target_stack.resources.get(resource_id) {
+                    retained.added_by_alien = target.added_by_alien;
                     retained.display_name = target.display_name.clone();
                     retained.description = target.description.clone();
                 }

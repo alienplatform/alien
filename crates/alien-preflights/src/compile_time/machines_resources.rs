@@ -83,6 +83,7 @@ mod tests {
             config: resource,
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            added_by_alien: false,
             display_name: None,
             description: None,
             remote_access: false,

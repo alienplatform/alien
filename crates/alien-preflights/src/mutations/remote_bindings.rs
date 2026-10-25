@@ -88,6 +88,7 @@ impl StackMutation for RemoteBindingsMutation {
                 ),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
+                added_by_alien: true,
                 display_name: Some("Remote resource access".to_string()),
                 description: Some(
                     "Provides the declared access path for resources used outside this deployment."

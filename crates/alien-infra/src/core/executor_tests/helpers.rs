@@ -312,6 +312,7 @@ pub fn build_stack_with_deps(
                 config: resource,
                 lifecycle,
                 dependencies: deps,
+                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,

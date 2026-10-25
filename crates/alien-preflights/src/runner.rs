@@ -209,6 +209,7 @@ impl PreflightRunner {
             stack_state.platform
         );
 
+        let declared_ids: std::collections::HashSet<_> = stack.resources.keys().cloned().collect();
         let mut current_stack = stack;
 
         for mutation in self.registry.get_all_mutations() {
@@ -226,6 +227,12 @@ impl PreflightRunner {
                     message: "Mutation execution failed".to_string(),
                     resource_id: None,
                 })?;
+        }
+
+        for (id, entry) in &mut current_stack.resources {
+            if !declared_ids.contains(id) {
+                entry.added_by_alien = true;
+            }
         }
 
         // Generated containers need the same capability checks as developer input.
@@ -1339,6 +1346,7 @@ mod setup_update_authorization_tests {
                         lifecycle: alien_core::ResourceLifecycle::Live,
                         dependencies: vec![],
                         enabled_when: None,
+                        added_by_alien: false,
                         display_name: None,
                         description: None,
                         remote_access: false,
@@ -1631,6 +1639,7 @@ mod setup_update_authorization_tests {
                 ),
                 lifecycle: alien_core::ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                added_by_alien: false,
                 display_name: None,
                 description: None,
                 remote_access: false,

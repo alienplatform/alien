@@ -298,6 +298,7 @@ mod tests {
             ),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: vec![],
+            added_by_alien: false,
             display_name: None,
             description: None,
             remote_access: true,

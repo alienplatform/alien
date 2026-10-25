@@ -87,7 +87,8 @@ impl StackMutation for AzureServiceBusNamespaceMutation {
             config: alien_core::Resource::new(service_bus_namespace),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies,
-            display_name: Some("Application messaging namespace".to_string()),
+            added_by_alien: true,
+            display_name: Some("Service Bus namespace".to_string()),
             description: Some(
                 "Hosts Azure Service Bus queues used by this deployment.".to_string(),
             ),

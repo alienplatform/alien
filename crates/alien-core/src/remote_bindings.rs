@@ -221,6 +221,7 @@ mod tests {
             config: crate::Resource::new(sandbox),
             dependencies: Vec::new(),
             lifecycle: ResourceLifecycle::Frozen,
+            added_by_alien: false,
             display_name: None,
             description: None,
             remote_access: true,

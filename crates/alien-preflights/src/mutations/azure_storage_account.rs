@@ -78,7 +78,8 @@ impl StackMutation for AzureStorageAccountMutation {
             config: alien_core::Resource::new(storage_account),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies,
-            display_name: Some("Application storage account".to_string()),
+            added_by_alien: false,
+            display_name: Some("Storage account".to_string()),
             description: Some("Hosts Azure storage resources used by this deployment.".to_string()),
             remote_access: false,
         };

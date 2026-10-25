@@ -2734,6 +2734,7 @@ impl StackExecutor {
         next_state.resources.extend(subsequent_state_updates);
         for (id, resource) in &mut next_state.resources {
             if let Some(entry) = self.desired_stack.resources.get(id) {
+                resource.added_by_alien = entry.added_by_alien;
                 resource.display_name.clone_from(&entry.display_name);
                 resource.description.clone_from(&entry.description);
             }
