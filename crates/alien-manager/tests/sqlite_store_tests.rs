@@ -3234,6 +3234,42 @@ mod retention_handoff_tests {
             })
         }
     }
+    #[test]
+    fn failed_bucket_without_physical_identity_is_not_installed_data() {
+        let mut stack = StackState::with_resource_prefix(Platform::Aws, "test".into());
+        let mut bucket = alien_core::StackResourceState::new_pending(
+            "storage".into(),
+            alien_core::Resource::new(alien_core::Storage::new("data".into()).build()),
+            None,
+            Vec::new(),
+        );
+        bucket.status = ResourceStatus::ProvisionFailed;
+        bucket.lifecycle = Some(ResourceLifecycle::Live);
+        bucket.internal_state = Some(serde_json::json!({
+            "type": "AwsStorageController", "state": "createFailed", "_controllerStateVersion": 1
+        }));
+        stack.resources.insert("data".into(), bucket);
+        assert!(installed_durable_resource_ids(&stack).is_empty());
+        // An interrupted request is cleaned up by the controller's ownership-checked
+        // delete path; it is not evidence that an installed bucket holds user data.
+        stack
+            .resources
+            .get_mut("data")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()["requestedBucketName"] = serde_json::json!("test-data");
+        assert!(installed_durable_resource_ids(&stack).is_empty());
+        stack
+            .resources
+            .get_mut("data")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()["bucketName"] = serde_json::json!("test-data");
+        assert_eq!(installed_durable_resource_ids(&stack), vec!["data"]);
+    }
+
     #[tokio::test]
     async fn setup_erase_removes_retained_live_bucket() {
         let mut stack = StackState::with_resource_prefix(Platform::Aws, "test".into());

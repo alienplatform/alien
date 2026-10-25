@@ -612,7 +612,24 @@ pub fn installed_durable_resource_ids(state: &StackState) -> Vec<String> {
                 "artifact-registry" => platform != Platform::Aws,
                 _ => false,
             };
+            // A failed storage create can save a controller before it owns a bucket.
+            // Requested names are cleaned up by the controller, not retained as data.
+            let storage_installed = resource.internal_state.as_ref().is_none_or(|controller| {
+                let identity = match controller.get("type").and_then(serde_json::Value::as_str) {
+                    Some(
+                        "AwsStorageController" | "GcpStorageController" | "TestStorageController",
+                    ) => "bucketName",
+                    Some("AzureStorageController") => "containerName",
+                    Some("LocalStorageController") => "storagePath",
+                    _ => return true,
+                };
+                controller
+                    .get(identity)
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+            });
             (resource.status != ResourceStatus::Deleted
+                && storage_installed
                 && !(resource.status == ResourceStatus::Pending
                     && resource.internal_state.is_none()
                     && resource.outputs.is_none()
