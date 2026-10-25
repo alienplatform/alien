@@ -16,7 +16,9 @@
 use std::{future::ready, sync::Arc, time::Duration};
 
 use alien_bindings::traits::Kv;
-use alien_core::{sync::TargetDeployment, AirgappedReportMetadata, DeploymentState, Platform};
+use alien_core::{
+    sync::TargetDeployment, AirgappedReportMetadata, DeploymentState, Platform, ResourceHeartbeat,
+};
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -292,6 +294,9 @@ pub struct StatusReport {
     /// Deployment state as the environment's Operator last recorded it.
     #[cfg_attr(feature = "openapi", schema(value_type = std::collections::HashMap<String, serde_json::Value>))]
     pub state: DeploymentState,
+    /// Resource observations captured by the Operator alongside this state.
+    #[serde(default)]
+    pub heartbeats: Vec<ResourceHeartbeat>,
     /// Telemetry the Operator buffered, as the OTLP batches it received.
     #[serde(default)]
     pub telemetry: Vec<ReportedTelemetry>,
@@ -395,7 +400,15 @@ async fn status_report(
     let last_batch = report.telemetry.iter().filter_map(|batch| batch.id).max();
     let report_state = report.state.clone();
     if !deleting {
-        if let Err(error) = reconcile_report(&state, &subject, &deployment.id, report.state).await {
+        if let Err(error) = reconcile_report(
+            state.deployment_store.as_ref(),
+            &subject,
+            &deployment.id,
+            report.state,
+            report.heartbeats.clone(),
+        )
+        .await
+        {
             return error.into_response();
         }
     }
@@ -428,7 +441,15 @@ async fn status_report(
 
     if deleting && last_batch.is_none_or(|last| forwarded.through.is_some_and(|mark| mark >= last))
     {
-        if let Err(error) = reconcile_report(&state, &subject, &deployment.id, report_state).await {
+        if let Err(error) = reconcile_report(
+            state.deployment_store.as_ref(),
+            &subject,
+            &deployment.id,
+            report_state,
+            report.heartbeats,
+        )
+        .await
+        {
             return error.into_response();
         }
     }
@@ -445,13 +466,13 @@ async fn status_report(
 }
 
 async fn reconcile_report(
-    state: &AppState,
+    store: &dyn crate::traits::DeploymentStore,
     subject: &Subject,
     deployment_id: &str,
     report: DeploymentState,
+    heartbeats: Vec<ResourceHeartbeat>,
 ) -> Result<(), alien_error::AlienError> {
-    state
-        .deployment_store
+    store
         .reconcile(
             subject,
             ReconcileData {
@@ -460,7 +481,7 @@ async fn reconcile_report(
                 state: report,
                 update_heartbeat: true,
                 suggested_delay_ms: None,
-                heartbeats: Vec::new(),
+                heartbeats,
                 observed_inventory_batches: Vec::new(),
                 capabilities: Vec::new(),
                 operator_version: None,
@@ -594,6 +615,47 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+
+    #[tokio::test]
+    async fn report_reconcile_preserves_heartbeats_and_accepts_old_reports() {
+        let heartbeat = serde_json::json!({
+         "deploymentId": "dep_1", "resourceId": "web", "resourceType": "container",
+         "controllerPlatform": "kubernetes", "backend": "kubernetes", "observedAt": "2026-01-01T00:00:00Z",
+         "data": {"resourceType": "container", "data": {"backend": "kubernetes", "namespace": "site", "name": "web",
+         "workloadKind": "deployment", "status": {"health": "healthy", "lifecycle": "running", "stale": false, "partial": false, "collectionIssues": []},
+         "replicas": {"desired": 7, "current": 7, "ready": 7, "available": 7, "updated": 7}, "pods": [], "events": []}}, "raw": []
+        });
+        for heartbeats in [None, Some(serde_json::json!([heartbeat]))] {
+            let mut body =
+                serde_json::json!({"state": {"status": "running", "platform": "kubernetes", "protocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION}});
+            if let Some(heartbeats) = heartbeats {
+                body["heartbeats"] = heartbeats;
+            }
+            let report: StatusReport = serde_json::from_value(body.clone()).unwrap();
+            let expected: Vec<ResourceHeartbeat> = serde_json::from_value(
+                body.get("heartbeats")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([])),
+            )
+            .unwrap();
+            let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+            store
+                .expect_reconcile()
+                .times(1)
+                .withf(move |_, data| data.deployment_id == "dep_1" && data.heartbeats == expected)
+                .returning(|_, _| Err(ErrorData::internal("store reached").into_generic()));
+            let error = reconcile_report(
+                &store,
+                &Subject::system(),
+                "dep_1",
+                report.state,
+                report.heartbeats,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("store reached"));
+        }
+    }
 
     /// A backend that, like one acknowledging a write only once it is
     /// flushed, takes a while per batch. Records the id each batch carries

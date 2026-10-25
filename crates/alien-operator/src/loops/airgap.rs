@@ -245,12 +245,7 @@ async fn write_status(state: &OperatorState, secret_name: &str, export_token: &s
     if state.db.get_airgap_sequence().await? != sequence {
         return Ok(());
     }
-    let status = serde_json::json!({
-        "deploymentId": state.db.get_deployment_id().await?,
-        "writtenAt": chrono::Utc::now().to_rfc3339(),
-        "sequence": sequence,
-        "state": deployment_state,
-    });
+    let status = exported_status(&state.db, deployment_state, sequence).await?;
     let bytes =
         serde_json::to_vec(&status)
             .into_alien_error()
@@ -262,6 +257,10 @@ async fn write_status(state: &OperatorState, secret_name: &str, export_token: &s
     let secret = Secret {
         metadata: ObjectMeta {
             name: Some(secret_name.to_string()),
+            labels: Some(BTreeMap::from([(
+                "app.kubernetes.io/managed-by".into(),
+                "alien-deploy-sync".into(),
+            )])),
             ..Default::default()
         },
         data: Some(BTreeMap::from([
@@ -305,6 +304,20 @@ async fn write_status(state: &OperatorState, secret_name: &str, export_token: &s
     Ok(())
 }
 
+async fn exported_status(
+    db: &crate::db::OperatorDb,
+    deployment_state: alien_core::DeploymentState,
+    sequence: Option<u64>,
+) -> Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "deploymentId": db.get_deployment_id().await?,
+        "writtenAt": chrono::Utc::now().to_rfc3339(),
+        "sequence": sequence,
+        "state": deployment_state,
+        "heartbeats": db.get_pending_heartbeats().await?,
+    }))
+}
+
 async fn client(state: &OperatorState) -> Result<(KubernetesClient, String)> {
     let namespace = state.config.namespace.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
@@ -328,6 +341,41 @@ async fn client(state: &OperatorState) -> Result<(KubernetesClient, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn exported_status_carries_persisted_heartbeats() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::OperatorDb::new(
+            dir.path().to_str().unwrap(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .unwrap();
+        let heartbeat = serde_json::json!({
+         "deploymentId": "dep_1", "resourceId": "web", "resourceType": "container",
+         "controllerPlatform": "kubernetes", "backend": "kubernetes", "observedAt": "2026-01-01T00:00:00Z",
+         "data": {"resourceType": "container", "data": {"backend": "kubernetes", "namespace": "site", "name": "web",
+         "workloadKind": "deployment", "status": {"health": "healthy", "lifecycle": "running", "stale": false, "partial": false, "collectionIssues": []},
+         "replicas": {"desired": 7, "current": 7, "ready": 7, "available": 7, "updated": 7}, "pods": [], "events": []}}, "raw": []
+        });
+        db.set_pending_heartbeats(&[serde_json::from_value(heartbeat.clone()).unwrap()])
+            .await
+            .unwrap();
+        let state = serde_json::from_value(
+            serde_json::json!({"status": "running", "platform": "kubernetes", "protocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION}),
+        )
+        .unwrap();
+        let exported = exported_status(&db, state, Some(3)).await.unwrap();
+        let observed: Vec<alien_core::ResourceHeartbeat> =
+            serde_json::from_value(exported["heartbeats"].clone()).unwrap();
+        assert_eq!(observed, vec![serde_json::from_value(heartbeat).unwrap()]);
+        assert_eq!(exported["sequence"], 3);
+        assert!(exported["writtenAt"]
+            .as_str()
+            .unwrap()
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .is_ok());
+    }
 
     #[tokio::test(start_paused = true)]
     async fn healthy_multi_resource_refresh_can_exceed_thirty_seconds() {

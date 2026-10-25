@@ -33,7 +33,7 @@ use std::{
 use std::os::unix::fs::PermissionsExt as _;
 
 use alien_cli_common::airgap::{self, BundleManifest, RegistryAccess};
-use alien_core::embedded_config::DeployCliConfig;
+use alien_core::{embedded_config::DeployCliConfig, ResourceHeartbeat};
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::Engine as _;
 use clap::Parser;
@@ -44,6 +44,7 @@ use tokio::{io::AsyncBufReadExt as _, process::Command};
 use crate::error::{ErrorData, Result};
 
 const SITE_FILE: &str = "site.json";
+const SYNC_SECRET_MANAGER: &str = "alien-deploy-sync";
 const TO_SITE: &str = "to-site";
 const FROM_SITE: &str = "from-site";
 const INSTALLED: &str = "installed";
@@ -162,6 +163,8 @@ struct SiteReport {
     written_at: String,
     installed_release: Option<String>,
     state: serde_json::Value,
+    #[serde(default)]
+    heartbeats: Vec<ResourceHeartbeat>,
     telemetry: Vec<ReportedBatch>,
     /// Batches the Operator dropped to stay within its buffer.
     dropped: u64,
@@ -844,7 +847,8 @@ async fn send_report(
     let last = report.telemetry.iter().map(|batch| batch.id).max();
     loop {
         let mut body = serde_json::json!({
-            "state": report.state, "telemetry": [], "writtenAt": report.written_at
+            "state": report.state, "telemetry": [], "writtenAt": report.written_at,
+            "heartbeats": report.heartbeats
         });
         let mut bytes = serde_json::to_vec(&body)
             .into_alien_error()
@@ -1386,7 +1390,9 @@ async fn uninstall_site(
     }
     report.installed_release = None;
     report.written_at = chrono::Utc::now().to_rfc3339();
+    report.heartbeats.clear();
     save_report(folder, &report)?;
+    remove_transport_secrets(settings, &manifest.stack_id, &namespace).await?;
     for (_, pending) in by_sequence(&folder.join(TO_SITE), Some(BUNDLE_EXTENSION))? {
         std::fs::remove_file(pending)
             .into_alien_error()
@@ -2206,16 +2212,37 @@ async fn collect_report(
     let after = current_ack(settings, &record.stack_id, &namespace).await?;
     let (telemetry, dropped) =
         export_telemetry(settings, &record.stack_id, &namespace, &export_token, after).await?;
+    report_from_status(site, record, status, telemetry, dropped).map(Some)
+}
+
+fn report_from_status(
+    site: &SiteState,
+    record: &InstalledBundle,
+    status: serde_json::Value,
+    telemetry: Vec<ReportedBatch>,
+    dropped: u64,
+) -> Result<SiteReport> {
     let report = SiteReport {
         deployment_id: site.deployment_id.clone(),
-        written_at: chrono::Utc::now().to_rfc3339(),
+        written_at: status["writtenAt"]
+            .as_str()
+            .ok_or_else(|| AlienError::new(config_error("the Operator status has no writtenAt")))?
+            .to_string(),
         installed_release: current_release(&status),
         state: status["state"].clone(),
+        heartbeats: serde_json::from_value(
+            status
+                .get("heartbeats")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        )
+        .into_alien_error()
+        .context(config_error("reading resource heartbeats"))?,
         telemetry,
         dropped,
         inventory: record.inventory.clone(),
     };
-    Ok(Some(report))
+    Ok(report)
 }
 
 fn save_report(folder: &Path, report: &SiteReport) -> Result<()> {
@@ -2561,8 +2588,20 @@ async fn write_pull_secret(
             "--from-file=.dockerconfigjson={}",
             config_path.display()
         ))
-        .args(["--dry-run=client", "-o", "yaml"]);
+        .args(["--dry-run=client", "-o", "json"]);
     let secret_yaml = run(secret_yaml, "kubectl create secret").await?;
+    // An existing customer pull Secret may be reused, but never becomes ours.
+    let mut existing = kubectl(settings.kube_context.as_deref());
+    existing.args(["get", "secret", &secret_name, "-n", namespace, "--ignore-not-found", "-o", "json"]);
+    let existing = run(existing, "checking the pull Secret owner").await?;
+    let owned = if existing.is_empty() {
+        true
+    } else {
+        let secret: serde_json::Value = serde_json::from_slice(&existing)
+            .into_alien_error().context(config_error("reading pull Secret ownership"))?;
+        secret["metadata"]["labels"]["app.kubernetes.io/managed-by"].as_str() == Some(SYNC_SECRET_MANAGER)
+    };
+    let secret_yaml = if owned { mark_sync_secret(&secret_yaml)? } else { secret_yaml };
 
     let apply_path = dir.path().join("pull-secret.yaml");
     let mut documents = namespace_yaml;
@@ -2654,8 +2693,9 @@ async fn write_target(
         .arg(format!("--from-file=target.json={}", target_path.display()))
         .arg(format!("--from-literal=sequence={sequence}"))
         .arg(format!("--from-literal=telemetry-ack={telemetry_ack}"))
-        .args(["--dry-run=client", "-o", "yaml"]);
+        .args(["--dry-run=client", "-o", "json"]);
     let yaml = run(create, "kubectl create secret").await?;
+    let yaml = mark_sync_secret(&yaml)?;
     let dir = tempfile::tempdir()
         .into_alien_error()
         .context(config_error("creating a working directory"))?;
@@ -2668,6 +2708,64 @@ async fn write_target(
         .args(["apply", "-n", namespace, "-f"])
         .arg(&apply_path);
     run(apply, "kubectl apply").await.map(|_| ())
+}
+
+/// Mark only Secrets this sync creates; customer-supplied credentials stay owned by the customer.
+fn mark_sync_secret(yaml: &[u8]) -> Result<Vec<u8>> {
+    let mut secret: serde_json::Value = serde_json::from_slice(yaml)
+        .into_alien_error()
+        .context(config_error("reading the Secret manifest"))?;
+    secret["metadata"]["labels"]["app.kubernetes.io/managed-by"] = SYNC_SECRET_MANAGER.into();
+    serde_json::to_vec(&secret)
+        .into_alien_error()
+        .context(config_error("encoding the Secret manifest"))
+}
+
+async fn remove_transport_secrets(
+    settings: &SiteSide,
+    stack_id: &str,
+    namespace: &str,
+) -> Result<()> {
+    for name in [
+        format!("{stack_id}-airgap-target"),
+        format!("{stack_id}-airgap-status"),
+        pull_secret_name(stack_id),
+    ] {
+        let mut get = kubectl(settings.kube_context.as_deref());
+        get.args([
+            "get",
+            "secret",
+            &name,
+            "-n",
+            namespace,
+            "--ignore-not-found",
+            "-o",
+            "json",
+        ]);
+        let bytes = run(get, "checking sync Secret ownership").await?;
+        if bytes.is_empty() {
+            continue;
+        }
+        let secret: serde_json::Value = serde_json::from_slice(&bytes)
+            .into_alien_error()
+            .context(config_error("reading sync Secret ownership"))?;
+        if secret["metadata"]["labels"]["app.kubernetes.io/managed-by"].as_str()
+            != Some(SYNC_SECRET_MANAGER)
+        {
+            continue;
+        }
+        let mut delete = kubectl(settings.kube_context.as_deref());
+        delete.args([
+            "delete",
+            "secret",
+            &name,
+            "-n",
+            namespace,
+            "--ignore-not-found",
+        ]);
+        run(delete, "removing sync Secret").await?;
+    }
+    Ok(())
 }
 
 fn kubectl(context: Option<&str>) -> Command {
@@ -2716,6 +2814,114 @@ mod tests {
     use std::os::unix::fs::MetadataExt as _;
 
     use super::*;
+
+    /// Run with ALIEN_SYNC_TEST_CONTEXT pointing at a disposable Kind cluster.
+    #[tokio::test]
+    #[ignore = "requires kubectl and a disposable Kind cluster"]
+    async fn uninstall_transport_secrets_preserves_customer_credentials() {
+        let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("sync-cleanup-{}", std::process::id());
+        let settings = SiteSide {
+            registry: "registry.example.com/site".into(),
+            registry_credentials: None,
+            insecure_registry: false,
+            namespace: Some(namespace.clone()),
+            values: Vec::new(),
+            kube_context: Some(context),
+        };
+        let mut create = kubectl(settings.kube_context.as_deref());
+        create.args(["create", "namespace", &namespace]);
+        run(create, "creating test namespace").await.unwrap();
+        for name in ["deployer-password", "site-tls"] {
+            let mut create = kubectl(settings.kube_context.as_deref());
+            create.args([
+                "create",
+                "secret",
+                "generic",
+                name,
+                "-n",
+                &namespace,
+                "--from-literal=value=test",
+            ]);
+            run(create, "creating customer Secret").await.unwrap();
+        }
+        let mut create = kubectl(settings.kube_context.as_deref());
+        create.args([
+            "create",
+            "secret",
+            "docker-registry",
+            "customer-registry-credentials",
+            "-n",
+            &namespace,
+            "--docker-server=registry.example.com",
+            "--docker-username=user",
+            "--docker-password=password",
+        ]);
+        run(create, "creating customer pull Secret").await.unwrap();
+        write_pull_secret(&settings, "customer", &namespace, "user", "password")
+            .await
+            .unwrap();
+        write_pull_secret(&settings, "owned", &namespace, "user", "password")
+            .await
+            .unwrap();
+        write_pull_secret(&settings, "owned", &namespace, "user", "updated-password").await.unwrap();
+        let target = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(target.path(), b"{}").unwrap();
+        write_target(&settings, "owned", &namespace, target.path(), 1, 0)
+            .await
+            .unwrap();
+        let mut create = kubectl(settings.kube_context.as_deref());
+        create.args([
+            "create",
+            "secret",
+            "generic",
+            "owned-airgap-status",
+            "-n",
+            &namespace,
+        ]);
+        run(create, "creating status Secret").await.unwrap();
+        let mut label = kubectl(settings.kube_context.as_deref());
+        label.args([
+            "label",
+            "secret",
+            "owned-airgap-status",
+            "-n",
+            &namespace,
+            "app.kubernetes.io/managed-by=alien-deploy-sync",
+        ]);
+        run(label, "marking status Secret").await.unwrap();
+        remove_transport_secrets(&settings, "owned", &namespace)
+            .await
+            .unwrap();
+        remove_transport_secrets(&settings, "customer", &namespace)
+            .await
+            .unwrap();
+        remove_transport_secrets(&settings, "owned", &namespace)
+            .await
+            .unwrap();
+        let mut list = kubectl(settings.kube_context.as_deref());
+        list.args(["get", "secrets", "-n", &namespace, "-o", "json"]);
+        let remaining: serde_json::Value =
+            serde_json::from_slice(&run(list, "reading retained Secrets").await.unwrap()).unwrap();
+        let mut names: Vec<_> = remaining["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["metadata"]["name"].as_str().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "customer-registry-credentials",
+                "deployer-password",
+                "site-tls"
+            ]
+        );
+        let mut delete = kubectl(settings.kube_context.as_deref());
+        delete.args(["delete", "namespace", &namespace]);
+        run(delete, "removing test namespace").await.unwrap();
+    }
 
     #[test]
     fn rollout_waits_for_requested_sequence_before_judging_status() {
@@ -3025,6 +3231,7 @@ mod tests {
             written_at: "2026-01-01T00:00:00Z".to_string(),
             installed_release: Some("rel_old".to_string()),
             state: serde_json::json!({ "status": "running" }),
+            heartbeats: Vec::new(),
             telemetry: (1..=4)
                 .map(|id| ReportedBatch {
                     id,
@@ -3134,6 +3341,77 @@ mod tests {
             assert_eq!(site.deleted, accepted);
             request.assert_hits_async(1).await;
         }
+    }
+
+    #[test]
+    fn collected_report_keeps_operator_time_and_observations() {
+        let heartbeat = serde_json::json!({
+         "deploymentId": "dep_1", "resourceId": "web", "resourceType": "container",
+         "controllerPlatform": "kubernetes", "backend": "kubernetes", "observedAt": "2026-01-01T00:00:00Z",
+         "data": {"resourceType": "container", "data": {"backend": "kubernetes", "namespace": "site", "name": "web",
+         "workloadKind": "deployment", "status": {"health": "healthy", "lifecycle": "running", "stale": false, "partial": false, "collectionIssues": []},
+         "replicas": {"desired": 7, "current": 7, "ready": 7, "available": 7, "updated": 7}, "pods": [], "events": []}}, "raw": []
+        });
+        let record = InstalledBundle {
+            release_id: "rel_1".into(),
+            stack_id: "site".into(),
+            chart: "chart.tgz".into(),
+            chart_images: BTreeMap::new(),
+            telemetry_ack: None,
+            inventory: BTreeSet::new(),
+            registry: None,
+        };
+        let site = SiteState {
+            deployment_id: "dep_1".into(),
+            ..Default::default()
+        };
+        let mut status = serde_json::json!({"writtenAt": "2026-01-01T00:00:00Z", "state": {"status": "running"}, "heartbeats": [heartbeat.clone()]});
+        let report = report_from_status(&site, &record, status.clone(), Vec::new(), 0).unwrap();
+        assert_eq!(report.written_at, "2026-01-01T00:00:00Z");
+        assert_eq!(
+            report.heartbeats,
+            vec![serde_json::from_value(heartbeat).unwrap()]
+        );
+        status.as_object_mut().unwrap().remove("heartbeats");
+        assert!(
+            report_from_status(&site, &record, status.clone(), Vec::new(), 0)
+                .unwrap()
+                .heartbeats
+                .is_empty()
+        );
+        status["heartbeats"] = serde_json::json!([{"invalid": true}]);
+        assert!(report_from_status(&site, &record, status, Vec::new(), 0).is_err());
+    }
+
+    #[tokio::test]
+    async fn carried_report_upload_preserves_heartbeats() {
+        let server = MockServer::start_async().await;
+        let heartbeat = serde_json::json!({
+         "deploymentId": "dep_1", "resourceId": "web", "resourceType": "container",
+         "controllerPlatform": "kubernetes", "backend": "kubernetes", "observedAt": "2026-01-01T00:00:00Z",
+         "data": {"resourceType": "container", "data": {"backend": "kubernetes", "namespace": "site", "name": "web",
+         "workloadKind": "deployment", "status": {"health": "healthy", "lifecycle": "running", "stale": false, "partial": false, "collectionIssues": []},
+         "replicas": {"desired": 7, "current": 7, "ready": 7, "available": 7, "updated": 7}, "pods": [], "events": []}}, "raw": []
+        });
+        let request = server.mock_async(|when, then| {
+            when.method(POST).path("/v1/deployments/dep_1/status-report")
+                .json_body_partial(serde_json::json!({"heartbeats": [heartbeat.clone()], "writtenAt": "2026-01-01T00:00:00Z"}).to_string());
+            then.status(200).json_body(serde_json::json!({"telemetryThrough": 4}));
+        }).await;
+        let (dir, mut site) = folder_with_report();
+        let mut report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report_path(dir.path())).unwrap()).unwrap();
+        report["heartbeats"] = serde_json::json!([heartbeat]);
+        std::fs::write(
+            report_path(dir.path()),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        send_reports(dir.path(), &mut site, &access(&server), false)
+            .await
+            .unwrap();
+        request.assert_hits_async(1).await;
+        assert!(!report_path(dir.path()).exists());
     }
 
     #[tokio::test]
