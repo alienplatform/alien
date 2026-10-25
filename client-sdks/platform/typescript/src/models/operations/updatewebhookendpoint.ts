@@ -31,7 +31,7 @@ export type UpdateWebhookEndpointFilterType = ClosedEnum<
 >;
 
 export type UpdateWebhookEndpointRequestBody = {
-  url: string;
+  url?: string | undefined;
   description?: string | undefined;
   filterTypes?: Array<UpdateWebhookEndpointFilterType> | undefined;
   disabled?: boolean | undefined;
@@ -50,10 +50,10 @@ export const UpdateWebhookEndpointFilterType$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type UpdateWebhookEndpointRequestBody$Outbound = {
-  url: string;
-  description: string;
+  url?: string | undefined;
+  description?: string | undefined;
   filterTypes?: Array<string> | undefined;
-  disabled: boolean;
+  disabled?: boolean | undefined;
 };
 
 /** @internal */
@@ -61,11 +61,11 @@ export const UpdateWebhookEndpointRequestBody$outboundSchema: z.ZodType<
   UpdateWebhookEndpointRequestBody$Outbound,
   UpdateWebhookEndpointRequestBody
 > = z.object({
-  url: z.string(),
-  description: z.string().default(""),
+  url: z.string().optional(),
+  description: z.string().optional(),
   filterTypes: z.array(UpdateWebhookEndpointFilterType$outboundSchema)
     .optional(),
-  disabled: z.boolean().default(false),
+  disabled: z.boolean().optional(),
 });
 
 export function updateWebhookEndpointRequestBodyToJSON(

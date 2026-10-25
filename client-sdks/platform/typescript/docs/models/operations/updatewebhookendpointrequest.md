@@ -7,9 +7,7 @@ import { UpdateWebhookEndpointRequest } from "@alienplatform/platform-api/models
 
 let value: UpdateWebhookEndpointRequest = {
   id: "<id>",
-  requestBody: {
-    url: "https://brisk-mathematics.com/",
-  },
+  requestBody: {},
 };
 ```
 

@@ -6,9 +6,9 @@ management:
   generationVersion: 2.941.0
   releaseVersion: 3.3.42
 persistentEdits:
-  generation_id: 378474ac-77e0-4917-be08-7e9f3d72f71c
-  pristine_commit_hash: 29e081338472af4a3e015c3c38992b4895137f09
-  pristine_tree_hash: ad97eeb32a4158011796f3251165d887f4e4b8a7
+  generation_id: 0e216994-6213-4781-982d-ff6f25c0c5f8
+  pristine_commit_hash: 6cc51cf27f95ea7f74f31fb064c555b09d1aef9e
+  pristine_tree_hash: a3a8116f98490fc3d1b55f0175d14df6034d030c
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -12317,6 +12317,10 @@ trackedFiles:
     id: 3f79c7d64eac
     last_write_checksum: sha1:e737dfe23a9232b67b4f1b202d7601b64a846fff
     pristine_git_object: 27f95ef9cd6741328345705811a2747981c6d80a
+  docs/models/filtertype.md:
+    id: 0a51b2cfc433
+    last_write_checksum: sha1:eab09689d5844a39cb9cecbeab575024e533b09e
+    pristine_git_object: 78a6e982e69157ee82faab56ffe6ca806405ee4c
   docs/models/forwardimportrequest.md:
     id: "652670843092"
     last_write_checksum: sha1:e8d8a9ab4ada6220093492930efcd37e59eaa9a2
@@ -12367,8 +12371,8 @@ trackedFiles:
     pristine_git_object: ed60f3bc6cb23aa9988307bc1d591592b5d9adbe
   docs/models/generatemanagertokenrequest.md:
     id: 8390570078a9
-    last_write_checksum: sha1:c1ab1e37ddb659397990bc514ed9df3629ed1d12
-    pristine_git_object: 450d175bf71b7b65c4d28b871027e36575de8394
+    last_write_checksum: sha1:5d78df140ab34e9972161d2f0588b806aa86ce9f
+    pristine_git_object: 3b93b14eadf64d1e4b6f29ad0aba3ab42f6ea73e
   docs/models/generatemanagertokenresponse.md:
     id: 4e2794042c0c
     last_write_checksum: sha1:b40f8609d89e4e48c56080c1811a675097622ec5
@@ -17941,6 +17945,22 @@ trackedFiles:
     id: df6f249b1ea6
     last_write_checksum: sha1:96ce3bf4edd2cb8797d660d366aea23048646047
     pristine_git_object: 0b4463fe2ac5ef556891031a52c22a863e959ed4
+  docs/models/operations/createwebhookendpointfiltertype.md:
+    id: b30bea1c17ed
+    last_write_checksum: sha1:9dd5139349ac001f0c4377ea795e4acd4a405cfe
+    pristine_git_object: 2db171de83fc5f99c1984bf7e4a3ed97c9896f7d
+  docs/models/operations/createwebhookendpointglobals.md:
+    id: fad8af6d3fd8
+    last_write_checksum: sha1:8853cd1f34959f184f04bef5a1a9a6af61d413f1
+    pristine_git_object: 0ebd9b8c791c35797ed94fe34e65f8b299081fa3
+  docs/models/operations/createwebhookendpointrequest.md:
+    id: e20bfea91877
+    last_write_checksum: sha1:7daf1ffb6d81f28e3cd369c8f799d62cb5f3945d
+    pristine_git_object: f01b0e2e110b9d89a1ef9cbf965f97a9f20e6c2a
+  docs/models/operations/createwebhookendpointrequestbody.md:
+    id: 04e7ac9ce763
+    last_write_checksum: sha1:915b10517d53d4d04ebef21109db8e8a4392673e
+    pristine_git_object: 324d6a44d252b6349962f1802bc1ebbc2c277738
   docs/models/operations/createworkspaceinvitationglobals.md:
     id: 06197bd4234a
     last_write_checksum: sha1:8c62d6e7b687fce6831a269a3c56deb0763b9f06
@@ -18637,6 +18657,14 @@ trackedFiles:
     id: 2b9e0e9da792
     last_write_checksum: sha1:ea8de34b94b48b6b76539b2d38331c0db1c21639
     pristine_git_object: 1896907bdac92ac3c62512147c142cb4ee277977
+  docs/models/operations/deletewebhookendpointglobals.md:
+    id: 17b1fa591f13
+    last_write_checksum: sha1:891f906e2cde7bfa2c025cca28cdc8e5e80a567d
+    pristine_git_object: b973da4c4807c5718915dcb56f971a59cf3013b8
+  docs/models/operations/deletewebhookendpointrequest.md:
+    id: 51240cdf8cbb
+    last_write_checksum: sha1:d0d0b59f99be04f13c2158839dcb7fb99f2d0afb
+    pristine_git_object: 3007ed98ad7bfa546cc682f48c49bafa1075b514
   docs/models/operations/deleteworkspaceglobals.md:
     id: 43fe94eda9d4
     last_write_checksum: sha1:156244b1a30af11e8a1049161557864e9803c98a
@@ -20401,6 +20429,22 @@ trackedFiles:
     id: 3a69e2c89caa
     last_write_checksum: sha1:2e9ac25c736e77af68c871d76a4832d003bdec36
     pristine_git_object: 957953b95c99f6d2f2ed276c68bde9a655519f8a
+  docs/models/operations/getwebhookendpointglobals.md:
+    id: a61d64d94325
+    last_write_checksum: sha1:ca64827a1308b6fd3cb9eb773d676ba82cc48ac7
+    pristine_git_object: 46fe4ea965953a8e5784c9cac88c71a56c44b17a
+  docs/models/operations/getwebhookendpointrequest.md:
+    id: 1af22c43023f
+    last_write_checksum: sha1:5c6335df96f8bfd62538a3f9d23940ba1ef80cb3
+    pristine_git_object: 1679ccf35aa2203794d499dd86af18c1558dc5ed
+  docs/models/operations/getwebhooksigningsecretglobals.md:
+    id: 429018f14484
+    last_write_checksum: sha1:aaaa396b87ef924c958ddfd7820ca1e2788e4e8b
+    pristine_git_object: 95e137e93611a3eef288a25b0f2ae91c6f34dc4b
+  docs/models/operations/getwebhooksigningsecretrequest.md:
+    id: a4224f051c7b
+    last_write_checksum: sha1:ccf085403dde2abaac490c4d341974872d263712
+    pristine_git_object: 40e6e204cca33474deb585d35fea5881e5055186
   docs/models/operations/getworkspacebillingentitlementsglobals.md:
     id: 6be847f989aa
     last_write_checksum: sha1:d03d3cf338cce0bf9ec56ab7533c9271eff9c381
@@ -21761,6 +21805,22 @@ trackedFiles:
     id: d18e327878ea
     last_write_checksum: sha1:70cb520a5f4fda88aed9d51591bc31aa08a32fcd
     pristine_git_object: b2aee4fd68a57f2019a31ed229845ace43a75551
+  docs/models/operations/listwebhookdeliveriesglobals.md:
+    id: c4da597936c5
+    last_write_checksum: sha1:7c11f7647f7925b0216bd6035c67fcd81703dd50
+    pristine_git_object: 3db3928a3ee45381a4b7c693f8f7e5f0aa6afb02
+  docs/models/operations/listwebhookdeliveriesrequest.md:
+    id: dbfca05eb4d6
+    last_write_checksum: sha1:37ad3f4d8f9a9a54da9988ef4ed8a462b5093a4a
+    pristine_git_object: 0dd32eb0a7f0e09645311ccc7ac88d596f10095d
+  docs/models/operations/listwebhookendpointsglobals.md:
+    id: 1c2defa3289d
+    last_write_checksum: sha1:504ae39324947ccb50834a1ecf72a25fda818643
+    pristine_git_object: 5fec751f5a5d8bb308e481e526b852fe0ea51574
+  docs/models/operations/listwebhookendpointsrequest.md:
+    id: 79b8e5299599
+    last_write_checksum: sha1:50158015662f4ae74510e28357955d7f8a1157a4
+    pristine_git_object: 1b37368f5badc234b69258e68a4ebc6017ce60ec
   docs/models/operations/listworkspaceinvitationsglobals.md:
     id: 6e037341bc33
     last_write_checksum: sha1:d98d9938f262c47257276d6a203a1958429fee1b
@@ -23605,6 +23665,18 @@ trackedFiles:
     id: ffa362cadd7a
     last_write_checksum: sha1:6a41205e0f1373aae587d67e8ce2e95a9aface6a
     pristine_git_object: 743d36e9fe40c53c3dde081ee211be889deda919
+  docs/models/operations/retrywebhookdeliveryglobals.md:
+    id: 96c784f758e0
+    last_write_checksum: sha1:4d89991a649f273120849ef41d83c72f16413f69
+    pristine_git_object: aef87e53cee337b903ef6e1cfa569d6493064557
+  docs/models/operations/retrywebhookdeliveryrequest.md:
+    id: 8d5aefa85ad8
+    last_write_checksum: sha1:ee7b7e089c3821a1e661772bbd66e1150e370e90
+    pristine_git_object: 85db2788bf06f5667c06367310e02e0d81a33c2e
+  docs/models/operations/retrywebhookdeliveryrequestbody.md:
+    id: e1262d684546
+    last_write_checksum: sha1:77390573d5a965e2ed8007bab563213b096501bb
+    pristine_git_object: 2677f569540f107927988af932e472d32a6ed251
   docs/models/operations/revokeaccessrequestactorkind.md:
     id: d7af8924e0eb
     last_write_checksum: sha1:f91017df08d238e96c64d5a3e3c854e79d313f65
@@ -23749,6 +23821,14 @@ trackedFiles:
     id: 495662a04757
     last_write_checksum: sha1:6490ebdac3431f238f65662768a449f34d582e58
     pristine_git_object: 366d9c1d06de9fbac884e47d54091e7aa5d4c040
+  docs/models/operations/rotatewebhooksigningsecretglobals.md:
+    id: d361a359bd8d
+    last_write_checksum: sha1:906a3d5a16137912128712347058a0f52420c4bf
+    pristine_git_object: e2a86344ec815421af558de3bbbab2b09fd67f17
+  docs/models/operations/rotatewebhooksigningsecretrequest.md:
+    id: d241f23eecf1
+    last_write_checksum: sha1:7443633b7455add8462e5987a8a03bc0bda37b0c
+    pristine_git_object: a673f94ef349423cf1cf4ca17fbf8e1ef0b49a05
   docs/models/operations/sample.md:
     id: 5a5c64f2a5f0
     last_write_checksum: sha1:b2942266591a204a1d5ad47d7a990e6d4b9d0717
@@ -24061,6 +24141,14 @@ trackedFiles:
     id: 3c2e570027fa
     last_write_checksum: sha1:097dbdfd668a9f8db8033d682e1b34ad14908c57
     pristine_git_object: 190371e76a881ffc75acd2dc91a5d95528b5c6cd
+  docs/models/operations/testwebhookendpointglobals.md:
+    id: 198b8cc31d29
+    last_write_checksum: sha1:9fab2edcb9358dad821392444bac3f5b6dfc1dc0
+    pristine_git_object: 77dac6cc08c78aa4a265eb2a2613727fb2a21fb2
+  docs/models/operations/testwebhookendpointrequest.md:
+    id: 41d6cee33997
+    last_write_checksum: sha1:d4ce0e2eb0812dee479620dc51247bc60ccbec97
+    pristine_git_object: 004e6496df52325e35cdb56770e097ba48c6caa1
   docs/models/operations/tiersucceeded.md:
     id: ea5014fa5e31
     last_write_checksum: sha1:06786777e2541e4a0d0668722a6599aac3c2d9ff
@@ -24193,6 +24281,22 @@ trackedFiles:
     id: 1e59616c750f
     last_write_checksum: sha1:e95584ac79cde7d2e7a870c38e18c3c7a3bc4ff8
     pristine_git_object: 70fafbdeb22ed60c9f6e12328e9961f94e48060f
+  docs/models/operations/updatewebhookendpointfiltertype.md:
+    id: ad5555a2080a
+    last_write_checksum: sha1:b09e8d6ed76713fb0e8a5cf0aef806765ac7a9bb
+    pristine_git_object: a971c3b2c8658ad1eae65327a85efee8ec4b30da
+  docs/models/operations/updatewebhookendpointglobals.md:
+    id: 7af0725e121e
+    last_write_checksum: sha1:7e5dd5bf561e377d4188f27aa173e7592b94aa58
+    pristine_git_object: aa60758ed2b3ed77564b7e745526425acf61cba8
+  docs/models/operations/updatewebhookendpointrequest.md:
+    id: 54f9ab396733
+    last_write_checksum: sha1:947a1641ab2892d33b627f7a62948e16395d07d8
+    pristine_git_object: 1370bac5f5e3f385a00c3b14b413ffc530ab7e35
+  docs/models/operations/updatewebhookendpointrequestbody.md:
+    id: ceebc7d441d3
+    last_write_checksum: sha1:69bde4f838da1c3691d7417ce31ac3296047454e
+    pristine_git_object: ab2f64ca2cda00b9ce59576e20bb63ce48014adf
   docs/models/operations/updateworkspaceglobals.md:
     id: c1892ff792dc
     last_write_checksum: sha1:885000bb69650bc45a3c5ac06af37060dca39764
@@ -35749,6 +35853,30 @@ trackedFiles:
     id: 42232994813d
     last_write_checksum: sha1:dc2ef25eb9e895bf8e08b048a8b171054ed89fe9
     pristine_git_object: c520f4debc42b9520f85205d8d505cdd9ba632e3
+  docs/models/webhookactionresult.md:
+    id: 9dc62e140ce7
+    last_write_checksum: sha1:b5705b6bcc0e64fa1412c9d26f149410139d65f8
+    pristine_git_object: 505eee049ce89902eb55c1940fbe5a9a04ff02eb
+  docs/models/webhookdeliverylist.md:
+    id: bfbbd7caf1b3
+    last_write_checksum: sha1:076bf65a694e22097be12631058715f83a4ac292
+    pristine_git_object: 5d7685f20d3f89ce5ed3bcfa43fe45a1a0735ac2
+  docs/models/webhookdeliverylistitem.md:
+    id: ee3ba115df36
+    last_write_checksum: sha1:f6aded926bba063d46dd7059f9be63ff1fdbf7bd
+    pristine_git_object: f37d4e2fe7ff2862ecc7a34e63ed9df745a10f2d
+  docs/models/webhookendpoint.md:
+    id: 48fbdb362b7e
+    last_write_checksum: sha1:2748aae873de349b2d817949eadf9804bdd47e3c
+    pristine_git_object: f95988e94a137dfb2670e81183b55c7a7839eb27
+  docs/models/webhookendpointlist.md:
+    id: ad9b87121d5f
+    last_write_checksum: sha1:7f5396930251319a6d776fad20489d8695184912
+    pristine_git_object: 110bc5d22c7992068c4398580d00693ef27b56aa
+  docs/models/webhooksigningsecret.md:
+    id: 8c063469bf2b
+    last_write_checksum: sha1:3cad37c5a93435bec9588a36c70da53d78abf382
+    pristine_git_object: 3fe68b8f540ae79a566f9fcabb83ed0e66f0000a
   docs/models/wireguardmesh.md:
     id: 723b101cdb5f
     last_write_checksum: sha1:d0e812657e146a7fcf30288868c12027f390746c
@@ -35985,6 +36113,10 @@ trackedFiles:
     id: 437dd7dc6e30
     last_write_checksum: sha1:7c4493667a82f628a87510a275e06162b27ec04a
     pristine_git_object: 32b501f60091eb89c804c782e7027783cb779611
+  docs/sdks/webhooks/README.md:
+    id: e21b32d786a4
+    last_write_checksum: sha1:17bf8d0236260ce5b9ea98bed13ec1cb4747a015
+    pristine_git_object: 276fea96819cf97441858b302ec2695960b50c93
   docs/sdks/workspaces/README.md:
     id: 1f5b051a6380
     last_write_checksum: sha1:5cf33496d8ac34f8a82485b178afa355018c80c2
@@ -37049,6 +37181,46 @@ trackedFiles:
     id: c321fb0f4cee
     last_write_checksum: sha1:1d34196ec948a69c4eacec5145e09921cc7f1c30
     pristine_git_object: a1bc1c6785bbd13def75258e8faf6e5c60b66dd0
+  src/funcs/webhooksCreateWebhookEndpoint.ts:
+    id: 8dce4f370a7e
+    last_write_checksum: sha1:89491c27a07e0ccbd6ecfbb8476c3d34cb54d7a7
+    pristine_git_object: 7245dcdf9b9da328b65f436ecf3a4e95dd5864e0
+  src/funcs/webhooksDeleteWebhookEndpoint.ts:
+    id: dda2aa061782
+    last_write_checksum: sha1:637c9a6aa5eb28134bf6c838d4534c7463eef9ac
+    pristine_git_object: 7c5ad4e58044141c8ef5acb033420803c13e45c7
+  src/funcs/webhooksGetWebhookEndpoint.ts:
+    id: d135e3e5cd88
+    last_write_checksum: sha1:de869ccbd18505e8d213b8048dc4b87c4cb87e72
+    pristine_git_object: f7c56377edd617bc74114cfb990bff960b249aad
+  src/funcs/webhooksGetWebhookSigningSecret.ts:
+    id: 0a2bd328888b
+    last_write_checksum: sha1:f7c9b4f52165e7ff25890df71853b4e6b112955b
+    pristine_git_object: 1d74ec9cf750ca00f844f20eb57eb1554796e37d
+  src/funcs/webhooksListWebhookDeliveries.ts:
+    id: fb3fb92fcf78
+    last_write_checksum: sha1:2d629699ebc4f8dc2d86bd119de5c6c3186b2dbb
+    pristine_git_object: 95da1c8eba5a0c23e5809c1c19feb67f995c593a
+  src/funcs/webhooksListWebhookEndpoints.ts:
+    id: b0bba5f02712
+    last_write_checksum: sha1:661a3d3e0608e8ff125b59ec0b50872d513dd13b
+    pristine_git_object: 58c3b572a93c6f9e31182ff84e040fd7e826d387
+  src/funcs/webhooksRetryWebhookDelivery.ts:
+    id: 677e1abe91b7
+    last_write_checksum: sha1:c68432f20c21a13b13f9a78efd79864530fc4ecc
+    pristine_git_object: 2387e278d8fc7cb0ecd3887d8740e3f283132475
+  src/funcs/webhooksRotateWebhookSigningSecret.ts:
+    id: 3b89b1e24201
+    last_write_checksum: sha1:5ead429e24c69c5fbbbf728b07a0440fafd9dbd9
+    pristine_git_object: 7a20155ad6e0783f56ebcd7720e8fbe8d258c8c4
+  src/funcs/webhooksTestWebhookEndpoint.ts:
+    id: af5c2c3833e3
+    last_write_checksum: sha1:ff3cdddb6c064e99bc7f5cfd37fdb17e27f7e43b
+    pristine_git_object: bbb2318cb52479180c84459fab4405e12e68a722
+  src/funcs/webhooksUpdateWebhookEndpoint.ts:
+    id: 7e00b4061c3d
+    last_write_checksum: sha1:b9db73f164416ed20987631eb3ba9e647b655478
+    pristine_git_object: 82e9f45cdeefb8351835cf7684f7687a14914ce3
   src/funcs/workspacesAddMember.ts:
     id: 831417e9feae
     last_write_checksum: sha1:257c602f3b9f1faf7d57f55c8951f65a20f7c75a
@@ -37875,8 +38047,8 @@ trackedFiles:
     pristine_git_object: b975aad847c301d687683ccae6b38c3969fb346c
   src/models/generatemanagertokenrequest.ts:
     id: 37d07c31900f
-    last_write_checksum: sha1:70b17940f8de784de909ca36ce6a346a8db93894
-    pristine_git_object: c079f956155d13989b6abbec3f41ad821147745d
+    last_write_checksum: sha1:12d3664ffefbf06e850eb21ee988a8369276f4d7
+    pristine_git_object: 07cf090aea4f2ef03971d62181dab6ca955a0107
   src/models/generatemanagertokenresponse.ts:
     id: 2d5c48de9e4f
     last_write_checksum: sha1:5b8b3f4779373a09d5042f09246f02add5025304
@@ -37939,8 +38111,8 @@ trackedFiles:
     pristine_git_object: e3b1530ed0aec91afb64292a12d54ab58d11f60f
   src/models/index.ts:
     id: f93644b0f37e
-    last_write_checksum: sha1:f6a36c7e1a5060d68e5f7ed20398569150c60a04
-    pristine_git_object: 561765c838100498559149cc8fe68db8a2a7a893
+    last_write_checksum: sha1:1a3f8518e48f0e5f08abe0260b1c9db533cedc43
+    pristine_git_object: 855c529ea6027f3f44085bcd230fa5c7ffb78326
   src/models/installationdeploymentresponse.ts:
     id: 53b546ee420f
     last_write_checksum: sha1:884809803d968b5b7032dc5622739205215a8269
@@ -38301,6 +38473,10 @@ trackedFiles:
     id: cafb1f32d3ca
     last_write_checksum: sha1:677fddf33842413acf7ea3ee02a92141724173a1
     pristine_git_object: ea0590b5fe7242fb72331782902fb4623aacaeea
+  src/models/operations/createwebhookendpoint.ts:
+    id: 1299fad1f97e
+    last_write_checksum: sha1:fd1e70188c452c17b992661913d0dcbc35cf9532
+    pristine_git_object: 7fcfd8ec04baa40404b746bfd276460c3cefd61b
   src/models/operations/createworkspace.ts:
     id: 27fe97979faa
     last_write_checksum: sha1:27c41129bac7a19f66e89926a96e658ff6c73f95
@@ -38357,6 +38533,10 @@ trackedFiles:
     id: d48bf2235b56
     last_write_checksum: sha1:b8d7027fb986ad1873d8b6c6d389c8be8db2af86
     pristine_git_object: 94d3c262fadd1f0a17ddf842599f3ad13824df95
+  src/models/operations/deletewebhookendpoint.ts:
+    id: 81fc1f8ab89d
+    last_write_checksum: sha1:3b87e8f47b9a3168c3fb1aec2445c9306f47d855
+    pristine_git_object: b7447427c3c9dc705751010205daf5fafd062a4c
   src/models/operations/deleteworkspace.ts:
     id: 38325c1278ba
     last_write_checksum: sha1:b46172ca5956c50beb922d93c823f5e2e9ecf170
@@ -38621,6 +38801,14 @@ trackedFiles:
     id: c1cf70012dca
     last_write_checksum: sha1:19e0a55f59ea992bc06e7e2c84bfb119f6ece73f
     pristine_git_object: df67c938d0580ef6c3743ed52cddbc95fa116389
+  src/models/operations/getwebhookendpoint.ts:
+    id: f44509178d68
+    last_write_checksum: sha1:0b3dff0fe53f0da34feb4c26808082151c48ebb9
+    pristine_git_object: fba2ec451e7311f4c20e9ee4979f0bb70d558269
+  src/models/operations/getwebhooksigningsecret.ts:
+    id: 3d8b137013d4
+    last_write_checksum: sha1:9227e48e1ea4be59e556d1bc73874d2f7b9c9f9a
+    pristine_git_object: e979865b2da289e88e180232ea3b7800cf38b14d
   src/models/operations/getworkspace.ts:
     id: bd847aca12d8
     last_write_checksum: sha1:1d64095c5bc73d320a1956ada50b7b180de1db29
@@ -38655,8 +38843,8 @@ trackedFiles:
     pristine_git_object: 3859a13d2ae28291b8d001ba34b52e2621805226
   src/models/operations/index.ts:
     id: 0d9ffaf774d2
-    last_write_checksum: sha1:782baa604608195824e2feea26781d4a20116329
-    pristine_git_object: dc38a161a4738b79ffc2b79f4ce9f2c1a9935ab9
+    last_write_checksum: sha1:5da21c5ffe9771c7fe0d3c64194cd7aa0ee9432d
+    pristine_git_object: 493d40a54a3c371830cdaa8ce22cc8444c806fa1
   src/models/operations/invokeoperation.ts:
     id: 7c5d24402bdf
     last_write_checksum: sha1:bfe93e2406e9c9c5f9fc67d821f82b1f0ef7ceb7
@@ -38813,6 +39001,14 @@ trackedFiles:
     id: eedd30655fb2
     last_write_checksum: sha1:8d7cc10b064aec0da8510bc8c030a21487447a3b
     pristine_git_object: 87054ac65cd271b7fd578e0b80f29ba1cca59acb
+  src/models/operations/listwebhookdeliveries.ts:
+    id: fcddb9e8dcb0
+    last_write_checksum: sha1:47aa6c73a504282f25147cf9265a23413e161355
+    pristine_git_object: 2eb02300409f08acb06ff4cdda1e8b93ed78ed02
+  src/models/operations/listwebhookendpoints.ts:
+    id: 6a7f4b690bec
+    last_write_checksum: sha1:ab019edb1c6169f2f41f58bf2cad7a19aa4869a8
+    pristine_git_object: 2470368ad8209cef1557d4bc1e6a36ebc79aa096
   src/models/operations/listworkspaceinvitations.ts:
     id: bc6bc6b84df5
     last_write_checksum: sha1:02be7e870f23e4a05cec17fe81e2d97f8d3f90c7
@@ -38973,6 +39169,10 @@ trackedFiles:
     id: 916f967956a4
     last_write_checksum: sha1:1929862632a6bc46f5c100f93fd4d230aefce35f
     pristine_git_object: ba02502b8d0a4545e025ec2d56d4554f512691f6
+  src/models/operations/retrywebhookdelivery.ts:
+    id: d6b79b3f0ca3
+    last_write_checksum: sha1:99d078f78644fc6c83c95a70ad0f40fa5be528ef
+    pristine_git_object: 5d056dccfc358e25a21aa5de2ef8ce406cd12e99
   src/models/operations/revokeaccessrequest.ts:
     id: 1247009a8316
     last_write_checksum: sha1:9b6f6d4dad57be9e9765bf42b4d3b8efbd48790d
@@ -39009,6 +39209,10 @@ trackedFiles:
     id: 7f88d810e3c7
     last_write_checksum: sha1:1c14e9878298481bc8171cf95cbd531e9a91240d
     pristine_git_object: e05e518c4cf4b57cce2c18742cc8fcbbf3c756b1
+  src/models/operations/rotatewebhooksigningsecret.ts:
+    id: 379618fd7e68
+    last_write_checksum: sha1:7db4cad463502a7899a612bf27c3ac37a47a129d
+    pristine_git_object: dd249a68c6c7c1dfc0f889cc61ebade11d5e0d4e
   src/models/operations/setdeploymentgroupexternalid.ts:
     id: b8622f38ce06
     last_write_checksum: sha1:2b548ddd250217d58fa349ade3c71947b393e663
@@ -39085,6 +39289,10 @@ trackedFiles:
     id: 368c5762b719
     last_write_checksum: sha1:3b3117ef833a0425b9a1992859da7dac5c16278f
     pristine_git_object: fc0173b5fec2c38d4acb4946c01eff9d8bc091c7
+  src/models/operations/testwebhookendpoint.ts:
+    id: 4e438725195d
+    last_write_checksum: sha1:5e884d712edaba33a07b06ff0a12b1695a39f690
+    pristine_git_object: 72d09b260b6ed6e4bd6889be154f3c010aca8591
   src/models/operations/updateapikey.ts:
     id: a4e3a053ca54
     last_write_checksum: sha1:c8ccaec137d76eee1395effb4c953d7b8bd57614
@@ -39137,6 +39345,10 @@ trackedFiles:
     id: bbb96b491509
     last_write_checksum: sha1:63eb904b40565a003f9789e9e7759cfd495e6d8e
     pristine_git_object: ff7b1d29c5c75c9bb4b39530d1c522f6a5109538
+  src/models/operations/updatewebhookendpoint.ts:
+    id: 7a6b615a2055
+    last_write_checksum: sha1:8f17f94d2e946121d642f7bd25b97c088d94e823
+    pristine_git_object: 9b73c57c68c39cbfe7f6e272bdecbd051a378d8c
   src/models/operations/updateworkspace.ts:
     id: b10c83b1ce4f
     last_write_checksum: sha1:9361bb52cf37dc5fc4af25aa75c62b92c39db33e
@@ -39749,6 +39961,26 @@ trackedFiles:
     id: e671fad00ed4
     last_write_checksum: sha1:bf9425493696315f49c3ce3e023daadcaf9fac22
     pristine_git_object: 5f9396e5e3c5f31ff25bf537b4d11cd4c5f45f73
+  src/models/webhookactionresult.ts:
+    id: 0a09d13b056d
+    last_write_checksum: sha1:f98c0940a84f73a0760c854bf26737688ce6e31e
+    pristine_git_object: 45b69cb2186a0b6c505a55cacc26df56f66532e0
+  src/models/webhookdeliverylist.ts:
+    id: ebb13bfa1eac
+    last_write_checksum: sha1:38cb3279477c3474a820f6fc42082de6645c2a28
+    pristine_git_object: c0c0c4bd86b45699be394d03fde8f74f84dabe4e
+  src/models/webhookendpoint.ts:
+    id: be71269ac2fc
+    last_write_checksum: sha1:3a578b6d95016e7a7a5a9785db259cd2eda0d42b
+    pristine_git_object: 4c51455939d73e3cd7c14d1ae7ea3eeba555aed1
+  src/models/webhookendpointlist.ts:
+    id: 67c7b74925e5
+    last_write_checksum: sha1:74cd3f0dcf86ce94cb1766fab9fea809344be5e9
+    pristine_git_object: e580fbc5721a52844800e27f2ba69e20238c0e26
+  src/models/webhooksigningsecret.ts:
+    id: a5af1308cb4c
+    last_write_checksum: sha1:48ea22f913a71160e50897f3a34b47940dec4fd6
+    pristine_git_object: 81206383987bc6e656f6dd1ff79e8ae010de6a6c
   src/models/workspace.ts:
     id: f3a6e662c47b
     last_write_checksum: sha1:fa821d6aa928319d59aa2d9b31dfff633d7db939
@@ -40515,8 +40747,8 @@ trackedFiles:
     pristine_git_object: c0013d208f05260987d3259717f832fc3b9530f5
   src/react-query/index.ts:
     id: 9e975471aa65
-    last_write_checksum: sha1:e67f11bf1007970495ecec671894cfde334198bc
-    pristine_git_object: ecd89c89f5b7067b689c89440b013db448dfbbbd
+    last_write_checksum: sha1:f59b1e34e0349396768a0662cce2962a9fdee03f
+    pristine_git_object: 09f66881e950a23b870877796d829a9984a34806
   src/react-query/listAwsKeySetupCleanup.core.ts:
     id: f284e913be24
     last_write_checksum: sha1:b3bb58c0b7da19728bcbc74b232eaf715cca6df7
@@ -41241,6 +41473,62 @@ trackedFiles:
     id: 051cc9e08069
     last_write_checksum: sha1:b474a871bb9d30403d5a0e377cbf1df9b7259f28
     pristine_git_object: ec5429ec983b03077e730b2e2db5db5a7b358cc0
+  src/react-query/webhooksCreateWebhookEndpoint.ts:
+    id: ba0644bdd171
+    last_write_checksum: sha1:3c5a4dfd69d45f272dd4436bc22753ada244b8ae
+    pristine_git_object: c01fb3989c773cffebfbcdb3626cb1fa838a07bb
+  src/react-query/webhooksDeleteWebhookEndpoint.ts:
+    id: 5d97ecb06d7d
+    last_write_checksum: sha1:8432c1d4c2001f25f0e7aec428852948d1f90562
+    pristine_git_object: 8179cc6429215f348904cd79bf8c0d406ab7edcb
+  src/react-query/webhooksGetWebhookEndpoint.core.ts:
+    id: 07cd6dd7e9c1
+    last_write_checksum: sha1:7de33232fc3fe21f293b24b0555642b4fb44963a
+    pristine_git_object: 5043070ceafb79909388fb49121f4961aaa59231
+  src/react-query/webhooksGetWebhookEndpoint.ts:
+    id: c81d6ebfa664
+    last_write_checksum: sha1:acdb25a9bfeebafbebaf17f0c48992fe60864a7e
+    pristine_git_object: 06242e5f97d57158ec940eb957516e68fda79e96
+  src/react-query/webhooksGetWebhookSigningSecret.core.ts:
+    id: 12f90f257b7b
+    last_write_checksum: sha1:fa7d1608f940801f20394af9f6358033828525fb
+    pristine_git_object: eae9d322c23751447463041b88e1001c0c5983b9
+  src/react-query/webhooksGetWebhookSigningSecret.ts:
+    id: 312b6171c853
+    last_write_checksum: sha1:3df5b26beeac01715a3409782242b828ed34aa04
+    pristine_git_object: 6f6e7bb45fdddcb0ead44c47d0ec6803f0078bb2
+  src/react-query/webhooksListWebhookDeliveries.core.ts:
+    id: 63636a4fde58
+    last_write_checksum: sha1:bbc1f5f0d4348314a5f35fbf721c532cf49149f4
+    pristine_git_object: 037c87b4bf383d2e79441efbfaf0bce985200e96
+  src/react-query/webhooksListWebhookDeliveries.ts:
+    id: 76df3ac4d0aa
+    last_write_checksum: sha1:88c9450f6bb66e1b9b073639332e37437a5729cd
+    pristine_git_object: c513fbdee6e34e04c7dee28ea5a79e4c66a6a22d
+  src/react-query/webhooksListWebhookEndpoints.core.ts:
+    id: 4309f578ba2b
+    last_write_checksum: sha1:7fd59ccf54db8c45f7fb31edf9ca5c5c2c7766a2
+    pristine_git_object: 0ca771699c6dd717b6d0045e14541fdf11bf8ca9
+  src/react-query/webhooksListWebhookEndpoints.ts:
+    id: fb635b17cbd9
+    last_write_checksum: sha1:d541940dbd0b060a99be684167f1d3915d01c14b
+    pristine_git_object: aab9dd02eb5f9aca419c92e2b3f99e382f1f23fb
+  src/react-query/webhooksRetryWebhookDelivery.ts:
+    id: 48970f6311ef
+    last_write_checksum: sha1:c76de778fbc03dc100ab74bce280f4aeb1ebe787
+    pristine_git_object: e14ec8e4afef03170fa08e7072cfd1101e33bf33
+  src/react-query/webhooksRotateWebhookSigningSecret.ts:
+    id: 984506048ee4
+    last_write_checksum: sha1:669347fa4ee3036e5bd88245a5ca93ef54f91d48
+    pristine_git_object: 668bb4c89c3bca37aaf6a76a9cdf739d487524cb
+  src/react-query/webhooksTestWebhookEndpoint.ts:
+    id: b3506dfc0791
+    last_write_checksum: sha1:84f73cbdf2ec5c500be62a3126499c8d53e54711
+    pristine_git_object: e2287e1c806785fceff802501c260f0987c31b88
+  src/react-query/webhooksUpdateWebhookEndpoint.ts:
+    id: f1b6505af54d
+    last_write_checksum: sha1:e9707ebc3bf293885e6e3b5c9709200eee003b22
+    pristine_git_object: af6c9783aab53580d995d56ff523be8955bd215c
   src/react-query/workspacesAddMember.ts:
     id: 083610e3ddce
     last_write_checksum: sha1:8058cad818592cbb79696ae988cd3e8109daa13a
@@ -41411,8 +41699,8 @@ trackedFiles:
     pristine_git_object: 7ffb0ff119b539f1011be6d888bd8f1d299ea0be
   src/sdk/sdk.ts:
     id: 784571af2f69
-    last_write_checksum: sha1:093fb9d61b836f7fc00b18a0ddc81fa106c2f3c5
-    pristine_git_object: 2968f20adea1312c8f838dc94ffa529fe99be51c
+    last_write_checksum: sha1:a3892110dcdfdf3c94bc2ed792cdc233f77d4211
+    pristine_git_object: a6ae3d929e1a69dc4803dcdcf028cf5cbc96b2cd
   src/sdk/setuplinks.ts:
     id: 0d0665e41e3f
     last_write_checksum: sha1:5c7ec3f120a444412cbc0568fe92b80e400a05b3
@@ -41429,6 +41717,10 @@ trackedFiles:
     id: 363e2a871b31
     last_write_checksum: sha1:faabc81f8084b5c5e44c3626ec975be8f39be3c6
     pristine_git_object: 23e0f1cd9c59146e7276fcfd864cd87f8c156108
+  src/sdk/webhooks.ts:
+    id: e879e17d0532
+    last_write_checksum: sha1:7e97ae69906eb46250737d91905785205ab2bcfc
+    pristine_git_object: 0b8baf8f047b3b379f98369cbef73077384f127f
   src/sdk/workspaces.ts:
     id: 72b45379c8d9
     last_write_checksum: sha1:ef56f72b558fd4b191be279a9f6ab6fd9916362f
@@ -42609,6 +42901,20 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+  createWebhookEndpoint:
+    speakeasy-default-create-webhook-endpoint:
+      parameters:
+        query:
+          workspace: "my-workspace"
+      requestBody:
+        application/json: {"url": "https://cautious-litter.net/", "description": "", "disabled": false}
+      responses:
+        "201":
+          application/json: {"url": "https://handy-bracelet.biz", "description": "fray if apropos upside-down quietly crystallize quaff anesthetize", "filterTypes": [], "disabled": false, "id": "<id>", "projectId": "<id>", "projectIds": ["<value 1>", "<value 2>", "<value 3>"], "createdAt": "2025-04-14T05:21:05.217Z"}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
   createWorkspace:
     speakeasy-default-create-workspace:
       responses:
@@ -42850,6 +43156,20 @@ examples:
       responses:
         "400":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+  deleteWebhookEndpoint:
+    speakeasy-default-delete-webhook-endpoint:
+      parameters:
+        path:
+          id: "<id>"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"success": true}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   deleteWorkspace:
     speakeasy-default-delete-workspace:
       parameters:
@@ -44348,6 +44668,34 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+  getWebhookEndpoint:
+    speakeasy-default-get-webhook-endpoint:
+      parameters:
+        path:
+          id: "<id>"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"url": "https://tattered-typeface.net/", "description": "than apud hose", "filterTypes": ["deployment.deleted"], "disabled": false, "id": "<id>", "projectId": "<id>", "projectIds": ["<value 1>", "<value 2>", "<value 3>"], "createdAt": "2024-07-17T01:13:19.476Z"}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+  getWebhookSigningSecret:
+    speakeasy-default-get-webhook-signing-secret:
+      parameters:
+        path:
+          id: "<id>"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"key": "<key>"}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   getWorkspace:
     speakeasy-default-get-workspace:
       parameters:
@@ -45623,6 +45971,32 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+  listWebhookDeliveries:
+    speakeasy-default-list-webhook-deliveries:
+      parameters:
+        path:
+          id: "<id>"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"items": [], "nextCursor": "<value>"}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+  listWebhookEndpoints:
+    speakeasy-default-list-webhook-endpoints:
+      parameters:
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"items": [{"url": "https://best-coal.com", "description": "gloat athwart questioningly after", "filterTypes": ["deployment.created"], "disabled": false, "id": "<id>", "projectId": "<id>", "projectIds": ["<value 1>", "<value 2>", "<value 3>"], "createdAt": "2026-03-01T10:45:27.466Z"}], "nextCursor": "<value>"}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   listWorkspaceInvitations:
     speakeasy-default-list-workspace-invitations:
       parameters:
@@ -46264,6 +46638,22 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+  retryWebhookDelivery:
+    speakeasy-default-retry-webhook-delivery:
+      parameters:
+        path:
+          id: "<id>"
+        query:
+          workspace: "my-workspace"
+      requestBody:
+        application/json: {"messageId": "<id>"}
+      responses:
+        "200":
+          application/json: {"success": true}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
   revokeAPIKey:
     speakeasy-default-revoke-API-key:
       parameters:
@@ -46383,6 +46773,20 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+  rotateWebhookSigningSecret:
+    speakeasy-default-rotate-webhook-signing-secret:
+      parameters:
+        path:
+          id: "<id>"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"success": true}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   setBuiltinOperationsPlugins:
     projectName:
       parameters:
@@ -46762,6 +47166,20 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+  testWebhookEndpoint:
+    speakeasy-default-test-webhook-endpoint:
+      parameters:
+        path:
+          id: "<id>"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"success": true}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   updateAPIKey:
     speakeasy-default-update-API-key:
       parameters:
@@ -47077,6 +47495,22 @@ examples:
         "200":
           application/json: {"id": "<id>", "email": "Boyd.Barton41@gmail.com", "name": "<value>", "image": null, "githubUsername": "<value>", "cliConnected": true, "company": "Feil - Barton", "acquisitionSource": "reddit", "acquisitionSourceDetail": "<value>", "accessStatus": "pending", "useCaseTags": [], "useCases": null, "profileSetupCompletedAt": "2025-04-03T19:27:30.497Z", "profileSetupVersion": 817279}
         "401":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+  updateWebhookEndpoint:
+    speakeasy-default-update-webhook-endpoint:
+      parameters:
+        path:
+          id: "<id>"
+        query:
+          workspace: "my-workspace"
+      requestBody:
+        application/json: {}
+      responses:
+        "200":
+          application/json: {"url": "https://trim-postbox.info", "description": "disclosure ack under catalyst unzip louse rise", "filterTypes": [], "disabled": false, "id": "<id>", "projectId": "<id>", "projectIds": [], "createdAt": "2025-12-11T18:46:06.869Z"}
+        "400":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}

@@ -326,9 +326,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.webhooks.updateWebhookEndpoint({
     id: "<id>",
-    requestBody: {
-      url: "https://trim-postbox.info",
-    },
+    requestBody: {},
   });
 
   console.log(result);
@@ -355,9 +353,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await webhooksUpdateWebhookEndpoint(alien, {
     id: "<id>",
-    requestBody: {
-      url: "https://trim-postbox.info",
-    },
+    requestBody: {},
   });
   if (res.ok) {
     const { value: result } = res;
