@@ -1520,8 +1520,7 @@ pub fn event_bus_for_command(kind: Option<UiCommandKind>, json_output: bool) -> 
     Some(EventBus::with_handlers(vec![handler]))
 }
 
-/// Stable, non-ANSI progress for CI and JSON commands. Output goes to stderr so JSON stdout
-/// remains a machine-readable contract.
+/// Stable, non-ANSI progress on stderr for JSON output and CI.
 struct LineCommandEventHandler {
     compilation_updates: Mutex<HashMap<String, (Instant, String)>>,
 }

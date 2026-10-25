@@ -97,7 +97,8 @@ pub struct BuildArgs {
     #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
     pub override_base_image: Option<String>,
 
-    /// Emit structured JSON output
+    /// Emit result JSON on stdout and plain progress lines on stderr.
+    /// On failure, stderr ends with one JSON error document on its own line.
     #[arg(long)]
     pub json: bool,
 }

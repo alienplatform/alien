@@ -194,8 +194,10 @@ fn test_build_command_json_failure_is_structured_error() {
     let output = assert.get_output();
     assert!(!output.status.success());
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let payload: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Loading configuration"));
+    let payload: serde_json::Value = serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
     assert_eq!(payload["code"], "VALIDATION_ERROR");
     let message = payload["message"].as_str().unwrap();
     assert!(message.contains("platform"));

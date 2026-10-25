@@ -12,6 +12,8 @@ use crate::deployment_tracking::{
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::{ExecutionMode, ManagerContext};
+use crate::interaction::{ConfirmationMode, InteractionMode};
+use crate::output::prompt_confirm;
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_core::{
     ClientConfig, DeployerSecretReport, DeploymentConfig, DeploymentState, DeploymentStatus,
@@ -60,9 +62,33 @@ pub struct DestroyArgs {
     /// Force-destroy: skip resource teardown and delete the record immediately.
     #[arg(long)]
     pub force: bool,
+
+    /// Skip the destruction confirmation prompt
+    #[arg(long)]
+    pub yes: bool,
 }
 
 pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
+    let confirmation = InteractionMode::current(false).confirmation_mode(
+        args.yes,
+        "Destruction requires confirmation. Pass --yes to run non-interactively.",
+    )?;
+    if matches!(confirmation, ConfirmationMode::Prompt)
+        && !prompt_confirm(
+            &if args.force {
+                format!(
+                    "Forget deployment '{}' and leave its resources running?",
+                    args.name
+                )
+            } else {
+                format!("Destroy deployment '{}' and its resources?", args.name)
+            },
+            false,
+        )?
+    {
+        println!("Destruction cancelled.");
+        return Ok(());
+    }
     info!("Starting destroy command");
     println!("{}", contextual_heading("Destroying", &args.name, &[]));
     let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
@@ -442,6 +468,7 @@ pub(crate) async fn destroy_local_target(
         platform: Some("local".to_string()),
         token: None,
         force: false,
+        yes: true,
     };
     let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
     destroy_tracked_deployment(&args, Platform::Local, &tracked, manager, steps).await
@@ -777,7 +804,12 @@ async fn destroy_tracked_deployment(
             );
         }
         LoopOutcome::Neutral => {
-            steps.complete(2, Some("Deletion in progress".to_string()));
+            if loop_result.final_status == DeploymentStatus::Deleted {
+                steps.complete(2, Some("Deleted".to_string()));
+                println!("{}", success_line("Deployment destroyed."));
+            } else {
+                steps.complete(2, Some("Deletion in progress".to_string()));
+            }
         }
     }
     drop(steps);
@@ -789,14 +821,16 @@ async fn destroy_tracked_deployment(
         args.name,
         tracked_deployment.deployment_id
     );
-    println!(
-        "{} {}",
-        dim_label("Next"),
-        command(&format!(
-            "alien deployments get {}",
-            tracked_deployment.deployment_id
-        ))
-    );
+    if loop_result.final_status != DeploymentStatus::Deleted {
+        println!(
+            "{} {}",
+            dim_label("Next"),
+            command(&format!(
+                "alien deployments get {}",
+                tracked_deployment.deployment_id
+            ))
+        );
+    }
 
     Ok(())
 }
@@ -1092,6 +1126,7 @@ mod tests {
             name: ID.to_string(),
             platform: Some("test".to_string()),
             force: false,
+            yes: true,
         };
         let (target, manager) = resolve_destroy_target(&args, &ctx, "test", None, None)
             .await
@@ -1252,6 +1287,7 @@ mod tests {
             name: ID.to_string(),
             platform: Some("test".to_string()),
             force: false,
+            yes: true,
         };
         let (target, manager) = resolve_destroy_target(
             &args,
@@ -1398,6 +1434,7 @@ mod tests {
             name: "dep_test".to_string(),
             platform: Some("test".to_string()),
             force: true,
+            yes: true,
         };
         let (target, _) = resolve_destroy_target(&args, &ctx, "test", None, None)
             .await
@@ -1428,6 +1465,7 @@ mod tests {
             name: "dep_test".to_string(),
             platform: Some("test".to_string()),
             force: false,
+            yes: true,
         };
         let (target, manager) = resolve_destroy_target(&args, &ctx, "test", None, None)
             .await
@@ -1476,6 +1514,7 @@ mod tests {
                 name: name.to_string(),
                 platform: Some(platform.to_string()),
                 force: false,
+                yes: true,
             };
             let error = resolve_destroy_target(&args, &ctx, platform, None, None)
                 .await
@@ -1559,6 +1598,7 @@ mod tests {
                 name: name.to_string(),
                 platform: Some("test".to_string()),
                 force: false,
+                yes: true,
             };
             let (target, _) = resolve_destroy_target(&args, &ctx, "test", None, None)
                 .await
@@ -1580,6 +1620,7 @@ mod tests {
                 name: PLATFORM_DEPLOYMENT.to_string(),
                 platform: Some("test".to_string()),
                 force,
+                yes: true,
             };
             let error = resolve_destroy_target(&args, &ctx, "test", None, None)
                 .await
@@ -1638,6 +1679,7 @@ mod tests {
             name: "test".to_string(),
             platform: Some("local".to_string()),
             force: false,
+            yes: true,
         };
 
         destroy_tracked_deployment(
@@ -1701,6 +1743,7 @@ mod tests {
             name: "test".to_string(),
             platform: Some("local".to_string()),
             force: false,
+            yes: true,
         };
 
         let error = destroy_tracked_deployment(

@@ -122,6 +122,7 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::Events { json: true, .. }
                 | DeploymentsCmd::Wait { json: true, .. }
                 | DeploymentsCmd::Machines { json: true, .. }
+                | DeploymentsCmd::Token { json: true, .. }
                 | DeploymentsCmd::Volumes { json: true, .. }
                 | DeploymentsCmd::RestoreVolume { json: true, .. }
                 | DeploymentsCmd::CancelVolumeRestore { json: true, .. }
@@ -248,11 +249,11 @@ pub enum DeploymentsCmd {
         #[arg(long = "for", value_enum, default_value_t = DeploymentWaitCondition::Ready)]
         condition: DeploymentWaitCondition,
 
-        /// Maximum wait duration, such as 30s, 10m, or 1h
+        /// Maximum wait duration in seconds, or with a unit such as 30s, 10m, or 1h
         #[arg(long, default_value = "10m", value_parser = parse_wait_duration)]
         timeout: Duration,
 
-        /// Poll interval, such as 1s or 5s
+        /// Poll interval in seconds, optionally suffixed with s, m, or h
         #[arg(long, default_value = "2s", value_parser = parse_wait_duration)]
         interval: Duration,
 
@@ -410,6 +411,10 @@ pub enum DeploymentsCmd {
     Token {
         /// Deployment ID
         id: String,
+
+        /// Print the token and deployment ID as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Forget a deployment this machine tracks locally, discarding its stored key
     Untrack {
@@ -876,7 +881,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 Ok(())
             }
         }
-        DeploymentsCmd::Token { id } => {
+        DeploymentsCmd::Token { id, json } => {
             if ctx.is_dev() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
@@ -894,8 +899,8 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 }));
             }
             let client = ctx.sdk_client().await?;
-            let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
-            token_deployment_task(&client, &workspace_name, &id).await
+            let workspace_name = ctx.resolve_platform_workspace_context(!json).await?.name;
+            token_deployment_task(&client, &workspace_name, &id, json).await
         }
         DeploymentsCmd::Untrack { name } => untrack_deployment_task(&name),
     }
@@ -983,7 +988,7 @@ async fn machines_inventory_task(
         .into_inner();
 
     if json {
-        return print_json(&response);
+        return print_json(&response.machines);
     }
 
     response.machines.sort_by(|left, right| {
@@ -2848,13 +2853,13 @@ fn parse_wait_duration(value: &str) -> std::result::Result<Duration, String> {
     let trimmed = value.trim();
     let unit_start = trimmed
         .find(|character: char| !character.is_ascii_digit())
-        .ok_or_else(|| "duration must include a unit: s, m, or h".to_string())?;
+        .unwrap_or(trimmed.len());
     let (amount, unit) = trimmed.split_at(unit_start);
     let amount = amount
         .parse::<u64>()
         .map_err(|error| format!("invalid duration amount: {error}"))?;
     let seconds = match unit {
-        "s" => amount,
+        "" | "s" => amount,
         "m" => amount.saturating_mul(60),
         "h" => amount.saturating_mul(60 * 60),
         _ => return Err("duration unit must be one of: s, m, h".to_string()),
@@ -3237,7 +3242,7 @@ async fn create_deployment_task(
         println!("   Project: {}", project.project_name);
         println!("   Platform: {:?}", deployment.platform);
         println!("   Deployment Group: {}", *deployment.deployment_group_id);
-        println!("   Status: {:?}", deployment.status);
+        println!("   Status: {}", deployment.status);
         if environment_variable_count > 0 {
             println!(
                 "   Environment Variables: {} configured",
@@ -3290,7 +3295,7 @@ async fn pin_deployment_task(
             contextual_heading("Pinning deployment", deployment.name.as_ref(), &[])
         );
         println!("{} {}", dim_label("ID"), *deployment.id);
-        println!("{} {:?}", dim_label("Status"), deployment.status);
+        println!("{} {}", dim_label("Status"), deployment.status);
 
         if let Some(ref release_id_str) = release_id {
             println!("Pinning to release: {}", release_id_str);
@@ -3355,6 +3360,7 @@ async fn token_deployment_task(
     client: &alien_platform_api::Client,
     workspace: &str,
     deployment_id: &str,
+    json: bool,
 ) -> Result<()> {
     let workspace_param = CreateDeploymentTokenWorkspace::try_from(workspace)
         .into_alien_error()
@@ -3397,6 +3403,10 @@ async fn token_deployment_task(
         })?;
 
     let token_response = response.into_inner();
+
+    if json {
+        return print_json(&token_response);
+    }
 
     println!("{}", token_response.token);
     eprintln!("(deployment: {})", token_response.deployment_id);
@@ -4021,7 +4031,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_events_rejects_an_api_limit_above_the_maximum() {
+    fn deployment_events_rejects_limits_above_one_hundred() {
         let result = DeploymentsArgs::try_parse_from([
             "deployments",
             "events",
@@ -4030,7 +4040,7 @@ mod tests {
             "101",
         ]);
 
-        assert!(result.is_err(), "limits above the API maximum must fail");
+        assert!(result.is_err(), "event limit is capped at 100");
     }
 
     #[test]
@@ -4054,7 +4064,7 @@ mod tests {
     fn wait_duration_rejects_zero_and_missing_units() {
         assert_eq!(parse_wait_duration("2m").unwrap(), Duration::from_secs(120));
         assert!(parse_wait_duration("0s").is_err());
-        assert!(parse_wait_duration("30").is_err());
+        assert_eq!(parse_wait_duration("30").unwrap(), Duration::from_secs(30));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::time::Duration as StdDuration;
 
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::{types, ClientInfo as _, SdkResultExt as _};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use clap::{Parser, ValueEnum};
 use console::style;
 use deepstore_client::{DeepstoreClient, DeepstoreError, SearchParams};
@@ -87,11 +87,11 @@ pub struct LogsArgs {
     #[arg(long, default_value = "1h", value_parser = parse_duration_arg)]
     pub since: Duration,
 
-    /// Start timestamp in RFC3339 format. Overrides --since.
+    /// Start timestamp in RFC3339 format, or YYYY-MM-DD (midnight UTC). Overrides --since.
     #[arg(long, value_parser = parse_rfc3339_arg)]
     pub from: Option<DateTime<Utc>>,
 
-    /// End timestamp in RFC3339 format. Defaults to now.
+    /// End timestamp in RFC3339 format, or YYYY-MM-DD (midnight UTC). Defaults to now.
     #[arg(long, value_parser = parse_rfc3339_arg)]
     pub to: Option<DateTime<Utc>>,
 
@@ -233,13 +233,7 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
     let project_override = args.project.as_deref().or(ctx.project_override());
     let target =
         resolve_logs_target(&ctx, &platform_client, &workspace, &args, project_override).await?;
-    let token_scope_project = target.project_id.as_deref().ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message:
-                "A project is required to query logs. Pass --project <name> or run `alien link`."
-                    .to_string(),
-        })
-    })?;
+    let token_scope_project = target.project_id.as_deref();
     let token = generate_logs_token(
         &platform_client,
         &workspace,
@@ -268,7 +262,7 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
     let shared_client = Arc::new(platform_client);
     let provider_workspace = workspace.clone();
     let provider_manager = target.manager_id.clone();
-    let provider_project = token_scope_project.to_string();
+    let provider_project = target.project_id.clone();
     let deepstore = DeepstoreClient::builder()
         .control_plane_url(control_plane_url)
         .auth_proxy_url(token.manager_url)
@@ -278,11 +272,12 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
             let manager_id = provider_manager.clone();
             let project = provider_project.clone();
             async move {
-                let token = generate_logs_token(&client, &workspace, &manager_id, &project)
-                    .await
-                    .map_err(|error| {
-                        deepstore_client::DeepstoreError::Authentication(error.to_string())
-                    })?;
+                let token =
+                    generate_logs_token(&client, &workspace, &manager_id, project.as_deref())
+                        .await
+                        .map_err(|error| {
+                            deepstore_client::DeepstoreError::Authentication(error.to_string())
+                        })?;
                 Ok(token.access_token)
             }
         })
@@ -363,7 +358,7 @@ fn validate_args(args: &LogsArgs) -> Result<()> {
             message: "Query cannot be empty.".to_string(),
         }));
     }
-    if args.limit == 0 || args.limit > MAX_LIMIT {
+    if !(1..=MAX_LIMIT).contains(&args.limit) {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "limit".to_string(),
             message: format!("Limit must be between 1 and {MAX_LIMIT}."),
@@ -666,9 +661,11 @@ async fn generate_logs_token(
     client: &alien_platform_api::Client,
     workspace: &str,
     manager_id: &str,
-    project: &str,
+    project: Option<&str>,
 ) -> Result<types::GenerateManagerTokenResponse> {
-    let project = types::GenerateManagerTokenRequestProject::try_from(project)
+    let project = project
+        .map(types::GenerateManagerTokenRequestProject::try_from)
+        .transpose()
         .into_alien_error()
         .context(ErrorData::ValidationError {
             field: "project".to_string(),
@@ -699,49 +696,61 @@ async fn fetch_logs(
     end_time: DateTime<Utc>,
     limit: usize,
 ) -> Result<LogsOutput> {
-    let result = client
-        .search(SearchParams {
-            database_id: database_id.to_string(),
-            query: query.to_string(),
-            start_time,
-            end_time,
-            max_hits: Some(limit),
-            sort_by: Some("-timestamp_nanos".to_string()),
-            search_fields: Some(
-                DEFAULT_LOG_SEARCH_FIELDS
-                    .iter()
-                    .map(|field| field.to_string())
-                    .collect(),
-            ),
-            ..Default::default()
-        })
-        .await
-        .map_err(|error| match error {
-            DeepstoreError::InvalidRequest(body) => {
-                // Error bodies may be structured or plain text. Show the reason,
-                // rather than embedding the serialized response in the message.
-                let message = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or(body);
-                AlienError::new(ErrorData::LogSearchRejected { message })
-            }
-            error => AlienError::new(ErrorData::ApiRequestFailed {
-                message: format!("Deepstore search failed: {error}"),
-                url: None,
-            }),
-        })?;
+    let mut hits = Vec::new();
+    let mut elapsed_time_micros = 0;
+    let mut errors = Vec::new();
+    let mut num_hits = 0;
+    while hits.len() < limit {
+        let page_size = (limit - hits.len()).min(MAX_LIMIT);
+        let result = client
+            .search(SearchParams {
+                database_id: database_id.to_string(),
+                query: query.to_string(),
+                start_time,
+                end_time,
+                max_hits: Some(page_size),
+                start_offset: Some(hits.len()),
+                sort_by: Some("-timestamp_nanos".to_string()),
+                search_fields: Some(
+                    DEFAULT_LOG_SEARCH_FIELDS
+                        .iter()
+                        .map(|field| field.to_string())
+                        .collect(),
+                ),
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| match error {
+                DeepstoreError::InvalidRequest(body) => {
+                    // Error bodies may be structured or plain text. Show the reason,
+                    // rather than embedding the serialized response in the message.
+                    let message = serde_json::from_str::<Value>(&body)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        })
+                        .unwrap_or(body);
+                    AlienError::new(ErrorData::LogSearchRejected { message })
+                }
+                error => AlienError::new(ErrorData::ApiRequestFailed {
+                    message: format!("Deepstore search failed: {error}"),
+                    url: None,
+                }),
+            })?;
 
-    let mut logs = result
-        .hits
-        .into_iter()
-        .map(log_entry_from_hit)
-        .collect::<Vec<_>>();
+        num_hits = result.num_hits;
+        elapsed_time_micros += result.elapsed_time_micros;
+        let page_len = result.hits.len();
+        hits.extend(result.hits);
+        errors.extend(result.errors);
+        if page_len < page_size || !errors.is_empty() {
+            break;
+        }
+    }
+    let mut logs = hits.into_iter().map(log_entry_from_hit).collect::<Vec<_>>();
     logs.sort_by_key(|entry| entry.timestamp_nanos.unwrap_or(i64::MIN));
 
     Ok(LogsOutput {
@@ -749,10 +758,10 @@ async fn fetch_logs(
         query: query.to_string(),
         start_time,
         end_time,
-        num_hits: result.num_hits,
+        num_hits,
         logs,
-        errors: result.errors,
-        elapsed_time_micros: result.elapsed_time_micros,
+        errors,
+        elapsed_time_micros,
     })
 }
 
@@ -1186,9 +1195,14 @@ fn system_log_attribute_field() -> String {
 }
 
 fn parse_rfc3339_arg(value: &str) -> std::result::Result<DateTime<Utc>, String> {
-    DateTime::parse_from_rfc3339(value)
-        .map(|timestamp| timestamp.with_timezone(&Utc))
-        .map_err(|error| format!("invalid RFC3339 timestamp: {error}"))
+    if let Ok(timestamp) = DateTime::parse_from_rfc3339(value) {
+        return Ok(timestamp.with_timezone(&Utc));
+    }
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .ok()
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .map(|timestamp| timestamp.and_utc())
+        .ok_or_else(|| "expected an RFC3339 timestamp or YYYY-MM-DD (midnight UTC)".to_string())
 }
 
 fn parse_duration_arg(value: &str) -> std::result::Result<Duration, String> {
@@ -1280,6 +1294,73 @@ mod tests {
         splits.assert_hits_async(1).await;
         search.assert_hits_async(1).await;
         result
+    }
+
+    #[tokio::test]
+    async fn log_search_stops_at_limit_and_sends_offset() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .unwrap_or_else(|_| {
+                assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+            });
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/databases/db_test/splits");
+                then.json_body(json!({"splits":[]}));
+            })
+            .await;
+        let page = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/logs/search")
+                    .body_contains("\"start_offset\":0")
+                    .body_contains("\"max_hits\":1000");
+                let hits: Vec<_> = (0..1000)
+                    .map(|i| {
+                        json!({
+                            "timestamp_nanos":1700000000000000000i64,
+                            "body":{"message":format!("log-{i}")}
+                        })
+                    })
+                    .collect();
+                then.json_body(json!({
+                    "num_hits":1005,"hits":hits,"elapsed_time_micros":1,"errors":[]
+                }));
+            })
+            .await;
+        let client = DeepstoreClient::builder()
+            .control_plane_url(server.url("/v1"))
+            .auth_proxy_url(server.base_url())
+            .query_token_provider(|| async { Ok("test-query-token".to_string()) })
+            .build()
+            .unwrap();
+        let target = LogsTarget {
+            manager_id: "mgr_test".to_string(),
+            project_id: None,
+            project_name: None,
+            deployment_id: None,
+            deployment_name: None,
+            deployment_group_name: None,
+            database_id: "db_test".to_string(),
+        };
+        let end = Utc::now();
+        let result = fetch_logs(
+            &client,
+            "db_test",
+            "*",
+            &target,
+            end - Duration::hours(1),
+            end,
+            1000,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.logs.len(), 1000);
+        assert_eq!(result.logs[0].message, "log-0");
+        assert_eq!(result.logs[999].message, "log-999");
+        assert_eq!(result.elapsed_time_micros, 1);
+        page.assert_hits_async(1).await;
     }
 
     #[tokio::test]
@@ -1433,7 +1514,7 @@ mod tests {
 
     #[test]
     fn invalid_log_limits_are_client_validation_errors() {
-        for limit in [0, 2000] {
+        for limit in [0, 1001] {
             let args = LogsArgs::try_parse_from(["logs", "--limit", &limit.to_string()])
                 .expect("numeric limit parses before semantic validation");
             let error = validate_args(&args).expect_err("limit outside supported range");
@@ -1444,7 +1525,7 @@ mod tests {
         }
         let args =
             LogsArgs::try_parse_from(["logs", "--limit", "1000"]).expect("maximum limit parses");
-        validate_args(&args).expect("maximum supported limit remains valid");
+        validate_args(&args).expect("maximum limit remains valid");
     }
 
     fn test_query<'a>(

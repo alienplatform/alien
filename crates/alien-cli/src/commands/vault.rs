@@ -48,7 +48,7 @@ EXAMPLES:
 VAULT STRUCTURE:
     .alien/deployments/{deployment-id}/vault/{vault-name}/secrets.json
 
-See also: https://alien.dev/docs/vaults"
+See also: https://alien.dev/docs/infrastructure/vault"
 )]
 pub struct VaultArgs {
     #[command(subcommand)]
@@ -391,7 +391,7 @@ EXAMPLES:
     # Delete a secret
     alien vault delete --deployment my-deployment customer-secrets GITHUB_TOKEN
 
-See also: https://alien.dev/docs/vaults"
+See also: https://alien.dev/docs/infrastructure/vault"
 )]
 pub struct VaultRemoteArgs {
     #[command(subcommand)]
@@ -636,7 +636,7 @@ async fn delete_remote_secret(
 
 #[cfg(test)]
 mod tests {
-    use axum::{Router, extract::Path, http::StatusCode, routing::delete};
+    use axum::{extract::Path, http::StatusCode, routing::delete, Router};
     use clap::Parser;
     use tempfile::TempDir;
 
@@ -660,10 +660,15 @@ mod tests {
             matches!(argument.action, VaultAction::Set { value: Some(value), stdin: false, .. } if value == "fake-value")
         );
         assert!(VaultArgs::try_parse_from(["vault", "set", "secrets", "key"]).is_err());
-        assert!(
-            VaultArgs::try_parse_from(["vault", "set", "secrets", "key", "fake-value", "--stdin"])
-                .is_err()
-        );
+        assert!(VaultArgs::try_parse_from([
+            "vault",
+            "set",
+            "secrets",
+            "key",
+            "fake-value",
+            "--stdin"
+        ])
+        .is_err());
         let remote = VaultRemoteArgs::try_parse_from([
             "vault",
             "--deployment",
@@ -705,18 +710,16 @@ mod tests {
         let actual = read_secret_value(value, file).await.unwrap();
         assert_eq!(actual.as_bytes(), expected.as_bytes());
         for extra in ["--stdin", "fake-value"] {
-            assert!(
-                VaultArgs::try_parse_from([
-                    "vault",
-                    "set",
-                    "secrets",
-                    "key",
-                    "--file",
-                    "value.txt",
-                    extra
-                ])
-                .is_err()
-            );
+            assert!(VaultArgs::try_parse_from([
+                "vault",
+                "set",
+                "secrets",
+                "key",
+                "--file",
+                "value.txt",
+                extra
+            ])
+            .is_err());
         }
         assert!(
             read_secret_value(None, Some(directory.path().join("missing")))

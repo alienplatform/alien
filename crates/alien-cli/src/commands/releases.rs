@@ -88,6 +88,19 @@ pub enum ReleasesCmd {
     },
 }
 
+impl ReleasesArgs {
+    pub fn wants_json_output(&self) -> bool {
+        match &self.cmd {
+            ReleasesCmd::Ls { json, .. }
+            | ReleasesCmd::Get { json, .. }
+            | ReleasesCmd::Promote { json, .. }
+            | ReleasesCmd::Channels { json, .. }
+            | ReleasesCmd::CreateChannel { json, .. } => *json,
+            ReleasesCmd::DeleteChannel { .. } => false,
+        }
+    }
+}
+
 pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()> {
     ctx.ensure_ready().await?;
 

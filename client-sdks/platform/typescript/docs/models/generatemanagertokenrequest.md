@@ -5,13 +5,11 @@
 ```typescript
 import { GenerateManagerTokenRequest } from "@alienplatform/platform-api/models";
 
-let value: GenerateManagerTokenRequest = {
-  project: "<value>",
-};
+let value: GenerateManagerTokenRequest = {};
 ```
 
 ## Fields
 
-| Field                                        | Type                                         | Required                                     | Description                                  |
-| -------------------------------------------- | -------------------------------------------- | -------------------------------------------- | -------------------------------------------- |
-| `project`                                    | *string*                                     | :heavy_check_mark:                           | Project ID or name to scope token access to. |
+| Field                                                                          | Type                                                                           | Required                                                                       | Description                                                                    |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `project`                                                                      | *string*                                                                       | :heavy_minus_sign:                                                             | Project ID or name. Omit to query all projects you can read in this workspace. |

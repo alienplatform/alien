@@ -6,7 +6,7 @@
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
-use alien_commands_client::{CommandsClient, CommandsClientConfig};
+use alien_commands_client::{CommandsClient, CommandsClientConfig, InvokeOptions};
 use alien_core::DeploymentStatus;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, Subcommand};
@@ -55,6 +55,10 @@ pub enum CommandsAction {
         #[arg(long)]
         command: String,
 
+        /// Resource ID to invoke when several resources handle commands
+        #[arg(long)]
+        target: Option<String>,
+
         /// Command parameters as JSON (default: {})
         #[arg(long, default_value = "{}")]
         params: String,
@@ -71,6 +75,7 @@ pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()>
         CommandsAction::Invoke {
             deployment,
             command,
+            target,
             params,
             timeout,
         } => {
@@ -110,7 +115,12 @@ pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()>
                 &deployment,
                 &command,
                 &params,
-                timeout,
+                InvokeOptions {
+                    timeout: Some(Duration::from_secs(timeout)),
+                    target_resource_id: target,
+                    deadline: None,
+                    idempotency_key: None,
+                },
                 is_dev,
             )
             .await
@@ -131,7 +141,7 @@ async fn invoke_command(
     deployment_name: &str,
     command: &str,
     params_json: &str,
-    timeout_secs: u64,
+    options: InvokeOptions,
     is_dev: bool,
 ) -> Result<()> {
     // Resolve deployment name to ID and ensure it's ready.
@@ -147,7 +157,6 @@ async fn invoke_command(
 
     // Use alien-commands-client for the invoke flow (handles polling, base64, storage download)
     let config = CommandsClientConfig {
-        timeout: Duration::from_secs(timeout_secs),
         allow_local_storage: true,
         ..Default::default()
     };
@@ -156,7 +165,7 @@ async fn invoke_command(
         CommandsClient::with_http_client(&commands_url, &deployment_id, http_client, config);
 
     let result: serde_json::Value = client
-        .invoke(command, params)
+        .invoke_with_options(command, params, Some(options))
         .await
         .into_alien_error()
         .context(ErrorData::ApiRequestFailed {
@@ -262,5 +271,57 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::TeardownFailed => "teardown-failed",
         DeploymentStatus::Deleted => "deleted",
         DeploymentStatus::Error => "error",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::{
+        Method::{GET, POST},
+        MockServer,
+    };
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn selected_target_reaches_command_request() {
+        let server = MockServer::start_async().await;
+        server.mock_async(|when, then| {
+            when.method(GET).path("/v1/deployments/dep_test");
+            then.json_body(json!({"id":"dep_test", "name":"docproc", "platform":"test", "status":"running",
+                "deploymentGroupId":"dg_test", "deploymentProtocolVersion":1,"projectId":"prj_test",
+                "workspaceId":"ws_test","retryRequested":false,"updateBlocked":false,"createdAt":"2026-01-01T00:00:00Z"}));
+        }).await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/commands")
+                    .body_contains("\"targetResourceId\":\"worker-a\"");
+                then.json_body(json!({"commandId":"cmd_test"}));
+            })
+            .await;
+        server.mock_async(|when, then| {
+            when.method(GET).path("/v1/commands/cmd_test");
+            then.json_body(json!({"state":"SUCCEEDED","response":{"response":{"mode":"inline","inlineBase64":"e30="}}}));
+        }).await;
+        let manager = alien_manager_api::Client::new(&server.base_url());
+        invoke_command(
+            &manager,
+            &server.base_url(),
+            reqwest::Client::new(),
+            "dep_test",
+            "ping",
+            "{}",
+            InvokeOptions {
+                timeout: Some(Duration::from_secs(2)),
+                target_resource_id: Some("worker-a".to_string()),
+                deadline: None,
+                idempotency_key: None,
+            },
+            false,
+        )
+        .await
+        .expect("targeted command completes");
+        create.assert_async().await;
     }
 }

@@ -193,7 +193,8 @@ fn unavailable_identity_or_missing_workspace_stops_before_key_requests() {
             false,
         );
         assert!(!output.status.success());
-        let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
         if status == 200 {
             assert_eq!(error["code"], "CONFIGURATION_ERROR");
         } else {
