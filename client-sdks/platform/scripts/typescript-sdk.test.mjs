@@ -543,3 +543,56 @@ test("published external-binding endpoint models retain root and deep imports", 
     assert.deepEqual(models.endpointSecretRefFromJSON(JSON.stringify(endpoint.secretRef)), { ok: true, value: endpoint.secretRef });
   }
 });
+
+test("grouped deployment setup progress sends the documented request", async () => {
+  const calls = [];
+  const client = new Alien({
+    serverURL: "https://example.com",
+    workspace: "acme",
+    apiKey: "test-only-key",
+    httpClient: new HTTPClient({
+      fetcher: async request => {
+        calls.push({ url: new URL(request.url), method: request.method, body: await request.json() });
+        return new Response(null, { status: 204 });
+      },
+    }),
+  });
+  const progress = {
+    event: "stack-started",
+    cloudFormation: { stackId: "stack-acme", requestId: "request-acme", logicalResourceId: "DeploymentSetupStarted" },
+  };
+  await client.deployments.reportDeploymentSetupProgress(progress);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, "/v1/deployments/setup-progress");
+  assert.equal(calls[0].url.searchParams.get("workspace"), "acme");
+  assert.equal(calls[0].method, "POST");
+  assert.deepEqual(calls[0].body, progress);
+});
+
+test("webhook PATCH sends only changed settings", async () => {
+  const requests = [];
+  const client = new Alien({
+    serverURL: "https://example.com",
+    workspace: "acme",
+    apiKey: "test-only-key",
+    httpClient: new HTTPClient({
+      fetcher: async request => {
+        requests.push({ method: request.method, url: new URL(request.url), body: await request.json() });
+        return Response.json({
+          id: "ep_example", url: "https://example.com/hooks", description: "Acme",
+          filterTypes: ["deployment.running"], disabled: true, projectId: "prj_example",
+          projectIds: ["prj_example"], createdAt: "2026-01-01T00:00:00.000Z",
+        });
+      },
+    }),
+  });
+  const result = await client.webhooks.updateWebhookEndpoint({
+    id: "ep_example", requestBody: { disabled: true },
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, "PATCH");
+  assert.equal(requests[0].url.pathname, "/v1/webhooks/endpoints/ep_example");
+  assert.deepEqual(requests[0].body, { disabled: true });
+  assert.equal(result.description, "Acme");
+  assert.deepEqual(result.filterTypes, ["deployment.running"]);
+});
