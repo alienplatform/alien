@@ -2062,6 +2062,28 @@ fn rollout_finished(status: &serde_json::Value, release_id: &str, sequence: u64)
         return Ok(false);
     }
     let state = &status["state"];
+    if state["status"].as_str() == Some("waiting-for-secrets") {
+        let mut message = String::from(
+            "The site needs required Secrets before it can continue. Create them in the site cluster, then run sync again.",
+        );
+        if let Some(secrets) = state["runtimeMetadata"]["deployerSecrets"].as_array() {
+            for secret in secrets {
+                if secret["required"].as_bool() != Some(true)
+                    || secret["status"].as_str() != Some("missing")
+                {
+                    continue;
+                }
+                let location = &secret["location"];
+                if let Some(name) = location["name"].as_str() {
+                    message.push_str(&format!("\n\nSecret: {name}"));
+                }
+                if let Some(command) = location["cliCommand"].as_str() {
+                    message.push_str(&format!("\n{command}"));
+                }
+            }
+        }
+        return Err(AlienError::new(ErrorData::ConfigurationError { message }));
+    }
     let running = state["status"].as_str() == Some("running");
     if running && current_release(&status).as_deref() == Some(release_id) {
         return Ok(true);
@@ -2677,6 +2699,35 @@ mod tests {
         status["state"]["currentRelease"]["releaseId"] = "rel_new".into();
         assert!(rollout_finished(&status, "rel_new", 11).unwrap());
         assert!(!rollout_finished(&status, "rel_new", 12).unwrap());
+    }
+
+    #[test]
+    fn missing_secrets_stop_rollout_with_commands_and_allow_retry() {
+        let mut status = serde_json::json!({
+            "sequence": 10,
+            "state": {
+                "status": "waiting-for-secrets",
+                "runtimeMetadata": {"deployerSecrets": [
+                    {"required": true, "status": "missing", "value": "never-print-this",
+                     "location": {"name": "app-password", "cliCommand": "kubectl create secret generic app-password --from-literal=value='<VALUE>'"}},
+                    {"required": false, "status": "missing", "location": {"name": "optional-secret"}},
+                    {"required": true, "status": "available", "location": {"name": "existing-secret"}}
+                ]}
+            }
+        });
+        assert!(!rollout_finished(&status, "rel_new", 11).unwrap());
+        let error = rollout_finished(&status, "rel_new", 10).unwrap_err().to_string();
+        assert!(error.contains("Secret: app-password"));
+        assert!(error.contains("kubectl create secret generic app-password"));
+        assert!(error.contains("run sync again"));
+        assert!(!error.contains("never-print-this"));
+        assert!(!error.contains("optional-secret"));
+        assert!(!error.contains("existing-secret"));
+        status["state"]["status"] = "provisioning".into();
+        assert!(!rollout_finished(&status, "rel_new", 10).unwrap());
+        status["state"]["status"] = "running".into();
+        status["state"]["currentRelease"] = serde_json::json!({"releaseId": "rel_new"});
+        assert!(rollout_finished(&status, "rel_new", 10).unwrap());
     }
 
     #[tokio::test]
