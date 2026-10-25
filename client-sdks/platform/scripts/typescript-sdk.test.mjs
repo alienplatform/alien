@@ -543,3 +543,28 @@ test("published external-binding endpoint models retain root and deep imports", 
     assert.deepEqual(models.endpointSecretRefFromJSON(JSON.stringify(endpoint.secretRef)), { ok: true, value: endpoint.secretRef });
   }
 });
+
+test("grouped deployment setup progress sends the documented request", async () => {
+  const calls = [];
+  const client = new Alien({
+    serverURL: "https://example.com",
+    workspace: "acme",
+    apiKey: "test-only-key",
+    httpClient: new HTTPClient({
+      fetcher: async request => {
+        calls.push({ url: new URL(request.url), method: request.method, body: await request.json() });
+        return new Response(null, { status: 204 });
+      },
+    }),
+  });
+  const progress = {
+    event: "stack-started",
+    cloudFormation: { stackId: "stack-acme", requestId: "request-acme", logicalResourceId: "DeploymentSetupStarted" },
+  };
+  await client.deployments.reportDeploymentSetupProgress(progress);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, "/v1/deployments/setup-progress");
+  assert.equal(calls[0].url.searchParams.get("workspace"), "acme");
+  assert.equal(calls[0].method, "POST");
+  assert.deepEqual(calls[0].body, progress);
+});
