@@ -482,7 +482,11 @@ mod tests {
             .await
             .unwrap();
         assert!(!removed.success);
-        assert!(removed.errors[0].contains("'reader-sa' was modified"), "{:?}", removed.errors);
+        assert!(
+            removed.errors[0].contains("'reader-sa' was modified"),
+            "{:?}",
+            removed.errors
+        );
         let uncaptured = check
             .check(
                 &account_stack(with_grant.clone(), true),
@@ -587,6 +591,8 @@ mod tests {
                 config: Resource::new(storage.clone()),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -599,6 +605,8 @@ mod tests {
                 config: Resource::new(storage),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -646,6 +654,8 @@ mod tests {
                 config: Resource::new(storage1.clone()),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -658,6 +668,8 @@ mod tests {
                 config: Resource::new(storage1),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -668,6 +680,8 @@ mod tests {
                 config: Resource::new(storage2),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -721,6 +735,8 @@ mod tests {
                 config: Resource::new(storage_old),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -733,6 +749,8 @@ mod tests {
                 config: Resource::new(storage_new),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -781,6 +799,8 @@ mod tests {
                 config: Resource::new(storage.clone()),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -793,6 +813,8 @@ mod tests {
                 config: Resource::new(storage),
                 lifecycle: ResourceLifecycle::Live, // Changed from Frozen to Live
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -841,6 +863,8 @@ mod tests {
                 config: Resource::new(storage),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -892,6 +916,8 @@ mod tests {
                 config: Resource::new(cluster),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },

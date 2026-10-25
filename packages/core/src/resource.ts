@@ -18,6 +18,8 @@ export class Resource {
    * ungated ones, which shows up in the stack snapshots.
    */
   declare readonly enabledWhen?: string
+  declare readonly displayName?: string
+  declare readonly description?: string
 
   /**
    * Creates a new Resource instance.
@@ -27,7 +29,11 @@ export class Resource {
   constructor(
     public config: BaseResource,
     enabledWhen?: string,
+    displayName?: string,
+    description?: string,
   ) {
+    if (displayName !== undefined) this.displayName = displayName
+    if (description !== undefined) this.description = description
     if (enabledWhen !== undefined) {
       this.enabledWhen = enabledWhen
     }
@@ -44,10 +50,31 @@ export class Resource {
 }
 
 /**
- * Base class for the per-resource builders, giving every resource type the same
- * `.enabled()` gate without each builder reimplementing it.
+ * Shared display metadata for resource builders.
  */
-export abstract class ResourceBuilder {
+export abstract class ResourceMetadataBuilder {
+  private _displayName?: string
+  private _description?: string
+
+  /** Sets a friendly name; the resource ID remains its stable identity. */
+  public displayName(name: string): this {
+    this._displayName = name
+    return this
+  }
+
+  /** Describes this resource's purpose as plain text. */
+  public description(description: string): this {
+    this._description = description
+    return this
+  }
+
+  protected resource(config: BaseResource, enabledWhen?: string): Resource {
+    return new Resource(config, enabledWhen, this._displayName, this._description)
+  }
+}
+
+/** Shared conditional creation for resource types that support gates. */
+export abstract class ResourceBuilder extends ResourceMetadataBuilder {
   private _enabledWhen?: string
 
   /**
@@ -70,6 +97,6 @@ export abstract class ResourceBuilder {
    * @returns An immutable Resource.
    */
   protected resource(config: BaseResource): Resource {
-    return new Resource(config, this._enabledWhen)
+    return super.resource(config, this._enabledWhen)
   }
 }

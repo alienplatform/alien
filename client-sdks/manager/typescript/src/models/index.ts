@@ -118,6 +118,7 @@ export * from "./heartbeatcollectionissue.js";
 export * from "./heartbeatcollectionissuereason.js";
 export * from "./heartbeatissueseverity.js";
 export * from "./heartbeatsmode.js";
+export * from "./helmrelease.js";
 export * from "./horizonworkloadschedulingmode.js";
 export * from "./importedresource.js";
 export * from "./importsourcekind.js";

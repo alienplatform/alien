@@ -1,13 +1,13 @@
 //! Importer for the Azure Sandbox.
 
 use alien_core::{
+    import::{data::AzureSandboxImportData, ImportContext},
     AzureSandboxImage, ErrorData as CoreErrorData, Platform, ResourceStatus, Result, Sandbox,
     StackResourceState,
-    import::{ImportContext, data::AzureSandboxImportData},
 };
 use alien_error::AlienError;
 
-use crate::core::{ResourceController, serialize_controller};
+use crate::core::{serialize_controller, ResourceController};
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state_with_status;
 use crate::sandbox::{AzureSandboxController, AzureSandboxState};
@@ -177,6 +177,8 @@ mod tests {
             config,
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         }

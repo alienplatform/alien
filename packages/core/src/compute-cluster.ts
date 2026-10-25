@@ -6,7 +6,7 @@ import {
   type Platform,
   type ResourceType,
 } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceMetadataBuilder } from "./resource.js"
 
 export type {
   CapacityGroup,
@@ -102,12 +102,13 @@ export type ComputePoolInput = {
  * Provider instance types, selected zones, custom container CIDRs, GPU, and
  * nested virtualization requirements are unsupported and fail validation.
  */
-export class ComputeCluster {
+export class ComputeCluster extends ResourceMetadataBuilder {
   private _config: Partial<ComputeClusterConfig> = {
     capacityGroups: [],
   }
 
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -185,7 +186,7 @@ export class ComputeCluster {
       throw new Error("Dynamic container pool must be declared in the compute cluster")
     }
     const config = ComputeClusterSchema.parse(this._config)
-    return new Resource({
+    return this.resource({
       type: "compute-cluster",
       ...config,
     })

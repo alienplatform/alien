@@ -1367,6 +1367,14 @@ export type SyncListResponsePreparedStackResources = {
    */
   dependencies: Array<SyncListResponsePreparedStackDependency>;
   /**
+   * Authored purpose, displayed as plain text. Does not affect resource configuration.
+   */
+  description?: string | null | undefined;
+  /**
+   * Optional human-readable name. The stable resource ID is the display fallback.
+   */
+  displayName?: string | null | undefined;
+  /**
    * Id of the boolean stack input that decides whether this resource is
    *
    * @remarks
@@ -1974,7 +1982,7 @@ export type SyncListResponseDeployment = {
    */
   stackSettings: SyncListResponseStackSettings;
   /**
-   * State of infrastructure components managed by this deployment
+   * Raw engine state for installers and the CLI to resume, update, and destroy deployments. UIs should read resources[] for resource status and errors.
    */
   stackState?: SyncListResponseStackState | null | undefined;
   /**
@@ -4286,6 +4294,8 @@ export const SyncListResponsePreparedStackResources$inboundSchema: z.ZodType<
   dependencies: z.array(
     z.lazy(() => SyncListResponsePreparedStackDependency$inboundSchema),
   ),
+  description: z.nullable(z.string()).optional(),
+  displayName: z.nullable(z.string()).optional(),
   enabledWhen: z.nullable(z.string()).optional(),
   lifecycle: SyncListResponsePreparedStackLifecycle$inboundSchema,
   remoteAccess: z.boolean().optional(),

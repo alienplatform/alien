@@ -99,6 +99,8 @@ impl StackMutation for AzureServiceActivationMutation {
                 // orders it after `default-resource-group` when the stack has one; a sandbox
                 // published alone installs into the customer's existing group and has none.
                 dependencies: Vec::new(),
+                display_name: Some(format!("{service_name} provider")),
+                description: Some(format!("Registers {service_name} for this deployment.")),
                 remote_access: false,
             };
 

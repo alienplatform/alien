@@ -119,6 +119,11 @@ impl StackMutation for GcpServiceActivationMutation {
                 config: alien_core::Resource::new(service_activation),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(), // GCP service activations don't depend on other resources
+                display_name: Some(api_display_name(&service_name).to_string()),
+                description: Some(format!(
+                    "Enables {} for this deployment.",
+                    api_display_name(&service_name)
+                )),
                 remote_access: false,
             };
 
@@ -314,6 +319,29 @@ impl GcpServiceActivationMutation {
         }
 
         services
+    }
+}
+
+fn api_display_name(service: &str) -> &str {
+    match service {
+        "run.googleapis.com" => "Cloud Run API",
+        "cloudbuild.googleapis.com" => "Cloud Build API",
+        "storage.googleapis.com" => "Cloud Storage API",
+        "cloudkms.googleapis.com" => "Cloud KMS API",
+        "iam.googleapis.com" => "Identity and Access Management (IAM) API",
+        "cloudresourcemanager.googleapis.com" => "Cloud Resource Manager API",
+        "artifactregistry.googleapis.com" => "Artifact Registry API",
+        "firestore.googleapis.com" => "Cloud Firestore API",
+        "aiplatform.googleapis.com" => "Vertex AI API",
+        "pubsub.googleapis.com" => "Pub/Sub API",
+        "secretmanager.googleapis.com" => "Secret Manager API",
+        "sqladmin.googleapis.com" => "Cloud SQL Admin API",
+        "compute.googleapis.com" => "Compute Engine API",
+        "iamcredentials.googleapis.com" => "IAM Service Account Credentials API",
+        "container.googleapis.com" => "Kubernetes Engine API",
+        "sts.googleapis.com" => "Security Token Service API",
+        "cloudquotas.googleapis.com" => "Cloud Quotas API",
+        _ => service,
     }
 }
 

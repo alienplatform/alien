@@ -907,6 +907,8 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
             ),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: vec![],
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },

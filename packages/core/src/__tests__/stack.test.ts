@@ -7,6 +7,39 @@ import * as alien from "../index.js"
 const SHARED_IMAGE = "docker.io/library/rust:latest"
 
 describe("Stack builder validation", () => {
+  it("carries resource prose outside runtime configuration", () => {
+    const plain = new alien.Storage("documents").build()
+    const documented = new alien.Storage("documents")
+      .displayName("Document storage")
+      .description("Uploaded documents and processed results.")
+      .build()
+    expect(documented.config).toEqual(plain.config)
+    expect(documented.ref()).toEqual(plain.ref())
+    const stack = new alien.Stack("metadata").add(documented, "frozen").build()
+    expect(stack.resources.documents?.displayName).toBe("Document storage")
+    expect(stack.resources.documents?.description).toBe("Uploaded documents and processed results.")
+    const old = new alien.Stack("metadata").add(plain, "frozen").build()
+    expect(old.resources.documents).not.toHaveProperty("displayName")
+    expect(old.resources.documents).not.toHaveProperty("description")
+  })
+  it("carries metadata on builders that do not support conditional creation", () => {
+    const builders = [
+      new alien.ArtifactRegistry("images"),
+      new alien.ServiceAccount("identity"),
+      new alien.Build("build").permissions("default"),
+      new alien.ComputeCluster("compute"),
+    ]
+    for (const builder of builders) {
+      const resource = builder
+        .displayName("Application resource")
+        .description("Its purpose.")
+        .build()
+      const stack = new alien.Stack("metadata").add(resource, "frozen").build()
+      expect(stack.resources[resource.config.id]?.displayName).toBe("Application resource")
+      expect(stack.resources[resource.config.id]?.description).toBe("Its purpose.")
+      expect(builder).not.toHaveProperty("enabled")
+    }
+  })
   it("builds compute pools from portable requirements only", () => {
     const compute = new alien.ComputeCluster("runtime")
       .pool("nested", {

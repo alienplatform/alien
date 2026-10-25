@@ -205,7 +205,7 @@ variable "unsupported_availability_zone_ids" {
 
 variable "default_network_vpc_id" {
   type        = string
-  description = "Existing VPC ID supplied by the customer."
+  description = "Existing VPC ID for default-network supplied by the customer."
   default     = "vpc-0123456789abcdef0"
 }
 

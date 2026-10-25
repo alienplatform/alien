@@ -105,3 +105,16 @@ fn decodes_package_types_this_client_does_not_know() {
         ["cloudformation", "future-package-type"]
     );
 }
+
+#[test]
+fn decodes_resource_statuses_this_client_does_not_know() {
+    let resource: alien_platform_api::types::DeploymentResource = serde_json::from_value(json!({
+        "id": "worker",
+        "type": "worker",
+        "status": "future-status",
+        "retryAttempt": 0,
+        "error": null
+    }))
+    .expect("a future resource status decodes");
+    assert_eq!(resource.status, "future-status");
+}

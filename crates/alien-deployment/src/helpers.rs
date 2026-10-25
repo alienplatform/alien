@@ -1351,6 +1351,7 @@ pub fn interrupt_in_progress_resources(
         // will reset them back to Pending.
         resource_state.last_failed_state = resource_state.internal_state.clone();
         resource_state.status = interrupted_status;
+        resource_state.progress = None;
         resource_state.error = Some(interrupted_error.clone());
         resource_state.retry_attempt = 0;
         resource_state
@@ -1597,6 +1598,8 @@ mod tests {
                 config: resource,
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -1785,6 +1788,8 @@ mod tests {
                 config: alien_core::Resource::new(function),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -1817,6 +1822,8 @@ mod tests {
                 config: Resource::new(Vault::new(SECRETS_VAULT_ID.to_string()).build()),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -1834,6 +1841,9 @@ mod tests {
         let resource = Resource::new(worker);
 
         StackResourceState {
+            progress: None,
+            display_name: None,
+            description: None,
             resource_type: resource.resource_type().as_ref().to_string(),
             internal_state: None,
             status: ResourceStatus::ProvisionFailed,
@@ -2280,6 +2290,8 @@ mod tests {
                 config: Resource::new(container),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -2297,6 +2309,8 @@ mod tests {
                 config: Resource::new(daemon),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },

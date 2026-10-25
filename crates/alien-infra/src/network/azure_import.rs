@@ -1,8 +1,8 @@
 //! Importer for Azure Network (VNet + subnets + NAT).
 
 use alien_core::{
+    import::{data::AzureNetworkImportData, ImportContext},
     Result, StackResourceState,
-    import::{ImportContext, data::AzureNetworkImportData},
 };
 
 use crate::import::ResourceImporter;
@@ -91,6 +91,8 @@ mod tests {
             ),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         };
