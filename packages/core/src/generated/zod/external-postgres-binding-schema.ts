@@ -18,7 +18,9 @@ export const ExternalPostgresBindingSchema = z.object({
 get "host"(){
                 return BindingValueStringSchema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
               },
-"password": z.string().describe("Connection password as a concrete value, never an unresolved `SecretRef`: the platform\nmaterializes the Kubernetes secret into the pod env. The cloud variants carry a secret\nlocator instead."),
+get "password"(){
+                return BindingValueStringSchema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
+              },
 get "port"(){
                 return BindingValueU16Schema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
               },

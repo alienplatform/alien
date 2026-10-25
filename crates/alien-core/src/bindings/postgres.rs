@@ -107,10 +107,9 @@ pub struct ExternalPostgresBinding {
     pub port: BindingValue<u16>,
     pub database: BindingValue<String>,
     pub username: BindingValue<String>,
-    /// Connection password as a concrete value, never an unresolved `SecretRef`: the platform
-    /// materializes the Kubernetes secret into the pod env. The cloud variants carry a secret
-    /// locator instead.
-    pub password: String,
+    /// Connection password or Kubernetes Secret reference. Kubernetes workloads resolve
+    /// the reference through secretKeyRef before the application loads its binding.
+    pub password: BindingValue<String>,
     /// Explicit TLS policy. Missing legacy configuration defaults to verified TLS.
     #[serde(default)]
     pub ssl_mode: ExternalPostgresSslMode,
@@ -188,7 +187,7 @@ impl PostgresBinding {
             port: BindingValue::value(port),
             database: database.into(),
             username: username.into(),
-            password: password.into(),
+            password: BindingValue::value(password.into()),
             ssl_mode: ExternalPostgresSslMode::default(),
         })
     }
@@ -216,6 +215,23 @@ mod tests {
         let deserialized: PostgresBinding =
             serde_json::from_str(&json).expect("external binding deserializes");
         assert_eq!(binding, deserialized);
+    }
+
+    #[test]
+    fn external_binding_preserves_kubernetes_password_reference() {
+        let json = serde_json::json!({
+            "service": "external",
+            "host": "database",
+            "port": 5432,
+            "database": "app",
+            "username": "app",
+            "password": {"secretRef": {"name": "database-credentials", "key": "password"}},
+            "sslMode": "disable"
+        });
+        let binding: PostgresBinding = serde_json::from_value(json.clone())
+            .expect("external binding accepts a Kubernetes password reference");
+        assert_eq!(serde_json::to_value(&binding).unwrap(), json);
+        assert!(!format!("{binding:?}").contains("database-credentials"));
     }
 
     #[test]

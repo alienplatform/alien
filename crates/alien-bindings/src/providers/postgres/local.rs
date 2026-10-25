@@ -2,7 +2,7 @@ use crate::error::{ErrorData, Result};
 use crate::providers::postgres::{resolve_params, PostgresConnectionInput, ResolvedPostgres};
 use crate::traits::PostgresTlsPolicy;
 use alien_core::bindings::{ExternalPostgresSslMode, PostgresBinding};
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 
 /// Backwards-compatible name for a resolved inline-password Postgres binding.
 ///
@@ -33,6 +33,14 @@ impl ResolvedPostgres {
                 },
             )?,
             PostgresBinding::External(b) => {
+                let password = b
+                    .password
+                    .clone()
+                    .into_value(binding_name, "password")
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Postgres password reference must be resolved before loading the binding",
+                    ))?;
                 let tls = match b.ssl_mode {
                     ExternalPostgresSslMode::VerifyFull => {
                         PostgresTlsPolicy::verify_full_with_system_roots()
@@ -46,7 +54,7 @@ impl ResolvedPostgres {
                         port: &b.port,
                         database: &b.database,
                         username: &b.username,
-                        password: &b.password,
+                        password: &password,
                         tls,
                     },
                 )?
@@ -101,6 +109,23 @@ mod tests {
             pg.connection_string(),
             "postgres://alien:p%40ss%2Fword@db.internal:5432/app?sslmode=verify-full"
         );
+    }
+
+    #[test]
+    fn external_password_reference_requires_workload_materialization() {
+        let binding: PostgresBinding = serde_json::from_value(serde_json::json!({
+            "service": "external",
+            "host": "database",
+            "port": 5432,
+            "database": "app",
+            "username": "app",
+            "password": {"secretRef": {"name": "database-credentials", "key": "password"}}
+        }))
+        .expect("external password reference deserializes");
+        let error = ResolvedPostgres::from_binding("database", &binding)
+            .expect_err("runtime must refuse unresolved password references");
+        assert_eq!(error.code, "BINDING_CONFIG_INVALID");
+        assert!(!error.retryable);
     }
 
     #[test]
