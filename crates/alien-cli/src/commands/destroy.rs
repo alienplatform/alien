@@ -68,45 +68,13 @@ pub struct DestroyArgs {
     #[arg(long, conflicts_with = "force")]
     pub erase_data: bool,
 
-    /// Skip the destruction confirmation prompt
+    /// Skip confirmation for cloud destruction (local dev destruction never prompts)
     #[arg(long)]
     pub yes: bool,
 }
 
 pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
-    let confirmation = InteractionMode::current(false).confirmation_mode(
-        args.yes,
-        "Destruction requires confirmation. Pass --yes to run non-interactively.",
-    )?;
-    if matches!(confirmation, ConfirmationMode::Prompt)
-        && !prompt_confirm(
-            &if args.force {
-                format!(
-                    "Forget deployment '{}' and leave its resources running?",
-                    args.name
-                )
-            } else if args.erase_data {
-                format!(
-                    "Destroy deployment '{}' and permanently erase its data?",
-                    args.name
-                )
-            } else {
-                format!(
-                    "Stop deployment '{}' and retain its durable data?",
-                    args.name
-                )
-            },
-            false,
-        )?
-    {
-        println!("Destruction cancelled.");
-        return Ok(());
-    }
     info!("Starting destroy command");
-    println!("{}", contextual_heading("Destroying", &args.name, &[]));
-    let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
-    steps.activate(0, Some(format!("Deployment {}", args.name)));
-
     let platform_name = args.platform.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
@@ -120,6 +88,11 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         })
     })?;
 
+    let confirmation = InteractionMode::current(false).confirmation_mode(
+        args.yes,
+        "Destruction requires confirmation. Pass --yes to run non-interactively.",
+    )?;
+
     let tracker = if args.token.is_none() {
         Some(DeploymentTracker::new()?)
     } else {
@@ -128,13 +101,43 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     let tracked = tracker
         .as_ref()
         .and_then(|tracker| tracker.get_deployment(&args.name).cloned());
-    let (tracked_deployment, manager_ctx) =
+    let (mut tracked_deployment, manager_ctx) =
         resolve_destroy_target(&args, &ctx, &platform_name, tracked, tracker.as_ref()).await?;
+    if matches!(confirmation, ConfirmationMode::Prompt)
+        && !prompt_confirm(
+            &if args.force {
+                format!(
+                    "Forget deployment '{}' ({}) and leave its resources running?",
+                    tracked_deployment.name, tracked_deployment.deployment_id
+                )
+            } else if args.erase_data {
+                format!(
+                    "Destroy deployment '{}' ({}) and permanently erase its data?",
+                    tracked_deployment.name, tracked_deployment.deployment_id
+                )
+            } else {
+                format!(
+                    "Stop deployment '{}' ({}) and retain its durable data?",
+                    tracked_deployment.name, tracked_deployment.deployment_id
+                )
+            },
+            false,
+        )?
+    {
+        println!("Destruction cancelled.");
+        return Ok(());
+    }
+    let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
+    ensure_destroy_token(&args, &ctx, &mut tracked_deployment).await?;
+    println!(
+        "{}",
+        contextual_heading("Destroying", &tracked_deployment.name, &[])
+    );
     steps.complete(
         0,
         Some(format!(
             "{} ({})",
-            args.name, tracked_deployment.deployment_id
+            tracked_deployment.name, tracked_deployment.deployment_id
         )),
     );
     steps.activate(1, Some("Discovering manager...".to_string()));
@@ -311,54 +314,7 @@ async fn resolve_destroy_target(
         .and_then(|tracker| tracker.get_deployment_by_id(deployment.id.as_str()))
         .filter(|saved| saved.project_id == project_id)
         .map(|saved| saved.api_key.clone());
-    let api_key = if args.force {
-        String::new()
-    } else if let Some(saved_key) = saved_key {
-        saved_key
-    } else {
-        #[cfg(feature = "platform")]
-        {
-            if !ctx.is_platform() {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "token".to_string(),
-                    message: "Supply --token with the deployment token to run setup teardown"
-                        .to_string(),
-                }));
-            }
-            let workspace = ctx.resolve_workspace_query_with_bootstrap(true).await?;
-            let client = ctx.sdk_client().await?;
-            let mut request = client.create_deployment_token().id(deployment.id.as_str());
-            if let Some(workspace) = workspace.as_deref() {
-                request = request.workspace(workspace);
-            }
-            request
-                .body(&alien_platform_api::types::CreateDeploymentTokenRequest {
-                    description: Some("CLI setup teardown".try_into().into_alien_error().context(
-                        ErrorData::ConfigurationError {
-                            message: "Invalid teardown token description".to_string(),
-                        },
-                    )?),
-                    expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(24)),
-                })
-                .send()
-                .await
-                .into_sdk_error()
-                .context(ErrorData::ConfigurationError {
-                    message: "Failed to create a deployment-scoped setup teardown token"
-                        .to_string(),
-                })?
-                .into_inner()
-                .token
-        }
-        #[cfg(not(feature = "platform"))]
-        {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "token".to_string(),
-                message: "Supply --token with the deployment token to run setup teardown"
-                    .to_string(),
-            }));
-        }
-    };
+    let api_key = saved_key.unwrap_or_default();
     Ok((
         TrackedDeployment {
             name: deployment.name.to_string(),
@@ -369,6 +325,52 @@ async fn resolve_destroy_target(
         },
         manager,
     ))
+}
+
+/// Mint teardown credentials only after the user accepts destruction.
+async fn ensure_destroy_token(
+    args: &DestroyArgs,
+    ctx: &ExecutionMode,
+    target: &mut TrackedDeployment,
+) -> Result<()> {
+    if args.force || !target.api_key.is_empty() {
+        return Ok(());
+    }
+    if !ctx.is_platform() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "token".to_string(),
+            message: "Supply --token with the deployment token to run setup teardown".to_string(),
+        }));
+    }
+    #[cfg(feature = "platform")]
+    {
+        let workspace = ctx.resolve_workspace_query_with_bootstrap(true).await?;
+        let client = ctx.sdk_client().await?;
+        let mut request = client
+            .create_deployment_token()
+            .id(target.deployment_id.as_str());
+        if let Some(workspace) = workspace.as_deref() {
+            request = request.workspace(workspace);
+        }
+        target.api_key = request
+            .body(&alien_platform_api::types::CreateDeploymentTokenRequest {
+                description: Some("CLI setup teardown".try_into().into_alien_error().context(
+                    ErrorData::ConfigurationError {
+                        message: "Invalid teardown token description".to_string(),
+                    },
+                )?),
+                expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(24)),
+            })
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to create a deployment-scoped setup teardown token".to_string(),
+            })?
+            .into_inner()
+            .token;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "platform")]
@@ -967,6 +969,34 @@ mod tests {
 
     const DEPLOYMENT_TOKEN: &str = "deployment-secret";
 
+    #[tokio::test]
+    async fn noninteractive_destroy_requires_yes_before_any_request() {
+        let server = httpmock::MockServer::start_async().await;
+        let requests = server
+            .mock_async(|_when, then| {
+                then.status(500);
+            })
+            .await;
+        let error = destroy_task(
+            DestroyArgs {
+                token: None,
+                name: "dep_test".to_string(),
+                platform: Some("test".to_string()),
+                force: false,
+                erase_data: false,
+                yes: false,
+            },
+            ExecutionMode::Standalone {
+                server_url: server.base_url(),
+                api_key: "operator".to_string(),
+            },
+        )
+        .await
+        .expect_err("automation must acknowledge destruction before resolving a target");
+        assert!(error.message.contains("Pass --yes"), "{error}");
+        requests.assert_hits_async(0).await;
+    }
+
     fn deployer_secret(
         label: &str,
         status: alien_core::DeployerSecretStatus,
@@ -1227,7 +1257,11 @@ mod tests {
             erase_data: false,
             yes: true,
         };
-        let (target, manager) = resolve_destroy_target(&args, &ctx, "test", None, None)
+        let (mut target, manager) = resolve_destroy_target(&args, &ctx, "test", None, None)
+            .await
+            .unwrap();
+        assert!(target.api_key.is_empty());
+        ensure_destroy_token(&args, &ctx, &mut target)
             .await
             .unwrap();
         assert_eq!(target.deployment_id, ID);
@@ -1428,7 +1462,7 @@ mod tests {
             name: UNTRACKED.to_string(),
             ..args
         };
-        let error = resolve_destroy_target(
+        let (mut target, _) = resolve_destroy_target(
             &untracked,
             &ctx,
             "test",
@@ -1436,8 +1470,12 @@ mod tests {
             Some(&tracker),
         )
         .await
-        .err()
-        .expect("another deployment does not borrow the saved key");
+        .unwrap();
+        assert!(target.api_key.is_empty());
+        assert!(state.lock().unwrap().token_requests.is_empty());
+        let error = ensure_destroy_token(&untracked, &ctx, &mut target)
+            .await
+            .expect_err("another deployment does not borrow the saved key");
         assert!(
             error
                 .to_string()
@@ -1710,7 +1748,10 @@ mod tests {
             assert_eq!(target.deployment_id, PLATFORM_DEPLOYMENT, "{name}");
             assert_eq!(target.name, "prod", "{name}");
             assert_eq!(target.project_id, PLATFORM_PROJECT, "{name}");
-            assert_eq!(target.api_key, DEPLOYMENT_TOKEN, "{name}");
+            assert!(
+                target.api_key.is_empty(),
+                "lookup must not mint a token: {name}"
+            );
         }
     }
 
