@@ -3162,6 +3162,7 @@ async fn create_deployment_task(
         .transpose()?;
 
     let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
+        airgapped: None,
         quota_warning_overrides: Vec::new(),
         endpoint_access: network_args
             .endpoint_access
