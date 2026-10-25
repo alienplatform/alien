@@ -1119,7 +1119,10 @@ async fn download_update(
     let file = folder
         .join(TO_SITE)
         .join(format!("{sequence}-{release_id}.{BUNDLE_EXTENSION}"));
-    airgap::pack(dir, &file).context(config_error("writing the bundle"))?;
+    let trusted_key = site.bundle_key.as_deref().ok_or_else(|| {
+        AlienError::new(config_error("the manager returned no bundle signing key"))
+    })?;
+    write_update_bundle(dir, &file, folder, trusted_key).await?;
     let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
     let mut delta = if omitted.is_empty() {
         String::new()
@@ -1134,6 +1137,20 @@ async fn download_update(
         size as f64 / 1_000_000.0
     );
     Ok(())
+}
+
+/// Publish verified tools alongside the bundle so a first-time site can run sync.
+async fn write_update_bundle(
+    dir: &Path,
+    file: &Path,
+    folder: &Path,
+    trusted_key: &str,
+) -> Result<()> {
+    airgap::verify(dir, trusted_key)
+        .await
+        .context(config_error("verifying the downloaded update"))?;
+    airgap::pack(dir, file).context(config_error("writing the bundle"))?;
+    copy_tools(dir, folder)
 }
 
 /// A deletion carries no images or chart: the installed chart owns cleanup.
@@ -2579,6 +2596,8 @@ fn api_failed(message: impl Into<String>) -> ErrorData {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use alien_core::bundle_signature::BundleSigningKey;
     use httpmock::prelude::*;
 
     use super::*;
@@ -2681,6 +2700,74 @@ mod tests {
             Tools::AlreadyThere
         );
         binary.assert_hits_async(1).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn first_download_carries_runnable_verified_tools() {
+        let server = MockServer::start_async().await;
+        let binary = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/acmectl");
+                then.status(200)
+                    .body("#!/bin/sh\nprintf 'site CLI ready'\n");
+            })
+            .await;
+        let bundle = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let sources = serde_json::json!({"deployCli": [{
+            "platform": "linux-x86_64", "url": format!("{}/acmectl", server.base_url())
+        }]});
+        assert_eq!(
+            download_tools(bundle.path(), folder.path(), &sources)
+                .await
+                .unwrap(),
+            Tools::Included
+        );
+        let manifest = BundleManifest {
+            format_version: airgap::FORMAT_VERSION,
+            deployment_id: "dep_1".into(),
+            deployment_name: "site-1".into(),
+            release_id: "rel_1".into(),
+            sequence: 1,
+            created_at: "now".into(),
+            stack_id: "app".into(),
+            images: vec![],
+            chart_images: BTreeMap::new(),
+            chart: "chart/app.tgz".into(),
+            files: airgap::checksums(bundle.path()).await.unwrap(),
+            omitted_blobs: BTreeSet::new(),
+            telemetry_ack: None,
+        };
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        let key = BundleSigningKey::from_seed([5; 32]);
+        std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
+        std::fs::write(bundle.path().join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
+        let output = folder.path().join("update.alienbundle");
+        write_update_bundle(bundle.path(), &output, folder.path(), &key.public_key())
+            .await
+            .unwrap();
+        assert!(output.is_file());
+        let executable = folder.path().join("tools/acmectl-linux-x86_64");
+        let result = std::process::Command::new(&executable).output().unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"site CLI ready");
+        binary.assert_hits_async(1).await;
+
+        // Changed downloads must not replace the carried executable.
+        std::fs::write(bundle.path().join("tools/acmectl-linux-x86_64"), b"changed").unwrap();
+        assert!(
+            write_update_bundle(bundle.path(), &output, folder.path(), &key.public_key())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::process::Command::new(executable)
+                .output()
+                .unwrap()
+                .stdout,
+            b"site CLI ready"
+        );
     }
 
     /// A transfer folder for `deployment` with one report from the site
