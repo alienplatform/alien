@@ -55,6 +55,36 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// The host cannot execute an available native PostgreSQL runtime.
+    #[error(
+        code = "LOCAL_POSTGRES_RUNTIME_UNAVAILABLE",
+        message = "Cannot run local PostgreSQL: {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    LocalPostgresRuntimeUnavailable {
+        /// Unsupported host or failed runtime identification.
+        reason: String,
+    },
+
+    /// An initialized local cluster would be opened with a different server ABI.
+    #[error(
+        code = "LOCAL_POSTGRES_RUNTIME_CHANGED",
+        message = "Local PostgreSQL '{resource_id}' at '{data_dir}' was initialized for {previous_target}, but this host selected {selected_target}. Use its previous runtime to export the database, then restore into a new local database",
+        retryable = "false",
+        internal = "false"
+    )]
+    LocalPostgresRuntimeChanged {
+        /// Local database resource.
+        resource_id: String,
+        /// Existing data that has not been opened or migrated.
+        data_dir: String,
+        /// Runtime that last owned the data.
+        previous_target: String,
+        /// Runtime selected on this host.
+        selected_target: String,
+    },
+
     /// No free ports available for service allocation.
     #[error(
         code = "NO_FREE_PORTS",

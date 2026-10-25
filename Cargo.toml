@@ -182,6 +182,7 @@ pin-project-lite = "0.2"
 poem = "3.1"
 poem-openapi = "5"
 port_check = "0.3"
+postgresql_archive = { version = "0.22", default-features = false, features = ["tls-rustls-ring", "theseus"] }
 postgresql_embedded = { version = "0.22", default-features = false, features = ["tls-rustls-ring", "theseus"] }
 # `steampipe` is enabled only because the crate uses `serde_json` unconditionally while
 # gating the dependency behind that feature; we never use the steampipe namespace at runtime.

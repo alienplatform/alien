@@ -1012,6 +1012,7 @@ dependencies = [
  "notify",
  "object_store",
  "port_check",
+ "postgresql_archive",
  "postgresql_embedded",
  "postgresql_extensions",
  "prost-types",
