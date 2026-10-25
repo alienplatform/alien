@@ -52,6 +52,7 @@ const REPORT_EXTENSION: &str = "report";
 /// Installed bundles kept for rollback.
 const KEEP_INSTALLED: usize = 3;
 const ROLLOUT_TIMEOUT: Duration = Duration::from_secs(600);
+const SECRET_STATUS_TIMEOUT: Duration = Duration::from_secs(120);
 /// `alien-deploy` builds for the site, inside bundles and the folder.
 const TOOLS_DIR: &str = "tools";
 
@@ -1525,7 +1526,7 @@ fn copy_tools(bundle_dir: &Path, folder: &Path) -> Result<()> {
             Err(error) => {
                 return Err(error)
                     .into_alien_error()
-                    .context(config_error("reading the carried tool"))
+                    .context(config_error("reading the carried tool"));
             }
         };
         if unchanged {
@@ -2076,7 +2077,12 @@ async fn read_status(
     Ok(Some((status, token)))
 }
 
-fn rollout_finished(status: &serde_json::Value, release_id: &str, sequence: u64) -> Result<bool> {
+fn rollout_finished(
+    status: &serde_json::Value,
+    release_id: &str,
+    sequence: u64,
+    secrets_checked_after: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<bool> {
     // A chart restart can leave the preceding target's status in the Secret.
     // Sequence also distinguishes a retry or rollback to the same release.
     if status["sequence"].as_u64() != Some(sequence) {
@@ -2084,6 +2090,15 @@ fn rollout_finished(status: &serde_json::Value, release_id: &str, sequence: u64)
     }
     let state = &status["state"];
     if state["status"].as_str() == Some("waiting-for-secrets") {
+        // A same-bundle retry can read the snapshot from before Secrets were created.
+        if let Some(not_before) = secrets_checked_after {
+            let written_at = status["writtenAt"]
+                .as_str()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+            if written_at.is_none_or(|written_at| written_at <= not_before) {
+                return Ok(false);
+            }
+        }
         let mut message = String::from(
             "The site needs required Secrets before it can continue. Create them in the site cluster, then run sync again.",
         );
@@ -2114,13 +2129,13 @@ fn rollout_finished(status: &serde_json::Value, release_id: &str, sequence: u64)
         .is_some_and(|s| s.ends_with("failed"))
     {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-                    message: format!(
-                        "The rollout of {release_id} failed: {}. `alien-deploy rollback` returns to the previous release.",
-                        state["error"]["message"]
-                            .as_str()
-                            .unwrap_or("see the Operator's logs")
-                    ),
-                }));
+            message: format!(
+                "The rollout of {release_id} failed: {}. `alien-deploy rollback` returns to the previous release.",
+                state["error"]["message"]
+                    .as_str()
+                    .unwrap_or("see the Operator's logs")
+            ),
+        }));
     }
     Ok(false)
 }
@@ -2134,9 +2149,12 @@ async fn wait_for_rollout(
 ) -> Result<()> {
     println!("Waiting for {release_id} to roll out");
     let started = std::time::Instant::now();
+    let started_at = chrono::Utc::now();
     loop {
         if let Some((status, _)) = read_status(settings, stack_id, namespace).await? {
-            if rollout_finished(&status, release_id, sequence)? {
+            let secrets_checked_after =
+                (started.elapsed() < SECRET_STATUS_TIMEOUT).then_some(started_at);
+            if rollout_finished(&status, release_id, sequence, secrets_checked_after)? {
                 return Ok(());
             }
         }
@@ -2710,16 +2728,16 @@ mod tests {
                 "error": {"message": "previous attempt failed"}
             }
         });
-        assert!(!rollout_finished(&status, "rel_new", 11).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 11, None).unwrap());
         status["sequence"] = 11.into();
-        assert!(rollout_finished(&status, "rel_new", 11).is_err());
+        assert!(rollout_finished(&status, "rel_new", 11, None).is_err());
         status["state"]["status"] = "updating".into();
-        assert!(!rollout_finished(&status, "rel_new", 11).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 11, None).unwrap());
         status["state"]["status"] = "running".into();
-        assert!(!rollout_finished(&status, "rel_new", 11).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 11, None).unwrap());
         status["state"]["currentRelease"]["releaseId"] = "rel_new".into();
-        assert!(rollout_finished(&status, "rel_new", 11).unwrap());
-        assert!(!rollout_finished(&status, "rel_new", 12).unwrap());
+        assert!(rollout_finished(&status, "rel_new", 11, None).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 12, None).unwrap());
     }
 
     #[test]
@@ -2736,8 +2754,8 @@ mod tests {
                 ]}
             }
         });
-        assert!(!rollout_finished(&status, "rel_new", 11).unwrap());
-        let error = rollout_finished(&status, "rel_new", 10)
+        assert!(!rollout_finished(&status, "rel_new", 11, None).unwrap());
+        let error = rollout_finished(&status, "rel_new", 10, None)
             .unwrap_err()
             .to_string();
         assert!(error.contains("Secret: app-password"));
@@ -2747,10 +2765,41 @@ mod tests {
         assert!(!error.contains("optional-secret"));
         assert!(!error.contains("existing-secret"));
         status["state"]["status"] = "provisioning".into();
-        assert!(!rollout_finished(&status, "rel_new", 10).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 10, None).unwrap());
         status["state"]["status"] = "running".into();
         status["state"]["currentRelease"] = serde_json::json!({"releaseId": "rel_new"});
-        assert!(rollout_finished(&status, "rel_new", 10).unwrap());
+        assert!(rollout_finished(&status, "rel_new", 10, None).unwrap());
+    }
+
+    #[test]
+    fn secret_retry_waits_for_fresh_status_but_still_reports_missing_inputs() {
+        let started_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:01:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut status = serde_json::json!({
+            "sequence": 10,
+            "writtenAt": "2026-01-01T00:00:59Z",
+            "state": {
+                "status": "waiting-for-secrets",
+                "runtimeMetadata": {"deployerSecrets": [
+                    {"required": true, "status": "missing",
+                     "location": {"name": "app-password"}}
+                ]}
+            }
+        });
+        assert!(!rollout_finished(&status, "rel_new", 10, Some(started_at)).unwrap());
+        // Once the bounded freshness wait expires, an unchanged snapshot still
+        // produces the actionable error instead of waiting for the rollout timeout.
+        assert!(rollout_finished(&status, "rel_new", 10, None).is_err());
+        status["writtenAt"] = serde_json::Value::Null;
+        assert!(!rollout_finished(&status, "rel_new", 10, Some(started_at)).unwrap());
+        status["writtenAt"] = "2026-01-01T00:01:01Z".into();
+        assert!(rollout_finished(&status, "rel_new", 10, Some(started_at)).is_err());
+        status["state"]["status"] = "provisioning".into();
+        assert!(!rollout_finished(&status, "rel_new", 10, Some(started_at)).unwrap());
+        status["state"]["status"] = "running".into();
+        status["state"]["currentRelease"] = serde_json::json!({"releaseId": "rel_new"});
+        assert!(rollout_finished(&status, "rel_new", 10, Some(started_at)).unwrap());
     }
 
     #[tokio::test]
