@@ -212,6 +212,7 @@ impl AwsSandboxController {
             })?;
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
+        self.preview_ports = config.preview_ports.clone();
 
         // The vendor's base image travels inside the bundle's Dockerfile, already resolved to
         // a registry the build role can reach; the only image this call names is AWS's managed
@@ -565,6 +566,9 @@ impl AwsSandboxController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        // Preview tokens follow the current release, including old Ready checkpoints whose
+        // update already completed without refreshing their authorization list.
+        self.preview_ports = config.preview_ports.clone();
 
         let declared = super::egress::is_declared(ctx);
         if matches!(config.egress, alien_core::SandboxEgress::Internet) {
@@ -706,6 +710,7 @@ impl AwsSandboxController {
         // The session-policy ceilings feed the binding and cost nothing to refresh.
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
+        self.preview_ports = config.preview_ports.clone();
 
         // Ownership decides before the bundle is even read. A template's Frozen image belongs to
         // the setup stack, which owns its bundle too and hands none over — so there is nothing
@@ -2147,6 +2152,7 @@ mod tests {
                 image: BUNDLE_URI.to_string(),
             })
             .egress(SandboxEgress::None)
+            .preview_ports(vec![8080])
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),
@@ -2163,6 +2169,7 @@ mod tests {
                 image: bundle_uri.to_string(),
             })
             .egress(SandboxEgress::None)
+            .preview_ports(vec![8080])
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
                 idle_pause_seconds: Some(600),
@@ -5369,4 +5376,83 @@ mod tests {
             "arn:aws:lambda:eu-west-1:aws:microvm-image:al2023-1"
         );
     }
+    /// Preview authorization is mutable release configuration, not an image build input.
+    /// Exercise both newly updated state and old persisted Ready state with stale ports.
+    #[tokio::test]
+    async fn preview_ports_follow_release_updates_and_repair_old_checkpoints() {
+        for lifecycle in [
+            alien_core::ResourceLifecycle::Live,
+            alien_core::ResourceLifecycle::Frozen,
+        ] {
+            for update in [true, false] {
+                for desired_ports in [vec![8080, 8081, 8090], vec![8090], vec![]] {
+                    let mut desired = sandbox();
+                    desired.preview_ports = desired_ports.clone();
+                    let mut old = ready_controller();
+                    // No setup-owned image build should be attempted for a ports-only change.
+                    old.build_role_arn = None;
+                    let old: AwsSandboxController = serde_json::from_value(
+                        serde_json::to_value(old).expect("serialize old checkpoint"),
+                    )
+                    .expect("reload old checkpoint");
+                    let mut client = MockLambdaMicrovmsApi::new();
+                    if !update {
+                        client.expect_get_microvm_image().times(1).returning(|_| {
+                            Ok(MicrovmImage {
+                                description: None,
+                                image_identifier: None,
+                                image_arn: Some(IMAGE_ARN.to_string()),
+                                image_version: Some("1.0".to_string()),
+                                state: Some("AVAILABLE".to_string()),
+                            })
+                        });
+                    }
+                    let mut executor = SingleControllerExecutor::builder()
+                        .resource(desired.clone())
+                        .controller(old)
+                        .platform(Platform::Aws)
+                        .resource_lifecycle(lifecycle)
+                        .service_provider(provider(client))
+                        .build()
+                        .await
+                        .expect("build executor");
+                    if update {
+                        executor.update(desired).expect("start release update");
+                    }
+                    executor
+                        .step()
+                        .await
+                        .expect("reconcile preview authorization");
+                    let controller = executor
+                        .internal_state::<AwsSandboxController>()
+                        .expect("controller");
+                    assert_eq!(
+                        controller.preview_ports, desired_ports,
+                        "lifecycle={lifecycle:?}, update={update}"
+                    );
+                    let reloaded: AwsSandboxController = serde_json::from_value(
+                        serde_json::to_value(controller).expect("save reconciled controller"),
+                    )
+                    .expect("reload reconciled controller");
+                    let binding = reloaded
+                        .get_binding_params()
+                        .expect("binding")
+                        .expect("serving image binding must remain available");
+                    let alien_core::bindings::SandboxBinding::Aws(binding) =
+                        serde_json::from_value(binding).expect("consume published binding")
+                    else {
+                        panic!("expected AWS sandbox binding")
+                    };
+                    assert_eq!(binding.preview_ports, desired_ports);
+                    assert_ne!(reloaded.state, AwsSandboxState::UpdatingImage);
+                    assert_eq!(reloaded.active_version.as_deref(), Some("1.0"));
+                    assert!(
+                        reloaded.pending_version.is_none(),
+                        "ports must not rebuild the image"
+                    );
+                }
+            }
+        }
+    }
+
 }
