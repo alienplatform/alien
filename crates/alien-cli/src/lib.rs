@@ -139,12 +139,19 @@ impl Cli {
                 Some(DevSubcommand::Whoami(args)) => args.json,
                 Some(DevSubcommand::Debug(args)) => args.wants_json_output(),
                 Some(DevSubcommand::Deployments(args)) => args.wants_json_output(),
-                _ => false,
+                None
+                | Some(DevSubcommand::Server)
+                | Some(DevSubcommand::Deploy(_))
+                | Some(DevSubcommand::Destroy(_))
+                | Some(DevSubcommand::Vault(_))
+                | Some(DevSubcommand::Commands(_)) => false,
             },
             #[cfg(feature = "platform")]
             Some(Commands::Platform(PlatformCommand::Link(args))) => args.json,
             #[cfg(feature = "platform")]
-            Some(Commands::Platform(PlatformCommand::Login(_))) => false,
+            Some(Commands::Platform(
+                PlatformCommand::Login(_) | PlatformCommand::Logout(_) | PlatformCommand::Unlink(_),
+            )) => false,
             #[cfg(feature = "platform")]
             Some(Commands::Platform(PlatformCommand::Workspaces(args))) => args.json,
             #[cfg(feature = "platform")]
@@ -164,7 +171,14 @@ impl Cli {
             Some(Commands::Examples(args)) => args.json,
             #[cfg(feature = "platform")]
             Some(Commands::Usage(args)) => args.wants_json_output(),
-            _ => false,
+            None
+            | Some(Commands::Init(_))
+            | Some(Commands::Deploy(_))
+            | Some(Commands::Destroy(_))
+            | Some(Commands::Vault(_))
+            | Some(Commands::Commands(_))
+            | Some(Commands::Serve(_))
+            | Some(Commands::Upgrade(_)) => false,
         }
     }
 }
