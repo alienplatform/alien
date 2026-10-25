@@ -17,3 +17,4 @@ let value: DeploymentInstallationHelm = {
 | ------------------ | ------------------ | ------------------ | ------------------ |
 | `command`          | *string*           | :heavy_check_mark: | N/A                |
 | `managerUrl`       | *string*           | :heavy_check_mark: | N/A                |
+| `values`           | *string*           | :heavy_minus_sign: | N/A                |

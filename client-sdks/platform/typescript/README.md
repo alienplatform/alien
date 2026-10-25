@@ -291,7 +291,7 @@ run();
 
 * [move](docs/sdks/deployments/README.md#move) - Reassign a deployment to another group within its project
 * [list](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
-* [create](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+* [create](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId or deploymentGroupExternalId. Pending installation retries keep the originally reserved release and CloudFormation stack name, even after a new release is published. Other installation options must remain unchanged.
 * [getStats](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
 * [listFilterEnvironments](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
@@ -511,6 +511,19 @@ run();
 * [syncGitNamespaces](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 * [listGitNamespaceRepositories](docs/sdks/user/README.md#listgitnamespacerepositories) - List repositories accessible through a git namespace (GitHub installation).
 
+### [Webhooks](docs/sdks/webhooks/README.md)
+
+* [listWebhookEndpoints](docs/sdks/webhooks/README.md#listwebhookendpoints)
+* [createWebhookEndpoint](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
+* [getWebhookEndpoint](docs/sdks/webhooks/README.md#getwebhookendpoint)
+* [updateWebhookEndpoint](docs/sdks/webhooks/README.md#updatewebhookendpoint)
+* [deleteWebhookEndpoint](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+* [getWebhookSigningSecret](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
+* [rotateWebhookSigningSecret](docs/sdks/webhooks/README.md#rotatewebhooksigningsecret)
+* [listWebhookDeliveries](docs/sdks/webhooks/README.md#listwebhookdeliveries)
+* [retryWebhookDelivery](docs/sdks/webhooks/README.md#retrywebhookdelivery)
+* [testWebhookEndpoint](docs/sdks/webhooks/README.md#testwebhookendpoint)
+
 ### [Workspaces](docs/sdks/workspaces/README.md)
 
 * [list](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.
@@ -612,7 +625,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentPlanCompute`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
 - [`deploymentPrepareStack`](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
 - [`deploymentsCancelVolumeRestore`](docs/sdks/deployments/README.md#cancelvolumerestore) - Cancel a pending volume restore. Use it when a restore keeps failing: the deployment stops attempting it. A restore whose volume was already swapped still finishes. Allowed in any deployment status, including update-failed.
-- [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+- [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId or deploymentGroupExternalId. Pending installation retries keep the originally reserved release and CloudFormation stack name, even after a new release is published. Other installation options must remain unchanged.
 - [`deploymentsCreateSetupRegistrationOperation`](docs/sdks/deployments/README.md#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
 - [`deploymentsCreateToken`](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 - [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
@@ -799,6 +812,16 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`userListMemberships`](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 - [`userSyncGitNamespaces`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 - [`userUpdateProfile`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
+- [`webhooksCreateWebhookEndpoint`](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
+- [`webhooksDeleteWebhookEndpoint`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+- [`webhooksGetWebhookEndpoint`](docs/sdks/webhooks/README.md#getwebhookendpoint)
+- [`webhooksGetWebhookSigningSecret`](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
+- [`webhooksListWebhookDeliveries`](docs/sdks/webhooks/README.md#listwebhookdeliveries)
+- [`webhooksListWebhookEndpoints`](docs/sdks/webhooks/README.md#listwebhookendpoints)
+- [`webhooksRetryWebhookDelivery`](docs/sdks/webhooks/README.md#retrywebhookdelivery)
+- [`webhooksRotateWebhookSigningSecret`](docs/sdks/webhooks/README.md#rotatewebhooksigningsecret)
+- [`webhooksTestWebhookEndpoint`](docs/sdks/webhooks/README.md#testwebhookendpoint)
+- [`webhooksUpdateWebhookEndpoint`](docs/sdks/webhooks/README.md#updatewebhookendpoint)
 - [`workspacesAddMember`](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
 - [`workspacesDelete`](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects and must not be on pay as you go or a contract.
 - [`workspacesGet`](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
@@ -905,7 +928,7 @@ To learn about this feature and how to get started, check
 - [`useDeploymentPlanComputeMutation`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
 - [`useDeploymentPrepareStackMutation`](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
 - [`useDeploymentsCancelVolumeRestoreMutation`](docs/sdks/deployments/README.md#cancelvolumerestore) - Cancel a pending volume restore. Use it when a restore keeps failing: the deployment stops attempting it. A restore whose volume was already swapped still finishes. Allowed in any deployment status, including update-failed.
-- [`useDeploymentsCreateMutation`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+- [`useDeploymentsCreateMutation`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId or deploymentGroupExternalId. Pending installation retries keep the originally reserved release and CloudFormation stack name, even after a new release is published. Other installation options must remain unchanged.
 - [`useDeploymentsCreateSetupRegistrationOperationMutation`](docs/sdks/deployments/README.md#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
 - [`useDeploymentsCreateTokenMutation`](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 - [`useDeploymentsDeleteMutation`](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
@@ -1092,6 +1115,16 @@ To learn about this feature and how to get started, check
 - [`useUserListMemberships`](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 - [`useUserSyncGitNamespacesMutation`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 - [`useUserUpdateProfileMutation`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
+- [`useWebhooksCreateWebhookEndpointMutation`](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
+- [`useWebhooksDeleteWebhookEndpointMutation`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+- [`useWebhooksGetWebhookEndpoint`](docs/sdks/webhooks/README.md#getwebhookendpoint)
+- [`useWebhooksGetWebhookSigningSecret`](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
+- [`useWebhooksListWebhookDeliveries`](docs/sdks/webhooks/README.md#listwebhookdeliveries)
+- [`useWebhooksListWebhookEndpoints`](docs/sdks/webhooks/README.md#listwebhookendpoints)
+- [`useWebhooksRetryWebhookDeliveryMutation`](docs/sdks/webhooks/README.md#retrywebhookdelivery)
+- [`useWebhooksRotateWebhookSigningSecretMutation`](docs/sdks/webhooks/README.md#rotatewebhooksigningsecret)
+- [`useWebhooksTestWebhookEndpointMutation`](docs/sdks/webhooks/README.md#testwebhookendpoint)
+- [`useWebhooksUpdateWebhookEndpointMutation`](docs/sdks/webhooks/README.md#updatewebhookendpoint)
 - [`useWorkspacesAddMemberMutation`](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
 - [`useWorkspacesDeleteMutation`](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects and must not be on pay as you go or a contract.
 - [`useWorkspacesGet`](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.

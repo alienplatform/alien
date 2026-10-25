@@ -6,7 +6,7 @@
 
 * [move](#move) - Reassign a deployment to another group within its project
 * [list](#list) - Retrieve all deployments.
-* [create](#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+* [create](#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId or deploymentGroupExternalId. Pending installation retries keep the originally reserved release and CloudFormation stack name, even after a new release is published. Other installation options must remain unchanged.
 * [getStats](#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
 * [listFilterEnvironments](#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
@@ -314,7 +314,7 @@ import {
 
 ## create
 
-Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId or deploymentGroupExternalId. Pending installation retries keep the originally reserved release and CloudFormation stack name, even after a new release is published. Other installation options must remain unchanged.
 
 ### Example Usage
 

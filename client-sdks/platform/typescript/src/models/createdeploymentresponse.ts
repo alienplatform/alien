@@ -7,6 +7,10 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { Deployment, Deployment$inboundSchema } from "./deployment.js";
+import {
+  DeploymentInstallation,
+  DeploymentInstallation$inboundSchema,
+} from "./deploymentinstallation.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
@@ -29,8 +33,11 @@ export type CreateDeploymentResponse = {
    * Effective deployment model persisted for the deployment.
    */
   deploymentModel: CreateDeploymentResponseDeploymentModel;
+  installation?: DeploymentInstallation | undefined;
+  managementExternalId?: string | undefined;
+  runtimeEncryptionKey?: string | undefined;
   /**
-   * Deployment token (only returned when using deployment group token)
+   * Deployment token (returned for deployment-group creation and await-registration reservations)
    */
   token?: string | undefined;
 };
@@ -47,6 +54,9 @@ export const CreateDeploymentResponse$inboundSchema: z.ZodType<
 > = z.object({
   deployment: Deployment$inboundSchema,
   deploymentModel: CreateDeploymentResponseDeploymentModel$inboundSchema,
+  installation: DeploymentInstallation$inboundSchema.optional(),
+  managementExternalId: z.string().optional(),
+  runtimeEncryptionKey: z.string().optional(),
   token: z.string().optional(),
 });
 

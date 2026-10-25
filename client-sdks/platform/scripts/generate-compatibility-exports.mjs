@@ -540,7 +540,38 @@ await writeFile(externalBindingUrl, `${externalBindingSource}${externalBindingMa
 const accessRequestUrl = new URL("createaccessrequest.ts", models);
 const accessRequestMarker = "\n// Published access-request risk compatibility exports.\n";
 const accessRequestSource = (await readFile(accessRequestUrl, "utf8")).split(accessRequestMarker)[0];
-await writeFile(accessRequestUrl, `${accessRequestSource}${accessRequestMarker}export const CreateAccessRequestMaxRisk = MaxRisk;
+const accessRequestAliases = /export const MaxRisk =/.test(accessRequestSource)
+  ? `${accessRequestMarker}export const CreateAccessRequestMaxRisk = MaxRisk;
 export type CreateAccessRequestMaxRisk = MaxRisk;
 export const CreateAccessRequestMaxRisk$outboundSchema = MaxRisk$outboundSchema;
+`
+  : `${accessRequestMarker}export const MaxRisk = CreateAccessRequestMaxRisk;
+export type MaxRisk = CreateAccessRequestMaxRisk;
+export const MaxRisk$outboundSchema = CreateAccessRequestMaxRisk$outboundSchema;
+`;
+await writeFile(accessRequestUrl, `${accessRequestSource}${accessRequestAliases}`);
+
+// Reservation command variants disambiguate the preparation response models.
+// Preserve their published names, parsers and deep imports.
+const preparationUrl = new URL("deploymentpreparationresponse.ts", models);
+const preparationMarker = "\n// Published preparation compatibility exports.\n";
+const preparationSource = (await readFile(preparationUrl, "utf8")).split(preparationMarker)[0];
+const preparationAliases = ["Linux", "Mac", "CommandVariants"].flatMap(name => {
+  const parser = name[0].toLowerCase() + name.slice(1);
+  return [
+    `export type { DeploymentPreparationResponse${name} as ${name} };`,
+    `export { DeploymentPreparationResponse${name}$inboundSchema as ${name}$inboundSchema };`,
+    `export { deploymentPreparationResponse${name}FromJSON as ${parser}FromJSON };`,
+  ];
+});
+await writeFile(preparationUrl, `${preparationSource}${preparationMarker}${preparationAliases.join("\n")}\n`);
+
+// Portal appearance now has a shared input model; retain the published update names.
+const appearanceUrl = new URL("updateproject.ts", models);
+const appearanceMarker = "\n// Published portal-appearance compatibility exports.\n";
+const appearanceSource = (await readFile(appearanceUrl, "utf8")).split(appearanceMarker)[0];
+await writeFile(appearanceUrl, `${appearanceSource}${appearanceMarker}export type { DeploymentPortalAppearanceInput as UpdateProjectDeploymentPortalAppearance } from "./deploymentportalappearanceinput.js";
+export type { DeploymentPortalAppearanceInput$Outbound as UpdateProjectDeploymentPortalAppearance$Outbound } from "./deploymentportalappearanceinput.js";
+export { DeploymentPortalAppearanceInput$outboundSchema as UpdateProjectDeploymentPortalAppearance$outboundSchema } from "./deploymentportalappearanceinput.js";
+export { deploymentPortalAppearanceInputToJSON as updateProjectDeploymentPortalAppearanceToJSON } from "./deploymentportalappearanceinput.js";
 `);

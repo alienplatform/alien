@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -450,6 +452,8 @@ test("existing access request risk enum deep imports remain compatible", async (
   for (const path of ["index", "createaccessrequest"]) {
     const models = await import(`../typescript/esm/models/${path}.js`);
     assert.equal(models.CreateAccessRequestMaxRisk.ReadOnly, "read-only");
+    assert.equal(models.MaxRisk.ReadOnly, "read-only");
+    assert.equal(models.MaxRisk$outboundSchema.parse("mutating"), "mutating");
     assert.equal(models.CreateAccessRequestMaxRisk$outboundSchema.parse("mutating"), "mutating");
   }
 });
@@ -541,5 +545,35 @@ test("published external-binding endpoint models retain root and deep imports", 
     assert.deepEqual(models.externalBindingEndpointFromJSON(JSON.stringify(endpoint)), { ok: true, value: endpoint });
     assert.deepEqual(models.EndpointSecretRef$outboundSchema.parse(endpoint.secretRef), endpoint.secretRef);
     assert.deepEqual(models.endpointSecretRefFromJSON(JSON.stringify(endpoint.secretRef)), { ok: true, value: endpoint.secretRef });
+  }
+});
+
+test("published preparation imports parse command variants at root and deep paths", async () => {
+  const root = await import("../typescript/esm/models/index.js");
+  const deep = await import("../typescript/esm/models/deploymentpreparationresponse.js");
+  const command = { install: "install example", command: "example start" };
+  const variants = { linux: command, mac: command, windows: command };
+  for (const exports of [root, deep]) {
+    for (const [name, value] of [["Linux", command], ["Mac", command], ["CommandVariants", variants]]) {
+      const parser = name[0].toLowerCase() + name.slice(1) + "FromJSON";
+      assert.deepEqual(exports[`${name}$inboundSchema`].parse(value), value);
+      assert.deepEqual(exports[parser](JSON.stringify(value)), { ok: true, value });
+      assert.equal(exports[parser]('{"install":123}').ok, false);
+    }
+  }
+});
+
+
+test("published portal appearance types and serializers retain root and deep imports", async () => {
+  execFileSync(process.execPath, [
+    fileURLToPath(new URL("../typescript/node_modules/typescript/bin/tsc", import.meta.url)),
+    "--noEmit", "--strict", "--skipLibCheck", "--module", "nodenext",
+    fileURLToPath(new URL("./fixtures/portal-appearance-imports.ts", import.meta.url)),
+  ], { stdio: "inherit" });
+  const appearance = { title: "Acme", supportUrl: "https://example.test/support", preset: "clean", accentColor: "blue", density: "comfortable" };
+  for (const path of ["index", "updateproject"]) {
+    const models = await import(`../typescript/esm/models/${path}.js`);
+    assert.deepEqual(models.UpdateProjectDeploymentPortalAppearance$outboundSchema.parse(appearance), appearance);
+    assert.deepEqual(JSON.parse(models.updateProjectDeploymentPortalAppearanceToJSON(appearance)), appearance);
   }
 });

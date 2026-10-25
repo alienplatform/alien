@@ -1,11 +1,11 @@
-# Linux
+# DeploymentPreparationResponseMac
 
 ## Example Usage
 
 ```typescript
-import { Linux } from "@alienplatform/platform-api/models";
+import { DeploymentPreparationResponseMac } from "@alienplatform/platform-api/models";
 
-let value: Linux = {
+let value: DeploymentPreparationResponseMac = {
   install: "<value>",
   command: "<value>",
 };

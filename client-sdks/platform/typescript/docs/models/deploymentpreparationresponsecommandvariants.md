@@ -1,11 +1,11 @@
-# CommandVariants
+# DeploymentPreparationResponseCommandVariants
 
 ## Example Usage
 
 ```typescript
-import { CommandVariants } from "@alienplatform/platform-api/models";
+import { DeploymentPreparationResponseCommandVariants } from "@alienplatform/platform-api/models";
 
-let value: CommandVariants = {
+let value: DeploymentPreparationResponseCommandVariants = {
   linux: {
     install: "<value>",
     command: "<value>",
@@ -25,6 +25,6 @@ let value: CommandVariants = {
 
 | Field                                                                                            | Type                                                                                             | Required                                                                                         | Description                                                                                      |
 | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `linux`                                                                                          | [models.Linux](../models/linux.md)                                                               | :heavy_check_mark:                                                                               | N/A                                                                                              |
-| `mac`                                                                                            | [models.Mac](../models/mac.md)                                                                   | :heavy_check_mark:                                                                               | N/A                                                                                              |
+| `linux`                                                                                          | [models.DeploymentPreparationResponseLinux](../models/deploymentpreparationresponselinux.md)     | :heavy_check_mark:                                                                               | N/A                                                                                              |
+| `mac`                                                                                            | [models.DeploymentPreparationResponseMac](../models/deploymentpreparationresponsemac.md)         | :heavy_check_mark:                                                                               | N/A                                                                                              |
 | `windows`                                                                                        | [models.DeploymentPreparationResponseWindows](../models/deploymentpreparationresponsewindows.md) | :heavy_check_mark:                                                                               | N/A                                                                                              |
