@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
+ * Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId or deploymentGroupExternalId. Pending installation retries keep the originally reserved release and CloudFormation stack name, even after a new release is published. Other installation options must remain unchanged.
  */
 export function deploymentsCreate(
   client: AlienCore,

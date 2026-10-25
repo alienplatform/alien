@@ -6,6 +6,11 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../lib/primitives.js";
 import { ClosedEnum } from "../types/enums.js";
 import {
+  DeploymentInstallationOptions,
+  DeploymentInstallationOptions$Outbound,
+  DeploymentInstallationOptions$outboundSchema,
+} from "./deploymentinstallationoptions.js";
+import {
   DeploymentSetupMethod,
   DeploymentSetupMethod$outboundSchema,
 } from "./deploymentsetupmethod.js";
@@ -1463,14 +1468,14 @@ export type NewDeploymentRequestSetupItem = ClosedEnum<
 >;
 
 /**
- * Use await-registration when CloudFormation will create the infrastructure and register this deployment.
+ * Use await-registration to reserve a pending deployment before installing and registering its infrastructure.
  */
 export const SetupHandoff = {
   Immediate: "immediate",
   AwaitRegistration: "await-registration",
 } as const;
 /**
- * Use await-registration when CloudFormation will create the infrastructure and register this deployment.
+ * Use await-registration to reserve a pending deployment before installing and registering its infrastructure.
  */
 export type SetupHandoff = ClosedEnum<typeof SetupHandoff>;
 
@@ -1516,6 +1521,10 @@ export type NewDeploymentRequest = {
    */
   project: string;
   /**
+   * External ID of a deployment group in the selected project. Supply this or deploymentGroupId, not both.
+   */
+  deploymentGroupExternalId?: string | undefined;
+  /**
    * Base environment for a Kubernetes installation.
    */
   basePlatform?: NewDeploymentRequestBasePlatform | undefined;
@@ -1558,7 +1567,11 @@ export type NewDeploymentRequest = {
    */
   setupItem?: NewDeploymentRequestSetupItem | undefined;
   /**
-   * Use await-registration when CloudFormation will create the infrastructure and register this deployment.
+   * Build and save installation instructions on the server. Requires setupHandoff=await-registration.
+   */
+  installation?: DeploymentInstallationOptions | undefined;
+  /**
+   * Use await-registration to reserve a pending deployment before installing and registering its infrastructure.
    */
   setupHandoff?: SetupHandoff | undefined;
 };
@@ -4377,6 +4390,7 @@ export type NewDeploymentRequest$Outbound = {
     | null
     | undefined;
   project: string;
+  deploymentGroupExternalId?: string | undefined;
   basePlatform?: string | undefined;
   stackSettings?: NewDeploymentRequestStackSettings$Outbound | undefined;
   resourcePrefix?: string | undefined;
@@ -4389,6 +4403,7 @@ export type NewDeploymentRequest$Outbound = {
   initialDesiredRelease: string;
   releaseChannel: string;
   setupItem?: string | undefined;
+  installation?: DeploymentInstallationOptions$Outbound | undefined;
   setupHandoff: string;
 };
 
@@ -4416,6 +4431,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
     ]),
   ).optional(),
   project: z.string(),
+  deploymentGroupExternalId: z.string().optional(),
   basePlatform: NewDeploymentRequestBasePlatform$outboundSchema.optional(),
   stackSettings: z.lazy(() => NewDeploymentRequestStackSettings$outboundSchema)
     .optional(),
@@ -4430,6 +4446,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   initialDesiredRelease: InitialDesiredRelease$outboundSchema.default("active"),
   releaseChannel: z.string().default("production"),
   setupItem: NewDeploymentRequestSetupItem$outboundSchema.optional(),
+  installation: DeploymentInstallationOptions$outboundSchema.optional(),
   setupHandoff: SetupHandoff$outboundSchema.default("immediate"),
 });
 

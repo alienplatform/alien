@@ -41,6 +41,42 @@ export type DeploymentInstallationTerraform = {
 export type DeploymentInstallationHelm = {
   command: string;
   managerUrl: string;
+  values?: string | undefined;
+};
+
+export type DeploymentInstallationLinux = {
+  command: string;
+  install: string;
+};
+
+export type DeploymentInstallationMac = {
+  command: string;
+  install: string;
+};
+
+export type DeploymentInstallationWindows = {
+  command: string;
+  install: string;
+};
+
+export type DeploymentInstallationCommandVariants = {
+  linux: DeploymentInstallationLinux;
+  mac: DeploymentInstallationMac;
+  windows: DeploymentInstallationWindows;
+};
+
+export type DeploymentInstallationCli = {
+  command: string;
+  configuration: string;
+  installCommand?: string | undefined;
+  commandVariants?: DeploymentInstallationCommandVariants | undefined;
+};
+
+export type GoogleOauth = {
+  startUrl: string;
+  retryUrl: string;
+  projectId: string;
+  region: string;
 };
 
 export type DeploymentInstallation = {
@@ -52,6 +88,8 @@ export type DeploymentInstallation = {
   launchUrl?: string | undefined;
   terraform?: DeploymentInstallationTerraform | undefined;
   helm?: DeploymentInstallationHelm | undefined;
+  cli?: DeploymentInstallationCli | undefined;
+  googleOauth?: GoogleOauth | undefined;
 };
 
 /** @internal */
@@ -92,6 +130,7 @@ export const DeploymentInstallationHelm$inboundSchema: z.ZodType<
 > = z.object({
   command: z.string(),
   managerUrl: z.string(),
+  values: z.string().optional(),
 });
 
 export function deploymentInstallationHelmFromJSON(
@@ -101,6 +140,126 @@ export function deploymentInstallationHelmFromJSON(
     jsonString,
     (x) => DeploymentInstallationHelm$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DeploymentInstallationHelm' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInstallationLinux$inboundSchema: z.ZodType<
+  DeploymentInstallationLinux,
+  unknown
+> = z.object({
+  command: z.string(),
+  install: z.string(),
+});
+
+export function deploymentInstallationLinuxFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInstallationLinux, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInstallationLinux$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInstallationLinux' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInstallationMac$inboundSchema: z.ZodType<
+  DeploymentInstallationMac,
+  unknown
+> = z.object({
+  command: z.string(),
+  install: z.string(),
+});
+
+export function deploymentInstallationMacFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInstallationMac, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInstallationMac$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInstallationMac' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInstallationWindows$inboundSchema: z.ZodType<
+  DeploymentInstallationWindows,
+  unknown
+> = z.object({
+  command: z.string(),
+  install: z.string(),
+});
+
+export function deploymentInstallationWindowsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInstallationWindows, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInstallationWindows$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInstallationWindows' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInstallationCommandVariants$inboundSchema: z.ZodType<
+  DeploymentInstallationCommandVariants,
+  unknown
+> = z.object({
+  linux: z.lazy(() => DeploymentInstallationLinux$inboundSchema),
+  mac: z.lazy(() => DeploymentInstallationMac$inboundSchema),
+  windows: z.lazy(() => DeploymentInstallationWindows$inboundSchema),
+});
+
+export function deploymentInstallationCommandVariantsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInstallationCommandVariants, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInstallationCommandVariants$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInstallationCommandVariants' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInstallationCli$inboundSchema: z.ZodType<
+  DeploymentInstallationCli,
+  unknown
+> = z.object({
+  command: z.string(),
+  configuration: z.string(),
+  installCommand: z.string().optional(),
+  commandVariants: z.lazy(() =>
+    DeploymentInstallationCommandVariants$inboundSchema
+  ).optional(),
+});
+
+export function deploymentInstallationCliFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInstallationCli, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInstallationCli$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInstallationCli' from JSON`,
+  );
+}
+
+/** @internal */
+export const GoogleOauth$inboundSchema: z.ZodType<GoogleOauth, unknown> = z
+  .object({
+    startUrl: z.string(),
+    retryUrl: z.string(),
+    projectId: z.string(),
+    region: z.string(),
+  });
+
+export function googleOauthFromJSON(
+  jsonString: string,
+): SafeParseResult<GoogleOauth, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GoogleOauth$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GoogleOauth' from JSON`,
   );
 }
 
@@ -118,6 +277,8 @@ export const DeploymentInstallation$inboundSchema: z.ZodType<
   terraform: z.lazy(() => DeploymentInstallationTerraform$inboundSchema)
     .optional(),
   helm: z.lazy(() => DeploymentInstallationHelm$inboundSchema).optional(),
+  cli: z.lazy(() => DeploymentInstallationCli$inboundSchema).optional(),
+  googleOauth: z.lazy(() => GoogleOauth$inboundSchema).optional(),
 });
 
 export function deploymentInstallationFromJSON(

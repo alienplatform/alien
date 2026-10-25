@@ -1,6 +1,6 @@
 # SetupHandoff
 
-Use await-registration when CloudFormation will create the infrastructure and register this deployment.
+Use await-registration to reserve a pending deployment before installing and registering its infrastructure.
 
 ## Example Usage
 

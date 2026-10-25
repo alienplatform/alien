@@ -419,7 +419,7 @@ export type DeploymentInfoSetupConfig = {
    */
   returnUrl?: string | null | undefined;
   /**
-   * Vendor destination for expired, revoked, disabled or exhausted setup links. This URL remains available for unusable links; the endpoint must authenticate the user before minting a new link. Must be an absolute HTTPS URL without userinfo (embedded credentials), at most 2048 characters. Null clears the destination; omit to keep it unchanged.
+   * Vendor destination for expired, revoked or disabled setup links. This URL remains available for unusable links; the endpoint must authenticate the user before minting a new link. Must be an absolute HTTPS URL without userinfo (embedded credentials), at most 2048 characters. Null clears the destination; omit to keep it unchanged.
    */
   refreshUrl?: string | null | undefined;
   metadata: { [k: string]: any | null };

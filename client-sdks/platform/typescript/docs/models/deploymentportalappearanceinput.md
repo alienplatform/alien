@@ -1,13 +1,11 @@
-# UpdateProjectDeploymentPortalAppearance
-
-Customer-facing deployment portal appearance settings.
+# DeploymentPortalAppearanceInput
 
 ## Example Usage
 
 ```typescript
-import { UpdateProjectDeploymentPortalAppearance } from "@alienplatform/platform-api/models";
+import { DeploymentPortalAppearanceInput } from "@alienplatform/platform-api/models";
 
-let value: UpdateProjectDeploymentPortalAppearance = {};
+let value: DeploymentPortalAppearanceInput = {};
 ```
 
 ## Fields

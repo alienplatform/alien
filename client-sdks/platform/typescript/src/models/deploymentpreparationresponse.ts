@@ -35,12 +35,12 @@ export type DeploymentPreparationResponseMethod = ClosedEnum<
   typeof DeploymentPreparationResponseMethod
 >;
 
-export type Linux = {
+export type DeploymentPreparationResponseLinux = {
   install: string;
   command: string;
 };
 
-export type Mac = {
+export type DeploymentPreparationResponseMac = {
   install: string;
   command: string;
 };
@@ -50,9 +50,9 @@ export type DeploymentPreparationResponseWindows = {
   command: string;
 };
 
-export type CommandVariants = {
-  linux: Linux;
-  mac: Mac;
+export type DeploymentPreparationResponseCommandVariants = {
+  linux: DeploymentPreparationResponseLinux;
+  mac: DeploymentPreparationResponseMac;
   windows: DeploymentPreparationResponseWindows;
 };
 
@@ -78,7 +78,7 @@ export type Installer = {
   configuration: string;
   command: string;
   installCommand?: string | undefined;
-  commandVariants?: CommandVariants | undefined;
+  commandVariants?: DeploymentPreparationResponseCommandVariants | undefined;
   managerUrl?: string | undefined;
   setupItem?: DeploymentPreparationResponseSetupItem | undefined;
 };
@@ -105,34 +105,41 @@ export const DeploymentPreparationResponseMethod$inboundSchema: z.ZodEnum<
 > = z.enum(DeploymentPreparationResponseMethod);
 
 /** @internal */
-export const Linux$inboundSchema: z.ZodType<Linux, unknown> = z.object({
+export const DeploymentPreparationResponseLinux$inboundSchema: z.ZodType<
+  DeploymentPreparationResponseLinux,
+  unknown
+> = z.object({
   install: z.string(),
   command: z.string(),
 });
 
-export function linuxFromJSON(
+export function deploymentPreparationResponseLinuxFromJSON(
   jsonString: string,
-): SafeParseResult<Linux, SDKValidationError> {
+): SafeParseResult<DeploymentPreparationResponseLinux, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Linux$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Linux' from JSON`,
+    (x) =>
+      DeploymentPreparationResponseLinux$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPreparationResponseLinux' from JSON`,
   );
 }
 
 /** @internal */
-export const Mac$inboundSchema: z.ZodType<Mac, unknown> = z.object({
+export const DeploymentPreparationResponseMac$inboundSchema: z.ZodType<
+  DeploymentPreparationResponseMac,
+  unknown
+> = z.object({
   install: z.string(),
   command: z.string(),
 });
 
-export function macFromJSON(
+export function deploymentPreparationResponseMacFromJSON(
   jsonString: string,
-): SafeParseResult<Mac, SDKValidationError> {
+): SafeParseResult<DeploymentPreparationResponseMac, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Mac$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Mac' from JSON`,
+    (x) => DeploymentPreparationResponseMac$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPreparationResponseMac' from JSON`,
   );
 }
 
@@ -157,22 +164,26 @@ export function deploymentPreparationResponseWindowsFromJSON(
 }
 
 /** @internal */
-export const CommandVariants$inboundSchema: z.ZodType<
-  CommandVariants,
-  unknown
-> = z.object({
-  linux: z.lazy(() => Linux$inboundSchema),
-  mac: z.lazy(() => Mac$inboundSchema),
-  windows: z.lazy(() => DeploymentPreparationResponseWindows$inboundSchema),
-});
+export const DeploymentPreparationResponseCommandVariants$inboundSchema:
+  z.ZodType<DeploymentPreparationResponseCommandVariants, unknown> = z.object({
+    linux: z.lazy(() => DeploymentPreparationResponseLinux$inboundSchema),
+    mac: z.lazy(() => DeploymentPreparationResponseMac$inboundSchema),
+    windows: z.lazy(() => DeploymentPreparationResponseWindows$inboundSchema),
+  });
 
-export function commandVariantsFromJSON(
+export function deploymentPreparationResponseCommandVariantsFromJSON(
   jsonString: string,
-): SafeParseResult<CommandVariants, SDKValidationError> {
+): SafeParseResult<
+  DeploymentPreparationResponseCommandVariants,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => CommandVariants$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CommandVariants' from JSON`,
+    (x) =>
+      DeploymentPreparationResponseCommandVariants$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentPreparationResponseCommandVariants' from JSON`,
   );
 }
 
@@ -189,7 +200,9 @@ export const Installer$inboundSchema: z.ZodType<Installer, unknown> = z.object({
   configuration: z.string(),
   command: z.string(),
   installCommand: z.string().optional(),
-  commandVariants: z.lazy(() => CommandVariants$inboundSchema).optional(),
+  commandVariants: z.lazy(() =>
+    DeploymentPreparationResponseCommandVariants$inboundSchema
+  ).optional(),
   managerUrl: z.string().optional(),
   setupItem: DeploymentPreparationResponseSetupItem$inboundSchema.optional(),
 });

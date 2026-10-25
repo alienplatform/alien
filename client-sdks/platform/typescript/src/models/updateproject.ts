@@ -5,17 +5,10 @@
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 import {
-  DeploymentPortalAccentColor,
-  DeploymentPortalAccentColor$outboundSchema,
-} from "./deploymentportalaccentcolor.js";
-import {
-  DeploymentPortalAppearancePreset,
-  DeploymentPortalAppearancePreset$outboundSchema,
-} from "./deploymentportalappearancepreset.js";
-import {
-  DeploymentPortalDensity,
-  DeploymentPortalDensity$outboundSchema,
-} from "./deploymentportaldensity.js";
+  DeploymentPortalAppearanceInput,
+  DeploymentPortalAppearanceInput$Outbound,
+  DeploymentPortalAppearanceInput$outboundSchema,
+} from "./deploymentportalappearanceinput.js";
 
 /**
  * The Git Provider of the repository
@@ -40,48 +33,6 @@ export type UpdateProjectGitRepository = {
    * The name of the git repository
    */
   repo: string;
-};
-
-/**
- * Customer-facing deployment portal appearance settings.
- */
-export type UpdateProjectDeploymentPortalAppearance = {
-  /**
-   * Optional project-specific avatar override for the deployment portal.
-   */
-  avatarUrl?: string | null | undefined;
-  /**
-   * Optional browser icon override for the deployment portal.
-   */
-  faviconUrl?: string | null | undefined;
-  /**
-   * Curated visual style for the deployment portal.
-   */
-  preset?: DeploymentPortalAppearancePreset | undefined;
-  /**
-   * Accent color used for highlights and primary actions.
-   */
-  accentColor?: DeploymentPortalAccentColor | undefined;
-  /**
-   * Optional portal title. Defaults to the project name.
-   */
-  title?: string | null | undefined;
-  /**
-   * Optional customer-facing subtitle.
-   */
-  subtitle?: string | null | undefined;
-  /**
-   * Optional support or contact URL.
-   */
-  supportUrl?: string | null | undefined;
-  /**
-   * Optional documentation URL.
-   */
-  docsUrl?: string | null | undefined;
-  /**
-   * Layout density for portal content.
-   */
-  density?: DeploymentPortalDensity | undefined;
 };
 
 /**
@@ -542,11 +493,8 @@ export type UpdateProject = {
    * The name of a directory or relative path to the source code of your project. When null is used it will default to the project root
    */
   rootDirectory?: string | null | undefined;
-  /**
-   * Customer-facing deployment portal appearance settings.
-   */
   deploymentPortalAppearance?:
-    | UpdateProjectDeploymentPortalAppearance
+    | DeploymentPortalAppearanceInput
     | null
     | undefined;
   /**
@@ -589,46 +537,6 @@ export function updateProjectGitRepositoryToJSON(
 ): string {
   return JSON.stringify(
     UpdateProjectGitRepository$outboundSchema.parse(updateProjectGitRepository),
-  );
-}
-
-/** @internal */
-export type UpdateProjectDeploymentPortalAppearance$Outbound = {
-  avatarUrl?: string | null | undefined;
-  faviconUrl?: string | null | undefined;
-  preset: string;
-  accentColor: string;
-  title?: string | null | undefined;
-  subtitle?: string | null | undefined;
-  supportUrl?: string | null | undefined;
-  docsUrl?: string | null | undefined;
-  density: string;
-};
-
-/** @internal */
-export const UpdateProjectDeploymentPortalAppearance$outboundSchema: z.ZodType<
-  UpdateProjectDeploymentPortalAppearance$Outbound,
-  UpdateProjectDeploymentPortalAppearance
-> = z.object({
-  avatarUrl: z.nullable(z.string()).optional(),
-  faviconUrl: z.nullable(z.string()).optional(),
-  preset: DeploymentPortalAppearancePreset$outboundSchema.default("clean"),
-  accentColor: DeploymentPortalAccentColor$outboundSchema.default("blue"),
-  title: z.nullable(z.string()).optional(),
-  subtitle: z.nullable(z.string()).optional(),
-  supportUrl: z.nullable(z.string()).optional(),
-  docsUrl: z.nullable(z.string()).optional(),
-  density: DeploymentPortalDensity$outboundSchema.default("comfortable"),
-});
-
-export function updateProjectDeploymentPortalAppearanceToJSON(
-  updateProjectDeploymentPortalAppearance:
-    UpdateProjectDeploymentPortalAppearance,
-): string {
-  return JSON.stringify(
-    UpdateProjectDeploymentPortalAppearance$outboundSchema.parse(
-      updateProjectDeploymentPortalAppearance,
-    ),
   );
 }
 
@@ -1422,7 +1330,7 @@ export type UpdateProject$Outbound = {
   gitRepository?: UpdateProjectGitRepository$Outbound | null | undefined;
   rootDirectory?: string | null | undefined;
   deploymentPortalAppearance?:
-    | UpdateProjectDeploymentPortalAppearance$Outbound
+    | DeploymentPortalAppearanceInput$Outbound
     | null
     | undefined;
   packagesConfig?: UpdateProjectPackagesConfig$Outbound | null | undefined;
@@ -1441,7 +1349,7 @@ export const UpdateProject$outboundSchema: z.ZodType<
   ).optional(),
   rootDirectory: z.nullable(z.string()).optional(),
   deploymentPortalAppearance: z.nullable(
-    z.lazy(() => UpdateProjectDeploymentPortalAppearance$outboundSchema),
+    DeploymentPortalAppearanceInput$outboundSchema,
   ).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => UpdateProjectPackagesConfig$outboundSchema),
