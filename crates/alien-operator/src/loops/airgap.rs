@@ -199,9 +199,28 @@ async fn apply_pending_target(state: &OperatorState, secret_name: &str) -> Resul
 }
 
 async fn write_status(state: &OperatorState, secret_name: &str, export_token: &str) -> Result<()> {
-    let Some(deployment_state) = state.db.get_deployment_state().await? else {
+    let refresh = tokio::time::timeout(
+        Duration::from_secs(30),
+        super::deployment::refresh_airgap_deployment(state),
+    )
+    .await
+    .into_alien_error()
+    .context(ErrorData::ConfigurationError {
+        message: "Timed out refreshing disconnected deployment health".to_string(),
+    })
+    .and_then(|result| result);
+    let Some(mut deployment_state) = state.db.get_deployment_state().await? else {
         return Ok(());
     };
+    if let Err(error) = refresh {
+        if matches!(
+            deployment_state.status,
+            alien_core::DeploymentStatus::Running | alien_core::DeploymentStatus::RefreshFailed
+        ) {
+            deployment_state.status = alien_core::DeploymentStatus::RefreshFailed;
+            deployment_state.error = Some(error.into_generic());
+        }
+    }
     let status = serde_json::json!({
         "deploymentId": state.db.get_deployment_id().await?,
         "writtenAt": chrono::Utc::now().to_rfc3339(),

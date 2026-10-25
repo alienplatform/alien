@@ -55,6 +55,25 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
   }
 }
 
+it("keeps an explicitly disconnected receiver alive without network requests", async () => {
+  const fetch = vi.fn<typeof globalThis.fetch>()
+  const receiver = createCommandReceiver({ env: { ALIEN_COMMANDS_DISABLED: "true" }, fetch })
+  const handler = vi.fn()
+  expect(receiver.command("setup", handler)).toBe(receiver)
+  expect(receiver.handleRaw("raw", handler)).toBe(receiver)
+  let stopped = false
+  const run = receiver.run().then(() => {
+    stopped = true
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  expect(stopped).toBe(false)
+  expect(fetch).not.toHaveBeenCalled()
+  expect(handler).not.toHaveBeenCalled()
+  receiver.stop()
+  await run
+  expect(stopped).toBe(true)
+})
+
 const FULL_ENV = {
   ALIEN_COMMANDS_URL: "http://127.0.0.1:1/v1/",
   ALIEN_COMMANDS_TOKEN: "tok",

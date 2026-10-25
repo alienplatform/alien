@@ -240,6 +240,7 @@ mod tests {
             .otlp_server_host(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
             .agent_name("local-runner")
             .maybe_stack_settings(Some(alien_core::StackSettings {
+                airgapped: false,
                 updates: alien_core::UpdatesMode::ApprovalRequired,
                 telemetry: alien_core::TelemetryMode::Auto,
                 heartbeats: alien_core::HeartbeatsMode::On,
@@ -320,6 +321,7 @@ mod tests {
             .platform(Platform::Kubernetes)
             .encryption_key("key")
             .maybe_stack_settings(Some(alien_core::StackSettings {
+                airgapped: false,
                 updates: alien_core::UpdatesMode::ApprovalRequired,
                 telemetry: alien_core::TelemetryMode::Auto,
                 heartbeats: alien_core::HeartbeatsMode::On,
@@ -347,6 +349,7 @@ mod tests {
             .platform(Platform::Kubernetes)
             .encryption_key("key")
             .maybe_stack_settings(Some(alien_core::StackSettings {
+                airgapped: false,
                 updates: alien_core::UpdatesMode::Auto,
                 telemetry: alien_core::TelemetryMode::ApprovalRequired,
                 heartbeats: alien_core::HeartbeatsMode::On,
@@ -374,6 +377,7 @@ mod tests {
             .platform(Platform::Kubernetes)
             .encryption_key("key")
             .maybe_stack_settings(Some(alien_core::StackSettings {
+                airgapped: false,
                 updates: alien_core::UpdatesMode::Auto,
                 telemetry: alien_core::TelemetryMode::Off,
                 heartbeats: alien_core::HeartbeatsMode::On,
