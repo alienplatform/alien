@@ -276,7 +276,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     if args.airgapped {
         drop(steps);
         let group_name = customer_environment_name(&name);
-        let (manager_url, signing_key) =
+        let (manager_url, signing_key, cli_name) =
             airgapped_manager(&ctx.base_url(), &response.token).await?;
         return register_airgapped(
             &args,
@@ -286,6 +286,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             &group_name,
             &response.token,
             &signing_key,
+            Some(&cli_name),
             input_args.deployment_values,
         )
         .await;
@@ -1412,6 +1413,7 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
             &deployment_group_name,
             &token,
             &signing_key,
+            None,
             input_args.deployment_values,
         )
         .await;
@@ -1523,7 +1525,10 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
 /// The manager the project's Kubernetes deployments use, and its bundle key,
 /// as the new customer's setup token sees them.
 #[cfg(feature = "platform")]
-async fn airgapped_manager(platform_url: &str, group_token: &str) -> Result<(String, String)> {
+async fn airgapped_manager(
+    platform_url: &str,
+    group_token: &str,
+) -> Result<(String, String, String)> {
     let failed =
         |message: String| AlienError::new(ErrorData::ApiRequestFailed { message, url: None });
     let get = |url: String| async move {
@@ -1570,7 +1575,13 @@ async fn airgapped_manager(platform_url: &str, group_token: &str) -> Result<(Str
         .as_str()
         .ok_or_else(|| failed(format!("{manager_url} doesn't sign air-gapped bundles")))?
         .to_string();
-    Ok((manager_url, signing_key))
+    let cli_name = info["packages"]["cli"]["commandName"]
+        .as_str()
+        .ok_or_else(|| {
+            failed("The project needs a branded deploy CLI for air-gapped delivery".to_string())
+        })?
+        .to_string();
+    Ok((manager_url, signing_key, cli_name))
 }
 
 async fn register_airgapped(
@@ -1581,6 +1592,7 @@ async fn register_airgapped(
     group_name: &str,
     group_token: &str,
     signing_key: &str,
+    cli_name: Option<&str>,
     input_values: serde_json::Map<String, serde_json::Value>,
 ) -> Result<()> {
     let response = crate::http_client::client()?
@@ -1599,6 +1611,7 @@ async fn register_airgapped(
             "initialDesiredRelease": "active",
             "setupItem": "deployment",
             "setupMethod": "helm",
+            "stackSettings": { "deploymentModel": "pull", "airgapped": true },
             "inputValues": input_values,
         }))
         .send()
@@ -1636,7 +1649,10 @@ async fn register_airgapped(
             url: None,
         })
     })?;
-    let start = format!("alien-deploy sync --token {site_token} --manager {public_manager_url}");
+    let start = match cli_name {
+        Some(name) => format!("{name} sync --token {site_token}"),
+        None => format!("alien-deploy sync --token {site_token} --manager {public_manager_url}"),
+    };
     if args.json {
         return print_json(&serde_json::json!({
             "name": name,

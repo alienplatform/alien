@@ -836,7 +836,7 @@ async fn send_report(
             })
             .collect();
         let sending = !fresh.is_empty();
-        let body = serde_json::json!({ "state": report.state, "telemetry": fresh });
+        let body = serde_json::json!({ "state": report.state, "telemetry": fresh, "writtenAt": report.written_at });
         let response: StatusReportResponse = manager_post(
             &token.url,
             &token.token,
@@ -1164,7 +1164,22 @@ async fn download_tools(dir: &Path, folder: &Path, sources: &serde_json::Value) 
             .context(config_error(format!(
                 "downloading alien-deploy for {platform}"
             )))?;
-        builds.push((format!("alien-deploy-{platform}"), bytes));
+        let parsed_url = url::Url::parse(url)
+            .into_alien_error()
+            .context(config_error("parsing the deploy CLI download URL"))?;
+        let name = parsed_url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .filter(|name| {
+                !name.is_empty()
+                    && name.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    })
+            })
+            .ok_or_else(|| {
+                AlienError::new(config_error("deploy CLI URL needs a binary filename"))
+            })?;
+        builds.push((format!("{name}-{platform}"), bytes));
     }
     std::fs::create_dir_all(dir.join(TOOLS_DIR))
         .into_alien_error()
@@ -1205,7 +1220,7 @@ fn copy_tools(bundle_dir: &Path, folder: &Path) -> Result<()> {
             .into_alien_error()
             .context(config_error("copying alien-deploy"))?;
         #[cfg(unix)]
-        if name.to_string_lossy().starts_with("alien-deploy-") {
+        if name != TOOLS_SOURCES_FILE {
             std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755))
                 .into_alien_error()
                 .context(config_error("making alien-deploy executable"))?;
@@ -2316,6 +2331,47 @@ mod tests {
         assert!(sync_command(args, Some(&config)).await.is_err());
         discovery.assert_hits_async(1).await;
         whoami.assert_hits_async(2).await;
+    }
+
+    #[tokio::test]
+    async fn carried_tools_keep_the_downloaded_brand_and_skip_unchanged_builds() {
+        let server = MockServer::start_async().await;
+        let binary = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/linux-x64/acmectl");
+                then.status(200).body("branded executable bytes");
+            })
+            .await;
+        let sources = serde_json::json!({ "deployCli": [{
+            "platform": "linux-x86_64",
+            "url": format!("{}/linux-x64/acmectl", server.base_url()),
+        }] });
+        let bundle = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        assert_eq!(
+            download_tools(bundle.path(), folder.path(), &sources)
+                .await
+                .unwrap(),
+            Tools::Included
+        );
+        copy_tools(bundle.path(), folder.path()).unwrap();
+        let executable = folder.path().join("tools/acmectl-linux-x86_64");
+        assert_eq!(
+            std::fs::read(&executable).unwrap(),
+            b"branded executable bytes"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&executable).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert_eq!(
+            download_tools(bundle.path(), folder.path(), &sources)
+                .await
+                .unwrap(),
+            Tools::AlreadyThere
+        );
+        binary.assert_hits_async(1).await;
     }
 
     /// A transfer folder for `deployment` with one report from the site

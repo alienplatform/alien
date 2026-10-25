@@ -289,6 +289,7 @@ async fn report(
             "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         },
         "telemetry": telemetry,
+        "writtenAt": "2026-01-01T00:00:00Z",
     });
     let request = Request::builder()
         .method("POST")
@@ -318,6 +319,20 @@ async fn the_sites_own_token_reports_state_and_telemetry() {
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["telemetryAccepted"], 1);
+    let stored = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap()
+        .unwrap();
+    let receipt = stored.runtime_metadata.unwrap().airgapped_report.unwrap();
+    assert_eq!(
+        receipt.written_at.unwrap().to_rfc3339(),
+        "2026-01-01T00:00:00+00:00"
+    );
+    assert!((chrono::Utc::now() - receipt.received_at).num_seconds() < 10);
+
     assert_eq!(
         *fixture.telemetry.0.lock().unwrap(),
         vec![(TelemetrySignal::Logs, Some(fixture.deployment.clone()))],

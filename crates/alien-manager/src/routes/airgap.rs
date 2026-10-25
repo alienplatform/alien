@@ -16,7 +16,7 @@
 use std::{future::ready, sync::Arc, time::Duration};
 
 use alien_bindings::traits::Kv;
-use alien_core::{sync::TargetDeployment, DeploymentState, Platform};
+use alien_core::{sync::TargetDeployment, AirgappedReportMetadata, DeploymentState, Platform};
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -266,6 +266,9 @@ async fn bundle_signature(
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StatusReport {
+    /// Site clock time when the report was written. Older clients omit it.
+    #[serde(default)]
+    pub written_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Deployment state as the environment's Operator last recorded it.
     #[cfg_attr(feature = "openapi", schema(value_type = std::collections::HashMap<String, serde_json::Value>))]
     pub state: DeploymentState,
@@ -317,7 +320,7 @@ async fn status_report(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(report): Json<StatusReport>,
+    Json(mut report): Json<StatusReport>,
 ) -> Response {
     let (subject, deployment) = match airgapped_deployment(&state, &headers, &id).await {
         Ok(found) => found,
@@ -350,6 +353,15 @@ async fn status_report(
         };
         batches.push((batch.id, signal, data));
     }
+
+    report
+        .state
+        .runtime_metadata
+        .get_or_insert_with(Default::default)
+        .airgapped_report = Some(AirgappedReportMetadata {
+        written_at: report.written_at,
+        received_at: chrono::Utc::now(),
+    });
 
     let status = serde_json::to_value(&report.state.status)
         .ok()

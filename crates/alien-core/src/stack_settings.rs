@@ -878,6 +878,11 @@ pub struct StackSettings {
     #[serde(default, skip_serializing_if = "is_default_deployment_model")]
     pub deployment_model: DeploymentModel,
 
+    /// Deliver Kubernetes updates and reports as carried bundles instead of a live connection.
+    /// The Operator still executes deployments with the pull model.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub airgapped: bool,
+
     /// How updates are delivered.
     /// - auto: Updates deploy automatically (default)
     /// - approval-required: Updates wait for explicit approval
