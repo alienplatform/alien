@@ -1416,18 +1416,23 @@ pub(crate) fn container_public_endpoint_target<'a>(
     })
 }
 
-/// Configured custom addresses are available before workload or endpoint readiness.
+/// Configured addresses are available before workload or endpoint readiness.
 pub(crate) fn configured_public_endpoint_urls(
     exposure: &KubernetesExposureSettings,
     endpoints: &[alien_core::PublicEndpoint],
 ) -> Option<HashMap<String, String>> {
-    let KubernetesExposureSettings::Custom {
-        domain,
-        certificate,
-        ..
-    } = exposure
-    else {
-        return None;
+    let (certificate, domain, is_base_domain) = match exposure {
+        KubernetesExposureSettings::CustomBaseDomain {
+            base_domain,
+            certificate,
+            ..
+        } => (certificate, base_domain.as_str(), true),
+        KubernetesExposureSettings::Custom {
+            domain,
+            certificate,
+            ..
+        } => (certificate, domain.as_str(), false),
+        _ => return None,
     };
     let scheme = match certificate {
         KubernetesCertificateMode::None => "http",
@@ -1438,9 +1443,16 @@ pub(crate) fn configured_public_endpoint_urls(
     Some(
         endpoints
             .iter()
-            .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
-            .into_iter()
-            .map(|endpoint| (endpoint.name.clone(), format!("{scheme}://{domain}")))
+            .filter(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
+            .take(if is_base_domain { usize::MAX } else { 1 })
+            .map(|endpoint| {
+                let host = if is_base_domain {
+                    endpoint_base_hostname(endpoint, domain)
+                } else {
+                    domain.to_string()
+                };
+                (endpoint.name.clone(), format!("{scheme}://{host}"))
+            })
             .collect(),
     )
 }
