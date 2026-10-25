@@ -43,7 +43,11 @@ use alien_manager::traits::{
 
 /// Records every batch the manager passes on, after `delay`.
 #[derive(Default)]
-struct CapturedTelemetry(Mutex<Vec<(TelemetrySignal, Option<String>)>>, Duration);
+struct CapturedTelemetry(
+    Mutex<Vec<(TelemetrySignal, Option<String>)>>,
+    Duration,
+    tokio::sync::Notify,
+);
 
 #[async_trait]
 impl TelemetryBackend for CapturedTelemetry {
@@ -53,6 +57,7 @@ impl TelemetryBackend for CapturedTelemetry {
         caller: &TelemetryCaller,
         _data: bytes::Bytes,
     ) -> Result<(), AlienError> {
+        self.2.notify_one();
         tokio::time::sleep(self.1).await;
         self.0
             .lock()
@@ -192,7 +197,11 @@ async fn fixture_with_backend_delay(delay: Duration) -> Fixture {
     );
     let command_dispatcher: Arc<dyn CommandDispatcher> = Arc::new(NullCommandDispatcher);
     let command_registry: Arc<dyn CommandRegistry> = Arc::new(InMemoryCommandRegistry::default());
-    let telemetry = Arc::new(CapturedTelemetry(Mutex::default(), delay));
+    let telemetry = Arc::new(CapturedTelemetry(
+        Mutex::default(),
+        delay,
+        tokio::sync::Notify::new(),
+    ));
     std::mem::forget(tmp);
 
     let state = AppState {
@@ -475,4 +484,76 @@ async fn a_client_that_disconnects_mid_report_does_not_cause_duplicates() {
         ids.len(),
         "each batch reached the backend once"
     );
+}
+
+#[tokio::test]
+async fn deletion_target_stays_scoped_and_final_report_drains_logs_first() {
+    let fixture = fixture_with_backend_delay(Duration::from_millis(200)).await;
+    fixture
+        .state
+        .deployment_store
+        .set_delete_pending(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap();
+    for (token, expected) in [
+        (&fixture.site_token, StatusCode::OK),
+        (&fixture.other_token, StatusCode::FORBIDDEN),
+    ] {
+        let response = alien_manager::routes::airgap::router()
+            .with_state(fixture.state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/deployments/{}/target", fixture.deployment))
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let body: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["action"], "delete");
+        }
+    }
+    let body = serde_json::json!({
+        "state": {"status":"deleted", "platform":"kubernetes", "protocolVersion":CURRENT_DEPLOYMENT_PROTOCOL_VERSION},
+        "telemetry":[{"id":1,"signal":"logs","data":base64::engine::general_purpose::STANDARD.encode(b"final logs")}]
+    });
+    let router = alien_manager::routes::airgap::router().with_state(fixture.state.clone());
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/v1/deployments/{}/status-report",
+            fixture.deployment
+        ))
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", fixture.site_token),
+        )
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let sending = tokio::spawn(async move { router.oneshot(request).await.unwrap() });
+    fixture.telemetry.2.notified().await;
+    let during = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(during.status, "delete-pending");
+    assert_eq!(sending.await.unwrap().status(), StatusCode::OK);
+    assert_eq!(fixture.telemetry.0.lock().unwrap().len(), 1);
+    let after = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.status, "deleted");
 }

@@ -145,6 +145,8 @@ struct SiteState {
     /// Release the site last reported running.
     #[serde(default)]
     site_release: Option<String>,
+    #[serde(default)]
+    deleted: bool,
 
     /// Telemetry acknowledgement in the last bundle built for the site.
     #[serde(default)]
@@ -789,6 +791,7 @@ async fn send_reports(
         send_report(folder, site, token, &report).await?;
         site.site_has = report.inventory;
         site.site_release = report.installed_release.clone();
+        site.deleted = report.state["status"].as_str() == Some("deleted");
         // Saved before the report is removed, so progress is never lost.
         save_site(folder, site)?;
         let dropped = if report.dropped > 0 {
@@ -800,10 +803,11 @@ async fn send_reports(
             String::new()
         };
         println!(
-            "Sent report from {}: {} running {}, {fresh_batches} telemetry batches{dropped}.",
+            "Sent report from {}: {} {}, release {}, {fresh_batches} telemetry batches{dropped}.",
             report.written_at,
             site.name,
-            report.installed_release.as_deref().unwrap_or("nothing yet"),
+            report.state["status"].as_str().unwrap_or("unknown"),
+            report.installed_release.as_deref().unwrap_or("none"),
         );
         std::fs::remove_file(&path)
             .into_alien_error()
@@ -885,6 +889,10 @@ async fn download_update(
     dry_run: bool,
     values: &[PathBuf],
 ) -> Result<()> {
+    if site.deleted {
+        println!("{} has been deleted.", site.name);
+        return Ok(());
+    }
     let manager = &token.url;
     let target: serde_json::Value = manager_get(
         manager,
@@ -908,6 +916,10 @@ async fn download_update(
             })
         })?
         .to_string();
+
+    if target["action"].as_str() == Some("delete") {
+        return download_deletion(folder, site, token, &target, &stack_id, dry_run).await;
+    }
 
     let pending = by_sequence(&folder.join(TO_SITE), Some(BUNDLE_EXTENSION))?;
     let already_carried = pending.iter().any(|(_, path)| {
@@ -1109,6 +1121,232 @@ async fn download_update(
     println!(
         "Downloaded {what} ({:.1} MB, signed{delta}).",
         size as f64 / 1_000_000.0
+    );
+    Ok(())
+}
+
+/// A deletion carries no images or chart: the installed chart owns cleanup.
+async fn download_deletion(
+    folder: &Path,
+    site: &mut SiteState,
+    token: &ManagerAccess,
+    target: &serde_json::Value,
+    stack_id: &str,
+    dry_run: bool,
+) -> Result<()> {
+    if dry_run {
+        println!("Would download the deletion of {}.", site.name);
+        return Ok(());
+    }
+    let work = tempfile::tempdir()
+        .into_alien_error()
+        .context(config_error("preparing deletion"))?;
+    std::fs::write(
+        work.path().join(airgap::TARGET_FILE),
+        serde_json::to_vec(target)
+            .into_alien_error()
+            .context(config_error("encoding deletion"))?,
+    )
+    .into_alien_error()
+    .context(config_error("writing deletion"))?;
+    let sequence = chrono::Utc::now().timestamp_millis() as u64;
+    let manifest = BundleManifest {
+        format_version: airgap::FORMAT_VERSION,
+        deployment_id: site.deployment_id.clone(),
+        deployment_name: site.name.clone(),
+        release_id: "delete".to_string(),
+        sequence,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        stack_id: stack_id.to_string(),
+        images: Vec::new(),
+        chart_images: BTreeMap::new(),
+        chart: String::new(),
+        files: airgap::checksums(work.path())
+            .await
+            .context(config_error("checksumming deletion"))?,
+        omitted_blobs: BTreeSet::new(),
+        telemetry_ack: None,
+    };
+    let bytes = serde_json::to_vec_pretty(&manifest)
+        .into_alien_error()
+        .context(config_error("encoding deletion manifest"))?;
+    let signature: serde_json::Value = manager_post(&token.url, &token.token,
+        &format!("/v1/deployments/{}/bundle-signature", site.deployment_id),
+        &serde_json::json!({ "manifest": base64::engine::general_purpose::STANDARD.encode(&bytes) })).await?;
+    let signed = signature["signature"]
+        .as_str()
+        .ok_or_else(|| AlienError::new(config_error("missing deletion signature")))?;
+    std::fs::write(work.path().join(airgap::MANIFEST_FILE), bytes)
+        .into_alien_error()
+        .context(config_error("writing deletion manifest"))?;
+    std::fs::write(work.path().join(airgap::SIGNATURE_FILE), signed)
+        .into_alien_error()
+        .context(config_error("writing deletion signature"))?;
+    let destination = folder
+        .join(TO_SITE)
+        .join(format!("{sequence}-delete.{BUNDLE_EXTENSION}"));
+    airgap::pack(work.path(), &destination).context(config_error("packing deletion"))?;
+    for (_, old) in by_sequence(&folder.join(TO_SITE), Some(BUNDLE_EXTENSION))? {
+        if old != destination {
+            std::fs::remove_file(old)
+                .into_alien_error()
+                .context(config_error("removing superseded update"))?;
+        }
+    }
+    println!("Downloaded signed deletion for {}.", site.name);
+    Ok(())
+}
+
+async fn uninstall_site(
+    folder: &Path,
+    site: &SiteState,
+    settings: &SiteSide,
+    manifest: &BundleManifest,
+    dry_run: bool,
+) -> Result<()> {
+    let namespace = settings.namespace(&manifest.stack_id);
+    let values = release_values(settings, &manifest.stack_id, &namespace).await?;
+    if let Some(values) = &values {
+        if values["management"]["deploymentId"].as_str() != Some(site.deployment_id.as_str()) {
+            return Err(AlienError::new(config_error(
+                "the installed Helm release belongs to another deployment",
+            )));
+        }
+        if values["runtime"]["cleanup"]["onUninstall"]["enabled"].as_bool() != Some(true) {
+            return Err(AlienError::new(config_error(
+                "enable runtime.cleanup.onUninstall.enabled before deleting the site",
+            )));
+        }
+    }
+    if dry_run {
+        println!(
+            "Would uninstall {}/{} and carry its final report back.",
+            namespace, manifest.stack_id
+        );
+        return Ok(());
+    }
+    // Keep the snapshot outside from-site until Helm confirms cleanup. It also
+    // lets an interrupted uninstall resume after the Operator is gone.
+    let snapshot = folder.join("deleting-report.json");
+    let mut report: SiteReport = if snapshot.exists() {
+        serde_json::from_slice(
+            &std::fs::read(&snapshot)
+                .into_alien_error()
+                .context(config_error("reading deletion snapshot"))?,
+        )
+        .into_alien_error()
+        .context(config_error("parsing deletion snapshot"))?
+    } else {
+        let (_, installed) = installed_bundles(folder)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                AlienError::new(config_error(
+                    "no installed bundle is recorded for this deletion",
+                ))
+            })?;
+        let record = read_installed(&installed)?;
+        if record.stack_id != manifest.stack_id {
+            return Err(AlienError::new(config_error(
+                "the deletion does not match the recorded install",
+            )));
+        }
+        let report = collect_report(site, settings, &record)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(config_error(
+                    "the Operator has no status to carry back before deletion",
+                ))
+            })?;
+        std::fs::write(
+            &snapshot,
+            serde_json::to_vec(&report)
+                .into_alien_error()
+                .context(config_error("encoding deletion snapshot"))?,
+        )
+        .into_alien_error()
+        .context(config_error("saving deletion snapshot"))?;
+        report
+    };
+    if report.deployment_id != site.deployment_id {
+        return Err(AlienError::new(config_error(
+            "deletion snapshot belongs to another deployment",
+        )));
+    }
+    if values.is_some() {
+        // Stop reconciliation before the chart removes its runtime resources.
+        let mut stop = kubectl(settings.kube_context.as_deref());
+        stop.args([
+            "scale",
+            "deployment",
+            &manifest.stack_id,
+            "--namespace",
+            &namespace,
+            "--replicas=0",
+        ]);
+        run(stop, "stopping the Operator").await?;
+        let mut wait = kubectl(settings.kube_context.as_deref());
+        wait.args([
+            "rollout",
+            "status",
+            &format!("deployment/{}", manifest.stack_id),
+            "--namespace",
+            &namespace,
+            "--timeout=120s",
+        ]);
+        run(wait, "waiting for the Operator to stop").await?;
+    }
+    let mut command = Command::new("helm");
+    command.args([
+        "uninstall",
+        &manifest.stack_id,
+        "--namespace",
+        &namespace,
+        "--wait",
+        "--timeout",
+        "300s",
+        "--ignore-not-found",
+    ]);
+    if let Some(context) = &settings.kube_context {
+        command.args(["--kube-context", context]);
+    }
+    run(command, "helm uninstall").await?;
+    // The chart's cleanup hook removed Live workloads; external bindings and
+    // retained data volumes keep the same ownership as a connected uninstall.
+    report.state["status"] = serde_json::json!("deleted");
+    report.state["currentRelease"] = serde_json::Value::Null;
+    report.state["targetRelease"] = serde_json::Value::Null;
+    report.state["error"] = serde_json::Value::Null;
+    if let Some(resources) = report
+        .state
+        .pointer_mut("/stackState/resources")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for resource in resources.values_mut() {
+            if resource["lifecycle"].as_str() == Some("live") {
+                resource["status"] = serde_json::json!("deleted");
+            }
+        }
+    }
+    report.installed_release = None;
+    report.written_at = chrono::Utc::now().to_rfc3339();
+    save_report(folder, &report)?;
+    for (_, pending) in by_sequence(&folder.join(TO_SITE), Some(BUNDLE_EXTENSION))? {
+        std::fs::remove_file(pending)
+            .into_alien_error()
+            .context(config_error("removing applied deletion"))?;
+    }
+    for (_, installed) in installed_bundles(folder)? {
+        std::fs::remove_dir_all(installed)
+            .into_alien_error()
+            .context(config_error("removing deleted install history"))?;
+    }
+    std::fs::remove_file(snapshot)
+        .into_alien_error()
+        .context(config_error("removing deletion snapshot"))?;
+    println!(
+        "Uninstalled {}. Copy the folder out to complete deletion.",
+        site.name
     );
     Ok(())
 }
@@ -1382,6 +1620,15 @@ async fn install_pending(
     let manifest = airgap::verify(work.path(), &trusted_key)
         .await
         .context(config_error("verifying the update"))?;
+    let target_bytes = std::fs::read(work.path().join(airgap::TARGET_FILE))
+        .into_alien_error()
+        .context(config_error("reading the target"))?;
+    let verified_target: serde_json::Value = serde_json::from_slice(&target_bytes)
+        .into_alien_error()
+        .context(config_error("parsing the target"))?;
+    if verified_target["action"].as_str() == Some("delete") {
+        return uninstall_site(folder, site, settings, &manifest, args.dry_run).await;
+    }
     let installed = installed_release(settings, &manifest.stack_id, &namespace).await?;
 
     if args.dry_run {
@@ -1609,8 +1856,25 @@ fn short_key(key: &str) -> String {
 /// The key the install pinned, from its Helm values. `None` before the first
 /// install.
 async fn pinned_key(settings: &SiteSide, release: &str, namespace: &str) -> Result<Option<String>> {
+    Ok(release_values(settings, release, namespace)
+        .await?
+        .and_then(|values| {
+            values["airgapped"]["bundleSigningKey"]
+                .as_str()
+                .filter(|key| !key.is_empty())
+                .map(str::to_string)
+        }))
+}
+
+async fn release_values(
+    settings: &SiteSide,
+    release: &str,
+    namespace: &str,
+) -> Result<Option<serde_json::Value>> {
     let mut cmd = Command::new("helm");
-    cmd.args(["get", "values", release, "-n", namespace, "-o", "json"]);
+    cmd.args([
+        "get", "values", release, "-n", namespace, "-o", "json", "--all",
+    ]);
     if let Some(context) = &settings.kube_context {
         cmd.arg("--kube-context").arg(context);
     }
@@ -1633,10 +1897,7 @@ async fn pinned_key(settings: &SiteSide, release: &str, namespace: &str) -> Resu
     let values: serde_json::Value = serde_json::from_slice(&output.stdout)
         .into_alien_error()
         .context(config_error("parsing the release's values"))?;
-    Ok(values["airgapped"]["bundleSigningKey"]
-        .as_str()
-        .filter(|key| !key.is_empty())
-        .map(str::to_string))
+    Ok(Some(values))
 }
 
 /// The telemetry acknowledgement the Operator last received, from the target
@@ -1783,10 +2044,21 @@ async fn write_report_for_install(
     settings: &SiteSide,
     record: &InstalledBundle,
 ) -> Result<()> {
+    if let Some(report) = collect_report(site, settings, record).await? {
+        save_report(folder, &report)?;
+    }
+    Ok(())
+}
+
+async fn collect_report(
+    site: &SiteState,
+    settings: &SiteSide,
+    record: &InstalledBundle,
+) -> Result<Option<SiteReport>> {
     let namespace = settings.namespace(&record.stack_id);
     let Some((status, export_token)) = read_status(settings, &record.stack_id, &namespace).await?
     else {
-        return Ok(());
+        return Ok(None);
     };
     let after = current_ack(settings, &record.stack_id, &namespace).await?;
     let (telemetry, dropped) =
@@ -1800,6 +2072,10 @@ async fn write_report_for_install(
         dropped,
         inventory: record.inventory.clone(),
     };
+    Ok(Some(report))
+}
+
+fn save_report(folder: &Path, report: &SiteReport) -> Result<()> {
     let sequence = chrono::Utc::now().timestamp_millis();
     let path = folder
         .join(FROM_SITE)

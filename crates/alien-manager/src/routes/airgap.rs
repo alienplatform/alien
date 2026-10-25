@@ -135,10 +135,30 @@ async fn target(
         Ok(found) => found,
         Err(response) => return response,
     };
-    let release = match release(&state, &subject, &deployment, query.release_id.as_deref()).await {
+    let deleting = matches!(
+        deployment.status.as_str(),
+        "delete-pending" | "deleting" | "delete-failed" | "teardown-required" | "teardown-failed"
+    );
+    let release_id = if deleting {
+        deployment.current_release_id.as_deref()
+    } else {
+        query.release_id.as_deref()
+    };
+    let release = match release(&state, &subject, &deployment, release_id).await {
         Ok(release) => release,
         Err(response) => return response,
     };
+    if deleting {
+        let Some(stack) = release.stacks.get(&deployment.platform) else {
+            return ErrorData::bad_request("The installed release has no stack for this platform")
+                .into_response();
+        };
+        return Json(serde_json::json!({
+            "action": "delete",
+            "releaseInfo": {"releaseId": release.id, "stack": {"id": stack.id()}},
+        }))
+        .into_response();
+    }
     // No token: the environment pulls from its own registry and never calls
     // the manager. Bundles are applied by Operators that support air-gapped
     // mode, which all understand tunnels.
@@ -367,27 +387,17 @@ async fn status_report(
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_default();
-    if let Err(e) = state
-        .deployment_store
-        .reconcile(
-            &subject,
-            ReconcileData {
-                deployment_id: deployment.id.clone(),
-                session: "airgap-status-report".to_string(),
-                state: report.state,
-                update_heartbeat: true,
-                suggested_delay_ms: None,
-                heartbeats: Vec::new(),
-                observed_inventory_batches: Vec::new(),
-                capabilities: Vec::new(),
-                operator_version: None,
-                execution_claim: None,
-                operations_report: None,
-            },
-        )
-        .await
-    {
-        return e.into_response();
+    let deleting = report.state.status == alien_core::DeploymentStatus::Deleted;
+    if deleting && report.telemetry.iter().any(|batch| batch.id.is_none()) {
+        return ErrorData::bad_request("Final deletion reports require telemetry batch IDs")
+            .into_response();
+    }
+    let last_batch = report.telemetry.iter().filter_map(|batch| batch.id).max();
+    let report_state = report.state.clone();
+    if !deleting {
+        if let Err(error) = reconcile_report(&state, &subject, &deployment.id, report.state).await {
+            return error.into_response();
+        }
     }
 
     // The same attribution live telemetry from this deployment gets.
@@ -416,6 +426,13 @@ async fn status_report(
         Err(e) => return ErrorData::internal(format!("forwarding telemetry: {e}")).into_response(),
     };
 
+    if deleting && last_batch.is_none_or(|last| forwarded.through.is_some_and(|mark| mark >= last))
+    {
+        if let Err(error) = reconcile_report(&state, &subject, &deployment.id, report_state).await {
+            return error.into_response();
+        }
+    }
+
     (
         StatusCode::OK,
         Json(StatusReportResponse {
@@ -425,6 +442,34 @@ async fn status_report(
         }),
     )
         .into_response()
+}
+
+async fn reconcile_report(
+    state: &AppState,
+    subject: &Subject,
+    deployment_id: &str,
+    report: DeploymentState,
+) -> Result<(), alien_error::AlienError> {
+    state
+        .deployment_store
+        .reconcile(
+            subject,
+            ReconcileData {
+                deployment_id: deployment_id.to_string(),
+                session: "airgap-status-report".to_string(),
+                state: report,
+                update_heartbeat: true,
+                suggested_delay_ms: None,
+                heartbeats: Vec::new(),
+                observed_inventory_batches: Vec::new(),
+                capabilities: Vec::new(),
+                operator_version: None,
+                execution_claim: None,
+                operations_report: None,
+            },
+        )
+        .await
+        .map(|_| ())
 }
 
 /// How long a status report spends forwarding telemetry before it answers.

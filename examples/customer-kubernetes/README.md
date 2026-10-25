@@ -292,6 +292,28 @@ alien-deploy sync \
 
 It verifies the update, pushes the images to `localhost:5001`, installs the chart, waits for the service to run, and writes a report into `customer-3-sync/from-site/`. It remembers the registry, namespace, values and context, and the install remembers your key: later syncs need no options, and an update signed with any other key is refused.
 
+Site settings use the same Helm values format as a connected install. For a stack with a public endpoint, the site admin supplies its routing configuration in that values file, alongside external resource bindings and stack inputs:
+
+```yaml
+stackSettings:
+  deploymentModel: pull
+  airgapped: true
+  kubernetes:
+    exposure:
+      mode: custom
+      domain: app.customer.example
+      route:
+        routeApi: ingress
+        ingressClassName: nginx
+      certificate:
+        mode: tlsSecretRef
+        secretName: app-tls
+```
+
+The site owns DNS, the ingress controller and the referenced TLS Secret. The files service in this example uses a tunnel instead, so it does not need this public endpoint configuration.
+
+A failed workload rollout still writes the Operator's failed state and buffered logs to `from-site/` before the CLI exits with an error. Carry that report back even if the update could not finish.
+
 Your laptop reaches the manager and the cluster at once, so this run also sent the report straight back. At a real site, the admin carries the folder out and runs `alien-deploy sync` online, which sends the report and downloads the next update in the same trip.
 
 The site now shows up like any other customer:
@@ -314,6 +336,7 @@ On your laptop, that one command does both halves. The update is a few megabytes
 
 - `alien-deploy sync --dry-run` shows what an update will change before it installs anything.
 - `alien-deploy rollback` returns the site to the release it ran before. To keep it there, pin it on your side (`alien deployments pin customer-3/customer-3 <release>`); otherwise the next trip brings the latest release again.
+- Deleting the deployment on the manager queues a signed deletion for the next trip. Site sync captures its final logs, stops the Operator and uninstalls the chart using its cleanup hooks. Carry the final report back to complete deletion. External resources and data volumes follow the installed chart's retention settings; deletion does not grant ownership of resources supplied by the site. Both online and site CLIs must support deletion bundles.
 - When the site already runs the latest release, a trip still brings back a small signed update: it tells the site's Operator which telemetry your manager received, so the Operator can free it.
 
 See [Air-gapped deployments](https://alien.dev/docs/deploying/air-gapped) for the details.
