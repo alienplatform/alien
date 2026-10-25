@@ -728,22 +728,32 @@ fn report_operator_capabilities(
 /// Logs reach the Operator either from a node collector, which authenticates
 /// with the collector token, or from the Operator's own Pod log stream, which
 /// needs no token. Either one means this installation sends logs.
+///
+/// Every state carries a detail. Earlier Operators reported this capability
+/// with no detail and marked it unavailable whenever the collector token was
+/// missing, including in podApi mode where logs do flow, so clients trust an
+/// unavailable report only when it has a detail.
 fn logs_capability(config: &OperatorConfig, pod_log_collection: bool) -> OperatorCapabilityReport {
-    let detail = if pod_log_collection {
-        Some("Pod logs read through the Kubernetes API")
+    let (state, detail) = if pod_log_collection {
+        (
+            OperatorCapabilityState::Granted,
+            "Pod logs read through the Kubernetes API",
+        )
     } else if config.collector_token.is_some() {
-        Some("Pod logs sent by the node log collector")
+        (
+            OperatorCapabilityState::Granted,
+            "Pod logs sent by the node log collector",
+        )
     } else {
-        None
+        (
+            OperatorCapabilityState::Unavailable,
+            "No log collector configured",
+        )
     };
     OperatorCapabilityReport {
         key: "logs".to_string(),
-        state: if detail.is_some() {
-            OperatorCapabilityState::Granted
-        } else {
-            OperatorCapabilityState::Unavailable
-        },
-        detail: detail.map(str::to_string),
+        state,
+        detail: Some(detail.to_string()),
     }
 }
 
@@ -1860,7 +1870,7 @@ mod tests {
         let off = logs_capability(&config(None), false);
         assert_eq!(off.key, "logs");
         assert_eq!(off.state, OperatorCapabilityState::Unavailable);
-        assert_eq!(off.detail, None);
+        assert_eq!(off.detail.as_deref(), Some("No log collector configured"));
 
         // nodeAgent mode: the chart mounts the collector token.
         let node_agent = logs_capability(&config(Some("collector-secret")), false);
