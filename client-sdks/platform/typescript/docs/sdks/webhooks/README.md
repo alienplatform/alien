@@ -5,10 +5,10 @@
 ### Available Operations
 
 * [listWebhookEndpoints](#listwebhookendpoints)
-* [createWebhookEndpoint](#createwebhookendpoint)
+* [createWebhookEndpoint](#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
 * [getWebhookEndpoint](#getwebhookendpoint)
 * [updateWebhookEndpoint](#updatewebhookendpoint)
-* [deleteWebhookEndpoint](#deletewebhookendpoint)
+* [deleteWebhookEndpoint](#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
 * [getWebhookSigningSecret](#getwebhooksigningsecret)
 * [rotateWebhookSigningSecret](#rotatewebhooksigningsecret)
 * [listWebhookDeliveries](#listwebhookdeliveries)
@@ -115,6 +115,8 @@ import {
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## createWebhookEndpoint
+
+Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
 
 ### Example Usage
 
@@ -405,6 +407,8 @@ import {
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## deleteWebhookEndpoint
+
+Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
 
 ### Example Usage
 

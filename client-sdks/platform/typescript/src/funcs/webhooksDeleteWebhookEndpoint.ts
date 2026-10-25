@@ -27,6 +27,9 @@ import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
+/**
+ * Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+ */
 export function webhooksDeleteWebhookEndpoint(
   client: AlienCore,
   request: operations.DeleteWebhookEndpointRequest,

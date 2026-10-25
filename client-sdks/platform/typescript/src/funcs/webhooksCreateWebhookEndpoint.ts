@@ -27,6 +27,9 @@ import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
+/**
+ * Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
+ */
 export function webhooksCreateWebhookEndpoint(
   client: AlienCore,
   requestBody: operations.CreateWebhookEndpointRequestBody,

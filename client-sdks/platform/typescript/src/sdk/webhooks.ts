@@ -29,6 +29,9 @@ export class Webhooks extends ClientSDK {
     ));
   }
 
+  /**
+   * Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
+   */
   async createWebhookEndpoint(
     requestBody: operations.CreateWebhookEndpointRequestBody,
     projectId?: string | undefined,
@@ -64,6 +67,9 @@ export class Webhooks extends ClientSDK {
     ));
   }
 
+  /**
+   * Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+   */
   async deleteWebhookEndpoint(
     request: operations.DeleteWebhookEndpointRequest,
     options?: RequestOptions,

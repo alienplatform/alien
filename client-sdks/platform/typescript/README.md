@@ -514,10 +514,10 @@ run();
 ### [Webhooks](docs/sdks/webhooks/README.md)
 
 * [listWebhookEndpoints](docs/sdks/webhooks/README.md#listwebhookendpoints)
-* [createWebhookEndpoint](docs/sdks/webhooks/README.md#createwebhookendpoint)
+* [createWebhookEndpoint](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
 * [getWebhookEndpoint](docs/sdks/webhooks/README.md#getwebhookendpoint)
 * [updateWebhookEndpoint](docs/sdks/webhooks/README.md#updatewebhookendpoint)
-* [deleteWebhookEndpoint](docs/sdks/webhooks/README.md#deletewebhookendpoint)
+* [deleteWebhookEndpoint](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
 * [getWebhookSigningSecret](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
 * [rotateWebhookSigningSecret](docs/sdks/webhooks/README.md#rotatewebhooksigningsecret)
 * [listWebhookDeliveries](docs/sdks/webhooks/README.md#listwebhookdeliveries)
@@ -812,8 +812,8 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`userListMemberships`](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 - [`userSyncGitNamespaces`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 - [`userUpdateProfile`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
-- [`webhooksCreateWebhookEndpoint`](docs/sdks/webhooks/README.md#createwebhookendpoint)
-- [`webhooksDeleteWebhookEndpoint`](docs/sdks/webhooks/README.md#deletewebhookendpoint)
+- [`webhooksCreateWebhookEndpoint`](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
+- [`webhooksDeleteWebhookEndpoint`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
 - [`webhooksGetWebhookEndpoint`](docs/sdks/webhooks/README.md#getwebhookendpoint)
 - [`webhooksGetWebhookSigningSecret`](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
 - [`webhooksListWebhookDeliveries`](docs/sdks/webhooks/README.md#listwebhookdeliveries)
@@ -1115,8 +1115,8 @@ To learn about this feature and how to get started, check
 - [`useUserListMemberships`](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 - [`useUserSyncGitNamespacesMutation`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 - [`useUserUpdateProfileMutation`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
-- [`useWebhooksCreateWebhookEndpointMutation`](docs/sdks/webhooks/README.md#createwebhookendpoint)
-- [`useWebhooksDeleteWebhookEndpointMutation`](docs/sdks/webhooks/README.md#deletewebhookendpoint)
+- [`useWebhooksCreateWebhookEndpointMutation`](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
+- [`useWebhooksDeleteWebhookEndpointMutation`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
 - [`useWebhooksGetWebhookEndpoint`](docs/sdks/webhooks/README.md#getwebhookendpoint)
 - [`useWebhooksGetWebhookSigningSecret`](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
 - [`useWebhooksListWebhookDeliveries`](docs/sdks/webhooks/README.md#listwebhookdeliveries)

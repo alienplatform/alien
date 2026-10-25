@@ -47,6 +47,9 @@ export type WebhooksDeleteWebhookEndpointMutationError =
   | UnexpectedClientError
   | SDKValidationError;
 
+/**
+ * Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+ */
 export function useWebhooksDeleteWebhookEndpointMutation(
   options?: MutationHookOptions<
     WebhooksDeleteWebhookEndpointMutationData,

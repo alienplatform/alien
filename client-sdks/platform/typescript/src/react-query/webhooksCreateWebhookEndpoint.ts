@@ -47,6 +47,9 @@ export type WebhooksCreateWebhookEndpointMutationError =
   | UnexpectedClientError
   | SDKValidationError;
 
+/**
+ * Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
+ */
 export function useWebhooksCreateWebhookEndpointMutation(
   options?: MutationHookOptions<
     WebhooksCreateWebhookEndpointMutationData,

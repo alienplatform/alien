@@ -6,9 +6,9 @@ management:
   generationVersion: 2.941.0
   releaseVersion: 3.3.42
 persistentEdits:
-  generation_id: 0e216994-6213-4781-982d-ff6f25c0c5f8
-  pristine_commit_hash: 6cc51cf27f95ea7f74f31fb064c555b09d1aef9e
-  pristine_tree_hash: a3a8116f98490fc3d1b55f0175d14df6034d030c
+  generation_id: 3af17e95-88aa-42e4-abe3-120df67265fa
+  pristine_commit_hash: 9a4de83c72dd0d605a6e70e107a7c9ca03ccc821
+  pristine_tree_hash: 9aa2bec70fe415f1349058e8b26063472b2e08b4
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -12371,8 +12371,8 @@ trackedFiles:
     pristine_git_object: ed60f3bc6cb23aa9988307bc1d591592b5d9adbe
   docs/models/generatemanagertokenrequest.md:
     id: 8390570078a9
-    last_write_checksum: sha1:5d78df140ab34e9972161d2f0588b806aa86ce9f
-    pristine_git_object: 3b93b14eadf64d1e4b6f29ad0aba3ab42f6ea73e
+    last_write_checksum: sha1:c1ab1e37ddb659397990bc514ed9df3629ed1d12
+    pristine_git_object: 450d175bf71b7b65c4d28b871027e36575de8394
   docs/models/generatemanagertokenresponse.md:
     id: 4e2794042c0c
     last_write_checksum: sha1:b40f8609d89e4e48c56080c1811a675097622ec5
@@ -36115,8 +36115,8 @@ trackedFiles:
     pristine_git_object: 32b501f60091eb89c804c782e7027783cb779611
   docs/sdks/webhooks/README.md:
     id: e21b32d786a4
-    last_write_checksum: sha1:17bf8d0236260ce5b9ea98bed13ec1cb4747a015
-    pristine_git_object: 276fea96819cf97441858b302ec2695960b50c93
+    last_write_checksum: sha1:d2e6ef32cc67c14029587b8170c67bdcf77dbbd8
+    pristine_git_object: 089e17676c44905a42be82838c30f634cb803179
   docs/sdks/workspaces/README.md:
     id: 1f5b051a6380
     last_write_checksum: sha1:5cf33496d8ac34f8a82485b178afa355018c80c2
@@ -37183,12 +37183,12 @@ trackedFiles:
     pristine_git_object: a1bc1c6785bbd13def75258e8faf6e5c60b66dd0
   src/funcs/webhooksCreateWebhookEndpoint.ts:
     id: 8dce4f370a7e
-    last_write_checksum: sha1:89491c27a07e0ccbd6ecfbb8476c3d34cb54d7a7
-    pristine_git_object: 7245dcdf9b9da328b65f436ecf3a4e95dd5864e0
+    last_write_checksum: sha1:cc2291ad73a89fd66326fce2ef5c2576f053934d
+    pristine_git_object: d75a0dac10888a3e5a280c603ca9b74097425bac
   src/funcs/webhooksDeleteWebhookEndpoint.ts:
     id: dda2aa061782
-    last_write_checksum: sha1:637c9a6aa5eb28134bf6c838d4534c7463eef9ac
-    pristine_git_object: 7c5ad4e58044141c8ef5acb033420803c13e45c7
+    last_write_checksum: sha1:035771879a1d4f1fb032796807330fd2f33b4ec4
+    pristine_git_object: 4909b5d0aa8b93203477a11af963e425363bbb68
   src/funcs/webhooksGetWebhookEndpoint.ts:
     id: d135e3e5cd88
     last_write_checksum: sha1:de869ccbd18505e8d213b8048dc4b87c4cb87e72
@@ -38047,8 +38047,8 @@ trackedFiles:
     pristine_git_object: b975aad847c301d687683ccae6b38c3969fb346c
   src/models/generatemanagertokenrequest.ts:
     id: 37d07c31900f
-    last_write_checksum: sha1:12d3664ffefbf06e850eb21ee988a8369276f4d7
-    pristine_git_object: 07cf090aea4f2ef03971d62181dab6ca955a0107
+    last_write_checksum: sha1:70b17940f8de784de909ca36ce6a346a8db93894
+    pristine_git_object: c079f956155d13989b6abbec3f41ad821147745d
   src/models/generatemanagertokenresponse.ts:
     id: 2d5c48de9e4f
     last_write_checksum: sha1:5b8b3f4779373a09d5042f09246f02add5025304
@@ -41475,12 +41475,12 @@ trackedFiles:
     pristine_git_object: ec5429ec983b03077e730b2e2db5db5a7b358cc0
   src/react-query/webhooksCreateWebhookEndpoint.ts:
     id: ba0644bdd171
-    last_write_checksum: sha1:3c5a4dfd69d45f272dd4436bc22753ada244b8ae
-    pristine_git_object: c01fb3989c773cffebfbcdb3626cb1fa838a07bb
+    last_write_checksum: sha1:c20c477146f5dd0541f26e12b007cd133a9fc581
+    pristine_git_object: 830ddff20a94b05a3812fa3dc2a10deb6b409e0a
   src/react-query/webhooksDeleteWebhookEndpoint.ts:
     id: 5d97ecb06d7d
-    last_write_checksum: sha1:8432c1d4c2001f25f0e7aec428852948d1f90562
-    pristine_git_object: 8179cc6429215f348904cd79bf8c0d406ab7edcb
+    last_write_checksum: sha1:460bbf5e411642ee88e3a00ec3deb50cba2ed5e7
+    pristine_git_object: e023701e9e0de2bdbafabcdec06b47bbcbfee7e5
   src/react-query/webhooksGetWebhookEndpoint.core.ts:
     id: 07cd6dd7e9c1
     last_write_checksum: sha1:7de33232fc3fe21f293b24b0555642b4fb44963a
@@ -41719,8 +41719,8 @@ trackedFiles:
     pristine_git_object: 23e0f1cd9c59146e7276fcfd864cd87f8c156108
   src/sdk/webhooks.ts:
     id: e879e17d0532
-    last_write_checksum: sha1:7e97ae69906eb46250737d91905785205ab2bcfc
-    pristine_git_object: 0b8baf8f047b3b379f98369cbef73077384f127f
+    last_write_checksum: sha1:e3b2109bc68fcc0f07d7e88fcc3b00a3f4542fc6
+    pristine_git_object: 22dee0395c357f69e11993e9d389949fe60fb88a
   src/sdk/workspaces.ts:
     id: 72b45379c8d9
     last_write_checksum: sha1:ef56f72b558fd4b191be279a9f6ab6fd9916362f
