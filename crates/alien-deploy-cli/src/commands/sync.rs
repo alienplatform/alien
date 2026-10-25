@@ -429,8 +429,14 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
         ack,
     )
     .await?;
-    if let Err(error) =
-        wait_for_rollout(&settings, &record.stack_id, &namespace, &record.release_id).await
+    if let Err(error) = wait_for_rollout(
+        &settings,
+        &record.stack_id,
+        &namespace,
+        &record.release_id,
+        sequence,
+    )
+    .await
     {
         write_report_for_install(&folder, &site, &settings, &record).await?;
         return Err(error);
@@ -1774,6 +1780,7 @@ async fn install_pending(
         &manifest.stack_id,
         &namespace,
         &manifest.release_id,
+        manifest.sequence,
     )
     .await
     {
@@ -2016,26 +2023,22 @@ async fn read_status(
     Ok(Some((status, token)))
 }
 
-async fn wait_for_rollout(
-    settings: &SiteSide,
-    stack_id: &str,
-    namespace: &str,
-    release_id: &str,
-) -> Result<()> {
-    println!("Waiting for {release_id} to roll out");
-    let started = std::time::Instant::now();
-    loop {
-        if let Some((status, _)) = read_status(settings, stack_id, namespace).await? {
-            let state = &status["state"];
-            let running = state["status"].as_str() == Some("running");
-            if running && current_release(&status).as_deref() == Some(release_id) {
-                return Ok(());
-            }
-            if state["status"]
-                .as_str()
-                .is_some_and(|s| s.ends_with("failed"))
-            {
-                return Err(AlienError::new(ErrorData::ConfigurationError {
+fn rollout_finished(status: &serde_json::Value, release_id: &str, sequence: u64) -> Result<bool> {
+    // A chart restart can leave the preceding target's status in the Secret.
+    // Sequence also distinguishes a retry or rollback to the same release.
+    if status["sequence"].as_u64() != Some(sequence) {
+        return Ok(false);
+    }
+    let state = &status["state"];
+    let running = state["status"].as_str() == Some("running");
+    if running && current_release(&status).as_deref() == Some(release_id) {
+        return Ok(true);
+    }
+    if state["status"]
+        .as_str()
+        .is_some_and(|s| s.ends_with("failed"))
+    {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
                     message: format!(
                         "The rollout of {release_id} failed: {}. `alien-deploy rollback` returns to the previous release.",
                         state["error"]["message"]
@@ -2043,6 +2046,23 @@ async fn wait_for_rollout(
                             .unwrap_or("see the Operator's logs")
                     ),
                 }));
+    }
+    Ok(false)
+}
+
+async fn wait_for_rollout(
+    settings: &SiteSide,
+    stack_id: &str,
+    namespace: &str,
+    release_id: &str,
+    sequence: u64,
+) -> Result<()> {
+    println!("Waiting for {release_id} to roll out");
+    let started = std::time::Instant::now();
+    loop {
+        if let Some((status, _)) = read_status(settings, stack_id, namespace).await? {
+            if rollout_finished(&status, release_id, sequence)? {
+                return Ok(());
             }
         }
         if started.elapsed() > ROLLOUT_TIMEOUT {
@@ -2601,6 +2621,29 @@ mod tests {
     use httpmock::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn rollout_waits_for_requested_sequence_before_judging_status() {
+        let mut status = serde_json::json!({
+            "sequence": 10,
+            "state": {
+                "status": "update-failed",
+                "currentRelease": {"releaseId": "rel_old"},
+                "targetRelease": {"releaseId": "rel_new"},
+                "error": {"message": "previous attempt failed"}
+            }
+        });
+        assert!(!rollout_finished(&status, "rel_new", 11).unwrap());
+        status["sequence"] = 11.into();
+        assert!(rollout_finished(&status, "rel_new", 11).is_err());
+        status["state"]["status"] = "updating".into();
+        assert!(!rollout_finished(&status, "rel_new", 11).unwrap());
+        status["state"]["status"] = "running".into();
+        assert!(!rollout_finished(&status, "rel_new", 11).unwrap());
+        status["state"]["currentRelease"]["releaseId"] = "rel_new".into();
+        assert!(rollout_finished(&status, "rel_new", 11).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 12).unwrap());
+    }
 
     #[tokio::test]
     async fn branded_sync_discovers_manager_only_when_registering_online() {

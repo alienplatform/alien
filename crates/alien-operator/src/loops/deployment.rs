@@ -1518,9 +1518,18 @@ mod tests {
                 ("SIMULATE_OBSERVED_REFRESH_FAIL_ONCE".into(), "true".into()),
             ]))
             .build();
-        let mut stack = alien_core::Stack::new("site".into())
-            .add(worker, alien_core::ResourceLifecycle::Live)
-            .build();
+        let mut stack =
+            alien_core::Stack::new("site".into()).add(worker, alien_core::ResourceLifecycle::Live);
+        for index in 0..8 {
+            let worker = alien_core::Worker::new(format!("healthy-{index}"))
+                .code(alien_core::WorkerCode::Image {
+                    image: "test:1".into(),
+                })
+                .permissions("default".into())
+                .build();
+            stack = stack.add(worker, alien_core::ResourceLifecycle::Live);
+        }
+        let mut stack = stack.build();
         stack
             .permissions
             .profiles
@@ -1589,6 +1598,18 @@ mod tests {
         refresh_airgap_deployment(&state).await.unwrap();
         let recovered = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(recovered.status, DeploymentStatus::Running);
+        let resources = &recovered.stack_state.as_ref().unwrap().resources;
+        // Preflights add the shared secrets vault and default service account.
+        assert_eq!(resources.len(), 11);
+        assert!(resources.contains_key("secrets"));
+        assert!(resources.contains_key("default-sa"));
+        assert!(resources.contains_key("worker"));
+        for index in 0..8 {
+            assert!(resources.contains_key(&format!("healthy-{index}")));
+        }
+        assert!(resources
+            .values()
+            .all(|resource| resource.status == alien_core::ResourceStatus::Running));
         assert_eq!(recovered.current_release, installed.current_release);
         assert!(recovered.target_release.is_none());
         assert!(state.db.get_deployment_config().await.unwrap().is_some());

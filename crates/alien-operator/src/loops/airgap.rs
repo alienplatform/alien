@@ -198,17 +198,38 @@ async fn apply_pending_target(state: &OperatorState, secret_name: &str) -> Resul
     Ok(())
 }
 
+/// Allow one minute per resource, including sequential dependency checks.
+/// A deadline leaves the last checkpoint intact; only an observed error fails health.
+async fn bounded_health_refresh(
+    resource_count: usize,
+    refresh: impl std::future::Future<Output = Result<()>>,
+) -> Result<()> {
+    let timeout = Duration::from_secs(60).saturating_mul(resource_count.max(1) as u32);
+    match tokio::time::timeout(timeout, refresh).await {
+        Ok(result) => result,
+        Err(_) => {
+            warn!(
+                resource_count,
+                "Health refresh deadline reached; exporting last checkpoint"
+            );
+            Ok(())
+        }
+    }
+}
+
 async fn write_status(state: &OperatorState, secret_name: &str, export_token: &str) -> Result<()> {
-    let refresh = tokio::time::timeout(
-        Duration::from_secs(30),
+    let resource_count = state
+        .db
+        .get_deployment_state()
+        .await?
+        .and_then(|deployment| deployment.stack_state)
+        .map_or(0, |stack| stack.resources.len());
+    let refresh = bounded_health_refresh(
+        resource_count,
         super::deployment::refresh_airgap_deployment(state),
     )
-    .await
-    .into_alien_error()
-    .context(ErrorData::ConfigurationError {
-        message: "Timed out refreshing disconnected deployment health".to_string(),
-    })
-    .and_then(|result| result);
+    .await;
+    let sequence = state.db.get_airgap_sequence().await?;
     let Some(mut deployment_state) = state.db.get_deployment_state().await? else {
         return Ok(());
     };
@@ -221,10 +242,13 @@ async fn write_status(state: &OperatorState, secret_name: &str, export_token: &s
             deployment_state.error = Some(error.into_generic());
         }
     }
+    if state.db.get_airgap_sequence().await? != sequence {
+        return Ok(());
+    }
     let status = serde_json::json!({
         "deploymentId": state.db.get_deployment_id().await?,
         "writtenAt": chrono::Utc::now().to_rfc3339(),
-        "sequence": state.db.get_airgap_sequence().await?,
+        "sequence": sequence,
         "state": deployment_state,
     });
     let bytes =
@@ -299,4 +323,43 @@ async fn client(state: &OperatorState) -> Result<(KubernetesClient, String)> {
             message: "creating Kubernetes client".to_string(),
         })?;
     Ok((client, namespace))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn healthy_multi_resource_refresh_can_exceed_thirty_seconds() {
+        let started = tokio::time::Instant::now();
+        let mut checked = 0;
+        bounded_health_refresh(9, async {
+            for _ in 0..9 {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                checked += 1;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(checked, 9);
+        assert_eq!(started.elapsed(), Duration::from_secs(90));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn refresh_deadline_does_not_invent_a_deployment_failure() {
+        let started = tokio::time::Instant::now();
+        bounded_health_refresh(9, std::future::pending())
+            .await
+            .unwrap();
+        assert_eq!(started.elapsed(), Duration::from_secs(540));
+        let error = bounded_health_refresh(9, async {
+            Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "observed resource failure".into(),
+            }))
+        })
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("observed resource failure"));
+    }
 }
