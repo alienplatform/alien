@@ -75,6 +75,10 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "getDeploymentUpdateOperation",
     "getManager",
     "getProject",
+    // Portal reads add endpoint status/DNS records and redacted OAuth settings.
+    // listDomains shares those endpoint types and adds domain ownership/usage.
+    "getProjectDeploymentPortalDomain",
+    "getProjectGcpOAuthProvider",
     "getProjectCapabilityOverview",
     "getProjectDeploymentLinkSetup",
     "getRelease",
@@ -83,6 +87,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "listAPIKeys",
     "listDeploymentGroups",
     "listDeployments",
+    "listDomains",
     "listEvents",
     "listDeploymentMachines",
     "listDeploymentVolumeRestores",
@@ -102,6 +107,9 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "revokeAccessRequest",
     "setDeploymentGroupExternalId",
     "setDeploymentReleaseChannel",
+    // Only the OAuth mode/client credentials request is added for portal writes;
+    // appearance uses JSON to preserve unknown server fields.
+    "updateProjectGcpOAuthProvider",
     "verifyOperationCheck",
     "whoami",
 ];

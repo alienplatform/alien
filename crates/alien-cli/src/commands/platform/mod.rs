@@ -8,6 +8,7 @@ pub mod link;
 pub mod login;
 pub mod logout;
 mod project_packages;
+mod project_portal;
 pub mod projects;
 pub mod unlink;
 pub mod workspace;
