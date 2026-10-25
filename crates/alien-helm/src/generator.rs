@@ -8805,6 +8805,56 @@ mod tests {
     }
 
     #[test]
+    fn postgres_pods_do_not_match_the_operator_selector() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let rendered = crate::test_utils::helm_template(&chart.files, None);
+        rendered.assert_ok("database chart");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let database = docs_by_kind(&docs, "StatefulSet")
+            .into_iter()
+            .next()
+            .unwrap();
+        let labels = database["spec"]["template"]["metadata"]["labels"]
+            .as_mapping()
+            .unwrap();
+        let operators = docs_by_kind(&docs, "Deployment");
+        assert!(!operators.is_empty());
+        for operator in operators {
+            let selector = operator["spec"]["selector"]["matchLabels"]
+                .as_mapping()
+                .unwrap();
+            assert!(
+                !selector
+                    .iter()
+                    .all(|(key, value)| labels.get(key) == Some(value)),
+                "database pod must not match Operator {}",
+                operator["metadata"]["name"].as_str().unwrap()
+            );
+        }
+        let selector = database["spec"]["selector"]["matchLabels"]
+            .as_mapping()
+            .unwrap();
+        assert!(selector
+            .iter()
+            .all(|(key, value)| labels.get(key) == Some(value)));
+    }
+
+    #[test]
     fn generated_chart_lints_and_templates() {
         let registry = HelmRegistry::built_in();
         let chart = generate_helm_chart(

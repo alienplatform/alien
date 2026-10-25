@@ -48,6 +48,8 @@ pub(crate) const TEMPLATE: &str = r#"{{- range $id, $database := .Values.postgre
 {{- if $database.highAvailability }}{{ fail "In-cluster Postgres is single-instance; supply an external binding for high availability" }}{{ end }}
 {{- if $database.encryptionKey }}{{ fail "In-cluster Postgres uses StorageClass encryption; supply an external binding for an explicit database encryption key" }}{{ end }}
 {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) }}
+{{- $labels := include "deployment.labels" $ | fromYaml }}
+{{- $_ := set $labels "app.kubernetes.io/name" $name }}
 {{- $installed := lookup "apps/v1" "StatefulSet" $.Release.Namespace $name }}
 {{- if $installed }}
   {{- $previousImage := (index $installed.spec.template.spec.containers 0).image }}
@@ -74,7 +76,7 @@ metadata:
   annotations:
     helm.sh/resource-policy: keep
   labels:
-    {{- include "deployment.labels" $ | nindent 4 }}
+    {{- $labels | toYaml | nindent 4 }}
 type: Opaque
 data:
   password: {{ $password | quote }}
@@ -86,7 +88,7 @@ metadata:
   annotations:
     helm.sh/resource-policy: keep
   labels:
-    {{- include "deployment.labels" $ | nindent 4 }}
+    {{- $labels | toYaml | nindent 4 }}
 spec:
   accessModes: [ReadWriteOnce]
   {{- if $database.storageClassName }}
@@ -101,7 +103,7 @@ kind: Service
 metadata:
   name: {{ $name }}
   labels:
-    {{- include "deployment.labels" $ | nindent 4 }}
+    {{- $labels | toYaml | nindent 4 }}
 spec:
   selector:
     app.kubernetes.io/component: {{ $name }}
@@ -115,7 +117,7 @@ kind: StatefulSet
 metadata:
   name: {{ $name }}
   labels:
-    {{- include "deployment.labels" $ | nindent 4 }}
+    {{- $labels | toYaml | nindent 4 }}
 spec:
   serviceName: {{ $name }}
   replicas: 1
@@ -126,7 +128,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/component: {{ $name }}
-        {{- include "deployment.labels" $ | nindent 8 }}
+        {{- $labels | toYaml | nindent 8 }}
     spec:
       automountServiceAccountToken: false
       {{- with $.Values.runtime.imagePullSecrets }}
