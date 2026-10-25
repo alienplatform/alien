@@ -41,6 +41,14 @@ export type CreateDeploymentGroupTokenRequestSetupItemsUnion =
 
 export type CreateDeploymentGroupTokenRequest = {
   /**
+   * Vendor destination when leaving or completing setup. Must be an absolute HTTPS URL without userinfo (embedded credentials), at most 2048 characters. Null clears the destination; omit to keep it unchanged.
+   */
+  returnUrl?: string | null | undefined;
+  /**
+   * Vendor destination for expired, revoked, disabled or exhausted setup links. This URL remains available for unusable links; the endpoint must authenticate the user before minting a new link. Must be an absolute HTTPS URL without userinfo (embedded credentials), at most 2048 characters. Null clears the destination; omit to keep it unchanged.
+   */
+  refreshUrl?: string | null | undefined;
+  /**
    * Description for the API key
    */
   description?: string | undefined;
@@ -97,6 +105,8 @@ export function createDeploymentGroupTokenRequestSetupItemsUnionToJSON(
 
 /** @internal */
 export type CreateDeploymentGroupTokenRequest$Outbound = {
+  returnUrl?: string | null | undefined;
+  refreshUrl?: string | null | undefined;
   description?: string | undefined;
   expiresAt?: string | null | undefined;
   deploymentSetupConfig?: DeploymentSetupConfigInput$Outbound | undefined;
@@ -113,6 +123,8 @@ export const CreateDeploymentGroupTokenRequest$outboundSchema: z.ZodType<
   CreateDeploymentGroupTokenRequest$Outbound,
   CreateDeploymentGroupTokenRequest
 > = z.object({
+  returnUrl: z.nullable(z.string()).optional(),
+  refreshUrl: z.nullable(z.string()).optional(),
   description: z.string().optional(),
   expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   deploymentSetupConfig: DeploymentSetupConfigInput$outboundSchema.optional(),

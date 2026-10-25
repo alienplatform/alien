@@ -35,6 +35,14 @@ pub struct OnboardArgs {
     )]
     pub setup_items: Vec<SetupItem>,
 
+    /// HTTPS destination when the customer leaves or finishes setup (maximum 2048 characters).
+    #[arg(long, value_parser = parse_setup_link_url, conflicts_with = "airgapped")]
+    pub return_url: Option<String>,
+
+    /// HTTPS destination for expired or unavailable links. Must authenticate the user before minting a new link.
+    #[arg(long, value_parser = parse_setup_link_url, conflicts_with = "airgapped")]
+    pub refresh_url: Option<String>,
+
     /// Maximum number of deployments for this customer
     #[arg(long, default_value = "100")]
     pub max_deployments: u64,
@@ -71,6 +79,20 @@ pub struct OnboardArgs {
     /// The site keeps it up to date with `alien-deploy sync`.
     #[arg(long)]
     pub airgapped: bool,
+}
+
+fn parse_setup_link_url(value: &str) -> std::result::Result<String, String> {
+    if value.encode_utf16().count() > 2048 {
+        return Err("URL must be at most 2048 characters".to_string());
+    }
+    let url = url::Url::parse(value).map_err(|_| "Enter a valid HTTPS URL".to_string())?;
+    if url.scheme() != "https" || url.host_str().is_none() {
+        return Err("URL must use HTTPS".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("URL must not contain embedded credentials".to_string());
+    }
+    Ok(value.to_string())
 }
 
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
@@ -194,6 +216,8 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 &name,
                 includes_application,
             )?),
+            return_url: args.return_url.clone(),
+            refresh_url: args.refresh_url.clone(),
             description: None,
             entry_point: None,
             expires_at: None,
@@ -1169,6 +1193,11 @@ fn platform_setup_environment_variables(
 /// Self-hosted and local managers: create the deployment group on the
 /// manager and print the setup command for each selected platform.
 async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
+    if args.return_url.is_some() || args.refresh_url.is_some() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "--return-url and --refresh-url require a platform setup link. Run `alien login` and link a project first.".to_string(),
+        }));
+    }
     use alien_manager_api::types::{
         CreateDeploymentGroupRequest, EnvironmentVariable, EnvironmentVariableType,
     };
@@ -1955,6 +1984,93 @@ mod tests {
         let selected = select_onboard_platforms(&requested, &supported, true).unwrap();
 
         assert_eq!(selected, vec![Platform::Machines]);
+    }
+
+    #[test]
+    fn setup_link_urls_accept_https_and_reject_unsafe_destinations() {
+        let args = OnboardArgs::try_parse_from([
+            "onboard",
+            "acme",
+            "--return-url",
+            "https://example.com/complete",
+            "--refresh-url",
+            "https://example.com/refresh",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.return_url.as_deref(),
+            Some("https://example.com/complete")
+        );
+        assert_eq!(
+            args.refresh_url.as_deref(),
+            Some("https://example.com/refresh")
+        );
+        for flag in ["--return-url", "--refresh-url"] {
+            for value in [
+                "http://example.com",
+                "javascript:alert(1)",
+                "//example.com",
+                "https://user:password@example.com",
+                "",
+            ] {
+                assert!(OnboardArgs::try_parse_from(["onboard", "acme", flag, value]).is_err());
+            }
+            let boundary = format!("https://example.com/{}", "a".repeat(2028));
+            assert!(OnboardArgs::try_parse_from(["onboard", "acme", flag, &boundary]).is_ok());
+            assert!(OnboardArgs::try_parse_from([
+                "onboard",
+                "acme",
+                flag,
+                &format!("{boundary}a")
+            ])
+            .is_err());
+            assert!(OnboardArgs::try_parse_from([
+                "onboard",
+                "acme",
+                flag,
+                "https://example.com",
+                "--airgapped"
+            ])
+            .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn standalone_rejects_setup_link_urls_before_contacting_manager() {
+        let manager = httpmock::MockServer::start_async().await;
+        let requests = manager
+            .mock_async(|_, then| {
+                then.status(500);
+            })
+            .await;
+        for flag in ["--return-url", "--refresh-url"] {
+            let args = OnboardArgs::try_parse_from([
+                "onboard",
+                "acme",
+                flag,
+                "https://example.com/complete",
+            ])
+            .unwrap();
+            let error = onboard_standalone(
+                args,
+                ExecutionMode::Standalone {
+                    server_url: manager.base_url(),
+                    api_key: "test-key".to_string(),
+                },
+                "acme".to_string(),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("require a platform setup link"));
+        }
+        requests.assert_hits_async(0).await;
+    }
+
+    #[test]
+    fn setup_link_url_length_matches_utf16_server_validation() {
+        let boundary = format!("https://example.com/{}", "😀".repeat(1014));
+        assert!(parse_setup_link_url(&boundary).is_ok());
+        assert!(parse_setup_link_url(&format!("{boundary}a")).is_err());
     }
 
     #[test]

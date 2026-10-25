@@ -11,5 +11,5 @@ let value: DeploymentInstallationMethod = "cloudformation";
 ## Values
 
 ```typescript
-"cloudformation" | "terraform"
+"cloudformation" | "terraform" | "cli" | "helm" | "google-oauth"
 ```
