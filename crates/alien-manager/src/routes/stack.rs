@@ -2409,6 +2409,8 @@ mod setup_update_authorization_tests {
                         config,
                         lifecycle,
                         dependencies: Vec::new(),
+                        display_name: None,
+                        description: None,
                         remote_access: false,
                         enabled_when: None,
                     },

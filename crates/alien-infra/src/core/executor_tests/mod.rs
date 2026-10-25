@@ -28,3 +28,5 @@ mod update_tests;
 mod edge_cases_tests;
 mod failure_tests;
 mod stress_tests;
+
+mod progress_tests;

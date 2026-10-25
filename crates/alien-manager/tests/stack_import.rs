@@ -666,6 +666,42 @@ async fn post_sync(
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn import_response_and_saved_state_preserve_resource_metadata() {
+    let mut stack = stack_with_storage("assets");
+    let entry = stack.resources.get_mut("assets").unwrap();
+    entry.display_name = Some("Application assets".to_string());
+    entry.description = Some("Stores uploaded documents".to_string());
+    let fixture = make_fixture(Some(stack)).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+    let response: StackImportResponse = serde_json::from_value(json).unwrap();
+    let imported = response.stack_state.resources.get("assets").unwrap();
+    assert_eq!(imported.display_name.as_deref(), Some("Application assets"));
+    assert_eq!(
+        imported.description.as_deref(),
+        Some("Stores uploaded documents")
+    );
+    assert_eq!(imported.status, ResourceStatus::Running);
+    assert_eq!(imported.lifecycle, Some(ResourceLifecycle::Frozen));
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &response.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("imported deployment must persist");
+    let saved = persisted.stack_state.expect("imported state must persist");
+    let saved_resource = saved.resources.get("assets").unwrap();
+    assert_eq!(saved_resource.display_name, imported.display_name);
+    assert_eq!(saved_resource.description, imported.description);
+}
+
+#[tokio::test]
 async fn happy_path_creates_imported_deployment() {
     let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
     let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");

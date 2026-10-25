@@ -2210,6 +2210,8 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: vec![],
                 enabled_when: None,
+                display_name: None,
+                description: None,
                 remote_access: false,
             },
         );

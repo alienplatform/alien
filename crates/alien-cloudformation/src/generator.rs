@@ -396,6 +396,32 @@ pub fn generate_cloudformation_template_with_profile(
         outputs: IndexMap::new(),
     };
 
+    if stack
+        .resources
+        .values()
+        .any(|entry| entry.display_name.is_some() || entry.description.is_some())
+    {
+        template.metadata.insert(
+            "ApplicationResources".to_string(),
+            json!(stack
+                .resources
+                .iter()
+                .map(|(id, entry)| {
+                    let mut metadata = json!({
+                        "id": id,
+                        "displayName": entry.display_name_or_id(),
+                        "type": entry.config.resource_type(),
+                        "lifecycle": entry.lifecycle,
+                    });
+                    if let Some(description) = &entry.description {
+                        metadata["description"] = json!(description);
+                    }
+                    metadata
+                })
+                .collect::<Vec<_>>()),
+        );
+    }
+
     // CloudFormation exposes one DomainName/CertificateArn pair and registers it under the
     // selected public resource. Reject settings it cannot represent instead of moving a
     // configured hostname onto a different workload.
@@ -538,6 +564,23 @@ pub fn generate_cloudformation_template_with_profile(
         };
 
         let mut emitted_resources = emitter.emit_resources_with_registry(&ctx, options.registry)?;
+        if resource.display_name.is_some() || resource.description.is_some() {
+            for emitted in &mut emitted_resources {
+                let mut metadata = json!({
+                    "id": resource_id,
+                    "displayName": resource.display_name_or_id(),
+                    "componentType": emitted.resource_type,
+                    "lifecycle": resource.lifecycle,
+                });
+                if let Some(description) = &resource.description {
+                    metadata["description"] = json!(description);
+                }
+                emitted
+                    .metadata
+                    .insert("ApplicationResource".to_string(), metadata);
+            }
+        }
+
         if let Some(condition) = declared_condition {
             for emitted in &mut emitted_resources {
                 // A resource carries at most one Condition, so an emitter that
@@ -3720,6 +3763,8 @@ mod tests {
                     config: Resource::new(container),
                     lifecycle: ResourceLifecycle::Live,
                     dependencies: vec![],
+                    display_name: None,
+                    description: None,
                     remote_access: false,
                     enabled_when: None,
                 },

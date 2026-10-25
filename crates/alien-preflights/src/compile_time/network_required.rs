@@ -286,6 +286,8 @@ mod tests {
             ),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         }
@@ -310,6 +312,8 @@ mod tests {
             config: alien_core::Resource::new(worker.build()),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         }
@@ -336,6 +340,8 @@ mod tests {
             ),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         }
@@ -371,6 +377,8 @@ mod tests {
                 config: alien_core::Resource::new(cluster),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -390,6 +398,8 @@ mod tests {
                 ),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -431,6 +441,8 @@ mod tests {
             ),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         }

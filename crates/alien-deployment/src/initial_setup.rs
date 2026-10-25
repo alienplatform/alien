@@ -1858,6 +1858,13 @@ mod tests {
         let serving: alien_core::StackResourceState =
             serde_json::from_value(captured["state"].clone()).unwrap();
         assert_eq!(serving.status, ResourceStatus::Running);
+        assert!(serving.progress.is_none());
+        assert!(serving.display_name.is_none());
+        assert!(serving.description.is_none());
+        assert!(serde_json::to_value(&serving)
+            .unwrap()
+            .get("progress")
+            .is_none());
         assert_eq!(published_binding(&serving), captured["binding"]);
         let mut deployment = live_sandbox_setup(InitialSetupAuthority::DirectSetup);
         deployment

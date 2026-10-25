@@ -15,6 +15,8 @@ export const ResourceEntrySchema = z.object({
 get "dependencies"(){
                 return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("Additional dependencies for this resource beyond those defined in the resource itself.\nThe total dependencies are: resource.get_dependencies() + this list")
               },
+"description": z.string().describe("Authored purpose, displayed as plain text. Does not affect resource configuration.").nullish(),
+"displayName": z.string().describe("Optional human-readable name. The stable resource ID is the display fallback.").nullish(),
 "enabledWhen": z.string().describe("Id of the boolean stack input that decides whether this resource is\ncreated at all. `None` means always create it.\n\nSet by `.enabled(input)` in the SDK. Setup emitters render the resource\nconditionally on the matching template variable, so a deployer who says no\nnever gets the resource, its outputs, or anything derived from it.").nullish(),
 get "lifecycle"(){
                 return ResourceLifecycleSchema.describe("Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.")

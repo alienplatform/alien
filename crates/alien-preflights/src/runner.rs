@@ -1339,6 +1339,8 @@ mod setup_update_authorization_tests {
                         lifecycle: alien_core::ResourceLifecycle::Live,
                         dependencies: vec![],
                         enabled_when: None,
+                        display_name: None,
+                        description: None,
                         remote_access: false,
                     },
                 );
@@ -1629,6 +1631,8 @@ mod setup_update_authorization_tests {
                 ),
                 lifecycle: alien_core::ResourceLifecycle::Frozen,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },

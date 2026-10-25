@@ -19343,6 +19343,19 @@
             },
             "description": "Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition."
           },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Presentation metadata from the effective resource entry, outside runtime configuration."
+          },
           "error": {
             "oneOf": [
               {
@@ -19389,6 +19402,13 @@
                 "description": "The previous resource configuration during updates.\nThis is set when an update is initiated and cleared when the update completes or fails."
               }
             ]
+          },
+          "progress": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last reported step explanation for display only; not a machine-readable status."
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."

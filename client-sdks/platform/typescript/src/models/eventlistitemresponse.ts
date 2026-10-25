@@ -1508,6 +1508,11 @@ export type EventListItemResponseResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<EventListItemResponseDependency> | undefined;
+  description?: string | null | undefined;
+  /**
+   * Presentation metadata from the effective resource entry, outside runtime configuration.
+   */
+  displayName?: string | null | undefined;
   error?: EventListItemResponseErrorNextState | string | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
@@ -1524,6 +1529,10 @@ export type EventListItemResponseResources = {
     | string
     | null
     | undefined;
+  /**
+   * Last reported step explanation for display only; not a machine-readable status.
+   */
+  progress?: string | null | undefined;
   /**
    * Binding parameters for remote access.
    *
@@ -3885,6 +3894,8 @@ export const EventListItemResponseResources$inboundSchema: z.ZodType<
   dependencies: z.array(
     z.lazy(() => EventListItemResponseDependency$inboundSchema),
   ).optional(),
+  description: z.nullable(z.string()).optional(),
+  displayName: z.nullable(z.string()).optional(),
   error: z.nullable(
     z.union([
       z.lazy(() => EventListItemResponseErrorNextState$inboundSchema),
@@ -3907,6 +3918,7 @@ export const EventListItemResponseResources$inboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  progress: z.nullable(z.string()).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
   retryAttempt: z.int().optional(),
   status: EventListItemResponseStatus$inboundSchema,

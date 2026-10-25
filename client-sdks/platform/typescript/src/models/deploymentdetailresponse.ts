@@ -70,6 +70,10 @@ import {
   DeploymentReleaseInfo$inboundSchema,
 } from "./deploymentreleaseinfo.js";
 import {
+  DeploymentResource,
+  DeploymentResource$inboundSchema,
+} from "./deploymentresource.js";
+import {
   DeploymentUpdateOperationSummary,
   DeploymentUpdateOperationSummary$inboundSchema,
 } from "./deploymentupdateoperationsummary.js";
@@ -1442,6 +1446,14 @@ export type DeploymentDetailResponsePreparedStackResources = {
    */
   dependencies: Array<DeploymentDetailResponsePreparedStackDependency>;
   /**
+   * Authored purpose, displayed as plain text. Does not affect resource configuration.
+   */
+  description?: string | null | undefined;
+  /**
+   * Optional human-readable name. The stable resource ID is the display fallback.
+   */
+  displayName?: string | null | undefined;
+  /**
    * Id of the boolean stack input that decides whether this resource is
    *
    * @remarks
@@ -2029,7 +2041,7 @@ export type DeploymentDetailResponse = {
    */
   stackSettings: DeploymentDetailResponseStackSettings;
   /**
-   * State of infrastructure components managed by this deployment
+   * Raw engine state for installers and the CLI to resume, update, and destroy deployments. UIs should read resources[] for resource status and errors.
    */
   stackState?: DeploymentDetailResponseStackState | null | undefined;
   /**
@@ -2124,6 +2136,10 @@ export type DeploymentDetailResponse = {
    * A customer encryption key is unavailable. Dependent resources are preserved until access returns.
    */
   customerKeyUnavailable?: boolean | undefined;
+  /**
+   * Resource observations ordered by ID; empty before registration. Older servers may omit this field. Retry limits are not reported by the engine.
+   */
+  resources?: Array<DeploymentResource> | undefined;
   /**
    * Time of the last accepted runtime checkpoint or heartbeat; absent before registration.
    */
@@ -4442,6 +4458,8 @@ export const DeploymentDetailResponsePreparedStackResources$inboundSchema:
       dependencies: z.array(z.lazy(() =>
         DeploymentDetailResponsePreparedStackDependency$inboundSchema
       )),
+      description: z.nullable(z.string()).optional(),
+      displayName: z.nullable(z.string()).optional(),
       enabledWhen: z.nullable(z.string()).optional(),
       lifecycle: DeploymentDetailResponsePreparedStackLifecycle$inboundSchema,
       remoteAccess: z.boolean().optional(),
@@ -4932,6 +4950,7 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   managerId: z.string(),
   workspaceId: z.string(),
   customerKeyUnavailable: z.boolean().optional(),
+  resources: z.array(DeploymentResource$inboundSchema).optional(),
   resourceObservedAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),

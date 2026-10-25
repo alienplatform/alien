@@ -26,6 +26,8 @@ get "controllerPlatform"(){
 get "dependencies"(){
                 return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition.").optional()
               },
+"description": z.string().nullish(),
+"displayName": z.string().describe("Presentation metadata from the effective resource entry, outside runtime configuration.").nullish(),
 get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()
               },
@@ -39,6 +41,7 @@ get "outputs"(){
 get "previousConfig"(){
                 return z.union([BaseResourceSchema, z.null()]).optional()
               },
+"progress": z.string().describe("Last reported step explanation for display only; not a machine-readable status.").nullish(),
 "remoteBindingParams": z.optional(z.any().describe("Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params().")),
 "retryAttempt": z.optional(z.int().min(0).describe("Tracks consecutive retry attempts for the current state transition.")),
 get "status"(){

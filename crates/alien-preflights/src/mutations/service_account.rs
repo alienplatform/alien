@@ -95,12 +95,20 @@ impl StackMutation for ServiceAccountMutation {
                 resource_id: Some(service_account_id.clone()),
             })?;
 
+            let existing = stack.resources.get(&service_account_id);
+
             // Add as a frozen resource (ServiceAccounts are infrastructure)
             let resource_entry = ResourceEntry {
                 enabled_when: None,
                 config: alien_core::Resource::new(service_account),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
+                display_name: existing
+                    .and_then(|entry| entry.display_name.clone())
+                    .or_else(|| Some(format!("Service account ({profile_name})"))),
+                description: existing
+                    .and_then(|entry| entry.description.clone())
+                    .or_else(|| Some("Grants application workloads the permissions declared by their permission profile.".to_string())),
                 remote_access: false,
             };
 
@@ -166,6 +174,52 @@ fn add_global_permission(profile: &mut PermissionProfile, permission_set_id: &'s
 mod tests {
     use super::*;
     use alien_core::{ResourceLifecycle, Worker, WorkerCode};
+
+    #[tokio::test]
+    async fn preserves_authored_presentation_and_fills_missing_fields() {
+        let state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: "empty".to_string(),
+                created_at: "2026-10-25T00:00:00Z".to_string(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        for name in [None, Some("Application access")] {
+            for description in [None, Some("Access for customer workloads")] {
+                let mut stack = Stack::new("test-stack".to_string())
+                    .permissions(
+                        alien_core::PermissionsConfig::default()
+                            .with_profile("application", PermissionProfile::new()),
+                    )
+                    .add(
+                        ServiceAccount::new("application-sa".to_string()).build(),
+                        ResourceLifecycle::Frozen,
+                    )
+                    .build();
+                let authored = stack.resources.get_mut("application-sa").unwrap();
+                authored.display_name = name.map(str::to_string);
+                authored.description = description.map(str::to_string);
+                for _ in 0..2 {
+                    stack = ServiceAccountMutation
+                        .mutate(stack, &state, &config)
+                        .await
+                        .unwrap();
+                    let account = &stack.resources["application-sa"];
+                    assert_eq!(
+                        account.display_name.as_deref(),
+                        Some(name.unwrap_or("Service account (application)"))
+                    );
+                    assert_eq!(account.description.as_deref(), Some(description.unwrap_or("Grants application workloads the permissions declared by their permission profile.")));
+                    assert_eq!(account.lifecycle, ResourceLifecycle::Frozen);
+                    assert!(account.config.downcast_ref::<ServiceAccount>().is_some());
+                }
+            }
+        }
+    }
 
     #[test]
     fn worker_profiles_get_execute_baseline() {

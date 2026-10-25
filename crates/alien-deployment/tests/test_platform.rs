@@ -148,6 +148,8 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
             config: alien_core::Resource::new(function),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -188,6 +190,8 @@ fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id:
             config: alien_core::Resource::new(storage),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -198,6 +202,8 @@ fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id:
             config: alien_core::Resource::new(function),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -494,6 +500,8 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_machines() {
         config: alien_core::Resource::new(ComputeCluster::new("machines".into()).build()),
         lifecycle: ResourceLifecycle::Frozen,
         dependencies: Vec::new(),
+        display_name: None,
+        description: None,
         remote_access: false,
         enabled_when: None,
     };
@@ -968,6 +976,8 @@ async fn persistent_worker_failure_surfaces_during_provisioning() {
             config: alien_core::Resource::new(function),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -1061,6 +1071,58 @@ async fn test_update_flow_happy_path_promotes_release() {
         v1_release.release_id,
         "should have updated from v1"
     );
+}
+
+#[tokio::test]
+async fn metadata_only_release_refreshes_frozen_service_account_labels() {
+    let _vault = test_vault_env().await;
+    let mut stack = create_test_stack("metadata-stack", "worker");
+    stack.resources.insert(
+        "identity".to_string(),
+        ResourceEntry::new(
+            alien_core::ServiceAccount::new("identity".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .display_name("Original identity")
+        .description("Original purpose"),
+    );
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(create_initial_state(stack.clone()), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let installed = state.stack_state.as_ref().unwrap().resources["identity"].clone();
+
+    for (release_id, name, description) in [
+        (
+            "rel_v2",
+            Some("Application identity"),
+            Some("Updated purpose"),
+        ),
+        ("rel_v3", None, None),
+    ] {
+        let entry = stack.resources.get_mut("identity").unwrap();
+        entry.display_name = name.map(str::to_string);
+        entry.description = description.map(str::to_string);
+        start_update(&mut state, release_of(release_id, stack.clone()));
+        state = run_to_completion(state, config.clone()).await;
+        assert_eq!(state.status, DeploymentStatus::Running);
+        let observed = &state.stack_state.as_ref().unwrap().resources["identity"];
+        assert_eq!(observed.display_name.as_deref(), name);
+        assert_eq!(observed.description.as_deref(), description);
+        assert_eq!(observed.config, installed.config);
+        assert_eq!(observed.outputs, installed.outputs);
+        let prepared = state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .as_ref()
+            .unwrap();
+        assert_eq!(prepared.resources["identity"].display_name.as_deref(), name);
+        assert_eq!(
+            prepared.resources["identity"].description.as_deref(),
+            description
+        );
+    }
 }
 
 fn worker_image_release(image: &str, release_id: &str) -> ReleaseInfo {
@@ -1248,6 +1310,8 @@ async fn an_update_omitting_a_frozen_resource_waits_for_setup() {
                 config: alien_core::Resource::new(frozen.clone()),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -1341,9 +1405,13 @@ async fn an_update_after_setup_removed_a_frozen_resource_does_not_recreate_it() 
         .insert(
             "setup-storage".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(Storage::new("setup-storage".to_string()).build()),
+                config: alien_core::Resource::new(
+                    Storage::new("setup-storage".to_string()).build(),
+                ),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -1399,6 +1467,8 @@ async fn update_completes_after_removed_resource_is_deleted() {
             config: alien_core::Resource::new(function_b),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -1508,6 +1578,8 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
             config: alien_core::Resource::new(function_v2),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -1825,6 +1897,8 @@ async fn running_automatic_setup_with_package_vault() -> (DeploymentState, Deplo
             config: alien_core::Resource::new(Vault::new("app-secrets".to_string()).build()),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -1941,8 +2015,11 @@ async fn denied_delete_leaves_the_deployment_delete_failed_with_the_resource_nam
         "SIMULATE_DELETE_ACCESS_DENIED".to_string(),
         "true".to_string(),
     );
-    stack.resources.get_mut("denied-fn").expect("the worker entry").config =
-        alien_core::Resource::new(worker);
+    stack
+        .resources
+        .get_mut("denied-fn")
+        .expect("the worker entry")
+        .config = alien_core::Resource::new(worker);
     let config = create_test_config("hash_v1", false);
     let mut state = run_to_completion(create_initial_state(stack), config.clone()).await;
     assert_eq!(state.status, DeploymentStatus::Running);
@@ -1960,7 +2037,11 @@ async fn denied_delete_leaves_the_deployment_delete_failed_with_the_resource_nam
     .await;
 
     assert_eq!(state.status, DeploymentStatus::DeleteFailed);
-    let resource = &state.stack_state.as_ref().expect("stack state is kept").resources["denied-fn"];
+    let resource = &state
+        .stack_state
+        .as_ref()
+        .expect("stack state is kept")
+        .resources["denied-fn"];
     assert_eq!(resource.status, alien_core::ResourceStatus::DeleteFailed);
     assert!(
         resource.internal_state.is_some(),
@@ -2010,6 +2091,8 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
             config: alien_core::Resource::new(failing_fn),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -2020,6 +2103,8 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
             config: alien_core::Resource::new(sibling_fn),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -2075,6 +2160,8 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
             config: alien_core::Resource::new(failing_fn),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -2088,6 +2175,8 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
                 alien_core::Worker::RESOURCE_TYPE,
                 "failing-fn".to_string(),
             )],
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -2256,6 +2345,8 @@ fn add_live_worker(stack: &mut Stack, worker: Worker) {
             config: alien_core::Resource::new(worker),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -2676,6 +2767,8 @@ async fn setup_retry_creates_a_failed_setup_owned_store_again_with_the_new_confi
                 config: alien_core::Resource::new(storage),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -2800,6 +2893,8 @@ fn create_live_gated_stack(stack_id: &str, store_id: &str, function_id: &str) ->
             config: alien_core::Resource::new(Storage::new(store_id.to_string()).build()),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: Some("storeEnabled".to_string()),
         },
@@ -2944,6 +3039,8 @@ fn create_live_gated_stack_with_linking_worker(
             config: alien_core::Resource::new(function),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: None,
         },
@@ -2954,6 +3051,8 @@ fn create_live_gated_stack_with_linking_worker(
             config: alien_core::Resource::new(store),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: Some("storeEnabled".to_string()),
         },
@@ -2980,6 +3079,8 @@ async fn a_frozen_gate_answer_is_fixed_for_the_deployment_lifetime() {
             config: alien_core::Resource::new(Storage::new("archive".to_string()).build()),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: Some("archiveEnabled".to_string()),
         },
@@ -3143,6 +3244,8 @@ async fn a_declined_gated_import_is_not_created_by_the_runner() {
             config: alien_core::Resource::new(Storage::new("analytics".to_string()).build()),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: Some("analyticsEnabled".to_string()),
         },
@@ -3218,6 +3321,8 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
             config: alien_core::Resource::new(Storage::new("archive".to_string()).build()),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access: false,
             enabled_when: Some("archiveEnabled".to_string()),
         },

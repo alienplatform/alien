@@ -1186,6 +1186,8 @@ impl SingleControllerExecutorBuilder {
                     config: dep_resource.clone(),
                     lifecycle,
                     dependencies: vec![],
+                    display_name: None,
+                    description: None,
                     remote_access: false,
                     enabled_when: None,
                 },
@@ -1222,6 +1224,8 @@ impl SingleControllerExecutorBuilder {
                     config: other.clone(),
                     lifecycle: *lifecycle,
                     dependencies: vec![],
+                    display_name: None,
+                    description: None,
                     remote_access: false,
                     enabled_when: None,
                 },
@@ -1252,6 +1256,8 @@ impl SingleControllerExecutorBuilder {
                     .iter()
                     .map(|(ref_obj, _, _)| ref_obj.clone())
                     .collect(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },

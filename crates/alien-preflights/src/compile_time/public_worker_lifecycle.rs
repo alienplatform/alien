@@ -88,6 +88,8 @@ mod tests {
                 config: Resource::new(worker),
                 lifecycle: ResourceLifecycle::Frozen, // Wrong!
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -122,6 +124,8 @@ mod tests {
                 config: Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live, // Correct
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -155,6 +159,8 @@ mod tests {
                 config: Resource::new(worker),
                 lifecycle: ResourceLifecycle::Frozen, // OK for private
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -189,6 +195,8 @@ mod tests {
                 config: Resource::new(worker),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },

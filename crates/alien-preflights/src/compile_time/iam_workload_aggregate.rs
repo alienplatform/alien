@@ -398,6 +398,8 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 enabled_when: None,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: true,
             };
             let definition = alien_core::remote_bindings::remote_binding_for_entry(&entry).unwrap();
@@ -483,6 +485,8 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 enabled_when: None,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
             },
         );
@@ -887,6 +891,8 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 enabled_when: None,
                 dependencies: vec![],
+                display_name: None,
+                description: None,
                 remote_access: false,
             },
         );

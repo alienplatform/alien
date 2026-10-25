@@ -144,3 +144,32 @@ for (const quotaWarningOverrides of [["L-1216C47A"], []]) {
     assert.equal(requests, 1)
   })
 }
+
+test("stack import responses retain resource metadata and accept older managers", async () => {
+  const { stackImportResponseFromJSON } = await import("../typescript/esm/models/stackimportresponse.js")
+  for (const metadata of [{}, { displayName: "Document storage", description: "Stores uploaded documents." }]) {
+    const parsed = stackImportResponseFromJSON(JSON.stringify({
+      deploymentId: "deployment-example",
+      stackSettings: {},
+      stackState: {
+        platform: "aws",
+        resourcePrefix: "example",
+        resources: {
+          documents: {
+            config: { type: "storage", id: "documents" },
+            type: "storage",
+            status: "pending",
+            ...metadata,
+          },
+        },
+      },
+    }))
+    assert.equal(parsed.ok, true)
+    if (parsed.ok) {
+      const resource = parsed.value.stackState.resources.documents
+      assert.equal(resource.displayName, metadata.displayName)
+      assert.equal(resource.description, metadata.description)
+      assert.equal(resource.config.id, "documents")
+    }
+  }
+})

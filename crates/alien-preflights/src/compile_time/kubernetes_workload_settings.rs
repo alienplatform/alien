@@ -91,6 +91,8 @@ mod tests {
                 config: Resource::new(container),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -152,6 +154,8 @@ mod tests {
                 config: Resource::new(container),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
+                display_name: None,
+                description: None,
                 remote_access: false,
                 enabled_when: None,
             },
@@ -170,7 +174,13 @@ mod tests {
         assert!(!KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Kubernetes));
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             assert!(!KubernetesWorkloadSettingsCheck.should_run(&stack, platform));
-            assert!(KubernetesWorkloadSettingsCheck.check(&stack, platform).await.unwrap().success);
+            assert!(
+                KubernetesWorkloadSettingsCheck
+                    .check(&stack, platform)
+                    .await
+                    .unwrap()
+                    .success
+            );
         }
         assert!(KubernetesWorkloadSettingsCheck.should_run(&stack, Platform::Local));
         let result = KubernetesWorkloadSettingsCheck

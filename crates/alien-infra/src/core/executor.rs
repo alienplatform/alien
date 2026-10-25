@@ -1945,6 +1945,7 @@ impl StackExecutor {
 
         // Handle Deletes and the delete half of Replaces - initiate deletion transitions only
         // for deletion-ready resources
+        let mut waiting_progress = HashMap::new();
         let planned_deletes = plan_result
             .deletes
             .iter()
@@ -1976,7 +1977,11 @@ impl StackExecutor {
                     | ResourceStatus::UpdateFailed
                     | ResourceStatus::DeleteFailed => {
                         // Check if this resource is ready for deletion (all dependents are deleted)
-                        if !self.deletion_ready(resource_id, &state, replacing) {
+                        if let Some(dependent) =
+                            self.blocking_dependent(resource_id, &state, replacing)
+                        {
+                            waiting_progress
+                                .insert(resource_id.clone(), format!("Waiting for {dependent}."));
                             debug!(
                                 "Resource '{}' not ready for deletion - skipping until dependents are deleted",
                                 resource_id
@@ -2430,8 +2435,40 @@ impl StackExecutor {
             // repair/replacement already in progress. Explicit teardown still runs.
             let explicit_delete = current_resource_view.status == ResourceStatus::Deleting
                 && !self.resources.contains_key(resource_id);
-            if is_ready && (explicit_delete || self.dependencies_available(resource_id, &state)) {
+            let unavailable = if explicit_delete || !is_ready {
+                None
+            } else {
+                self.unavailable_dependency(resource_id, &state)
+            };
+            if is_ready && unavailable.is_none() {
                 ready_resource_ids.push(resource_id.clone());
+            } else if current_resource_view.status != ResourceStatus::Running
+                && !current_resource_view.status.is_terminal()
+            {
+                let blocking = if is_ready {
+                    unavailable
+                } else if current_resource_view.status == ResourceStatus::Deleting {
+                    self.blocking_dependent(
+                        resource_id,
+                        &next_state,
+                        self.resources.contains_key(resource_id),
+                    )
+                } else if !self.id_to_node_index.contains_key(resource_id) {
+                    self.blocking_dependent(resource_id, &state, false)
+                } else {
+                    self.resources.get(resource_id).and_then(|config| {
+                        config
+                            .dependencies
+                            .iter()
+                            .find(|dep| !self.dependency_settled(dep.id(), &state))
+                            .map(|dep| dep.id())
+                    })
+                }
+                .or(unavailable);
+                if let Some(dependency) = blocking {
+                    waiting_progress
+                        .insert(resource_id.clone(), format!("Waiting for {dependency}."));
+                }
             }
         }
 
@@ -2856,6 +2893,25 @@ impl StackExecutor {
             subsequent_state_updates.len()
         );
         next_state.resources.extend(subsequent_state_updates);
+        for (id, resource) in &mut next_state.resources {
+            if let Some(entry) = self.desired_stack.resources.get(id) {
+                resource.display_name.clone_from(&entry.display_name);
+                resource.description.clone_from(&entry.description);
+            }
+            if resource.status.is_terminal() || resource.status == ResourceStatus::Running {
+                resource.progress = None;
+            }
+        }
+
+        // A planned delete may still be Running while its dependents shut down.
+        // Apply that explanation after Ready handlers and completed-state cleanup.
+        for (resource_id, progress) in waiting_progress {
+            if let Some(resource) = next_state.resources.get_mut(&resource_id) {
+                if !resource.status.is_terminal() {
+                    resource.progress = Some(progress);
+                }
+            }
+        }
 
         let step_result = StepResult {
             next_state: next_state.clone(),
@@ -2969,7 +3025,11 @@ impl StackExecutor {
         }
     }
 
-    fn dependencies_available(&self, resource_id: &str, state: &StackState) -> bool {
+    fn unavailable_dependency<'a>(
+        &'a self,
+        resource_id: &'a str,
+        state: &'a StackState,
+    ) -> Option<&'a str> {
         let mut pending = vec![resource_id];
         let mut visited = HashSet::new();
         while let Some(id) = pending.pop() {
@@ -2983,7 +3043,7 @@ impl StackExecutor {
                     .and_then(|resource| resource.outputs.as_ref())
                     .is_some_and(|outputs| !outputs.as_resource_outputs().is_available())
             {
-                return false;
+                return Some(id);
             }
             if let Some(resource) = state.resources.get(id) {
                 pending.extend(
@@ -3002,7 +3062,7 @@ impl StackExecutor {
                 );
             }
         }
-        true
+        None
     }
 
     fn dependencies_met(&self, node_index: NodeIndex, state: &StackState) -> bool {
@@ -3035,61 +3095,50 @@ impl StackExecutor {
     /// using it if its own controller has started: `replacing` ignores dependents with no
     /// controller state, which are waiting for the replacement.
     fn deletion_ready(&self, resource_id: &str, state: &StackState, replacing: bool) -> bool {
-        // Find all resources in the state that depend on this resource
-        for (dependent_id, dependent_state) in &state.resources {
-            // Skip self and dependents that are fully deleted. A dependent in
-            // Deleting is still active because delete handlers often need
-            // dependency outputs such as resource group names or bucket names.
-            if dependent_id == resource_id
-                || self.releases_permission_dependency(dependent_id, resource_id, state)
-                || matches!(
-                    dependent_state.status,
-                    ResourceStatus::Deleted | ResourceStatus::TeardownRequired
-                )
-                || (replacing && !dependent_state.has_internal_state())
-            {
-                continue;
-            }
+        self.blocking_dependent(resource_id, state, replacing)
+            .is_none()
+    }
 
-            // Check if this dependent depends on our resource in current dependencies
-            for dep_ref in &dependent_state.dependencies {
-                if dep_ref.id() == resource_id {
-                    // Found an active dependent - not ready for deletion
-                    debug!(
-                        "Resource '{}' not ready for deletion: active dependent '{}' (status: {:?})",
-                        resource_id, dependent_id, dependent_state.status
-                    );
+    fn blocking_dependent<'a>(
+        &self,
+        resource_id: &str,
+        state: &'a StackState,
+        replacing: bool,
+    ) -> Option<&'a str> {
+        // Stable progress avoids treating a different HashMap iteration order as work.
+        state
+            .resources
+            .iter()
+            .filter(|(dependent_id, dependent_state)| {
+                if dependent_id.as_str() == resource_id
+                    || self.releases_permission_dependency(dependent_id, resource_id, state)
+                    || matches!(
+                        dependent_state.status,
+                        ResourceStatus::Deleted | ResourceStatus::TeardownRequired
+                    )
+                    || (replacing && !dependent_state.has_internal_state())
+                {
                     return false;
                 }
-            }
-
-            // For resources that are updating or provisioning, also check previous dependencies
-            // since they might still be using the old dependencies during the transition process
-            if matches!(
-                dependent_state.status,
-                ResourceStatus::Updating | ResourceStatus::Provisioning
-            ) {
-                if let Some(prev_config) = &dependent_state.previous_config {
-                    for dep_ref in prev_config.get_dependencies() {
-                        if dep_ref.id() == resource_id {
-                            // Found a resource that is transitioning and previously depended on this resource
-                            debug!(
-                                "Resource '{}' not ready for deletion: resource '{}' is {:?} and previously depended on it",
-                                resource_id, dependent_id, dependent_state.status
-                            );
-                            return false;
-                        }
-                    }
-                }
-            }
-        }
-
-        // No active dependents found - ready for deletion
-        debug!(
-            "Resource '{}' is ready for deletion - no active dependents",
-            resource_id
-        );
-        true
+                dependent_state
+                    .dependencies
+                    .iter()
+                    .any(|dependency| dependency.id() == resource_id)
+                    || (matches!(
+                        dependent_state.status,
+                        ResourceStatus::Updating | ResourceStatus::Provisioning
+                    ) && dependent_state
+                        .previous_config
+                        .as_ref()
+                        .is_some_and(|config| {
+                            config
+                                .get_dependencies()
+                                .iter()
+                                .any(|dependency| dependency.id() == resource_id)
+                        }))
+            })
+            .map(|(id, _)| id.as_str())
+            .min()
     }
 
     pub(crate) fn is_resource_synced(&self, resource_id: &str, state: &StackState) -> bool {

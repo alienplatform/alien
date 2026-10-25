@@ -75,6 +75,10 @@ impl StackMutation for AzureContainerAppsEnvironmentMutation {
             config: alien_core::Resource::new(container_env),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies,
+            display_name: Some("Container Apps environment".to_string()),
+            description: Some(
+                "Hosts application containers in the configured Azure network.".to_string(),
+            ),
             remote_access: false,
         };
 

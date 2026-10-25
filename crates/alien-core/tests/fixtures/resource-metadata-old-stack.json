@@ -1,0 +1,22 @@
+{
+  "id": "old-document",
+  "resources": {
+    "documents": {
+      "config": {
+        "corsAllowedOrigins": [],
+        "id": "documents",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false
+      },
+      "lifecycle": "frozen",
+      "dependencies": [],
+      "remoteAccess": false
+    }
+  },
+  "permissions": {
+    "profiles": {},
+    "management": "auto"
+  }
+}

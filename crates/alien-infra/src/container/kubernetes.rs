@@ -6,10 +6,10 @@ use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
     delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
     kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, linked_bindings,
-    pod_template_annotations,
-    projected_env_vars, reconcile_environment_secret_with_additional_secrets,
-    EnvSecretRotationTracker, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
-    ResourceController, ResourceControllerContext,
+    pod_template_annotations, projected_env_vars,
+    reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
+    EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceController,
+    ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -530,6 +530,7 @@ impl KubernetesContainerController {
         state = WaitingForWorkload,
         on_failure = CreateFailed,
         status = ResourceStatus::Provisioning,
+        progress = "Waiting for workload readiness.",
     )]
     async fn waiting_for_workload(
         &mut self,
@@ -1300,6 +1301,7 @@ impl KubernetesContainerController {
         state = WaitingForUpdate,
         on_failure = UpdateFailed,
         status = ResourceStatus::Updating,
+        progress = "Waiting for workload readiness.",
     )]
     async fn waiting_for_update(
         &mut self,
@@ -3392,8 +3394,7 @@ mod tests {
             (&gateway, Some(GATEWAY_READY_DELAY_SECONDS), Some(false)),
             (&ordinary, None, None),
         ] {
-            let harness =
-                KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
             let state = secrets_vault_state();
             let mut ctx = harness.ctx();
             ctx.state = &state;
@@ -3406,7 +3407,11 @@ mod tests {
                 .template
                 .spec
                 .expect("pod spec");
-            assert_eq!(pod.automount_service_account_token, automount, "{}", config.id);
+            assert_eq!(
+                pod.automount_service_account_token, automount,
+                "{}",
+                config.id
+            );
             assert_eq!(
                 pod.containers[0]
                     .readiness_probe

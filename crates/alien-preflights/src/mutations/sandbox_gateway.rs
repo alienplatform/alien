@@ -151,6 +151,11 @@ impl StackMutation for SandboxGatewayMutation {
                     lifecycle: ResourceLifecycle::Live,
                     dependencies: Vec::new(),
                     enabled_when: None,
+                    display_name: Some("Sandbox egress gateway".to_string()),
+                    description: Some(
+                        "Routes sandbox internet traffic through the configured egress policy."
+                            .to_string(),
+                    ),
                     remote_access: false,
                 },
             );
@@ -207,6 +212,8 @@ mod tests {
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: vec![],
             enabled_when: None,
+            display_name: None,
+            description: None,
             remote_access: true,
         };
         stack

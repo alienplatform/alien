@@ -661,9 +661,15 @@ impl AzurePermissionsHelper {
         let wanted = &custom_role.role_definition;
         existing.properties.as_ref().is_some_and(|properties| {
             let permissions = properties.permissions.first();
-            let actions = permissions.map(|p| p.actions.as_slice()).unwrap_or_default();
-            let not_actions = permissions.map(|p| p.not_actions.as_slice()).unwrap_or_default();
-            let data_actions = permissions.map(|p| p.data_actions.as_slice()).unwrap_or_default();
+            let actions = permissions
+                .map(|p| p.actions.as_slice())
+                .unwrap_or_default();
+            let not_actions = permissions
+                .map(|p| p.not_actions.as_slice())
+                .unwrap_or_default();
+            let data_actions = permissions
+                .map(|p| p.data_actions.as_slice())
+                .unwrap_or_default();
             let not_data_actions = permissions
                 .map(|p| p.not_data_actions.as_slice())
                 .unwrap_or_default();
@@ -832,7 +838,10 @@ impl AzurePermissionsHelper {
 
             let operation = format!(
                 "assign role '{}' to principal '{principal_id}'",
-                role_definition_id.rsplit('/').next().unwrap_or(role_definition_id)
+                role_definition_id
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(role_definition_id)
             );
             return Err(role_write_error(
                 error,
@@ -1420,7 +1429,6 @@ fn is_worker_command_transport_permission(resource_type: &str, permission_set_id
     resource_type == "worker" && permission_set_id == "worker/dispatch-command"
 }
 
-
 /// A failed role write, with `context`. A refused one also carries
 /// [`ErrorData::ManagementPermissionMissing`], which waits for setup to run again instead of
 /// failing: on a setup that owns the runtime's roles, a role or an assignment the runtime is
@@ -1599,21 +1607,36 @@ mod tests {
                     actions: wanted.actions.clone(),
                     not_actions: Vec::new(),
                     // Azure returns its own order and case.
-                    data_actions: data_actions.into_iter().rev().map(|a| a.to_uppercase()).collect(),
+                    data_actions: data_actions
+                        .into_iter()
+                        .rev()
+                        .map(|a| a.to_uppercase())
+                        .collect(),
                     not_data_actions: Vec::new(),
                 }],
                 ..Default::default()
             }),
             ..Default::default()
         };
-        let setup_scopes = ["/subscriptions/sub-123/resourceGroups/rg-123", "/subscriptions/sub-123"];
+        let setup_scopes = [
+            "/subscriptions/sub-123/resourceGroups/rg-123",
+            "/subscriptions/sub-123",
+        ];
         let runtime_scopes = ["/subscriptions/sub-123/resourceGroups/rg-123"];
         let mut stale = wanted.data_actions.clone();
         stale.push("Microsoft.KeyVault/vaults/secrets/getSecret/action".to_string());
         // (found, write attempted, write refused)
         for (found, writes, refused) in [
-            (Some(existing(wanted.data_actions.clone(), &setup_scopes)), false, false),
-            (Some(existing(wanted.data_actions.clone(), &runtime_scopes)), false, false),
+            (
+                Some(existing(wanted.data_actions.clone(), &setup_scopes)),
+                false,
+                false,
+            ),
+            (
+                Some(existing(wanted.data_actions.clone(), &runtime_scopes)),
+                false,
+                false,
+            ),
             (Some(existing(stale.clone(), &runtime_scopes)), true, false),
             (None, true, false),
             (None, true, true),
@@ -1709,6 +1732,8 @@ mod tests {
             // Remote bindings exist for setup-owned resources.
             lifecycle: alien_core::ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
+            display_name: None,
+            description: None,
             remote_access,
             enabled_when: None,
         };

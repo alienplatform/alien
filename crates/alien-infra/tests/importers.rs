@@ -64,6 +64,8 @@ fn entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
         config: Resource::new(resource),
         lifecycle: ResourceLifecycle::Live,
         dependencies: vec![],
+        display_name: None,
+        description: None,
         remote_access: false,
         enabled_when: None,
     }
@@ -74,6 +76,8 @@ fn remote_entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
         config: Resource::new(resource),
         lifecycle: ResourceLifecycle::Live,
         dependencies: vec![],
+        display_name: None,
+        description: None,
         remote_access: true,
         enabled_when: None,
     }
@@ -84,6 +88,8 @@ fn frozen_entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
         config: Resource::new(resource),
         lifecycle: ResourceLifecycle::Frozen,
         dependencies: vec![],
+        display_name: None,
+        description: None,
         remote_access: false,
         enabled_when: None,
     }
@@ -1215,6 +1221,8 @@ fn sandbox_entry(lifecycle: ResourceLifecycle, remote_access: bool) -> ResourceE
         lifecycle,
         dependencies: vec![],
         remote_access,
+        display_name: None,
+        description: None,
         enabled_when: None,
     }
 }
