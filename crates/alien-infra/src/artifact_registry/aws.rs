@@ -1422,6 +1422,19 @@ impl AwsArtifactRegistryController {
                     "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id)
                 },
                 {
+                    "Sid": "RepositoryCreationOwner",
+                    "Effect": "Allow",
+                    "Action": ["ecr:TagResource"],
+                    "Resource": format!("arn:aws:ecr:{}:{}:repository/{}-{}-*", aws_cfg.region, aws_cfg.account_id, ctx.resource_prefix, registry_id),
+                    "Condition": {
+                        "StringEquals": {
+                            "aws:ResourceTag/registry-owner": "${aws:PrincipalArn}",
+                            "aws:RequestTag/registry-owner": "${aws:PrincipalArn}"
+                        },
+                        "ForAllValues:StringEquals": {"aws:TagKeys": ["registry-owner"]}
+                    }
+                },
+                {
                     "Sid": "RegionalRepositoryPolicies",
                     "Effect": "Allow",
                     "Action": ["ecr:GetRepositoryPolicy", "ecr:DeleteRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories"],

@@ -25,3 +25,6 @@ pub use local::*;
 mod fixtures;
 #[cfg(test)]
 pub use fixtures::*;
+
+mod erase;
+pub use erase::erase_registry_repositories;

@@ -204,6 +204,22 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
         ]),
     ];
     if push {
+        // IAM expands PrincipalArn; this plain string is deliberately not Fn::Sub.
+        statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("RepositoryCreationOwner")),
+            ("Effect", CfExpression::from("Allow")),
+            ("Action", CfExpression::from("ecr:TagResource")),
+            ("Resource", CfExpression::sub(format!("arn:${{AWS::Partition}}:ecr:${{AWS::Region}}:${{AWS::AccountId}}:repository/${{AWS::StackName}}-{}-*", registry.id()))),
+            ("Condition", CfExpression::object([
+                ("StringEquals", CfExpression::object([
+                    ("aws:ResourceTag/registry-owner", CfExpression::from("${aws:PrincipalArn}")),
+                    ("aws:RequestTag/registry-owner", CfExpression::from("${aws:PrincipalArn}")),
+                ])),
+                ("ForAllValues:StringEquals", CfExpression::object([
+                    ("aws:TagKeys", CfExpression::list([CfExpression::from("registry-owner")])),
+                ])),
+            ])),
+        ]));
         // Replication copies images, but each regional repository needs its own pull policy.
         statements.push(CfExpression::object([
             ("Sid", CfExpression::from("RegionalRepositoryPolicies")),

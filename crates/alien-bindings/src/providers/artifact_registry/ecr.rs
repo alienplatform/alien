@@ -9,12 +9,12 @@ use crate::{
 use alien_aws_clients::{
     ecr::{
         CreateRepositoryRequest, DeleteRepositoryPolicyRequest, DescribeRepositoriesRequest,
-        EcrApi, EcrClient, GetRepositoryPolicyRequest, SetRepositoryPolicyRequest,
+        EcrApi, EcrClient, GetRepositoryPolicyRequest, SetRepositoryPolicyRequest, Tag,
     },
     AwsClientConfigExt as _, AwsCredentialProvider,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::bindings::ArtifactRegistryBinding;
+use alien_core::{bindings::ArtifactRegistryBinding, ALIEN_REGISTRY_OWNER_TAG_KEY};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
@@ -400,11 +400,43 @@ impl EcrArtifactRegistry {
                 })?,
         );
 
-        let request = CreateRepositoryRequest::builder()
+        let mut request = CreateRepositoryRequest::builder()
             .repository_name(full_repo_name.clone())
             .build();
+        // Stamp ownership atomically when creating a repository. An existing repository is
+        // never retagged or adopted merely because its name matches this binding's prefix.
+        request.tags = self.push_role_arn.as_ref().map(|owner| {
+            vec![Tag {
+                key: ALIEN_REGISTRY_OWNER_TAG_KEY.to_string(),
+                value: owner.clone(),
+            }]
+        });
 
-        let response = match ecr_client.create_repository(request).await {
+        let tagged = request.tags.is_some();
+        let mut legacy_request = request.clone();
+        legacy_request.tags = None;
+        let result = ecr_client.create_repository(request).await;
+        // Old installed push roles can create repositories but cannot tag them. Preserve
+        // publication until setup is updated; erase independently refuses unverified ownership.
+        // This is one alternate request, never a retry loop or an ownership adoption.
+        let result = match result {
+            Err(error)
+                if tagged
+                    && matches!(
+                        &error.error,
+                        Some(CloudClientErrorData::RemoteAccessDenied { .. })
+                    ) =>
+            {
+                let legacy = ecr_client.create_repository(legacy_request).await;
+                if legacy.is_ok() {
+                    warn!(repository = %full_repo_name,
+                        "Repository created without an ownership marker using legacy setup permissions. Update setup for tagged creation; explicit erase requires administrator ownership review.");
+                }
+                legacy
+            }
+            result => result,
+        };
+        let response = match result {
             Ok(response) => response,
             Err(e) => {
                 let error = map_cloud_client_error(
@@ -1801,6 +1833,105 @@ mod tests {
             )
             .await
             .expect("the ECR binding builds")
+        }
+
+        #[tokio::test]
+        async fn creation_stamps_the_recorded_role_without_retagging_existing_repositories() {
+            for mode in ["new", "existing", "legacy", "denied"] {
+                let existing = mode == "existing";
+                let legacy = mode == "legacy";
+                let denied = mode == "denied";
+                let server = MockServer::start_async().await;
+                let owner = format!("arn:aws:iam::{ACCOUNT}:role/deployment-images-push");
+                let mut registry = registry(&server).await;
+                let mut config = registry.credentials.config().clone();
+                config
+                    .service_overrides
+                    .as_mut()
+                    .unwrap()
+                    .endpoints
+                    .insert("sts".into(), server.base_url());
+                registry.credentials = AwsCredentialProvider::from_config_sync(config);
+                registry.push_role_arn = Some(owner.clone());
+                let assume = server.mock_async(|when, then| {
+                    when.method(POST).body_contains("Action=AssumeRole")
+                        .body_contains("RoleArn=arn%3Aaws%3Aiam%3A");
+                    then.status(200).body(format!(
+                        "<AssumeRoleResponse><AssumeRoleResult><AssumedRoleUser><Arn>{owner}</Arn><AssumedRoleId>test</AssumedRoleId></AssumedRoleUser><Credentials><AccessKeyId>assumed-test-key</AccessKeyId><SecretAccessKey>test-secret</SecretAccessKey><SessionToken>test-session</SessionToken><Expiration>2099-01-01T00:00:00Z</Expiration></Credentials></AssumeRoleResult></AssumeRoleResponse>"
+                    ));
+                }).await;
+                let create = server.mock_async(|when, then| {
+                    when.method(POST).matches(signed_for("us-east-1"))
+                        .header("x-amz-target", target("CreateRepository"))
+                        .json_body_partial(json!({
+                            "repositoryName": "artifacts-owned",
+                            "tags": [{"Key": ALIEN_REGISTRY_OWNER_TAG_KEY, "Value": owner}],
+                        }).to_string());
+                    if legacy || denied {
+                        then.status(400).json_body(json!({
+                            "__type": "AccessDeniedException", "message": "ecr:TagResource is not allowed",
+                        }));
+                    } else if existing {
+                        then.status(400).json_body(json!({
+                            "__type": "RepositoryAlreadyExistsException", "message": "already exists",
+                        }));
+                    } else {
+                        then.status(200).json_body(json!({"repository": {
+                            "repositoryArn": format!("arn:aws:ecr:us-east-1:{ACCOUNT}:repository/artifacts-owned"),
+                            "registryId": ACCOUNT, "repositoryName": "artifacts-owned",
+                            "repositoryUri": format!("{ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/artifacts-owned"),
+                            "createdAt": 1.0,
+                        }}));
+                    }
+                }).await;
+                let untagged = server.mock_async(|when, then| {
+                    when.method(POST).header("x-amz-target", target("CreateRepository"))
+                        .json_body(json!({"repositoryName": "artifacts-owned"}));
+                    if denied {
+                        then.status(400).json_body(json!({"__type":"AccessDeniedException", "message":"creation denied"}));
+                    } else {
+                        then.status(200).json_body(json!({"repository": {
+                            "repositoryArn": format!("arn:aws:ecr:us-east-1:{ACCOUNT}:repository/artifacts-owned"),
+                            "registryId": ACCOUNT, "repositoryName": "artifacts-owned",
+                            "repositoryUri": format!("{ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/artifacts-owned"),
+                            "createdAt": 1.0,
+                        }}));
+                    }
+                }).await;
+                let retag = server
+                    .mock_async(|when, then| {
+                        when.method(POST)
+                            .header("x-amz-target", target("TagResource"));
+                        then.status(403);
+                    })
+                    .await;
+                let result = registry
+                    .create_named_repository("artifacts-owned".into())
+                    .await;
+                if denied {
+                    assert!(
+                        result.is_err(),
+                        "denied creation must never become a successful publication"
+                    );
+                } else {
+                    let result = result
+                        .expect("current and legacy installed policies keep publication working");
+                    assert_eq!(result.name, "artifacts-owned");
+                    assert_eq!(
+                        result.uri.as_deref(),
+                        Some(
+                            format!("{ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/artifacts-owned")
+                                .as_str()
+                        )
+                    );
+                }
+                untagged
+                    .assert_hits_async(usize::from(legacy || denied))
+                    .await;
+                assume.assert_hits_async(1).await;
+                create.assert_hits_async(1).await;
+                retag.assert_hits_async(0).await;
+            }
         }
 
         /// The source repository's policy, granting Lambda pulls in `regions`.

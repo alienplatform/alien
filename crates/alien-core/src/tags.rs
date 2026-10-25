@@ -2,6 +2,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+/// Immutable-at-creation ownership evidence for dynamically created registry repositories.
+pub const ALIEN_REGISTRY_OWNER_TAG_KEY: &str = "registry-owner";
+
 pub const ALIEN_STACK_TAG_KEY: &str = "deployment";
 pub const ALIEN_RESOURCE_TAG_KEY: &str = "resource";
 pub const ALIEN_MANAGED_BY_TAG_KEY: &str = "managed-by";
