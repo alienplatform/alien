@@ -217,6 +217,8 @@ struct ResolvedLogsTarget {
     deployment_id: Option<String>,
     deployment_name: Option<String>,
     deployment_group_name: Option<String>,
+    /// The deployment's Operator reported that it sends no logs.
+    log_collector_off: bool,
 }
 
 pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
@@ -342,7 +344,7 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
         if args.json {
             print_json(&output)
         } else {
-            render_human_logs(&output.logs);
+            render_human_logs(&output.logs, target.log_collector_off, args.source);
             Ok(())
         }
     }
@@ -441,6 +443,7 @@ async fn resolve_logs_target(
             deployment_id: None,
             deployment_name: None,
             deployment_group_name: None,
+            log_collector_off: false,
         });
     }
 
@@ -513,6 +516,10 @@ async fn target_from_deployment_detail(
             .as_ref()
             .map(|group| String::from(group.name.clone()))
     });
+    let log_collector_off = log_collector_reported_off(
+        &deployment.platform.to_string(),
+        deployment.capabilities.as_deref(),
+    );
 
     Ok(ResolvedLogsTarget {
         manager_id,
@@ -521,6 +528,7 @@ async fn target_from_deployment_detail(
         deployment_id: Some(deployment_id),
         deployment_name: Some(deployment_name),
         deployment_group_name,
+        log_collector_off,
     })
 }
 
@@ -544,6 +552,7 @@ async fn resolve_default_manager_target(
         deployment_id: None,
         deployment_name: None,
         deployment_group_name: None,
+        log_collector_off: false,
     })
 }
 
@@ -836,9 +845,52 @@ impl SeenLogKeys {
     }
 }
 
-fn render_human_logs(logs: &[LogEntry]) {
+const LOG_COLLECTOR_OFF_MESSAGE: &str = "\
+No logs. This installation doesn't send logs: its log collector is off.
+Turn the log collector on in the deployment's Helm release:
+  helm upgrade <release> <chart> --reuse-values \\
+    --set logCollector.enabled=true --set-string logCollector.mode=podApi
+Logs need telemetry. If the release sets management.telemetry or \
+stackSettings.telemetry to off, set it to auto in the same upgrade, \
+or the Operator won't start.
+In podApi mode the Operator reads Pod logs through the Kubernetes API. \
+logCollector.mode=nodeAgent runs a Fluent Bit DaemonSet on each node instead.";
+
+/// The Operator reports a `logs` capability: granted when a node collector or
+/// its own Pod log stream is configured, unavailable with a detail when neither
+/// is. Earlier Operators sent the capability without a detail and reported it
+/// unavailable in podApi mode even though logs flow there, so an unavailable
+/// report without a detail tells us nothing, and neither does an Operator too
+/// old to report the capability. Only the Kubernetes chart has a log collector
+/// to turn on.
+fn log_collector_reported_off(
+    platform: &str,
+    capabilities: Option<&[types::OperatorCapabilityReport]>,
+) -> bool {
+    platform == "kubernetes"
+        && capabilities.is_some_and(|capabilities| {
+            capabilities.iter().any(|capability| {
+                capability.key.as_str() == "logs"
+                    && capability.state == types::OperatorCapabilityState::Unavailable
+                    && capability.detail.is_some()
+            })
+        })
+}
+
+/// A `--source` query reads gateway request diagnostics without the deployment
+/// filter, so the deployment's Pod log collector doesn't explain an empty
+/// result there.
+fn empty_logs_message(log_collector_off: bool, source: Option<LogSource>) -> &'static str {
+    if log_collector_off && source.is_none() {
+        LOG_COLLECTOR_OFF_MESSAGE
+    } else {
+        "(no logs)"
+    }
+}
+
+fn render_human_logs(logs: &[LogEntry], log_collector_off: bool, source: Option<LogSource>) {
     if logs.is_empty() {
-        println!("(no logs)");
+        println!("{}", empty_logs_message(log_collector_off, source));
         return;
     }
     for entry in logs {
@@ -1554,6 +1606,105 @@ mod tests {
         assert_eq!(
             parse_std_duration_arg("1d").unwrap(),
             StdDuration::from_secs(86400)
+        );
+    }
+
+    fn capability_reports(value: Value) -> Vec<types::OperatorCapabilityReport> {
+        serde_json::from_value(value).expect("capability reports should match the API schema")
+    }
+
+    #[test]
+    fn empty_result_explains_a_log_collector_the_operator_reported_off() {
+        let unavailable = capability_reports(json!([
+            { "key": "k8s-workloads", "state": "granted", "detail": "namespace customer" },
+            { "key": "logs", "state": "unavailable", "detail": "No log collector configured" }
+        ]));
+        let message = empty_logs_message(
+            log_collector_reported_off("kubernetes", Some(&unavailable)),
+            None,
+        );
+        assert_eq!(message, LOG_COLLECTOR_OFF_MESSAGE);
+        assert!(message
+            .contains("--set logCollector.enabled=true --set-string logCollector.mode=podApi"));
+
+        let granted = capability_reports(json!([
+            { "key": "logs", "state": "granted", "detail": "Pod logs read through the Kubernetes API" }
+        ]));
+        assert_eq!(
+            empty_logs_message(
+                log_collector_reported_off("kubernetes", Some(&granted)),
+                None
+            ),
+            "(no logs)"
+        );
+
+        // Earlier Operators send no detail and report podApi mode, where logs
+        // flow, as unavailable. An empty result there is just an empty result.
+        let undetailed = capability_reports(json!([
+            { "key": "k8s-workloads", "state": "granted" },
+            { "key": "logs", "state": "unavailable", "detail": null }
+        ]));
+        assert_eq!(
+            empty_logs_message(
+                log_collector_reported_off("kubernetes", Some(&undetailed)),
+                None
+            ),
+            "(no logs)"
+        );
+        let detail_omitted = capability_reports(json!([
+            { "key": "logs", "state": "unavailable" }
+        ]));
+        assert_eq!(
+            empty_logs_message(
+                log_collector_reported_off("kubernetes", Some(&detail_omitted)),
+                None
+            ),
+            "(no logs)"
+        );
+
+        // Operators that predate the capability report nothing about logs.
+        let without_logs = capability_reports(json!([
+            { "key": "k8s-workloads", "state": "granted" }
+        ]));
+        assert_eq!(
+            empty_logs_message(
+                log_collector_reported_off("kubernetes", Some(&without_logs)),
+                None
+            ),
+            "(no logs)"
+        );
+        assert_eq!(
+            empty_logs_message(log_collector_reported_off("kubernetes", None), None),
+            "(no logs)"
+        );
+
+        // Gateway request diagnostics aren't the deployment's Pod logs.
+        for source in [
+            LogSource::Application,
+            LogSource::AiGateway,
+            LogSource::EncryptionGateway,
+            LogSource::RemoteSandbox,
+        ] {
+            assert_eq!(
+                deployment_filter_for_source(Some(source), Some("dep_1")),
+                None
+            );
+            assert_eq!(
+                empty_logs_message(
+                    log_collector_reported_off("kubernetes", Some(&unavailable)),
+                    Some(source)
+                ),
+                "(no logs)"
+            );
+        }
+
+        // Only the Kubernetes chart has a log collector to turn on.
+        assert_eq!(
+            empty_logs_message(
+                log_collector_reported_off("machines", Some(&unavailable)),
+                None
+            ),
+            "(no logs)"
         );
     }
 
