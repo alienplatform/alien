@@ -4,7 +4,10 @@ use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
 use crate::ui::success_line;
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_platform_api::{types::UpdateProjectGcpOAuthProvider, SdkResultExt};
+use alien_platform_api::{
+    convert_sdk_error, types::UpdateProjectGcpOAuthProvider, Error as SdkError, ResponseValue,
+    SdkResultExt,
+};
 use clap::{Args, Subcommand};
 use reqwest::Method;
 use serde::Serialize;
@@ -271,13 +274,24 @@ async fn project_request(
         .await
         .into_alien_error()
         .context(api_error("Reading or updating portal settings"))?;
-    // Proxy responses may contain sensitive HTML; never include their body in errors.
-    response
-        .error_for_status_ref()
-        .into_alien_error()
-        .context(api_error(
-            "Portal settings request failed; check project access and configuration",
-        ))?;
+    let status = response.status();
+    if !status.is_success() {
+        // Only structured API errors are safe to show; discard proxy HTML and other bodies.
+        let error =
+            match ResponseValue::from_response::<alien_platform_api::types::ApiError>(response)
+                .await
+            {
+                Ok(response) => convert_sdk_error(SdkError::ErrorResponse(response)),
+                Err(_) => {
+                    let mut error = AlienError::new(api_error(&format!(
+                        "Portal settings request failed with HTTP {status}"
+                    )));
+                    error.http_status_code = Some(status.as_u16());
+                    return Err(error);
+                }
+            };
+        return Err(error).context(api_error("Reading or updating portal settings"));
+    }
     response
         .json()
         .await
@@ -381,6 +395,47 @@ async fn google_settings(
     }
 }
 
+// Only access-denied and missing sections are optional; all other failures remain fatal.
+fn readable_section(result: Result<Value>) -> Result<Value> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            let detail = error.source.as_deref();
+            let status = detail
+                .and_then(|source| source.http_status_code)
+                .or(error.http_status_code);
+            if matches!(status, Some(403 | 404)) {
+                let (code, message) = detail
+                    .map(|source| (&source.code, &source.message))
+                    .unwrap_or((&error.code, &error.message));
+                Ok(json!({"error": {"code": code, "message": message, "httpStatusCode": status}}))
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+async fn get_settings(http: &AuthHttp, workspace: Option<&str>, project: &str) -> Result<Value> {
+    let appearance = project_request(http, workspace, project, None)
+        .await
+        .and_then(|response| {
+            response
+                .get("deploymentPortalAppearance")
+                .cloned()
+                .ok_or_else(|| {
+                    invalid(
+                        "appearance",
+                        "API response omitted deploymentPortalAppearance",
+                    )
+                })
+        });
+    let appearance = readable_section(appearance)?;
+    let domain = readable_section(domain_status(http, workspace, project).await)?;
+    let google = readable_section(google_settings(http, workspace, project, None).await)?;
+    Ok(json!({"appearance": appearance, "domain": domain, "googleSignIn": google}))
+}
+
 pub async fn portal_task(
     command: &PortalCommand,
     ctx: &ExecutionMode,
@@ -442,16 +497,7 @@ pub async fn portal_task(
     let workspace = workspace.as_deref();
     let mut saved = false;
     let result = match command {
-        PortalCommand::Get { .. } => {
-            let response = project_request(&http, workspace, &project, None).await?;
-            let appearance = response.get("deploymentPortalAppearance").ok_or_else(|| {
-                invalid(
-                    "appearance",
-                    "API response omitted deploymentPortalAppearance",
-                )
-            })?;
-            json!({"appearance": appearance, "domain": domain_status(&http, workspace, &project).await?, "googleSignIn": google_settings(&http, workspace, &project, None).await?})
-        }
+        PortalCommand::Get { .. } => get_settings(&http, workspace, &project).await?,
         PortalCommand::Set(_) => {
             let patch =
                 appearance_patch.ok_or_else(|| invalid("set", "Missing appearance patch"))?;
@@ -491,12 +537,6 @@ pub async fn portal_task(
                                 "Domain not found; add and verify it before selecting it",
                             )
                         })?;
-                    if found["status"] != "verified" {
-                        return Err(invalid(
-                            "use",
-                            "Domain must be verified before selecting it",
-                        ));
-                    }
                     found["id"].clone()
                 } else {
                     Value::Null
@@ -543,6 +583,13 @@ pub async fn portal_task(
 }
 
 fn print_domains(value: &Value) -> Result<()> {
+    if let Some(error) = value.get("error") {
+        println!(
+            "Domains unavailable: {}: {}",
+            error["code"], error["message"]
+        );
+        return Ok(());
+    }
     for (key, label) in [
         ("deploymentPortalEndpoint", "Portal"),
         ("packageEndpoint", "Packages"),
@@ -569,6 +616,13 @@ fn print_domains(value: &Value) -> Result<()> {
 }
 
 fn print_google(value: &Value) -> Result<()> {
+    if let Some(error) = value.get("error") {
+        println!(
+            "Google sign-in unavailable: {}: {}",
+            error["code"], error["message"]
+        );
+        return Ok(());
+    }
     let mode = value["mode"]
         .as_str()
         .ok_or_else(|| invalid("google-sign-in", "API omitted mode"))?;
@@ -710,6 +764,99 @@ mod tests {
         let error = serde_json::to_string(&error).unwrap();
         assert!(!error.contains("private-proxy-detail"));
         assert!(!error.contains("<html>"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn api_errors_preserve_details_and_only_access_failures_allow_partial_reads() {
+        for (status, code) in [
+            (400, "DOMAIN_NOT_VERIFIED"),
+            (400, "VALIDATION_ERROR"),
+            (422, "REQUEST_VALIDATION_ERROR"),
+            (403, "FORBIDDEN"),
+            (404, "PROJECT_NOT_FOUND"),
+            (500, "INTERNAL_ERROR"),
+        ] {
+            let app = Router::new().route(
+                "/v1/projects/sample",
+                get(move || async move {
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        Json(json!({
+                            "code": code, "message": "Actionable API message",
+                            "retryable": false, "internal": false,
+                            "hint": "Check configuration", "requestId": "req_example"
+                        })),
+                    )
+                }),
+            );
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let http = build_auth_http(
+                client_with_header("Bearer test-key").unwrap(),
+                format!("http://{}", listener.local_addr().unwrap()),
+                None,
+            );
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let error = project_request(&http, None, "sample", None)
+                .await
+                .unwrap_err();
+            let source = error.source.as_ref().unwrap();
+            assert_eq!(source.code, code);
+            assert_eq!(source.message, "Actionable API message");
+            assert_eq!(source.http_status_code, Some(status));
+            assert_eq!(source.hint.as_deref(), Some("Check configuration"));
+            assert_eq!(source.context.as_ref().unwrap()["requestId"], "req_example");
+            let section = readable_section(Err(error));
+            if matches!(status, 403 | 404) {
+                assert_eq!(section.unwrap()["error"]["code"], code);
+            } else {
+                assert!(section.is_err());
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn get_keeps_readable_sections_when_google_settings_are_forbidden() {
+        let app = Router::new()
+            .route(
+                "/v1/projects/sample",
+                get(|| async { Json(json!({"deploymentPortalAppearance": {"title": "Acme"}})) }),
+            )
+            .route(
+                "/v1/projects/sample/deployment-portal-domain",
+                get(|| async {
+                    Json(json!({"deploymentPortalEndpoint": null, "packageEndpoint": null}))
+                }),
+            )
+            .route(
+                "/v1/projects/sample/gcp-oauth-provider",
+                get(|| async {
+                    (
+                        axum::http::StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "code": "FORBIDDEN", "message": "Administrator required",
+                            "retryable": false, "internal": false
+                        })),
+                    )
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let http = build_auth_http(
+            client_with_header("Bearer test-key").unwrap(),
+            format!("http://{}", listener.local_addr().unwrap()),
+            None,
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let settings = get_settings(&http, None, "sample").await.unwrap();
+        assert_eq!(settings["appearance"]["title"], "Acme");
+        assert_eq!(
+            settings["domain"],
+            json!({"deploymentPortalEndpoint": null, "packageEndpoint": null})
+        );
+        assert_eq!(settings["googleSignIn"]["error"]["httpStatusCode"], 403);
+        print_domains(&settings["domain"]).unwrap();
+        print_google(&settings["googleSignIn"]).unwrap();
         server.abort();
     }
 
