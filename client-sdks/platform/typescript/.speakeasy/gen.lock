@@ -6,9 +6,9 @@ management:
   generationVersion: 2.941.0
   releaseVersion: 3.3.42
 persistentEdits:
-  generation_id: e33d02e3-7e23-4744-a9f0-4ad2f8f04059
-  pristine_commit_hash: fc9cf936d3a0c74ef13d6a5fee71ae2a124a9b0e
-  pristine_tree_hash: 3c9058ce10c84a61c78b32bda180249bbcf6ed9c
+  generation_id: 378474ac-77e0-4917-be08-7e9f3d72f71c
+  pristine_commit_hash: 29e081338472af4a3e015c3c38992b4895137f09
+  pristine_tree_hash: ad97eeb32a4158011796f3251165d887f4e4b8a7
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -12367,8 +12367,8 @@ trackedFiles:
     pristine_git_object: ed60f3bc6cb23aa9988307bc1d591592b5d9adbe
   docs/models/generatemanagertokenrequest.md:
     id: 8390570078a9
-    last_write_checksum: sha1:5d78df140ab34e9972161d2f0588b806aa86ce9f
-    pristine_git_object: 3b93b14eadf64d1e4b6f29ad0aba3ab42f6ea73e
+    last_write_checksum: sha1:c1ab1e37ddb659397990bc514ed9df3629ed1d12
+    pristine_git_object: 450d175bf71b7b65c4d28b871027e36575de8394
   docs/models/generatemanagertokenresponse.md:
     id: 4e2794042c0c
     last_write_checksum: sha1:b40f8609d89e4e48c56080c1811a675097622ec5
@@ -37875,8 +37875,8 @@ trackedFiles:
     pristine_git_object: b975aad847c301d687683ccae6b38c3969fb346c
   src/models/generatemanagertokenrequest.ts:
     id: 37d07c31900f
-    last_write_checksum: sha1:12d3664ffefbf06e850eb21ee988a8369276f4d7
-    pristine_git_object: 07cf090aea4f2ef03971d62181dab6ca955a0107
+    last_write_checksum: sha1:70b17940f8de784de909ca36ce6a346a8db93894
+    pristine_git_object: c079f956155d13989b6abbec3f41ad821147745d
   src/models/generatemanagertokenresponse.ts:
     id: 2d5c48de9e4f
     last_write_checksum: sha1:5b8b3f4779373a09d5042f09246f02add5025304

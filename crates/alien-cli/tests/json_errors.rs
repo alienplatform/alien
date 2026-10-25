@@ -1,4 +1,76 @@
+use alien_cli::Cli;
+use clap::Parser;
+#[cfg(feature = "platform")]
+use httpmock::MockServer;
 use std::process::Command;
+
+#[test]
+fn release_and_token_subcommands_recognize_json_mode() {
+    for prefix in [vec!["alien", "releases"], vec!["alien", "dev", "releases"]] {
+        for args in [
+            vec!["ls"],
+            vec!["get", "rel_test"],
+            vec!["promote", "rel_test"],
+            vec!["channels"],
+            vec!["create-channel", "preview"],
+        ] {
+            let mut command = prefix.clone();
+            command.extend(args);
+            assert!(!Cli::try_parse_from(&command).unwrap().wants_json_output());
+            command.push("--json");
+            assert!(Cli::try_parse_from(&command).unwrap().wants_json_output());
+        }
+    }
+    for args in [
+        vec!["alien", "tokens", "ls"],
+        vec!["alien", "tokens", "create", "--tunnel"],
+    ] {
+        assert!(!Cli::try_parse_from(&args).unwrap().wants_json_output());
+        let mut args = args;
+        args.push("--json");
+        assert!(Cli::try_parse_from(&args).unwrap().wants_json_output());
+    }
+}
+
+#[test]
+#[cfg(feature = "platform")]
+fn release_api_failure_ends_with_one_json_error_line() {
+    let api = MockServer::start();
+    let denied = api.mock(|when, then| {
+        when.any_request();
+        then.status(401).json_body(serde_json::json!({
+            "code": "UNAUTHORIZED", "message": "Test request denied",
+            "retryable": false, "internal": false, "httpStatusCode": 401
+        }));
+    });
+    let config = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_alien"))
+        .args([
+            "--base-url",
+            &api.base_url(),
+            "--workspace",
+            "acme",
+            "--project",
+            "acme",
+            "releases",
+            "ls",
+            "--json",
+        ])
+        .current_dir(config.path())
+        .env("XDG_CONFIG_HOME", config.path())
+        .env("ALIEN_API_KEY", "test-key")
+        .env_remove("ALIEN_MANAGER_URL")
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let error: serde_json::Value = serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+    assert!(error["code"].is_string(), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(denied.hits() > 0);
+}
 
 #[test]
 fn json_validation_error_is_one_stderr_document_with_empty_stdout() {

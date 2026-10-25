@@ -124,6 +124,8 @@ impl Cli {
                 None => args.json,
             },
             Some(Commands::Release(args)) => args.json,
+            Some(Commands::Releases(args)) => args.wants_json_output(),
+            Some(Commands::Tokens(args)) => args.wants_json_output(),
             Some(Commands::Render(args)) => args.json,
             Some(Commands::Onboard(args)) => args.json,
             Some(Commands::Logs(args)) => args.json,
@@ -133,6 +135,7 @@ impl Cli {
             Some(Commands::Status(args)) => args.wants_json_output(),
             Some(Commands::Dev(dev)) => match &dev.subcommand {
                 Some(DevSubcommand::Release(args)) => args.json,
+                Some(DevSubcommand::Releases(args)) => args.wants_json_output(),
                 Some(DevSubcommand::Whoami(args)) => args.json,
                 Some(DevSubcommand::Debug(args)) => args.wants_json_output(),
                 Some(DevSubcommand::Deployments(args)) => args.wants_json_output(),

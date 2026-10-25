@@ -53,6 +53,15 @@ pub enum TokensCommand {
     },
 }
 
+impl TokensArgs {
+    pub fn wants_json_output(&self) -> bool {
+        match &self.command {
+            TokensCommand::Ls { json } | TokensCommand::Create { json, .. } => *json,
+            TokensCommand::Revoke { .. } => false,
+        }
+    }
+}
+
 pub async fn tokens_task(args: TokensArgs, ctx: ExecutionMode) -> Result<()> {
     let (project_id, _) = ctx.resolve_project(None, false).await?;
     let mgr = ctx.resolve_manager(&project_id, "local").await?;
