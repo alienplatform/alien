@@ -511,7 +511,11 @@ impl LocalPostgresManager {
         // it in place: a crash mid-write would lose the only copy of the credentials.
         tokio::task::spawn_blocking(move || -> std::io::Result<()> {
             alien_core::file_utils::write_secret_file(&temp_path, &data)?;
-            std::fs::File::open(&temp_path)?.sync_all()?;
+            // Windows flushes only through a handle with write access.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&temp_path)?
+                .sync_all()?;
             std::fs::rename(&temp_path, &write_path)
         })
         .await
