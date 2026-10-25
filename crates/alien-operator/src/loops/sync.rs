@@ -643,6 +643,7 @@ fn accept_target_release(
     if matches!(
         deployment_state.status,
         alien_core::DeploymentStatus::Running
+            | alien_core::DeploymentStatus::ProvisioningFailed
             | alien_core::DeploymentStatus::UpdateFailed
             | alien_core::DeploymentStatus::RefreshFailed
     ) {
@@ -1040,30 +1041,35 @@ mod tests {
             description: None,
             stack: Stack::new("corrected".to_string()).build(),
         };
-        let mut metadata = alien_core::RuntimeMetadata::default();
-        metadata.pending_prepared_stack = Some(Stack::new("failed-target".to_string()).build());
-        let mut state = DeploymentState {
-            platform: Platform::Kubernetes,
-            status: DeploymentStatus::UpdateFailed,
-            current_release: None,
-            target_release: None,
-            stack_state: None,
-            error: None,
-            environment_info: None,
-            runtime_metadata: Some(metadata),
-            retry_requested: true,
-            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
-        };
+        for status in [
+            DeploymentStatus::UpdateFailed,
+            DeploymentStatus::ProvisioningFailed,
+        ] {
+            let mut metadata = alien_core::RuntimeMetadata::default();
+            metadata.pending_prepared_stack = Some(Stack::new("failed-target".to_string()).build());
+            let mut state = DeploymentState {
+                platform: Platform::Kubernetes,
+                status,
+                current_release: None,
+                target_release: None,
+                stack_state: None,
+                error: None,
+                environment_info: None,
+                runtime_metadata: Some(metadata),
+                retry_requested: true,
+                protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
 
-        accept_target_release(&mut state, release.clone());
+            accept_target_release(&mut state, release.clone());
 
-        assert_eq!(state.status, DeploymentStatus::UpdatePending);
-        assert_eq!(state.target_release, Some(release));
-        assert!(!state.retry_requested);
-        assert!(state
-            .runtime_metadata
-            .as_ref()
-            .is_some_and(|metadata| metadata.pending_prepared_stack.is_none()));
+            assert_eq!(state.status, DeploymentStatus::UpdatePending);
+            assert_eq!(state.target_release, Some(release.clone()));
+            assert!(!state.retry_requested);
+            assert!(state
+                .runtime_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.pending_prepared_stack.is_none()));
+        }
     }
 
     #[tokio::test]
