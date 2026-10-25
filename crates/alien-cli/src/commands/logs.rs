@@ -856,13 +856,14 @@ or the Operator won't start.
 In podApi mode the Operator reads Pod logs through the Kubernetes API. \
 logCollector.mode=nodeAgent runs a Fluent Bit DaemonSet on each node instead.";
 
-/// The Operator reports a `logs` capability: granted when a node collector or
-/// its own Pod log stream is configured, unavailable with a detail when neither
-/// is. Earlier Operators sent the capability without a detail and reported it
-/// unavailable in podApi mode even though logs flow there, so an unavailable
-/// report without a detail tells us nothing, and neither does an Operator too
-/// old to report the capability. Only the Kubernetes chart has a log collector
-/// to turn on.
+/// A Kubernetes Operator reports a `logs` capability: granted when a node
+/// collector or its own Pod log stream is configured, unavailable with a detail
+/// when neither is. Earlier Operators sent the capability without a detail and
+/// reported it unavailable in podApi mode even though logs flow there, so an
+/// unavailable report without a detail tells us nothing, and neither does an
+/// Operator too old to report the capability. Only the Kubernetes chart has a
+/// log collector to turn on; earlier cloud and local Operators reported the
+/// capability unavailable too, so the platform check stays.
 fn log_collector_reported_off(
     platform: &str,
     capabilities: Option<&[types::OperatorCapabilityReport]>,
