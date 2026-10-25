@@ -506,8 +506,13 @@ impl LocalPostgresManager {
                 reason: "Failed to serialize Postgres metadata".to_string(),
             })?;
         let write_path = path.clone();
-        tokio::task::spawn_blocking(move || {
-            alien_core::file_utils::write_secret_file(&write_path, &data)
+        let temp_path = path.with_extension("json.tmp");
+        // Existing metadata is rewritten (e.g. to record the runtime), so never truncate
+        // it in place: a crash mid-write would lose the only copy of the credentials.
+        tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            alien_core::file_utils::write_secret_file(&temp_path, &data)?;
+            std::fs::File::open(&temp_path)?.sync_all()?;
+            std::fs::rename(&temp_path, &write_path)
         })
         .await
         .into_alien_error()
