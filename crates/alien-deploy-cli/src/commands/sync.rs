@@ -846,13 +846,24 @@ async fn send_report(
             .collect();
         let sending = !fresh.is_empty();
         let body = serde_json::json!({ "state": report.state, "telemetry": fresh, "writtenAt": report.written_at });
-        let response: StatusReportResponse = manager_post(
-            &token.url,
-            &token.token,
-            &format!("/v1/deployments/{}/status-report", site.deployment_id),
-            &body,
-        )
-        .await?;
+        let path = format!("/v1/deployments/{}/status-report", site.deployment_id);
+        let response = http()?
+            .post(format!("{}{path}", token.url))
+            .bearer_auth(&token.token)
+            .json(&body)
+            .send()
+            .await
+            .into_alien_error()
+            .context(api_failed(format!("POST {path}")))?;
+        // The final acknowledgement can be lost after the manager removes
+        // the deployment. Only a pending Deleted report can accept absence.
+        if response.status() == reqwest::StatusCode::NOT_FOUND
+            && report.state["status"].as_str() == Some("deleted")
+        {
+            println!("{} was already deleted.", site.name);
+            return Ok(());
+        }
+        let response: StatusReportResponse = read_response(response, &path).await?;
         if !sending {
             return Ok(());
         }
@@ -1548,7 +1559,7 @@ fn site_side_settings(args: &SyncArgs, site: &mut MachineState) -> Result<Option
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "registry-username".to_string(),
                 message: "Pass --registry-username and --registry-password together".to_string(),
-            }))
+            }));
         }
     };
     Ok(Some(settings))
@@ -1595,7 +1606,7 @@ async fn install_pending(
                 message: format!(
                     "This install already trusts {pinned}; updates must be signed with that key"
                 ),
-            }))
+            }));
         }
         (Some(pinned), _) => pinned,
         (None, Some(given)) => given.to_string(),
@@ -2010,7 +2021,9 @@ async fn wait_for_rollout(
                 return Err(AlienError::new(ErrorData::ConfigurationError {
                     message: format!(
                         "The rollout of {release_id} failed: {}. `alien-deploy rollback` returns to the previous release.",
-                        state["error"]["message"].as_str().unwrap_or("see the Operator's logs")
+                        state["error"]["message"]
+                            .as_str()
+                            .unwrap_or("see the Operator's logs")
                     ),
                 }));
             }
@@ -2760,6 +2773,42 @@ mod tests {
             "the report stays for the next sync"
         );
         assert_eq!(load_site(dir.path()).unwrap().uploaded_through, 0);
+    }
+
+    #[tokio::test]
+    async fn only_a_deleted_report_accepts_not_found() {
+        for (status, deleted, accepted) in [
+            (404, true, true),
+            (404, false, false),
+            (403, true, false),
+            (500, true, false),
+        ] {
+            let server = MockServer::start_async().await;
+            let request = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/deployments/dep_1/status-report");
+                    then.status(status);
+                })
+                .await;
+            let (dir, mut site) = folder_with_report();
+            if deleted {
+                let path = report_path(dir.path());
+                let mut report: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                report["state"]["status"] = serde_json::json!("deleted");
+                std::fs::write(path, serde_json::to_vec(&report).unwrap()).unwrap();
+            }
+            let result = send_reports(dir.path(), &mut site, &access(&server), false).await;
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "status {status}, deleted {deleted}"
+            );
+            assert_eq!(report_path(dir.path()).exists(), !accepted);
+            assert_eq!(site.deleted, accepted);
+            request.assert_hits_async(1).await;
+        }
     }
 
     #[tokio::test]
