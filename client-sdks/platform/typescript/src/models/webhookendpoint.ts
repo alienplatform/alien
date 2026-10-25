@@ -30,6 +30,7 @@ export type WebhookEndpoint = {
   disabled: boolean;
   id: string;
   projectId: string | null;
+  projectIds: Array<string>;
   createdAt: Date;
 };
 
@@ -49,6 +50,7 @@ export const WebhookEndpoint$inboundSchema: z.ZodType<
   disabled: z.boolean(),
   id: z.string(),
   projectId: z.nullable(z.string()),
+  projectIds: z.array(z.string()),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 

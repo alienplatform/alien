@@ -15,7 +15,11 @@ let value: WebhookEndpoint = {
   disabled: false,
   id: "<id>",
   projectId: "<id>",
-  createdAt: new Date("2025-10-28T20:13:58.027Z"),
+  projectIds: [
+    "<value 1>",
+    "<value 2>",
+  ],
+  createdAt: new Date("2024-01-10T07:25:53.600Z"),
 };
 ```
 
@@ -29,4 +33,5 @@ let value: WebhookEndpoint = {
 | `disabled`                                                                                    | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `projectId`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `projectIds`                                                                                  | *string*[]                                                                                    | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `createdAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |

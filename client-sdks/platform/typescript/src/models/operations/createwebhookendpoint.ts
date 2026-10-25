@@ -35,6 +35,7 @@ export type CreateWebhookEndpointRequestBody = {
   description?: string | undefined;
   filterTypes?: Array<CreateWebhookEndpointFilterType> | undefined;
   disabled?: boolean | undefined;
+  projectIds?: Array<string> | undefined;
 };
 
 export type CreateWebhookEndpointRequest = {
@@ -53,6 +54,7 @@ export type CreateWebhookEndpointRequestBody$Outbound = {
   description: string;
   filterTypes?: Array<string> | undefined;
   disabled: boolean;
+  projectIds?: Array<string> | undefined;
 };
 
 /** @internal */
@@ -65,6 +67,7 @@ export const CreateWebhookEndpointRequestBody$outboundSchema: z.ZodType<
   filterTypes: z.array(CreateWebhookEndpointFilterType$outboundSchema)
     .optional(),
   disabled: z.boolean().default(false),
+  projectIds: z.array(z.string()).optional(),
 });
 
 export function createWebhookEndpointRequestBodyToJSON(
