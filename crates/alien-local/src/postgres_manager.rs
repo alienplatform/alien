@@ -890,4 +890,128 @@ mod tests {
             .expect("serialize binding env");
         assert!(env.values().any(|v| v.contains("s3cr3t")));
     }
+
+    #[cfg(target_os = "linux")]
+    const GNU: &str = "x86_64-unknown-linux-gnu";
+    #[cfg(target_os = "linux")]
+    const MUSL: &str = "x86_64-unknown-linux-musl";
+
+    #[cfg(target_os = "linux")]
+    /// Writes metadata for an initialized cluster (`PG_VERSION` present) and returns
+    /// the metadata file's contents, so tests can prove a refusal left it untouched.
+    async fn initialized_cluster(
+        manager: &LocalPostgresManager,
+        data_dir: PathBuf,
+        runtime_target: Option<&str>,
+    ) -> (PostgresMetadata, String) {
+        let metadata = PostgresMetadata {
+            resource_id: "pgdb".to_string(),
+            version: "17".to_string(),
+            port: 54321,
+            username: "postgres".to_string(),
+            password: "s3cr3t".to_string(),
+            database: "pgdb".to_string(),
+            data_dir,
+            runtime_target: runtime_target.map(str::to_string),
+        };
+        std::fs::create_dir_all(&metadata.data_dir).expect("mkdir data");
+        std::fs::write(metadata.data_dir.join("PG_VERSION"), "17\n").expect("write PG_VERSION");
+        manager
+            .write_metadata(&metadata)
+            .await
+            .expect("write metadata");
+        let saved = std::fs::read_to_string(manager.metadata_path("pgdb")).expect("read metadata");
+        (metadata, saved)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn recorded_runtime_mismatch_refuses_before_changing_metadata() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manager = LocalPostgresManager::new(tmp.path().to_path_buf());
+        let (metadata, saved) =
+            initialized_cluster(&manager, tmp.path().join("data"), Some(MUSL)).await;
+
+        let error = manager
+            .pin_runtime_target(&metadata, GNU)
+            .await
+            .expect_err("a different recorded runtime must refuse");
+
+        assert_eq!(error.code, "LOCAL_POSTGRES_RUNTIME_CHANGED");
+        let message = error.to_string();
+        assert!(message.contains(MUSL) && message.contains(GNU), "{message}");
+        assert_eq!(
+            std::fs::read_to_string(manager.metadata_path("pgdb")).expect("read metadata"),
+            saved
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn legacy_cluster_without_saved_server_options_refuses() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manager = LocalPostgresManager::new(tmp.path().to_path_buf());
+        let (metadata, saved) = initialized_cluster(&manager, tmp.path().join("data"), None).await;
+
+        let error = manager
+            .pin_runtime_target(&metadata, GNU)
+            .await
+            .expect_err("an unknown previous runtime must refuse");
+
+        assert_eq!(error.code, "LOCAL_POSTGRES_RUNTIME_UNAVAILABLE");
+        assert_eq!(
+            std::fs::read_to_string(manager.metadata_path("pgdb")).expect("read metadata"),
+            saved
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn legacy_cluster_runtime_is_read_from_previous_installation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manager = LocalPostgresManager::new(tmp.path().to_path_buf());
+        // A space in the installation path must survive parsing of postmaster.opts.
+        let installation = tmp.path().join("old dist").join("17.2.0");
+        let pgxs = installation.join("lib/pgxs/src");
+        std::fs::create_dir_all(&pgxs).expect("mkdir pgxs");
+        std::fs::write(
+            pgxs.join("Makefile.global"),
+            "host_os = linux-musl\nhost_cpu = x86_64\n",
+        )
+        .expect("write Makefile.global");
+        let data_dir = tmp.path().join("data");
+        let (metadata, saved) = initialized_cluster(&manager, data_dir.clone(), None).await;
+        std::fs::write(
+            data_dir.join("postmaster.opts"),
+            format!(
+                "{} \"-D\" \"{}\" \"-p\" \"54321\"\n",
+                installation.join("bin/postgres").display(),
+                data_dir.display()
+            ),
+        )
+        .expect("write postmaster.opts");
+
+        let error = manager
+            .pin_runtime_target(&metadata, GNU)
+            .await
+            .expect_err("a MUSL-built cluster must not open under GNU");
+        assert_eq!(error.code, "LOCAL_POSTGRES_RUNTIME_CHANGED");
+        assert_eq!(
+            std::fs::read_to_string(manager.metadata_path("pgdb")).expect("read metadata"),
+            saved
+        );
+
+        manager
+            .pin_runtime_target(&metadata, MUSL)
+            .await
+            .expect("the matching runtime adopts the legacy cluster");
+        let adopted: PostgresMetadata = serde_json::from_str(
+            &std::fs::read_to_string(manager.metadata_path("pgdb")).expect("read metadata"),
+        )
+        .expect("parse metadata");
+        assert_eq!(adopted.runtime_target.as_deref(), Some(MUSL));
+        assert_eq!(adopted.password, "s3cr3t");
+        assert_eq!(adopted.port, 54321);
+        assert_eq!(adopted.data_dir, data_dir);
+    }
 }
