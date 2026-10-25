@@ -427,7 +427,12 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
         ack,
     )
     .await?;
-    wait_for_rollout(&settings, &record.stack_id, &namespace, &record.release_id).await?;
+    if let Err(error) =
+        wait_for_rollout(&settings, &record.stack_id, &namespace, &record.release_id).await
+    {
+        write_report_for_install(&folder, &site, &settings, &record).await?;
+        return Err(error);
+    }
     // The rolled-back release is now the newest install.
     std::fs::rename(
         previous,
@@ -1489,13 +1494,19 @@ async fn install_pending(
         ack,
     )
     .await?;
-    wait_for_rollout(
+    if let Err(error) = wait_for_rollout(
         settings,
         &manifest.stack_id,
         &namespace,
         &manifest.release_id,
     )
-    .await?;
+    .await
+    {
+        // Failed first installs have no installed-bundle record yet.
+        // Carry their state and logs back without marking the update installed.
+        write_report_for_install(folder, site, settings, &record).await?;
+        return Err(error);
+    }
 
     // Keep what a rollback needs, as signed: the manifest and its
     // signature, the target and the chart. A rollback verifies them again
@@ -1763,6 +1774,15 @@ async fn write_report(folder: &Path, site: &SiteState, settings: &SiteSide) -> R
         return Ok(());
     };
     let record = read_installed(&latest.1)?;
+    write_report_for_install(folder, site, settings, &record).await
+}
+
+async fn write_report_for_install(
+    folder: &Path,
+    site: &SiteState,
+    settings: &SiteSide,
+    record: &InstalledBundle,
+) -> Result<()> {
     let namespace = settings.namespace(&record.stack_id);
     let Some((status, export_token)) = read_status(settings, &record.stack_id, &namespace).await?
     else {
@@ -1778,7 +1798,7 @@ async fn write_report(folder: &Path, site: &SiteState, settings: &SiteSide) -> R
         state: status["state"].clone(),
         telemetry,
         dropped,
-        inventory: record.inventory,
+        inventory: record.inventory.clone(),
     };
     let sequence = chrono::Utc::now().timestamp_millis();
     let path = folder
