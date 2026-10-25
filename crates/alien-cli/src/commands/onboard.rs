@@ -82,7 +82,7 @@ pub struct OnboardArgs {
 }
 
 fn parse_setup_link_url(value: &str) -> std::result::Result<String, String> {
-    if value.chars().count() > 2048 {
+    if value.encode_utf16().count() > 2048 {
         return Err("URL must be at most 2048 characters".to_string());
     }
     let url = url::Url::parse(value).map_err(|_| "Enter a valid HTTPS URL".to_string())?;
@@ -2033,6 +2033,44 @@ mod tests {
             ])
             .is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn standalone_rejects_setup_link_urls_before_contacting_manager() {
+        let manager = httpmock::MockServer::start_async().await;
+        let requests = manager
+            .mock_async(|_, then| {
+                then.status(500);
+            })
+            .await;
+        for flag in ["--return-url", "--refresh-url"] {
+            let args = OnboardArgs::try_parse_from([
+                "onboard",
+                "acme",
+                flag,
+                "https://example.com/complete",
+            ])
+            .unwrap();
+            let error = onboard_standalone(
+                args,
+                ExecutionMode::Standalone {
+                    server_url: manager.base_url(),
+                    api_key: "test-key".to_string(),
+                },
+                "acme".to_string(),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("require a platform setup link"));
+        }
+        requests.assert_hits_async(0).await;
+    }
+
+    #[test]
+    fn setup_link_url_length_matches_utf16_server_validation() {
+        let boundary = format!("https://example.com/{}", "😀".repeat(1014));
+        assert!(parse_setup_link_url(&boundary).is_ok());
+        assert!(parse_setup_link_url(&format!("{boundary}a")).is_err());
     }
 
     #[test]
