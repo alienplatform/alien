@@ -109,12 +109,53 @@ async fn generated_resources_keep_names_across_preparation() {
             .await
             .expect("real mutations prepare stack");
         assert!(prepared.resources.len() > stack.resources.len());
+        let expected_names = std::collections::BTreeMap::from([
+            ("application-sa", "Service account (application)"),
+            ("compute", "Compute cluster"),
+            ("default-container-env", "Container Apps environment"),
+            ("default-network", "Network"),
+            ("default-resource-group", "Resource group"),
+            ("default-storage-account", "Storage account"),
+            ("enable-app", "Microsoft.App provider"),
+            ("enable-cloud-quotas", "Cloud Quotas API"),
+            (
+                "enable-cloud-resource-manager",
+                "Cloud Resource Manager API",
+            ),
+            ("enable-cloud-run", "Cloud Run API"),
+            ("enable-cloud-storage", "Cloud Storage API"),
+            ("enable-compute-engine", "Compute Engine API"),
+            ("enable-iam", "Identity and Access Management (IAM) API"),
+            (
+                "enable-iam-credentials",
+                "IAM Service Account Credentials API",
+            ),
+            ("enable-keyvault", "Microsoft.KeyVault provider"),
+            ("enable-network", "Microsoft.Network provider"),
+            ("enable-secret-manager", "Secret Manager API"),
+            (
+                "enable-security-token-service",
+                "Security Token Service API",
+            ),
+            ("enable-storage", "Microsoft.Storage provider"),
+            ("kubernetes", "Kubernetes cluster"),
+            ("management", "Management identity"),
+            ("secrets", "Application secrets"),
+        ]);
         for (id, entry) in &prepared.resources {
-            assert!(
-                entry
-                    .display_name
-                    .as_ref()
-                    .is_some_and(|name| !name.is_empty()),
+            let expected_name = if let Some(authored) = stack.resources.get(id) {
+                assert_eq!(entry.description, authored.description, "{platform:?}/{id}");
+                authored.display_name.as_deref()
+            } else {
+                Some(
+                    *expected_names
+                        .get(id.as_str())
+                        .expect("every generated name is specified"),
+                )
+            };
+            assert_eq!(
+                entry.display_name.as_deref(),
+                expected_name,
                 "{platform:?}/{id}"
             );
             if !stack.resources.contains_key(id) {
