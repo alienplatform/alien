@@ -63,34 +63,13 @@ pub struct DestroyArgs {
     #[arg(long)]
     pub force: bool,
 
-    /// Skip the destruction confirmation prompt
+    /// Skip confirmation for cloud destruction (local dev destruction never prompts)
     #[arg(long)]
     pub yes: bool,
 }
 
 pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
-    let confirmation = InteractionMode::current(false).confirmation_mode(
-        args.yes,
-        "Destruction requires confirmation. Pass --yes to run non-interactively.",
-    )?;
-    if matches!(confirmation, ConfirmationMode::Prompt)
-        && !prompt_confirm(
-            &if args.force {
-                format!(
-                    "Forget deployment '{}' and leave its resources running?",
-                    args.name
-                )
-            } else {
-                format!("Destroy deployment '{}' and its resources?", args.name)
-            },
-            false,
-        )?
-    {
-        println!("Destruction cancelled.");
-        return Ok(());
-    }
     info!("Starting destroy command");
-    println!("{}", contextual_heading("Destroying", &args.name, &[]));
     let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
     steps.activate(0, Some(format!("Deployment {}", args.name)));
 
@@ -117,11 +96,38 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         .and_then(|tracker| tracker.get_deployment(&args.name).cloned());
     let (tracked_deployment, manager_ctx) =
         resolve_destroy_target(&args, &ctx, &platform_name, tracked, tracker.as_ref()).await?;
+    let confirmation = InteractionMode::current(false).confirmation_mode(
+        args.yes,
+        "Destruction requires confirmation. Pass --yes to run non-interactively.",
+    )?;
+    if matches!(confirmation, ConfirmationMode::Prompt)
+        && !prompt_confirm(
+            &if args.force {
+                format!(
+                    "Forget deployment '{}' ({}) and leave its resources running?",
+                    tracked_deployment.name, tracked_deployment.deployment_id
+                )
+            } else {
+                format!(
+                    "Destroy deployment '{}' ({}) and its resources?",
+                    tracked_deployment.name, tracked_deployment.deployment_id
+                )
+            },
+            false,
+        )?
+    {
+        println!("Destruction cancelled.");
+        return Ok(());
+    }
+    println!(
+        "{}",
+        contextual_heading("Destroying", &tracked_deployment.name, &[])
+    );
     steps.complete(
         0,
         Some(format!(
             "{} ({})",
-            args.name, tracked_deployment.deployment_id
+            tracked_deployment.name, tracked_deployment.deployment_id
         )),
     );
     steps.activate(1, Some("Discovering manager...".to_string()));

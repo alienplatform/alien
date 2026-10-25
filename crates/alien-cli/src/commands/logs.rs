@@ -581,6 +581,15 @@ async fn resolve_project_scope(
         crate::project_link::ProjectLinkStatus::Error(message) => {
             Err(AlienError::new(ErrorData::ConfigurationError { message }))
         }
+        crate::project_link::ProjectLinkStatus::Linked(link) => {
+            if allow_prompt {
+                eprintln!(
+                    "The linked project is in workspace '{}'. Searching every readable project in workspace '{}'.",
+                    link.workspace, workspace
+                );
+            }
+            Ok((None, None))
+        }
         _ => Ok((None, None)),
     }
 }
@@ -696,61 +705,48 @@ async fn fetch_logs(
     end_time: DateTime<Utc>,
     limit: usize,
 ) -> Result<LogsOutput> {
-    let mut hits = Vec::new();
-    let mut elapsed_time_micros = 0;
-    let mut errors = Vec::new();
-    let mut num_hits = 0;
-    while hits.len() < limit {
-        let page_size = (limit - hits.len()).min(MAX_LIMIT);
-        let result = client
-            .search(SearchParams {
-                database_id: database_id.to_string(),
-                query: query.to_string(),
-                start_time,
-                end_time,
-                max_hits: Some(page_size),
-                start_offset: Some(hits.len()),
-                sort_by: Some("-timestamp_nanos".to_string()),
-                search_fields: Some(
-                    DEFAULT_LOG_SEARCH_FIELDS
-                        .iter()
-                        .map(|field| field.to_string())
-                        .collect(),
-                ),
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| match error {
-                DeepstoreError::InvalidRequest(body) => {
-                    // Error bodies may be structured or plain text. Show the reason,
-                    // rather than embedding the serialized response in the message.
-                    let message = serde_json::from_str::<Value>(&body)
-                        .ok()
-                        .and_then(|value| {
-                            value
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .map(str::to_owned)
-                        })
-                        .unwrap_or(body);
-                    AlienError::new(ErrorData::LogSearchRejected { message })
-                }
-                error => AlienError::new(ErrorData::ApiRequestFailed {
-                    message: format!("Deepstore search failed: {error}"),
-                    url: None,
-                }),
-            })?;
-
-        num_hits = result.num_hits;
-        elapsed_time_micros += result.elapsed_time_micros;
-        let page_len = result.hits.len();
-        hits.extend(result.hits);
-        errors.extend(result.errors);
-        if page_len < page_size || !errors.is_empty() {
-            break;
-        }
-    }
-    let mut logs = hits.into_iter().map(log_entry_from_hit).collect::<Vec<_>>();
+    let result = client
+        .search(SearchParams {
+            database_id: database_id.to_string(),
+            query: query.to_string(),
+            start_time,
+            end_time,
+            max_hits: Some(limit),
+            sort_by: Some("-timestamp_nanos".to_string()),
+            search_fields: Some(
+                DEFAULT_LOG_SEARCH_FIELDS
+                    .iter()
+                    .map(|field| field.to_string())
+                    .collect(),
+            ),
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| match error {
+            DeepstoreError::InvalidRequest(body) => {
+                // Error bodies may be structured or plain text. Show the reason,
+                // rather than embedding the serialized response in the message.
+                let message = serde_json::from_str::<Value>(&body)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or(body);
+                AlienError::new(ErrorData::LogSearchRejected { message })
+            }
+            error => AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!("Deepstore search failed: {error}"),
+                url: None,
+            }),
+        })?;
+    let mut logs = result
+        .hits
+        .into_iter()
+        .map(log_entry_from_hit)
+        .collect::<Vec<_>>();
     logs.sort_by_key(|entry| entry.timestamp_nanos.unwrap_or(i64::MIN));
 
     Ok(LogsOutput {
@@ -758,10 +754,10 @@ async fn fetch_logs(
         query: query.to_string(),
         start_time,
         end_time,
-        num_hits,
+        num_hits: result.num_hits,
         logs,
-        errors,
-        elapsed_time_micros,
+        errors: result.errors,
+        elapsed_time_micros: result.elapsed_time_micros,
     })
 }
 
@@ -1294,73 +1290,6 @@ mod tests {
         splits.assert_hits_async(1).await;
         search.assert_hits_async(1).await;
         result
-    }
-
-    #[tokio::test]
-    async fn log_search_stops_at_limit_and_sends_offset() {
-        rustls::crypto::ring::default_provider()
-            .install_default()
-            .unwrap_or_else(|_| {
-                assert!(rustls::crypto::CryptoProvider::get_default().is_some());
-            });
-        let server = MockServer::start_async().await;
-        server
-            .mock_async(|when, then| {
-                when.method(GET).path("/v1/databases/db_test/splits");
-                then.json_body(json!({"splits":[]}));
-            })
-            .await;
-        let page = server
-            .mock_async(|when, then| {
-                when.method(POST)
-                    .path("/v1/logs/search")
-                    .body_contains("\"start_offset\":0")
-                    .body_contains("\"max_hits\":1000");
-                let hits: Vec<_> = (0..1000)
-                    .map(|i| {
-                        json!({
-                            "timestamp_nanos":1700000000000000000i64,
-                            "body":{"message":format!("log-{i}")}
-                        })
-                    })
-                    .collect();
-                then.json_body(json!({
-                    "num_hits":1005,"hits":hits,"elapsed_time_micros":1,"errors":[]
-                }));
-            })
-            .await;
-        let client = DeepstoreClient::builder()
-            .control_plane_url(server.url("/v1"))
-            .auth_proxy_url(server.base_url())
-            .query_token_provider(|| async { Ok("test-query-token".to_string()) })
-            .build()
-            .unwrap();
-        let target = LogsTarget {
-            manager_id: "mgr_test".to_string(),
-            project_id: None,
-            project_name: None,
-            deployment_id: None,
-            deployment_name: None,
-            deployment_group_name: None,
-            database_id: "db_test".to_string(),
-        };
-        let end = Utc::now();
-        let result = fetch_logs(
-            &client,
-            "db_test",
-            "*",
-            &target,
-            end - Duration::hours(1),
-            end,
-            1000,
-        )
-        .await
-        .unwrap();
-        assert_eq!(result.logs.len(), 1000);
-        assert_eq!(result.logs[0].message, "log-0");
-        assert_eq!(result.logs[999].message, "log-999");
-        assert_eq!(result.elapsed_time_micros, 1);
-        page.assert_hits_async(1).await;
     }
 
     #[tokio::test]
