@@ -450,6 +450,8 @@ test("existing access request risk enum deep imports remain compatible", async (
   for (const path of ["index", "createaccessrequest"]) {
     const models = await import(`../typescript/esm/models/${path}.js`);
     assert.equal(models.CreateAccessRequestMaxRisk.ReadOnly, "read-only");
+    assert.equal(models.MaxRisk.ReadOnly, "read-only");
+    assert.equal(models.MaxRisk$outboundSchema.parse("mutating"), "mutating");
     assert.equal(models.CreateAccessRequestMaxRisk$outboundSchema.parse("mutating"), "mutating");
   }
 });

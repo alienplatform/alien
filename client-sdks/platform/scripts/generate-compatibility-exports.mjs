@@ -540,7 +540,13 @@ await writeFile(externalBindingUrl, `${externalBindingSource}${externalBindingMa
 const accessRequestUrl = new URL("createaccessrequest.ts", models);
 const accessRequestMarker = "\n// Published access-request risk compatibility exports.\n";
 const accessRequestSource = (await readFile(accessRequestUrl, "utf8")).split(accessRequestMarker)[0];
-await writeFile(accessRequestUrl, `${accessRequestSource}${accessRequestMarker}export const CreateAccessRequestMaxRisk = MaxRisk;
+const accessRequestAliases = /export const MaxRisk =/.test(accessRequestSource)
+  ? `${accessRequestMarker}export const CreateAccessRequestMaxRisk = MaxRisk;
 export type CreateAccessRequestMaxRisk = MaxRisk;
 export const CreateAccessRequestMaxRisk$outboundSchema = MaxRisk$outboundSchema;
-`);
+`
+  : `${accessRequestMarker}export const MaxRisk = CreateAccessRequestMaxRisk;
+export type MaxRisk = CreateAccessRequestMaxRisk;
+export const MaxRisk$outboundSchema = CreateAccessRequestMaxRisk$outboundSchema;
+`;
+await writeFile(accessRequestUrl, `${accessRequestSource}${accessRequestAliases}`);

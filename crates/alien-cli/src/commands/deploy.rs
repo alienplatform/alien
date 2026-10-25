@@ -1669,6 +1669,8 @@ async fn deploy_task_with_environment(
                             .create_deployment()
                             .workspace(&workspace_name)
                             .body(alien_platform_api::types::NewDeploymentRequest {
+                                deployment_group_external_id: None,
+                                installation: None,
         base_platform: None,
                                 setup_item: parsed_setup_item,
                                 name: resolved_args
