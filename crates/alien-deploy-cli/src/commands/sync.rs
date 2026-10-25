@@ -1493,15 +1493,47 @@ fn copy_tools(bundle_dir: &Path, folder: &Path) -> Result<()> {
             continue;
         };
         let destination = folder.join(TOOLS_DIR).join(name);
-        std::fs::copy(&path, &destination)
+        let unchanged = match std::fs::read(&destination) {
+            Ok(existing) => {
+                existing
+                    == std::fs::read(&path)
+                        .into_alien_error()
+                        .context(config_error("reading the bundled tool"))?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(config_error("reading the carried tool"))
+            }
+        };
+        if unchanged {
+            #[cfg(unix)]
+            if name != TOOLS_SOURCES_FILE {
+                std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755))
+                    .into_alien_error()
+                    .context(config_error("making alien-deploy executable"))?;
+            }
+            continue;
+        }
+        let temporary = tempfile::NamedTempFile::new_in(folder.join(TOOLS_DIR))
+            .into_alien_error()
+            .context(config_error("creating the replacement tool"))?;
+        std::fs::copy(&path, temporary.path())
             .into_alien_error()
             .context(config_error("copying alien-deploy"))?;
         #[cfg(unix)]
         if name != TOOLS_SOURCES_FILE {
-            std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755))
+            std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o755))
                 .into_alien_error()
                 .context(config_error("making alien-deploy executable"))?;
         }
+        // The old inode can still be executing the site-side sync command.
+        temporary
+            .persist(&destination)
+            .map_err(|error| error.error)
+            .into_alien_error()
+            .context(config_error("replacing the carried tool"))?;
     }
     Ok(())
 }
@@ -2619,6 +2651,8 @@ mod tests {
     #[cfg(unix)]
     use alien_core::bundle_signature::BundleSigningKey;
     use httpmock::prelude::*;
+    #[cfg(target_os = "linux")]
+    use std::os::unix::fs::MetadataExt as _;
 
     use super::*;
 
@@ -2702,6 +2736,44 @@ mod tests {
         assert!(sync_command(args, Some(&config)).await.is_err());
         discovery.assert_hits_async(1).await;
         whoami.assert_hits_async(2).await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn carried_tools_can_refresh_the_running_executable() {
+        let bundle = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::create_dir(bundle.path().join(TOOLS_DIR)).unwrap();
+        let source = bundle.path().join("tools/acmectl-linux-x86_64");
+        std::fs::copy("/bin/sleep", &source).unwrap();
+        copy_tools(bundle.path(), folder.path()).unwrap();
+        let executable = folder.path().join("tools/acmectl-linux-x86_64");
+        let mut running = Command::new(&executable)
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        assert!(running.try_wait().unwrap().is_none());
+        let original_inode = std::fs::metadata(&executable).unwrap().ino();
+        copy_tools(bundle.path(), folder.path()).unwrap();
+        assert_eq!(
+            std::fs::metadata(&executable).unwrap().ino(),
+            original_inode
+        );
+        std::fs::copy("/bin/true", &source).unwrap();
+        copy_tools(bundle.path(), folder.path()).unwrap();
+        assert_ne!(
+            std::fs::metadata(&executable).unwrap().ino(),
+            original_inode
+        );
+        assert_eq!(
+            std::fs::metadata(&executable).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert!(Command::new(&executable).status().await.unwrap().success());
+        assert!(running.try_wait().unwrap().is_none());
+        running.kill().await.unwrap();
+        running.wait().await.unwrap();
     }
 
     #[tokio::test]
