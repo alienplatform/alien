@@ -190,6 +190,18 @@ Resources:
               - RegistryRepository
               - Arn
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+          - Sid: RepositoryCreationOwner
+            Effect: Allow
+            Action: ecr:TagResource
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
+            Condition:
+              StringEquals:
+                aws:ResourceTag/registry-owner: ${aws:PrincipalArn}
+                aws:RequestTag/registry-owner: ${aws:PrincipalArn}
+              ForAllValues:StringEquals:
+                aws:TagKeys:
+                - registry-owner
           - Sid: RegionalRepositoryPolicies
             Effect: Allow
             Action:
