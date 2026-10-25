@@ -25,6 +25,7 @@ use std::{
 use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use oci_client::{
     client::{Client as OciClient, ClientConfig, ClientProtocol},
+    errors::{OciDistributionError, OciErrorCode},
     manifest::{
         IMAGE_MANIFEST_LIST_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE, OCI_IMAGE_INDEX_MEDIA_TYPE,
         OCI_IMAGE_MEDIA_TYPE,
@@ -381,6 +382,35 @@ pub async fn import_images(
         client
             .store_auth_if_needed(target.resolve_registry(), &access.auth)
             .await;
+        let by_digest = Reference::with_digest(
+            target.registry().to_string(),
+            target.repository().to_string(),
+            image.digest.clone(),
+        );
+        match client.fetch_manifest_digest(&by_digest, &access.auth).await {
+            Ok(digest) if digest == image.digest => continue,
+            Ok(_) => {
+                return Err(AlienError::new(copy_failed(
+                    &image.source,
+                    "registry returned a different manifest digest",
+                )))
+            }
+            Err(OciDistributionError::ServerError { code: 404, .. }) => {}
+            Err(OciDistributionError::RegistryError { envelope, .. })
+                if !envelope.errors.is_empty()
+                    && envelope.errors.iter().all(|error| {
+                        matches!(
+                            error.code,
+                            OciErrorCode::ManifestUnknown | OciErrorCode::NameUnknown
+                        )
+                    }) => {}
+            Err(error) => {
+                return Err(error).into_alien_error().context(copy_failed(
+                    &image.source,
+                    "checking the destination manifest",
+                ))
+            }
+        }
         push_manifest_tree(&client, &target, layout, &image.digest, true).await?;
     }
     Ok(site_references(images, registry_prefix))
@@ -939,6 +969,14 @@ mod tests {
         }))
         .unwrap();
         let parent_digest = format!("sha256:{}", sha256_hex(&parent));
+        let missing = registry
+            .mock_async(|when, then| {
+                when.path(format!("/v2/site/image/manifests/{parent_digest}"));
+                then.status(404).json_body(serde_json::json!({
+                    "errors": [{"code": "MANIFEST_UNKNOWN", "message": "not found"}]
+                }));
+            })
+            .await;
         let child_push = registry
             .mock_async(|when, then| {
                 when.method(PUT)
@@ -986,8 +1024,73 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(mapping[source], format!("{prefix}/image@{parent_digest}"));
+        assert!(missing.hits_async().await >= 1);
         child_push.assert_async().await;
         parent_push.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn existing_digest_skips_writes_but_registry_errors_stop_import() {
+        let registry = MockServer::start_async().await;
+        let _ping = registry
+            .mock_async(|when, then| {
+                when.method(GET).path("/v2/");
+                then.status(200);
+            })
+            .await;
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2, "mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE, "manifests": []
+        }))
+        .unwrap();
+        let digest = format!("sha256:{}", sha256_hex(&manifest));
+        let path = format!("/v2/site/image/manifests/{digest}");
+        let mut existing = registry
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD).path(&path);
+                then.status(200).header("Docker-Content-Digest", &digest);
+            })
+            .await;
+        let writes = registry
+            .mock_async(|when, then| {
+                when.method(PUT);
+                then.status(201);
+            })
+            .await;
+        let layout = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(layout.path().join("blobs/sha256")).unwrap();
+        std::fs::write(blob_path(layout.path(), &digest).unwrap(), manifest).unwrap();
+        let images = [BundleImage {
+            source: "source.example.com/image:v1".into(),
+            repository: "image".into(),
+            tag: Some("v1".into()),
+            digest: digest.clone(),
+            media_type: OCI_IMAGE_INDEX_MEDIA_TYPE.into(),
+        }];
+        let prefix = format!("{}/site", registry.address());
+        let access = RegistryAccess {
+            auth: RegistryAuth::Anonymous,
+            insecure: true,
+        };
+        let mapping = import_images(layout.path(), &images, &prefix, &access)
+            .await
+            .unwrap();
+        assert_eq!(
+            mapping[&images[0].source],
+            format!("{prefix}/image@{digest}")
+        );
+        existing.assert_async().await;
+        writes.assert_hits_async(0).await;
+        existing.delete_async().await;
+        let _denied = registry
+            .mock_async(|when, then| {
+                when.path(&path);
+                then.status(401);
+            })
+            .await;
+        assert!(import_images(layout.path(), &images, &prefix, &access)
+            .await
+            .is_err());
+        writes.assert_hits_async(0).await;
     }
 
     #[test]
