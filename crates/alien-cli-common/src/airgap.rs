@@ -462,7 +462,14 @@ async fn push_manifest_tree(
         .parse()
         .into_alien_error()
         .context(copy_failed(&image, "invalid manifest media type"))?;
-    let destination = if tag_it { target } else { &by_digest };
+    // Some registries omit Location after a successful upload. The OCI client
+    // handles that response for tags, so give child manifests a content-based tag.
+    let child_tag = Reference::with_tag(
+        target.registry().to_string(),
+        target.repository().to_string(),
+        digest.replace(':', "-"),
+    );
+    let destination = if tag_it { target } else { &child_tag };
     client
         .push_manifest_raw(destination, manifest, content_type)
         .await
@@ -909,6 +916,79 @@ mod tests {
         apply_package_defaults, generate_helm_chart, package_chart, HelmOptions, HelmRegistry,
         LogCollectorDefault, OperatorImageDefault, PackageDefaults,
     };
+    use httpmock::prelude::*;
+
+    #[tokio::test]
+    async fn imports_nested_manifests_when_registry_omits_location() {
+        let registry = MockServer::start_async().await;
+        let _ping = registry
+            .mock_async(|when, then| {
+                when.method(GET).path("/v2/");
+                then.status(200);
+            })
+            .await;
+        let child = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2, "mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE, "manifests": []
+        }))
+        .unwrap();
+        let child_digest = format!("sha256:{}", sha256_hex(&child));
+        let parent = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2, "mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE,
+            "manifests": [{"mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE,
+                "digest": child_digest, "size": child.len()}]
+        }))
+        .unwrap();
+        let parent_digest = format!("sha256:{}", sha256_hex(&parent));
+        let child_push = registry
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path_matches(
+                        httpmock::Regex::new(&format!(
+                            "^/v2/site/image/manifests/sha256[:-]{}$",
+                            &child_digest[7..]
+                        ))
+                        .unwrap(),
+                    )
+                    .body(String::from_utf8(child.clone()).unwrap());
+                then.status(201);
+            })
+            .await;
+        let parent_push = registry
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/v2/site/image/manifests/v1")
+                    .body(String::from_utf8(parent.clone()).unwrap());
+                then.status(201);
+            })
+            .await;
+        let layout = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(layout.path().join("blobs/sha256")).unwrap();
+        std::fs::write(blob_path(layout.path(), &child_digest).unwrap(), child).unwrap();
+        std::fs::write(blob_path(layout.path(), &parent_digest).unwrap(), parent).unwrap();
+        let source = "source.example.com/image:v1";
+        let images = [BundleImage {
+            source: source.into(),
+            repository: "image".into(),
+            tag: Some("v1".into()),
+            digest: parent_digest.clone(),
+            media_type: OCI_IMAGE_INDEX_MEDIA_TYPE.into(),
+        }];
+        let prefix = format!("{}/site", registry.address());
+        let mapping = import_images(
+            layout.path(),
+            &images,
+            &prefix,
+            &RegistryAccess {
+                auth: RegistryAuth::Anonymous,
+                insecure: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(mapping[source], format!("{prefix}/image@{parent_digest}"));
+        child_push.assert_async().await;
+        parent_push.assert_async().await;
+    }
 
     #[test]
     fn finds_and_rewrites_image_references() {
