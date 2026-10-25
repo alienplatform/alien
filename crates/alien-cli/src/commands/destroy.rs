@@ -75,7 +75,14 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     )?;
     if matches!(confirmation, ConfirmationMode::Prompt)
         && !prompt_confirm(
-            &format!("Destroy deployment '{}' and its resources?", args.name),
+            &if args.force {
+                format!(
+                    "Forget deployment '{}' and leave its resources running?",
+                    args.name
+                )
+            } else {
+                format!("Destroy deployment '{}' and its resources?", args.name)
+            },
             false,
         )?
     {
