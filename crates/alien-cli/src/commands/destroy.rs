@@ -70,9 +70,6 @@ pub struct DestroyArgs {
 
 pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     info!("Starting destroy command");
-    let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
-    steps.activate(0, Some(format!("Deployment {}", args.name)));
-
     let platform_name = args.platform.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
@@ -86,6 +83,11 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         })
     })?;
 
+    let confirmation = InteractionMode::current(false).confirmation_mode(
+        args.yes,
+        "Destruction requires confirmation. Pass --yes to run non-interactively.",
+    )?;
+
     let tracker = if args.token.is_none() {
         Some(DeploymentTracker::new()?)
     } else {
@@ -96,10 +98,6 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         .and_then(|tracker| tracker.get_deployment(&args.name).cloned());
     let (mut tracked_deployment, manager_ctx) =
         resolve_destroy_target(&args, &ctx, &platform_name, tracked, tracker.as_ref()).await?;
-    let confirmation = InteractionMode::current(false).confirmation_mode(
-        args.yes,
-        "Destruction requires confirmation. Pass --yes to run non-interactively.",
-    )?;
     if matches!(confirmation, ConfirmationMode::Prompt)
         && !prompt_confirm(
             &if args.force {
@@ -119,6 +117,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         println!("Destruction cancelled.");
         return Ok(());
     }
+    let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
     ensure_destroy_token(&args, &ctx, &mut tracked_deployment).await?;
     println!(
         "{}",
@@ -306,12 +305,6 @@ async fn resolve_destroy_target(
         .filter(|saved| saved.project_id == project_id)
         .map(|saved| saved.api_key.clone());
     let api_key = saved_key.unwrap_or_default();
-    if !args.force && api_key.is_empty() && !ctx.is_platform() {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "token".to_string(),
-            message: "Supply --token with the deployment token to run setup teardown".to_string(),
-        }));
-    }
     Ok((
         TrackedDeployment {
             name: deployment.name.to_string(),
@@ -902,6 +895,33 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     const DEPLOYMENT_TOKEN: &str = "deployment-secret";
+
+    #[tokio::test]
+    async fn noninteractive_destroy_requires_yes_before_any_request() {
+        let server = httpmock::MockServer::start_async().await;
+        let requests = server
+            .mock_async(|_when, then| {
+                then.status(500);
+            })
+            .await;
+        let error = destroy_task(
+            DestroyArgs {
+                token: None,
+                name: "dep_test".to_string(),
+                platform: Some("test".to_string()),
+                force: false,
+                yes: false,
+            },
+            ExecutionMode::Standalone {
+                server_url: server.base_url(),
+                api_key: "operator".to_string(),
+            },
+        )
+        .await
+        .expect_err("automation must acknowledge destruction before resolving a target");
+        assert!(error.message.contains("Pass --yes"), "{error}");
+        requests.assert_hits_async(0).await;
+    }
 
     fn deployer_secret(
         label: &str,

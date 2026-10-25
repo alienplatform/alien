@@ -1257,7 +1257,8 @@ mod tests {
             .mock_async(|when, then| {
                 when.method(POST)
                     .path("/v1/logs/search")
-                    .header("authorization", "Bearer test-query-token");
+                    .header("authorization", "Bearer test-query-token")
+                    .json_body_partial(json!({"max_hits": 10}).to_string());
                 then.status(status).body(body);
             })
             .await;
@@ -1344,6 +1345,18 @@ mod tests {
         assert_eq!(output.logs[0].level.as_deref(), Some("INFO"));
         assert_eq!(output.elapsed_time_micros, 123);
         assert!(output.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_makes_one_request_with_the_requested_limit() {
+        let hits: Vec<_> = (0..10)
+            .map(|index| json!({"timestamp_nanos": 1700000000000000000i64, "body": {"message": format!("line {index}")}}))
+            .collect();
+        let body = json!({"num_hits": 100, "hits": hits, "elapsed_time_micros": 1, "errors": []});
+        let output = fetch_from_http(200, &body.to_string(), "*")
+            .await
+            .expect("one limited search succeeds even when more matches exist");
+        assert_eq!(output.logs.len(), 10);
     }
 
     fn manager_json(id: &str, is_system: bool) -> serde_json::Value {
