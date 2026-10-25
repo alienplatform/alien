@@ -1653,6 +1653,11 @@ export type DeploymentStackStateResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<DeploymentStackStateDependency> | undefined;
+  description?: string | null | undefined;
+  /**
+   * Presentation metadata from the effective resource entry, outside runtime configuration.
+   */
+  displayName?: string | null | undefined;
   error?: DeploymentErrorStackState | string | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
@@ -1665,6 +1670,10 @@ export type DeploymentStackStateResources = {
   lifecycle?: DeploymentLifecycleStackStateEnum | string | null | undefined;
   outputs?: DeploymentOutputs | string | null | undefined;
   previousConfig?: DeploymentPreviousConfig | string | null | undefined;
+  /**
+   * Last reported step explanation for display only; not a machine-readable status.
+   */
+  progress?: string | null | undefined;
   /**
    * Binding parameters for remote access.
    *
@@ -4250,6 +4259,8 @@ export const DeploymentStackStateResources$inboundSchema: z.ZodType<
   dependencies: z.array(
     z.lazy(() => DeploymentStackStateDependency$inboundSchema),
   ).optional(),
+  description: z.nullable(z.string()).optional(),
+  displayName: z.nullable(z.string()).optional(),
   error: z.nullable(
     z.union([
       z.lazy(() => DeploymentErrorStackState$inboundSchema),
@@ -4266,6 +4277,7 @@ export const DeploymentStackStateResources$inboundSchema: z.ZodType<
   previousConfig: z.nullable(
     z.union([z.lazy(() => DeploymentPreviousConfig$inboundSchema), z.string()]),
   ).optional(),
+  progress: z.nullable(z.string()).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
   retryAttempt: z.int().optional(),
   status: DeploymentStackStateStatus$inboundSchema,

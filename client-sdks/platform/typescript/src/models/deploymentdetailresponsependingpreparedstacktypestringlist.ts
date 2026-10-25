@@ -1748,6 +1748,11 @@ export type DeploymentDetailResponseStackStateResources = {
   dependencies?:
     | Array<DeploymentDetailResponseStackStateDependency>
     | undefined;
+  description?: string | null | undefined;
+  /**
+   * Presentation metadata from the effective resource entry, outside runtime configuration.
+   */
+  displayName?: string | null | undefined;
   error?: DeploymentDetailResponseErrorStackState | string | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
@@ -1768,6 +1773,10 @@ export type DeploymentDetailResponseStackStateResources = {
     | string
     | null
     | undefined;
+  /**
+   * Last reported step explanation for display only; not a machine-readable status.
+   */
+  progress?: string | null | undefined;
   /**
    * Binding parameters for remote access.
    *
@@ -4737,6 +4746,8 @@ export const DeploymentDetailResponseStackStateResources$inboundSchema:
     dependencies: z.array(
       z.lazy(() => DeploymentDetailResponseStackStateDependency$inboundSchema),
     ).optional(),
+    description: z.nullable(z.string()).optional(),
+    displayName: z.nullable(z.string()).optional(),
     error: z.nullable(
       z.union([
         z.lazy(() => DeploymentDetailResponseErrorStackState$inboundSchema),
@@ -4762,6 +4773,7 @@ export const DeploymentDetailResponseStackStateResources$inboundSchema:
         z.string(),
       ]),
     ).optional(),
+    progress: z.nullable(z.string()).optional(),
     remoteBindingParams: z.nullable(z.any()).optional(),
     retryAttempt: z.int().optional(),
     status: DeploymentDetailResponseStackStateStatus$inboundSchema,

@@ -1821,6 +1821,14 @@ export type DeploymentDetailResponsePendingPreparedStackResources = {
    */
   dependencies: Array<DeploymentDetailResponsePendingPreparedStackDependency>;
   /**
+   * Authored purpose, displayed as plain text. Does not affect resource configuration.
+   */
+  description?: string | null | undefined;
+  /**
+   * Optional human-readable name. The stable resource ID is the display fallback.
+   */
+  displayName?: string | null | undefined;
+  /**
    * Id of the boolean stack input that decides whether this resource is
    *
    * @remarks
@@ -5330,6 +5338,8 @@ export const DeploymentDetailResponsePendingPreparedStackResources$inboundSchema
           DeploymentDetailResponsePendingPreparedStackDependency$inboundSchema
         ),
       ),
+      description: z.nullable(z.string()).optional(),
+      displayName: z.nullable(z.string()).optional(),
       enabledWhen: z.nullable(z.string()).optional(),
       lifecycle:
         DeploymentDetailResponsePendingPreparedStackLifecycle$inboundSchema,

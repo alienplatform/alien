@@ -1,6 +1,6 @@
 # SyncListResponseStackState
 
-Raw engine state for installers and the CLI to resume, update, and destroy deployments. UIs should read resources[] for resource status and errors.
+State of infrastructure components managed by this deployment
 
 ## Example Usage
 

@@ -1365,6 +1365,14 @@ export type DeploymentStatePreparedStackResources = {
    */
   dependencies: Array<DeploymentStatePreparedStackDependency>;
   /**
+   * Authored purpose, displayed as plain text. Does not affect resource configuration.
+   */
+  description?: string | null | undefined;
+  /**
+   * Optional human-readable name. The stable resource ID is the display fallback.
+   */
+  displayName?: string | null | undefined;
+  /**
    * Id of the boolean stack input that decides whether this resource is
    *
    * @remarks
@@ -1986,6 +1994,11 @@ export type DeploymentStateStackStateResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<DeploymentStateStackStateDependency> | undefined;
+  description?: string | null | undefined;
+  /**
+   * Presentation metadata from the effective resource entry, outside runtime configuration.
+   */
+  displayName?: string | null | undefined;
   error?: DeploymentStateStackStateError | string | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
@@ -2002,6 +2015,10 @@ export type DeploymentStateStackStateResources = {
     | undefined;
   outputs?: DeploymentStateOutputs | string | null | undefined;
   previousConfig?: DeploymentStatePreviousConfig | string | null | undefined;
+  /**
+   * Last reported step explanation for display only; not a machine-readable status.
+   */
+  progress?: string | null | undefined;
   /**
    * Binding parameters for remote access.
    *
@@ -7103,6 +7120,8 @@ export const DeploymentStatePreparedStackResources$inboundSchema: z.ZodType<
   dependencies: z.array(
     z.lazy(() => DeploymentStatePreparedStackDependency$inboundSchema),
   ),
+  description: z.nullable(z.string()).optional(),
+  displayName: z.nullable(z.string()).optional(),
   enabledWhen: z.nullable(z.string()).optional(),
   lifecycle: DeploymentStatePreparedStackLifecycle$inboundSchema,
   remoteAccess: z.boolean().optional(),
@@ -7111,6 +7130,8 @@ export const DeploymentStatePreparedStackResources$inboundSchema: z.ZodType<
 export type DeploymentStatePreparedStackResources$Outbound = {
   config: DeploymentStatePreparedStackConfig$Outbound;
   dependencies: Array<DeploymentStatePreparedStackDependency$Outbound>;
+  description?: string | null | undefined;
+  displayName?: string | null | undefined;
   enabledWhen?: string | null | undefined;
   lifecycle: string;
   remoteAccess?: boolean | undefined;
@@ -7125,6 +7146,8 @@ export const DeploymentStatePreparedStackResources$outboundSchema: z.ZodType<
   dependencies: z.array(
     z.lazy(() => DeploymentStatePreparedStackDependency$outboundSchema),
   ),
+  description: z.nullable(z.string()).optional(),
+  displayName: z.nullable(z.string()).optional(),
   enabledWhen: z.nullable(z.string()).optional(),
   lifecycle: DeploymentStatePreparedStackLifecycle$outboundSchema,
   remoteAccess: z.boolean().optional(),
@@ -8334,6 +8357,8 @@ export const DeploymentStateStackStateResources$inboundSchema: z.ZodType<
   dependencies: z.array(
     z.lazy(() => DeploymentStateStackStateDependency$inboundSchema),
   ).optional(),
+  description: z.nullable(z.string()).optional(),
+  displayName: z.nullable(z.string()).optional(),
   error: z.nullable(
     z.union([
       z.lazy(() => DeploymentStateStackStateError$inboundSchema),
@@ -8353,6 +8378,7 @@ export const DeploymentStateStackStateResources$inboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  progress: z.nullable(z.string()).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
   retryAttempt: z.int().optional(),
   status: DeploymentStateStackStateStatus$inboundSchema,
@@ -8370,6 +8396,8 @@ export type DeploymentStateStackStateResources$Outbound = {
   dependencies?:
     | Array<DeploymentStateStackStateDependency$Outbound>
     | undefined;
+  description?: string | null | undefined;
+  displayName?: string | null | undefined;
   error?: DeploymentStateStackStateError$Outbound | string | null | undefined;
   lastFailedState?: any | null | undefined;
   lifecycle?: string | string | null | undefined;
@@ -8379,6 +8407,7 @@ export type DeploymentStateStackStateResources$Outbound = {
     | string
     | null
     | undefined;
+  progress?: string | null | undefined;
   remoteBindingParams?: any | null | undefined;
   retryAttempt?: number | undefined;
   status: string;
@@ -8398,6 +8427,8 @@ export const DeploymentStateStackStateResources$outboundSchema: z.ZodType<
   dependencies: z.array(
     z.lazy(() => DeploymentStateStackStateDependency$outboundSchema),
   ).optional(),
+  description: z.nullable(z.string()).optional(),
+  displayName: z.nullable(z.string()).optional(),
   error: z.nullable(
     z.union([
       z.lazy(() => DeploymentStateStackStateError$outboundSchema),
@@ -8420,6 +8451,7 @@ export const DeploymentStateStackStateResources$outboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  progress: z.nullable(z.string()).optional(),
   remoteBindingParams: z.nullable(z.any()).optional(),
   retryAttempt: z.int().optional(),
   status: DeploymentStateStackStateStatus$outboundSchema,

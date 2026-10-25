@@ -1693,6 +1693,14 @@ export type CurrentReleaseResources = {
    */
   dependencies: Array<CurrentReleaseDependency>;
   /**
+   * Authored purpose, displayed as plain text. Does not affect resource configuration.
+   */
+  description?: string | null | undefined;
+  /**
+   * Optional human-readable name. The stable resource ID is the display fallback.
+   */
+  displayName?: string | null | undefined;
+  /**
    * Id of the boolean stack input that decides whether this resource is
    *
    * @remarks
@@ -7146,6 +7154,8 @@ export const CurrentReleaseResources$inboundSchema: z.ZodType<
 > = z.object({
   config: z.lazy(() => CurrentReleaseConfig$inboundSchema),
   dependencies: z.array(z.lazy(() => CurrentReleaseDependency$inboundSchema)),
+  description: z.nullable(z.string()).optional(),
+  displayName: z.nullable(z.string()).optional(),
   enabledWhen: z.nullable(z.string()).optional(),
   lifecycle: CurrentReleaseLifecycle$inboundSchema,
   remoteAccess: z.boolean().optional(),
@@ -7154,6 +7164,8 @@ export const CurrentReleaseResources$inboundSchema: z.ZodType<
 export type CurrentReleaseResources$Outbound = {
   config: CurrentReleaseConfig$Outbound;
   dependencies: Array<CurrentReleaseDependency$Outbound>;
+  description?: string | null | undefined;
+  displayName?: string | null | undefined;
   enabledWhen?: string | null | undefined;
   lifecycle: string;
   remoteAccess?: boolean | undefined;
@@ -7166,6 +7178,8 @@ export const CurrentReleaseResources$outboundSchema: z.ZodType<
 > = z.object({
   config: z.lazy(() => CurrentReleaseConfig$outboundSchema),
   dependencies: z.array(z.lazy(() => CurrentReleaseDependency$outboundSchema)),
+  description: z.nullable(z.string()).optional(),
+  displayName: z.nullable(z.string()).optional(),
   enabledWhen: z.nullable(z.string()).optional(),
   lifecycle: CurrentReleaseLifecycle$outboundSchema,
   remoteAccess: z.boolean().optional(),

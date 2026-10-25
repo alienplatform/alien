@@ -804,8 +804,14 @@ async fn retained_data_releases_grantees_after_workload_cleanup() -> Result<()> 
             executor.prepare_for_deletion(&mut state)?;
             let waiting_for_workload =
                 get_status(&state, "consumer") != Some(ResourceStatus::Deleted);
-            let identity_before = serde_json::to_value(&state.resources["reader"]).unwrap();
-            let management_before = serde_json::to_value(&state.resources["management"]).unwrap();
+            let mut identity_before = serde_json::to_value(&state.resources["reader"]).unwrap();
+            let mut management_before = serde_json::to_value(&state.resources["management"]).unwrap();
+            // The controller checkpoint stays unchanged while deletion reports
+            // the workload that still needs this identity.
+            if waiting_for_workload {
+                identity_before["progress"] = serde_json::json!("Waiting for consumer.");
+                management_before["progress"] = serde_json::json!("Waiting for consumer.");
+            }
             state = executor.step(state).await?.next_state;
             if waiting_for_workload {
                 assert_eq!(
