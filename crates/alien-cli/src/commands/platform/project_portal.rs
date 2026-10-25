@@ -430,9 +430,15 @@ async fn get_settings(http: &AuthHttp, workspace: Option<&str>, project: &str) -
                     )
                 })
         });
+    let appearance_error = appearance.as_ref().err().cloned();
     let appearance = readable_section(appearance)?;
     let domain = readable_section(domain_status(http, workspace, project).await)?;
     let google = readable_section(google_settings(http, workspace, project, None).await)?;
+    if let Some(error) = appearance_error {
+        if domain.get("error").is_some() && google.get("error").is_some() {
+            return Err(error);
+        }
+    }
     Ok(json!({"appearance": appearance, "domain": domain, "googleSignIn": google}))
 }
 
@@ -857,6 +863,30 @@ mod tests {
         assert_eq!(settings["googleSignIn"]["error"]["httpStatusCode"], 403);
         print_domains(&settings["domain"]).unwrap();
         print_google(&settings["googleSignIn"]).unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn get_fails_when_no_section_can_be_read() {
+        let app = Router::new().fallback(|| async {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(json!({
+                    "code": "PROJECT_NOT_FOUND", "message": "Project no longer exists",
+                    "retryable": false, "internal": false
+                })),
+            )
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let http = build_auth_http(
+            client_with_header("Bearer test-key").unwrap(),
+            format!("http://{}", listener.local_addr().unwrap()),
+            None,
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let error = get_settings(&http, None, "sample").await.unwrap_err();
+        assert_eq!(error.http_status_code, Some(404));
+        assert_eq!(error.source.as_ref().unwrap().code, "PROJECT_NOT_FOUND");
         server.abort();
     }
 
