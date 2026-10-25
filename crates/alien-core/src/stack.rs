@@ -210,6 +210,7 @@ impl Stack {
                 let mut value =
                     serde_json::to_value(entry).expect("resource entries always serialize to JSON");
                 let object = value.as_object_mut().expect("resource entry is an object");
+                object.remove("addedByAlien");
                 object.remove("displayName");
                 object.remove("description");
                 if let Some(sandbox) = entry.config.downcast_ref::<crate::Sandbox>() {
@@ -875,6 +876,7 @@ mod tests {
             .build();
         let mut documented = original.clone();
         let entry = documented.resources.get_mut("documents").unwrap();
+        entry.added_by_alien = true;
         entry.display_name = Some("Document storage".to_string());
         entry.description = Some("Uploaded documents and processed results.".to_string());
         assert_eq!(

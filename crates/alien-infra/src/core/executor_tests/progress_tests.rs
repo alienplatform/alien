@@ -161,6 +161,7 @@ async fn metadata_only_release_updates_presentation_without_a_resource_operation
         Some("Document processor")
     );
     let before = state.resources["worker"].clone();
+    stack.resources.get_mut("worker").unwrap().added_by_alien = true;
     stack.resources.get_mut("worker").unwrap().description =
         Some("Processes documents and results.".to_owned());
     let executor = new_executor(&stack).unwrap();
@@ -182,6 +183,7 @@ async fn metadata_only_release_updates_presentation_without_a_resource_operation
         after.description.as_deref(),
         Some("Processes documents and results.")
     );
+    assert!(after.added_by_alien);
     stack.resources.get_mut("worker").unwrap().display_name = None;
     stack.resources.get_mut("worker").unwrap().description = None;
     let cleared = new_executor(&stack)
