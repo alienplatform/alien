@@ -137,12 +137,19 @@ async fn probe_loader(path: &str, expected: Loader) -> Result<bool> {
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(match expected {
-        Loader::Gnu => {
-            output.status.success() && (text.contains("GLIBC") || text.contains("GNU libc"))
-        }
+        Loader::Gnu => output.status.success() && is_glibc_loader_version(&text),
         // The MUSL loader prints its version to stderr and exits nonzero without a program.
         Loader::Musl => text.contains("musl libc"),
     })
+}
+
+/// glibc's loader always prints "ld.so (<package version>) <stable|development> release
+/// version <x.y>." The package version is distro-chosen (e.g. Gentoo's names neither
+/// GLIBC nor GNU libc), so match the fixed wording instead.
+fn is_glibc_loader_version(text: &str) -> bool {
+    text.lines()
+        .next()
+        .is_some_and(|line| line.starts_with("ld.so (") && line.contains(" release version "))
 }
 
 /// Recover the last server's ABI without executing a potentially incompatible binary.
@@ -195,5 +202,31 @@ pub(super) async fn previous_runtime_target(data_dir: &Path) -> Result<String> {
 fn runtime_error(reason: impl Into<String>) -> ErrorData {
     ErrorData::LocalPostgresRuntimeUnavailable {
         reason: reason.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_glibc_loader_version;
+
+    #[test]
+    fn glibc_loader_is_recognised_whatever_the_distro_package_version() {
+        for output in [
+            "ld.so (Debian GLIBC 2.36-9+deb12u7) stable release version 2.36.\nCopyright (C) 2022 Free Software Foundation, Inc.\n",
+            "ld.so (Ubuntu GLIBC 2.39-0ubuntu8.3) stable release version 2.39.\n",
+            "ld.so (GNU libc) stable release version 2.38.\n",
+            "ld.so (Gentoo 2.38-r13 (patchset 10)) stable release version 2.38.\n",
+            "ld.so (GNU libc) development release version 2.41.9000.\n",
+        ] {
+            assert!(is_glibc_loader_version(output), "{output}");
+        }
+    }
+
+    #[test]
+    fn musl_loader_output_is_not_glibc() {
+        // What gcompat's GNU-named loader path answers with, since it hands off to musl.
+        let musl = "musl libc (x86_64)\nVersion 1.2.4\nDynamic Program Loader\nUsage: /lib/ld-musl-x86_64.so.1 [options] [--] pathname [args]\n";
+        assert!(!is_glibc_loader_version(musl));
+        assert!(!is_glibc_loader_version(""));
     }
 }
