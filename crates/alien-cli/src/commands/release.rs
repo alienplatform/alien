@@ -100,7 +100,8 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub title: Option<String>,
 
-    /// Emit structured JSON output
+    /// Emit result JSON on stdout and plain progress lines on stderr.
+    /// On failure, stderr ends with one JSON error document on its own line.
     #[arg(long)]
     pub json: bool,
 

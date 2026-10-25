@@ -233,7 +233,7 @@ pub enum DeploymentsCmd {
         id: String,
 
         /// Maximum number of recent events to return
-        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..))]
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..=100))]
         limit: u64,
 
         /// Print the API response as machine-readable JSON
@@ -928,47 +928,32 @@ async fn deployment_events_task(
     limit: u64,
     json: bool,
 ) -> Result<()> {
-    let mut remaining = limit;
-    let mut cursor = None;
-    let mut items = Vec::new();
-    loop {
-        let page_size = NonZeroU64::new(remaining.min(100)).ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "limit".to_string(),
-                message: "event limit must be greater than zero".to_string(),
-            })
-        })?;
-        let mut request = client
-            .list_events()
-            .workspace(workspace)
-            .deployment_id(deployment_id)
-            .limit(page_size);
-        if let Some(cursor) = cursor.as_deref() {
-            request = request.cursor(cursor);
-        }
-        let response = request
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: format!("listing events for deployment '{deployment_id}'"),
-                url: None,
-            })?
-            .into_inner();
-        remaining = remaining.saturating_sub(response.items.len() as u64);
-        let empty = response.items.is_empty();
-        items.extend(response.items);
-        cursor = response.next_cursor;
-        if remaining == 0 || cursor.is_none() || empty {
-            break;
-        }
-    }
+    let limit = NonZeroU64::new(limit).ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "limit".to_string(),
+            message: "event limit must be greater than zero".to_string(),
+        })
+    })?;
+    let response = client
+        .list_events()
+        .workspace(workspace)
+        .deployment_id(deployment_id)
+        .limit(limit)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("listing events for deployment '{deployment_id}'"),
+            url: None,
+        })?
+        .into_inner();
 
     if json {
-        return print_json(&serde_json::json!({ "items": items, "nextCursor": cursor }));
+        return print_json(&response);
     }
 
-    let rows = items
+    let rows = response
+        .items
         .iter()
         .map(|event| {
             EventDisplayRow::try_new(
@@ -4046,7 +4031,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_events_accepts_a_limit_spanning_pages() {
+    fn deployment_events_rejects_limits_above_one_hundred() {
         let result = DeploymentsArgs::try_parse_from([
             "deployments",
             "events",
@@ -4055,7 +4040,7 @@ mod tests {
             "101",
         ]);
 
-        assert!(result.is_ok(), "limits above one API page are paginated");
+        assert!(result.is_err(), "event limit is capped at 100");
     }
 
     #[test]

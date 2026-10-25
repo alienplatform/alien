@@ -38,7 +38,7 @@ fn machine_inventory_and_token_are_json_without_a_linked_project() {
         then.status(201)
             .json_body(json!({"deploymentId":ID,"token":"test-deployment-token"}));
     });
-    let events: Vec<_> = (0..101)
+    let events: Vec<_> = (0..100)
         .map(|i| {
             json!({
                 "id":format!("event_{i:028}"), "deploymentId":ID,
@@ -48,22 +48,19 @@ fn machine_inventory_and_token_are_json_without_a_linked_project() {
             })
         })
         .collect();
+    let event_response = json!({"items":events,"nextCursor":"next-page","releases":[{
+        "id":"rel_0000000000000000000000000000", "version":"1.0.0",
+        "title":"First release", "createdAt":"2026-01-01T00:00:00Z"
+    }]});
     let first = server.mock(|when, then| {
         when.method(GET)
             .path("/v1/events")
             .query_param("limit", "100");
-        then.json_body(json!({"items":&events[..100],"nextCursor":"next-page"}));
-    });
-    let second = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/events")
-            .query_param("limit", "1")
-            .query_param("cursor", "next-page");
-        then.json_body(json!({"items":&events[100..],"nextCursor":null}));
+        then.json_body(event_response.clone());
     });
     for (operation, expected) in [
         ("machines", json!([])),
-        ("events", json!({"items": events, "nextCursor":null})),
+        ("events", event_response),
         (
             "token",
             json!({"deploymentId":ID,"token":"test-deployment-token"}),
@@ -88,7 +85,7 @@ fn machine_inventory_and_token_are_json_without_a_linked_project() {
             .env_remove("ALIEN_PROJECT")
             .env_remove("RUST_LOG");
         if operation == "events" {
-            command.args(["--limit", "101"]);
+            command.args(["--limit", "100"]);
         }
         let output = command.output().unwrap();
         assert!(
@@ -107,5 +104,4 @@ fn machine_inventory_and_token_are_json_without_a_linked_project() {
     machines.assert();
     token.assert();
     first.assert();
-    second.assert();
 }

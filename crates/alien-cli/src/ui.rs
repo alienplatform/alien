@@ -1512,10 +1512,7 @@ pub enum UiCommandKind {
 
 pub fn event_bus_for_command(kind: Option<UiCommandKind>, json_output: bool) -> Option<EventBus> {
     let kind = kind?;
-    if json_output {
-        return None;
-    }
-    if !supports_ansi() {
+    if json_output || !supports_ansi() {
         let handler = Arc::new(LineCommandEventHandler::new());
         return Some(EventBus::with_handlers(vec![handler]));
     }
@@ -1523,7 +1520,7 @@ pub fn event_bus_for_command(kind: Option<UiCommandKind>, json_output: bool) -> 
     Some(EventBus::with_handlers(vec![handler]))
 }
 
-/// Stable, non-ANSI progress for human-readable commands in CI.
+/// Stable, non-ANSI progress on stderr for JSON output and CI.
 struct LineCommandEventHandler {
     compilation_updates: Mutex<HashMap<String, (Instant, String)>>,
 }

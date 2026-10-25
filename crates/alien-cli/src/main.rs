@@ -33,7 +33,7 @@ async fn async_main() -> std::process::ExitCode {
                         if let Some(request_id) = request_id {
                             value["requestId"] = serde_json::Value::String(request_id);
                         }
-                        serde_json::to_string_pretty(&value)
+                        serde_json::to_string(&value)
                     });
                 match serialized {
                     Ok(json) => eprintln!("{json}"),

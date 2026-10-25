@@ -358,10 +358,10 @@ fn validate_args(args: &LogsArgs) -> Result<()> {
             message: "Query cannot be empty.".to_string(),
         }));
     }
-    if args.limit == 0 {
+    if !(1..=MAX_LIMIT).contains(&args.limit) {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "limit".to_string(),
-            message: "Limit must be greater than zero.".to_string(),
+            message: format!("Limit must be between 1 and {MAX_LIMIT}."),
         }));
     }
     if args.interval.is_zero() {
@@ -1297,7 +1297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn log_search_pages_past_one_thousand_without_losing_equal_timestamps() {
+    async fn log_search_stops_at_limit_and_sends_offset() {
         rustls::crypto::ring::default_provider()
             .install_default()
             .unwrap_or_else(|_| {
@@ -1310,18 +1310,25 @@ mod tests {
                 then.json_body(json!({"splits":[]}));
             })
             .await;
-        let mut pages = Vec::new();
-        for (offset, size) in [(0, 1000), (1000, 5)] {
-            pages.push(server.mock_async(move |when, then| {
-                when.method(POST).path("/v1/logs/search")
-                    .body_contains(format!("\"start_offset\":{offset}"))
-                    .body_contains(format!("\"max_hits\":{size}"));
-                let hits: Vec<_> = (offset..offset+size).map(|i| json!({
-                    "timestamp_nanos":1700000000000000000i64, "body":{"message":format!("log-{i}")}
-                })).collect();
-                then.json_body(json!({"num_hits":1005,"hits":hits,"elapsed_time_micros":1,"errors":[]}));
-            }).await);
-        }
+        let page = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/logs/search")
+                    .body_contains("\"start_offset\":0")
+                    .body_contains("\"max_hits\":1000");
+                let hits: Vec<_> = (0..1000)
+                    .map(|i| {
+                        json!({
+                            "timestamp_nanos":1700000000000000000i64,
+                            "body":{"message":format!("log-{i}")}
+                        })
+                    })
+                    .collect();
+                then.json_body(json!({
+                    "num_hits":1005,"hits":hits,"elapsed_time_micros":1,"errors":[]
+                }));
+            })
+            .await;
         let client = DeepstoreClient::builder()
             .control_plane_url(server.url("/v1"))
             .auth_proxy_url(server.base_url())
@@ -1345,17 +1352,15 @@ mod tests {
             &target,
             end - Duration::hours(1),
             end,
-            1005,
+            1000,
         )
         .await
         .unwrap();
-        assert_eq!(result.logs.len(), 1005);
+        assert_eq!(result.logs.len(), 1000);
         assert_eq!(result.logs[0].message, "log-0");
-        assert_eq!(result.logs[1004].message, "log-1004");
-        assert_eq!(result.elapsed_time_micros, 2);
-        for page in pages {
-            page.assert_async().await;
-        }
+        assert_eq!(result.logs[999].message, "log-999");
+        assert_eq!(result.elapsed_time_micros, 1);
+        page.assert_hits_async(1).await;
     }
 
     #[tokio::test]
@@ -1509,7 +1514,7 @@ mod tests {
 
     #[test]
     fn invalid_log_limits_are_client_validation_errors() {
-        for limit in [0] {
+        for limit in [0, 1001] {
             let args = LogsArgs::try_parse_from(["logs", "--limit", &limit.to_string()])
                 .expect("numeric limit parses before semantic validation");
             let error = validate_args(&args).expect_err("limit outside supported range");
@@ -1519,8 +1524,8 @@ mod tests {
             assert!(!error.internal);
         }
         let args =
-            LogsArgs::try_parse_from(["logs", "--limit", "2000"]).expect("multi-page limit parses");
-        validate_args(&args).expect("multi-page limits remain valid");
+            LogsArgs::try_parse_from(["logs", "--limit", "1000"]).expect("maximum limit parses");
+        validate_args(&args).expect("maximum limit remains valid");
     }
 
     fn test_query<'a>(
