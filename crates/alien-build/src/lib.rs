@@ -167,11 +167,19 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     // Release auto-builds and library callers can construct BuildSettings directly instead of
     // going through the CLI planner. Enforce the platform's architecture contract here so every
     // path fails before doing build work or writing artifacts.
-    plan::resolve_targets_for_stack_platform(
+    let targets = plan::resolve_targets_for_stack_platform(
         &stack,
         settings.platform.runtime_platform(),
         settings.targets.as_deref(),
     )?;
+    let mut resolved_settings = settings.clone();
+    if matches!(
+        settings.platform.runtime_platform(),
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Machines
+    ) {
+        resolved_settings.targets = Some(targets);
+    }
+    let settings = &resolved_settings;
 
     // Run preflights (compile-time checks only)
     let preflight_runner = PreflightRunner::new();
