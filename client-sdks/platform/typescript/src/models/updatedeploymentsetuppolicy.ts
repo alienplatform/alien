@@ -13,12 +13,22 @@ import {
  * Editable part of a deployment link's setup config. Locked env vars and input values are preserved.
  */
 export type UpdateDeploymentSetupPolicy = {
+  /**
+   * Vendor destination when leaving or completing setup. Null clears the destination.
+   */
+  returnUrl?: string | null | undefined;
+  /**
+   * Vendor destination for expired, revoked, disabled or exhausted setup links. The vendor creates a fresh link there. Null clears the destination.
+   */
+  refreshUrl?: string | null | undefined;
   policy: DeploymentSetupPolicy;
   metadata?: { [k: string]: any | null } | undefined;
 };
 
 /** @internal */
 export type UpdateDeploymentSetupPolicy$Outbound = {
+  returnUrl?: string | null | undefined;
+  refreshUrl?: string | null | undefined;
   policy: DeploymentSetupPolicy$Outbound;
   metadata?: { [k: string]: any | null } | undefined;
 };
@@ -28,6 +38,8 @@ export const UpdateDeploymentSetupPolicy$outboundSchema: z.ZodType<
   UpdateDeploymentSetupPolicy$Outbound,
   UpdateDeploymentSetupPolicy
 > = z.object({
+  returnUrl: z.nullable(z.string()).optional(),
+  refreshUrl: z.nullable(z.string()).optional(),
   policy: DeploymentSetupPolicy$outboundSchema,
   metadata: z.record(z.string(), z.nullable(z.any())).optional(),
 });

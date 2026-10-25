@@ -1,0 +1,29 @@
+# PrepareDeploymentInstallationRequestBody
+
+## Example Usage
+
+```typescript
+import { PrepareDeploymentInstallationRequestBody } from "@alienplatform/platform-api/models/operations";
+
+let value: PrepareDeploymentInstallationRequestBody = {
+  name: "<value>",
+  platform: "test",
+  method: "helm",
+  configuration: "<value>",
+  command: "<value>",
+};
+```
+
+## Fields
+
+| Field                                                                                                                  | Type                                                                                                                   | Required                                                                                                               | Description                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `name`                                                                                                                 | *string*                                                                                                               | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `platform`                                                                                                             | [operations.PrepareDeploymentInstallationPlatform](../../models/operations/preparedeploymentinstallationplatform.md)   | :heavy_check_mark:                                                                                                     | Represents the target cloud platform.                                                                                  |
+| `method`                                                                                                               | [operations.PrepareDeploymentInstallationMethod](../../models/operations/preparedeploymentinstallationmethod.md)       | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `configuration`                                                                                                        | *string*                                                                                                               | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `command`                                                                                                              | *string*                                                                                                               | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `installCommand`                                                                                                       | *string*                                                                                                               | :heavy_minus_sign:                                                                                                     | N/A                                                                                                                    |
+| `commandVariants`                                                                                                      | [operations.CommandVariants](../../models/operations/commandvariants.md)                                               | :heavy_minus_sign:                                                                                                     | N/A                                                                                                                    |
+| `managerUrl`                                                                                                           | *string*                                                                                                               | :heavy_minus_sign:                                                                                                     | N/A                                                                                                                    |
+| `setupItem`                                                                                                            | [operations.PrepareDeploymentInstallationSetupItem](../../models/operations/preparedeploymentinstallationsetupitem.md) | :heavy_minus_sign:                                                                                                     | N/A                                                                                                                    |

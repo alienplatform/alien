@@ -22,6 +22,7 @@ import { deploymentsListVolumeRestores } from "../funcs/deploymentsListVolumeRes
 import { deploymentsMove } from "../funcs/deploymentsMove.js";
 import { deploymentsPinRelease } from "../funcs/deploymentsPinRelease.js";
 import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
+import { deploymentsReportDeploymentSetupProgress } from "../funcs/deploymentsReportDeploymentSetupProgress.js";
 import { deploymentsRestoreVolume } from "../funcs/deploymentsRestoreVolume.js";
 import { deploymentsRetry } from "../funcs/deploymentsRetry.js";
 import { deploymentsSetFirstPartyDeploymentInputs } from "../funcs/deploymentsSetFirstPartyDeploymentInputs.js";
@@ -187,6 +188,20 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.SetFirstPartyDeploymentInputsResponse> {
     return unwrapAsync(deploymentsSetFirstPartyDeploymentInputs(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Record that a reserved CloudFormation setup started its stack, or that AWS rolled the stack back before it registered. Called by the template's DeploymentSetupStarted resource with the reservation's deployment credential.
+   */
+  async reportDeploymentSetupProgress(
+    request?: models.DeploymentSetupProgressRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<void> {
+    return unwrapAsync(deploymentsReportDeploymentSetupProgress(
       this,
       request,
       options,

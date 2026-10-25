@@ -17,6 +17,8 @@ import { getAwsVirtualKey } from "../funcs/getAwsVirtualKey.js";
 import { getDeploymentCredentialRotation } from "../funcs/getDeploymentCredentialRotation.js";
 import { getDeploymentCredentialRotationValues } from "../funcs/getDeploymentCredentialRotationValues.js";
 import { getDeploymentMetricsHistory } from "../funcs/getDeploymentMetricsHistory.js";
+import { getDeploymentPreparation } from "../funcs/getDeploymentPreparation.js";
+import { getInstallationDeployment } from "../funcs/getInstallationDeployment.js";
 import { getLogExportDeliveryConfig } from "../funcs/getLogExportDeliveryConfig.js";
 import { getPendingWorkspaceInvitation } from "../funcs/getPendingWorkspaceInvitation.js";
 import { getProjectLogExport } from "../funcs/getProjectLogExport.js";
@@ -26,6 +28,7 @@ import { listAwsKeySetupCleanup } from "../funcs/listAwsKeySetupCleanup.js";
 import { listAwsVirtualKeys } from "../funcs/listAwsVirtualKeys.js";
 import { listWorkspaceInvitations } from "../funcs/listWorkspaceInvitations.js";
 import { prepareDeploymentCredentialRotation } from "../funcs/prepareDeploymentCredentialRotation.js";
+import { prepareDeploymentInstallation } from "../funcs/prepareDeploymentInstallation.js";
 import { reportLogExportDelivery } from "../funcs/reportLogExportDelivery.js";
 import { requestDeploymentCheck } from "../funcs/requestDeploymentCheck.js";
 import { resendWorkspaceInvitation } from "../funcs/resendWorkspaceInvitation.js";
@@ -401,6 +404,41 @@ export class Alien extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(revokeWorkspaceInviteLink(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async prepareDeploymentInstallation(
+    reference: string,
+    requestBody: operations.PrepareDeploymentInstallationRequestBody,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentPreparationResponse> {
+    return unwrapAsync(prepareDeploymentInstallation(
+      this,
+      reference,
+      requestBody,
+      options,
+    ));
+  }
+
+  async getDeploymentPreparation(
+    request: operations.GetDeploymentPreparationRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentPreparationResponse> {
+    return unwrapAsync(getDeploymentPreparation(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getInstallationDeployment(
+    request: operations.GetInstallationDeploymentRequest,
+    options?: RequestOptions,
+  ): Promise<models.InstallationDeploymentResponse> {
+    return unwrapAsync(getInstallationDeployment(
       this,
       request,
       options,

@@ -171,6 +171,14 @@ export type ManagerRetryResponseEnvironmentVariable = {
 };
 
 export type ManagerRetryResponseSetupConfig = {
+  /**
+   * Vendor destination when leaving or completing setup. Null clears the destination.
+   */
+  returnUrl?: string | null | undefined;
+  /**
+   * Vendor destination for expired, revoked, disabled or exhausted setup links. The vendor creates a fresh link there. Null clears the destination.
+   */
+  refreshUrl?: string | null | undefined;
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
   inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
@@ -1958,6 +1966,8 @@ export const ManagerRetryResponseSetupConfig$inboundSchema: z.ZodType<
   ManagerRetryResponseSetupConfig,
   unknown
 > = z.object({
+  returnUrl: z.nullable(z.string()).optional(),
+  refreshUrl: z.nullable(z.string()).optional(),
   metadata: z.record(z.string(), z.nullable(z.any())),
   policy: DeploymentSetupPolicy$inboundSchema,
   inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)

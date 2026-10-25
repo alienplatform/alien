@@ -57,6 +57,14 @@ export type CreateSetupLinkRequest = {
    */
   maxDeployments?: number | undefined;
   /**
+   * Vendor destination when leaving or completing setup. Null clears the destination.
+   */
+  returnUrl?: string | null | undefined;
+  /**
+   * Vendor destination for expired, revoked, disabled or exhausted setup links. The vendor creates a fresh link there. Null clears the destination.
+   */
+  refreshUrl?: string | null | undefined;
+  /**
    * Description for the API key
    */
   description?: string | undefined;
@@ -118,6 +126,8 @@ export type CreateSetupLinkRequest$Outbound = {
   name: string;
   project: string;
   maxDeployments: number;
+  returnUrl?: string | null | undefined;
+  refreshUrl?: string | null | undefined;
   description?: string | undefined;
   expiresAt?: string | null | undefined;
   deploymentSetupConfig?: DeploymentSetupConfigInput$Outbound | undefined;
@@ -139,6 +149,8 @@ export const CreateSetupLinkRequest$outboundSchema: z.ZodType<
   name: z.string(),
   project: z.string(),
   maxDeployments: z.int().default(100),
+  returnUrl: z.nullable(z.string()).optional(),
+  refreshUrl: z.nullable(z.string()).optional(),
   description: z.string().optional(),
   expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   deploymentSetupConfig: DeploymentSetupConfigInput$outboundSchema.optional(),

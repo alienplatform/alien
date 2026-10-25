@@ -41,6 +41,14 @@ export type CreateDeploymentGroupTokenRequestSetupItemsUnion =
 
 export type CreateDeploymentGroupTokenRequest = {
   /**
+   * Vendor destination when leaving or completing setup. Null clears the destination.
+   */
+  returnUrl?: string | null | undefined;
+  /**
+   * Vendor destination for expired, revoked, disabled or exhausted setup links. The vendor creates a fresh link there. Null clears the destination.
+   */
+  refreshUrl?: string | null | undefined;
+  /**
    * Description for the API key
    */
   description?: string | undefined;
@@ -97,6 +105,8 @@ export function createDeploymentGroupTokenRequestSetupItemsUnionToJSON(
 
 /** @internal */
 export type CreateDeploymentGroupTokenRequest$Outbound = {
+  returnUrl?: string | null | undefined;
+  refreshUrl?: string | null | undefined;
   description?: string | undefined;
   expiresAt?: string | null | undefined;
   deploymentSetupConfig?: DeploymentSetupConfigInput$Outbound | undefined;
@@ -113,6 +123,8 @@ export const CreateDeploymentGroupTokenRequest$outboundSchema: z.ZodType<
   CreateDeploymentGroupTokenRequest$Outbound,
   CreateDeploymentGroupTokenRequest
 > = z.object({
+  returnUrl: z.nullable(z.string()).optional(),
+  refreshUrl: z.nullable(z.string()).optional(),
   description: z.string().optional(),
   expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   deploymentSetupConfig: DeploymentSetupConfigInput$outboundSchema.optional(),
