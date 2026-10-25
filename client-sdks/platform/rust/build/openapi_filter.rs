@@ -15,10 +15,11 @@ const CONSUMER_NAMED_ANONYMOUS_SCHEMA_POINTERS: &[&str] = &[
     "/paths/~1v1~1projects/post/requestBody/content/application~1json/schema/properties/gitRepository",
 ];
 
-// The server adds package types without a client release. No Alien consumer matches on these
-// two response fields, so they decode as plain strings instead of closed enums. When the
+// The server adds package types and resource statuses without a client release. These
+// response fields decode as plain strings instead of closed enums. When the
 // component is present, a moved field or a missing enum fails generation.
 const OPEN_STRING_ENUM_SCHEMAS: &[(&str, &str)] = &[
+    ("DeploymentResource", "/properties/status"),
     (
         "CapabilityMaterialization",
         "/properties/packages/items/properties/type",

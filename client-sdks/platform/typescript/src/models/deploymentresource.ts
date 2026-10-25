@@ -4,7 +4,8 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
-import { ClosedEnum } from "../types/enums.js";
+import * as openEnums from "../types/enums.js";
+import { OpenEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
@@ -27,7 +28,7 @@ export const DeploymentResourceStatus = {
 /**
  * Represents the high-level status of a resource during its lifecycle.
  */
-export type DeploymentResourceStatus = ClosedEnum<
+export type DeploymentResourceStatus = OpenEnum<
   typeof DeploymentResourceStatus
 >;
 
@@ -155,9 +156,10 @@ export type DeploymentResource = {
 };
 
 /** @internal */
-export const DeploymentResourceStatus$inboundSchema: z.ZodEnum<
-  typeof DeploymentResourceStatus
-> = z.enum(DeploymentResourceStatus);
+export const DeploymentResourceStatus$inboundSchema: z.ZodType<
+  DeploymentResourceStatus,
+  unknown
+> = openEnums.inboundSchema(DeploymentResourceStatus);
 
 /** @internal */
 export const DeploymentResourceError$inboundSchema: z.ZodType<

@@ -2944,60 +2944,39 @@ impl StackExecutor {
         state: &'a StackState,
         replacing: bool,
     ) -> Option<&'a str> {
-        // Find all resources in the state that depend on this resource
-        for (dependent_id, dependent_state) in &state.resources {
-            // Skip self and dependents that are fully deleted. A dependent in
-            // Deleting is still active because delete handlers often need
-            // dependency outputs such as resource group names or bucket names.
-            if dependent_id == resource_id
-                || matches!(
-                    dependent_state.status,
-                    ResourceStatus::Deleted | ResourceStatus::TeardownRequired
-                )
-                || (replacing && !dependent_state.has_internal_state())
-            {
-                continue;
-            }
-
-            // Check if this dependent depends on our resource in current dependencies
-            for dep_ref in &dependent_state.dependencies {
-                if dep_ref.id() == resource_id {
-                    // Found an active dependent - not ready for deletion
-                    debug!(
-                        "Resource '{}' not ready for deletion: active dependent '{}' (status: {:?})",
-                        resource_id, dependent_id, dependent_state.status
-                    );
-                    return Some(dependent_id);
+        // Stable progress avoids treating a different HashMap iteration order as work.
+        state
+            .resources
+            .iter()
+            .filter(|(dependent_id, dependent_state)| {
+                if dependent_id.as_str() == resource_id
+                    || matches!(
+                        dependent_state.status,
+                        ResourceStatus::Deleted | ResourceStatus::TeardownRequired
+                    )
+                    || (replacing && !dependent_state.has_internal_state())
+                {
+                    return false;
                 }
-            }
-
-            // For resources that are updating or provisioning, also check previous dependencies
-            // since they might still be using the old dependencies during the transition process
-            if matches!(
-                dependent_state.status,
-                ResourceStatus::Updating | ResourceStatus::Provisioning
-            ) {
-                if let Some(prev_config) = &dependent_state.previous_config {
-                    for dep_ref in prev_config.get_dependencies() {
-                        if dep_ref.id() == resource_id {
-                            // Found a resource that is transitioning and previously depended on this resource
-                            debug!(
-                                "Resource '{}' not ready for deletion: resource '{}' is {:?} and previously depended on it",
-                                resource_id, dependent_id, dependent_state.status
-                            );
-                            return Some(dependent_id);
-                        }
-                    }
-                }
-            }
-        }
-
-        // No active dependents found - ready for deletion
-        debug!(
-            "Resource '{}' is ready for deletion - no active dependents",
-            resource_id
-        );
-        None
+                dependent_state
+                    .dependencies
+                    .iter()
+                    .any(|dependency| dependency.id() == resource_id)
+                    || (matches!(
+                        dependent_state.status,
+                        ResourceStatus::Updating | ResourceStatus::Provisioning
+                    ) && dependent_state
+                        .previous_config
+                        .as_ref()
+                        .is_some_and(|config| {
+                            config
+                                .get_dependencies()
+                                .iter()
+                                .any(|dependency| dependency.id() == resource_id)
+                        }))
+            })
+            .map(|(id, _)| id.as_str())
+            .min()
     }
 
     pub(crate) fn is_resource_synced(&self, resource_id: &str, state: &StackState) -> bool {

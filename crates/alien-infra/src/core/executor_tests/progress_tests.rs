@@ -194,3 +194,40 @@ async fn metadata_only_release_updates_presentation_without_a_resource_operation
         .is_none());
     assert!(cleared.next_state.resources["worker"].description.is_none());
 }
+
+#[tokio::test]
+async fn blocked_delete_progress_is_stable_across_fifty_resumed_steps() {
+    let stack = Stack::new("stable-delete-wait".to_owned())
+        .add(test_storage("storage"), ResourceLifecycle::Live)
+        .add_with_dependencies(
+            test_function("z-worker"),
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "storage")],
+        )
+        .add_with_dependencies(
+            test_function("a-worker"),
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "storage")],
+        )
+        .build();
+    let executor = new_executor(&stack).unwrap();
+    let mut state = run_to_synced(&executor, new_test_state()).await.unwrap();
+    // Resume an in-flight delete while frozen dependents remain active.
+    let storage = state.resources.get_mut("storage").unwrap();
+    let mut controller = storage.get_internal_controller().unwrap().unwrap();
+    controller.transition_to_delete_start().unwrap();
+    storage.status = controller.get_status();
+    storage.set_internal_controller(Some(controller)).unwrap();
+    let deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Live]).unwrap();
+    for _ in 0..50 {
+        // Deserialization creates a fresh HashMap with an independent iteration order.
+        state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        state = deletion.step(state).await.unwrap().next_state;
+        assert_eq!(state.resources["storage"].status, ResourceStatus::Deleting);
+        assert_eq!(
+            state.resources["storage"].progress.as_deref(),
+            Some("Waiting for a-worker.")
+        );
+        assert_all_running(&state, &["a-worker", "z-worker"]);
+    }
+}
