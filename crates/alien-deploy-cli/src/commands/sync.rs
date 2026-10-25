@@ -2590,18 +2590,8 @@ async fn write_pull_secret(
         ))
         .args(["--dry-run=client", "-o", "json"]);
     let secret_yaml = run(secret_yaml, "kubectl create secret").await?;
-    // An existing customer pull Secret may be reused, but never becomes ours.
-    let mut existing = kubectl(settings.kube_context.as_deref());
-    existing.args(["get", "secret", &secret_name, "-n", namespace, "--ignore-not-found", "-o", "json"]);
-    let existing = run(existing, "checking the pull Secret owner").await?;
-    let owned = if existing.is_empty() {
-        true
-    } else {
-        let secret: serde_json::Value = serde_json::from_slice(&existing)
-            .into_alien_error().context(config_error("reading pull Secret ownership"))?;
-        secret["metadata"]["labels"]["app.kubernetes.io/managed-by"].as_str() == Some(SYNC_SECRET_MANAGER)
-    };
-    let secret_yaml = if owned { mark_sync_secret(&secret_yaml)? } else { secret_yaml };
+    let secret_yaml =
+        mark_created_sync_secret(settings, &secret_name, namespace, secret_yaml).await?;
 
     let apply_path = dir.path().join("pull-secret.yaml");
     let mut documents = namespace_yaml;
@@ -2695,7 +2685,7 @@ async fn write_target(
         .arg(format!("--from-literal=telemetry-ack={telemetry_ack}"))
         .args(["--dry-run=client", "-o", "json"]);
     let yaml = run(create, "kubectl create secret").await?;
-    let yaml = mark_sync_secret(&yaml)?;
+    let yaml = mark_created_sync_secret(settings, &secret_name, namespace, yaml).await?;
     let dir = tempfile::tempdir()
         .into_alien_error()
         .context(config_error("creating a working directory"))?;
@@ -2710,9 +2700,36 @@ async fn write_target(
     run(apply, "kubectl apply").await.map(|_| ())
 }
 
-/// Mark only Secrets this sync creates; customer-supplied credentials stay owned by the customer.
-fn mark_sync_secret(yaml: &[u8]) -> Result<Vec<u8>> {
-    let mut secret: serde_json::Value = serde_json::from_slice(yaml)
+/// Preserve customer ownership even when sync updates a pre-existing Secret.
+async fn mark_created_sync_secret(
+    settings: &SiteSide,
+    name: &str,
+    namespace: &str,
+    manifest: Vec<u8>,
+) -> Result<Vec<u8>> {
+    let mut existing = kubectl(settings.kube_context.as_deref());
+    existing.args([
+        "get",
+        "secret",
+        name,
+        "-n",
+        namespace,
+        "--ignore-not-found",
+        "-o",
+        "json",
+    ]);
+    let existing = run(existing, "checking sync Secret ownership").await?;
+    if !existing.is_empty() {
+        let secret: serde_json::Value = serde_json::from_slice(&existing)
+            .into_alien_error()
+            .context(config_error("reading sync Secret ownership"))?;
+        if secret["metadata"]["labels"]["app.kubernetes.io/managed-by"].as_str()
+            != Some(SYNC_SECRET_MANAGER)
+        {
+            return Ok(manifest);
+        }
+    }
+    let mut secret: serde_json::Value = serde_json::from_slice(&manifest)
         .into_alien_error()
         .context(config_error("reading the Secret manifest"))?;
     secret["metadata"]["labels"]["app.kubernetes.io/managed-by"] = SYNC_SECRET_MANAGER.into();
@@ -2832,7 +2849,12 @@ mod tests {
         let mut create = kubectl(settings.kube_context.as_deref());
         create.args(["create", "namespace", &namespace]);
         run(create, "creating test namespace").await.unwrap();
-        for name in ["deployer-password", "site-tls"] {
+        for name in [
+            "customer-airgap-target",
+            "customer-airgap-status",
+            "deployer-password",
+            "site-tls",
+        ] {
             let mut create = kubectl(settings.kube_context.as_deref());
             create.args([
                 "create",
@@ -2864,9 +2886,14 @@ mod tests {
         write_pull_secret(&settings, "owned", &namespace, "user", "password")
             .await
             .unwrap();
-        write_pull_secret(&settings, "owned", &namespace, "user", "updated-password").await.unwrap();
+        write_pull_secret(&settings, "owned", &namespace, "user", "updated-password")
+            .await
+            .unwrap();
         let target = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(target.path(), b"{}").unwrap();
+        write_target(&settings, "customer", &namespace, target.path(), 1, 0)
+            .await
+            .unwrap();
         write_target(&settings, "owned", &namespace, target.path(), 1, 0)
             .await
             .unwrap();
@@ -2913,6 +2940,8 @@ mod tests {
         assert_eq!(
             names,
             [
+                "customer-airgap-status",
+                "customer-airgap-target",
                 "customer-registry-credentials",
                 "deployer-password",
                 "site-tls"
