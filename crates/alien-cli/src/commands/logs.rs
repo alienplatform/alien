@@ -344,7 +344,7 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
         if args.json {
             print_json(&output)
         } else {
-            render_human_logs(&output.logs, target.log_collector_off);
+            render_human_logs(&output.logs, target.log_collector_off, args.source);
             Ok(())
         }
     }
@@ -877,17 +877,20 @@ fn log_collector_reported_off(
         })
 }
 
-fn empty_logs_message(log_collector_off: bool) -> &'static str {
-    if log_collector_off {
+/// A `--source` query reads gateway request diagnostics without the deployment
+/// filter, so the deployment's Pod log collector doesn't explain an empty
+/// result there.
+fn empty_logs_message(log_collector_off: bool, source: Option<LogSource>) -> &'static str {
+    if log_collector_off && source.is_none() {
         LOG_COLLECTOR_OFF_MESSAGE
     } else {
         "(no logs)"
     }
 }
 
-fn render_human_logs(logs: &[LogEntry], log_collector_off: bool) {
+fn render_human_logs(logs: &[LogEntry], log_collector_off: bool, source: Option<LogSource>) {
     if logs.is_empty() {
-        println!("{}", empty_logs_message(log_collector_off));
+        println!("{}", empty_logs_message(log_collector_off, source));
         return;
     }
     for entry in logs {
@@ -1616,8 +1619,10 @@ mod tests {
             { "key": "k8s-workloads", "state": "granted", "detail": "namespace customer" },
             { "key": "logs", "state": "unavailable", "detail": "No log collector configured" }
         ]));
-        let message =
-            empty_logs_message(log_collector_reported_off("kubernetes", Some(&unavailable)));
+        let message = empty_logs_message(
+            log_collector_reported_off("kubernetes", Some(&unavailable)),
+            None,
+        );
         assert_eq!(message, LOG_COLLECTOR_OFF_MESSAGE);
         assert!(message
             .contains("--set logCollector.enabled=true --set-string logCollector.mode=podApi"));
@@ -1626,7 +1631,10 @@ mod tests {
             { "key": "logs", "state": "granted", "detail": "Pod logs read through the Kubernetes API" }
         ]));
         assert_eq!(
-            empty_logs_message(log_collector_reported_off("kubernetes", Some(&granted))),
+            empty_logs_message(
+                log_collector_reported_off("kubernetes", Some(&granted)),
+                None
+            ),
             "(no logs)"
         );
 
@@ -1637,17 +1645,20 @@ mod tests {
             { "key": "logs", "state": "unavailable", "detail": null }
         ]));
         assert_eq!(
-            empty_logs_message(log_collector_reported_off("kubernetes", Some(&undetailed))),
+            empty_logs_message(
+                log_collector_reported_off("kubernetes", Some(&undetailed)),
+                None
+            ),
             "(no logs)"
         );
         let detail_omitted = capability_reports(json!([
             { "key": "logs", "state": "unavailable" }
         ]));
         assert_eq!(
-            empty_logs_message(log_collector_reported_off(
-                "kubernetes",
-                Some(&detail_omitted)
-            )),
+            empty_logs_message(
+                log_collector_reported_off("kubernetes", Some(&detail_omitted)),
+                None
+            ),
             "(no logs)"
         );
 
@@ -1656,20 +1667,43 @@ mod tests {
             { "key": "k8s-workloads", "state": "granted" }
         ]));
         assert_eq!(
-            empty_logs_message(log_collector_reported_off(
-                "kubernetes",
-                Some(&without_logs)
-            )),
+            empty_logs_message(
+                log_collector_reported_off("kubernetes", Some(&without_logs)),
+                None
+            ),
             "(no logs)"
         );
         assert_eq!(
-            empty_logs_message(log_collector_reported_off("kubernetes", None)),
+            empty_logs_message(log_collector_reported_off("kubernetes", None), None),
             "(no logs)"
         );
 
+        // Gateway request diagnostics aren't the deployment's Pod logs.
+        for source in [
+            LogSource::Application,
+            LogSource::AiGateway,
+            LogSource::EncryptionGateway,
+            LogSource::RemoteSandbox,
+        ] {
+            assert_eq!(
+                deployment_filter_for_source(Some(source), Some("dep_1")),
+                None
+            );
+            assert_eq!(
+                empty_logs_message(
+                    log_collector_reported_off("kubernetes", Some(&unavailable)),
+                    Some(source)
+                ),
+                "(no logs)"
+            );
+        }
+
         // Only the Kubernetes chart has a log collector to turn on.
         assert_eq!(
-            empty_logs_message(log_collector_reported_off("machines", Some(&unavailable))),
+            empty_logs_message(
+                log_collector_reported_off("machines", Some(&unavailable)),
+                None
+            ),
             "(no logs)"
         );
     }
