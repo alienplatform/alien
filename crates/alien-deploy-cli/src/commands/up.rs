@@ -3626,6 +3626,7 @@ machine = "m8i.xlarge"
         StackInputDefinition {
             id: id.to_string(),
             kind,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required,
             label: id.to_string(),

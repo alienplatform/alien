@@ -96,6 +96,33 @@ fn validate_input(
         ));
     }
 
+    if let Some(condition) = &input.when {
+        let reason = if condition.input == input.id {
+            Some("when cannot reference the input itself")
+        } else {
+            match stack
+                .inputs()
+                .iter()
+                .find(|reference| reference.id == condition.input)
+            {
+                None => Some("when references an unknown input"),
+                Some(reference) if reference.kind != StackInputKind::Boolean => {
+                    Some("when must reference a boolean input")
+                }
+                Some(reference) if reference.when.is_some() => Some(
+                    "when must reference an unconditional input; chains and cycles are unsupported",
+                ),
+                Some(_) => None,
+            }
+        };
+        if let Some(reason) = reason {
+            errors.push(format!(
+                "Stack input '{}': {} ('{}')",
+                input.id, reason, condition.input
+            ));
+        }
+    }
+
     if input.provided_by.is_empty() {
         errors.push(format!(
             "Stack input '{}': providedBy must include at least one provider",
@@ -474,6 +501,7 @@ mod tests {
         StackInputDefinition {
             id: id.to_string(),
             kind: StackInputKind::String,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required: true,
             label: "Tenant slug".to_string(),
@@ -498,6 +526,54 @@ mod tests {
                 target_resources: Some(vec!["api".to_string()]),
                 var_type: Some(StackInputEnvironmentVariableType::Plain),
             }],
+        }
+    }
+
+    #[tokio::test]
+    async fn validates_conditional_input_references() {
+        let toggle = StackInputDefinition::deployer_boolean(
+            "enabled",
+            "Enabled",
+            "Enable snapshots",
+            Some(true),
+        );
+        for (reference, kind, conditional, valid) in [
+            ("enabled", StackInputKind::Boolean, false, true),
+            ("missing", StackInputKind::Boolean, false, false),
+            ("bucket", StackInputKind::Boolean, false, false),
+            ("enabled", StackInputKind::String, false, false),
+            ("enabled", StackInputKind::Boolean, true, false),
+        ] {
+            let mut toggle = toggle.clone();
+            toggle.kind = kind;
+            toggle.default = None;
+            if conditional {
+                toggle.when = Some(alien_core::StackInputCondition {
+                    input: "bucket".into(),
+                    equals: true,
+                });
+            }
+            let mut bucket = string_input("bucket");
+            bucket.when = Some(alien_core::StackInputCondition {
+                input: reference.into(),
+                equals: true,
+            });
+            let result = StackInputsDefinitionCheck
+                .check(&test_stack(vec![toggle, bucket]), Platform::Aws)
+                .await
+                .unwrap();
+            assert_eq!(
+                result.success, valid,
+                "reference {reference}: {:?}",
+                result.errors
+            );
+            if !valid {
+                assert!(
+                    result.errors.iter().any(|error| error.contains("when")),
+                    "{:?}",
+                    result.errors
+                );
+            }
         }
     }
 
@@ -588,6 +664,7 @@ mod tests {
         StackInputDefinition {
             id: "databasePassword".to_string(),
             kind: StackInputKind::Secret,
+            when: None,
             provided_by: vec![StackInputProvider::Developer],
             required: true,
             label: "Database password".to_string(),

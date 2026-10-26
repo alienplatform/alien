@@ -13,6 +13,7 @@ fn plain_input_stack() -> Stack {
         .inputs(vec![StackInputDefinition {
             id: "apiBaseUrl".to_string(),
             kind: StackInputKind::String,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required: true,
             label: "API base URL".to_string(),
@@ -69,6 +70,7 @@ fn deployer_secret_stack(provided_by: Vec<StackInputProvider>) -> Stack {
         .inputs(vec![StackInputDefinition {
             id: "apiKey".to_string(),
             kind: StackInputKind::Secret,
+            when: None,
             provided_by,
             required: true,
             label: "API key".to_string(),
@@ -191,6 +193,7 @@ fn inputs_colliding_after_normalization_are_refused() {
         StackInputDefinition {
             id: id.to_string(),
             kind: StackInputKind::Boolean,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required: true,
             label: format!("Input {id}"),

@@ -8867,6 +8867,7 @@ infrastructureExistingSecret: customer-bindings
             .inputs(vec![alien_core::StackInputDefinition {
                 id: "ingestUrl".to_string(),
                 kind: alien_core::StackInputKind::String,
+                when: None,
                 provided_by: vec![alien_core::StackInputProvider::Deployer],
                 required: true,
                 label: "Ingest URL".to_string(),
@@ -8952,6 +8953,7 @@ infrastructureExistingSecret: customer-bindings
         let secret = |id: &str, label: &str, required: bool| alien_core::StackInputDefinition {
             id: id.to_string(),
             kind: alien_core::StackInputKind::Secret,
+            when: None,
             provided_by: vec![alien_core::StackInputProvider::Deployer],
             required,
             label: label.to_string(),

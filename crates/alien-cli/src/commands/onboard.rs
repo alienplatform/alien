@@ -1814,6 +1814,7 @@ mod tests {
         StackInputDefinition {
             id: id.to_string(),
             kind,
+            when: None,
             provided_by: vec![StackInputProvider::Developer],
             required,
             label: "Control plane API key".to_string(),
@@ -1829,6 +1830,7 @@ mod tests {
 
     fn deployer_input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
         StackInputDefinition {
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             label: format!("Deployer {id}"),
             ..input(id, kind, required)

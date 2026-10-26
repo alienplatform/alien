@@ -91,6 +91,7 @@ mod tests {
         StackInputDefinition {
             id: id.to_string(),
             kind: StackInputKind::Secret,
+            when: None,
             provided_by: vec![StackInputProvider::Developer],
             required: true,
             label: "Signing key".to_string(),

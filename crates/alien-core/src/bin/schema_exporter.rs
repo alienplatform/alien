@@ -67,6 +67,7 @@ use utoipa::OpenApi;
     OperationSettingValue,
     OperationApproval,
     OperationApprovalDecision,
+    StackInputCondition,
     StackInputDefaultValue,
     StackInputDefinition,
     StackInputEnvironmentMapping,

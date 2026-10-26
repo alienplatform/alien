@@ -1,5 +1,8 @@
+import { z } from "zod/v4"
+import { AlienError, defineError } from "./error.js"
 import type {
   Platform,
+  StackInputCondition,
   StackInputDefaultValue,
   StackInputDefinition,
   StackInputEnvironmentMapping,
@@ -14,6 +17,17 @@ import type {
 export const STACK_INPUT_GENERATE_MIN_LENGTH = 16
 /** Longest value Alien generates for a secret input. */
 export const STACK_INPUT_GENERATE_MAX_LENGTH = 256
+
+/** A conditional input references an unsupported or missing controlling input. */
+const InvalidInputConditionError = defineError({
+  code: "INVALID_INPUT_CONDITION",
+  context: z.object({ input: z.string(), reference: z.string(), reason: z.string() }),
+  message: ({ input, reference, reason }) =>
+    `Stack input '${input}' when '${reference}': ${reason}`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 400,
+})
 
 const stackInputDraftSymbol = Symbol("alien.stackInputDraft")
 const stackInputDefinitionsSymbol = Symbol("alien.stackInputDefinitions")
@@ -37,6 +51,7 @@ interface CommonInputOptions<TDefault extends StackInputValue> {
   description: string
   placeholder?: string
   default?: TDefault
+  when?: StackInputCondition
   platforms?: readonly Platform[]
   env?: OneOrMany<StackInputEnvMapping>
 }
@@ -135,6 +150,27 @@ export function inputs<const T extends Record<string, StackInputDraft>>(
   for (const [id, draft] of Object.entries(drafts)) {
     validateInputId(id)
     validateDraft(id, draft)
+    const condition = draft.options.when
+    if (condition) {
+      const reference = drafts[condition.input]
+      const reason =
+        condition.input === id
+          ? "cannot reference itself"
+          : !reference
+            ? "unknown input"
+            : reference.kind !== "boolean"
+              ? "must reference a boolean input"
+              : reference.options.when
+                ? "must reference an unconditional input; chains and cycles are unsupported"
+                : typeof condition.equals !== "boolean"
+                  ? "equals must be a boolean"
+                  : undefined
+      if (reason) {
+        throw new AlienError(
+          InvalidInputConditionError.create({ input: id, reference: condition.input, reason }),
+        )
+      }
+    }
 
     result[id] = { id, kind: draft.kind }
     definitions.push({
@@ -146,6 +182,7 @@ export function inputs<const T extends Record<string, StackInputDraft>>(
       description: draft.options.description,
       placeholder: draft.options.placeholder,
       default: toDefaultValue(draft.kind, draft.options.default),
+      when: draft.options.when,
       platforms: draft.options.platforms ? [...draft.options.platforms] : undefined,
       validation: Object.keys(draft.validation).length > 0 ? draft.validation : undefined,
       generate: draft.generate ? { length: draft.generate.length } : undefined,
@@ -178,6 +215,31 @@ export function getStackInputDefinitions(
  */
 export function isDeployerSecretInput(input: StackInputDefinition): boolean {
   return input.kind === "secret" && input.providedBy.includes("deployer")
+}
+
+/** Whether an input applies after platform scope and its boolean condition are evaluated. */
+export function stackInputApplies(
+  input: StackInputDefinition,
+  inputs: readonly StackInputDefinition[],
+  values: Readonly<Record<string, unknown>>,
+  platform: Platform,
+): boolean {
+  const onPlatform = (definition: StackInputDefinition) =>
+    !definition.platforms?.length || definition.platforms.includes(platform)
+  if (!onPlatform(input)) return false
+  if (!input.when) return true
+  const reference = inputs.find(candidate => candidate.id === input.when?.input)
+  if (!reference || !onPlatform(reference)) return false
+  const value =
+    values[reference.id] ??
+    (reference.default?.type === "boolean" ? reference.default.value : undefined)
+  const boolean =
+    value === true || value === "true"
+      ? true
+      : value === false || value === "false"
+        ? false
+        : undefined
+  return boolean === input.when.equals
 }
 
 function defineInput<TValue extends StackInputValue>(

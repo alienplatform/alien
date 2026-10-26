@@ -1916,7 +1916,10 @@ async fn delete_until_setup_teardown(
     mut state: DeploymentState,
     config: DeploymentConfig,
 ) -> DeploymentState {
-    state.runtime_metadata.get_or_insert_default().deletion_policy = alien_core::DeletionPolicy::Erase;
+    state
+        .runtime_metadata
+        .get_or_insert_default()
+        .deletion_policy = alien_core::DeletionPolicy::Erase;
     start_delete(&mut state);
     let state = run_until_status(
         state,
@@ -3373,6 +3376,7 @@ fn database_password_input() -> alien_core::StackInputDefinition {
     alien_core::StackInputDefinition {
         id: "databasePassword".to_string(),
         kind: alien_core::StackInputKind::Secret,
+        when: None,
         provided_by: vec![alien_core::StackInputProvider::Deployer],
         required: true,
         label: "Database password".to_string(),

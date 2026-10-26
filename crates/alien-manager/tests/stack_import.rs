@@ -2273,6 +2273,7 @@ async fn an_import_carrying_a_deployer_secret_value_is_refused() {
     stack.inputs = vec![alien_core::StackInputDefinition {
         id: "apiKey".to_string(),
         kind: alien_core::StackInputKind::Secret,
+        when: None,
         provided_by: vec![alien_core::StackInputProvider::Deployer],
         required: true,
         label: "API key".to_string(),
@@ -2518,6 +2519,7 @@ fn stack_with_storage_and_generated_secret(resource_id: &str) -> Stack {
         .inputs(vec![alien_core::StackInputDefinition {
             id: "databasePassword".to_string(),
             kind: alien_core::StackInputKind::Secret,
+            when: None,
             provided_by: vec![alien_core::StackInputProvider::Developer],
             required: true,
             label: "Database password".to_string(),

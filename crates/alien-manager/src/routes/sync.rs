@@ -2920,14 +2920,14 @@ pub(crate) async fn build_pull_target(
     let unresolved_inputs: Vec<_> = stack
         .inputs
         .iter()
-        .filter_map(|input| {
+        .map(|input| {
             let mut input = input.clone();
             input.env.retain(|mapping| {
                 !env_vars
                     .iter()
                     .any(|existing| existing.name == mapping.name)
             });
-            (!input.env.is_empty()).then_some(input)
+            input
         })
         .collect();
     let input_env = match alien_core::resolve_stack_input_environment_variables(

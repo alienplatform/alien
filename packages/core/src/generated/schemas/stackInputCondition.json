@@ -1,0 +1,1 @@
+{"type":"object","description":"A boolean input condition controlling whether another input applies.","required":["input","equals"],"properties":{"equals":{"type":"boolean","description":"Boolean value for which this input applies."},"input":{"type":"string","description":"ID of an unconditional boolean input in the same stack."}},"x-readme-ref-name":"StackInputCondition"}

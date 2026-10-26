@@ -16,6 +16,7 @@ fn stack_with_inputs() -> Stack {
         .inputs(vec![StackInputDefinition {
             id: "apiBaseUrl".to_string(),
             kind: StackInputKind::String,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required: true,
             label: "API base URL".to_string(),
@@ -102,6 +103,7 @@ fn deployer_secret_input(provided_by: Vec<StackInputProvider>) -> StackInputDefi
     StackInputDefinition {
         id: "tailScaleAuthKey".to_string(),
         kind: StackInputKind::Secret,
+        when: None,
         provided_by,
         required: true,
         label: "Tailscale auth key".to_string(),

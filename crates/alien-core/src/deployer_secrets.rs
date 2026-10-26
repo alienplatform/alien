@@ -96,7 +96,7 @@ pub fn deployer_secret_slots<'a>(
     inputs
         .iter()
         .filter(|input| is_deployer_secret_input(input))
-        .filter(|input| input.applies_to(platform))
+        .filter(|input| input.applies(inputs, values, platform))
         .filter_map(|input| {
             let has_stored_value = stored_secret_input_ids
                 .is_some_and(|ids| ids.contains(&input.id))
@@ -728,6 +728,7 @@ mod tests {
         StackInputDefinition {
             id: id.to_string(),
             kind: StackInputKind::Secret,
+            when: None,
             provided_by,
             required: true,
             label: "Database password".to_string(),

@@ -472,6 +472,7 @@ export {
   ServiceAccountHeartbeatStatusSchema,
   ServiceActivationHeartbeatDataSchema,
   ServiceActivationHeartbeatStatusSchema,
+  StackInputConditionSchema,
   StackInputDefaultValueSchema,
   StackInputDefinitionSchema,
   StackInputEnvironmentMappingSchema,
