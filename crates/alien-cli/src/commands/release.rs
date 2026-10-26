@@ -120,6 +120,8 @@ pub struct ReleaseArgs {
     /// Same format as `alien build --targets` — e.g. `linux-x64`,
     /// `linux-arm64`. When omitted, targets follow the compute pools' CPU
     /// architecture, or the platform default if no pool specifies one.
+    /// AWS daemons requiring nested virtualization default to `linux-x64`;
+    /// other AWS deployments retain the `linux-arm64` default.
     /// Explicit targets must match the stack's compute requirements.
     #[arg(long, value_delimiter = ',')]
     pub targets: Option<Vec<String>>,
