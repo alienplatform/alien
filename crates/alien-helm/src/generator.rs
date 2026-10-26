@@ -5222,9 +5222,19 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         .inputs()
         .iter()
         .filter(|input| {
-            input
+            (input
                 .provided_by
                 .contains(&alien_core::StackInputProvider::Deployer)
+                || stack.inputs().iter().any(|dependent| {
+                    dependent
+                        .provided_by
+                        .contains(&alien_core::StackInputProvider::Deployer)
+                        && dependent.applies_to_platform(Platform::Kubernetes)
+                        && dependent
+                            .when
+                            .as_ref()
+                            .is_some_and(|condition| condition.input == input.id)
+                }))
                 && !is_deployer_secret_input(input)
         })
         .collect::<Vec<_>>();
@@ -5243,6 +5253,10 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
     let mut required = Vec::new();
     let mut conditional = Vec::new();
     for input in deployer_inputs {
+        if !input.applies_to_platform(Platform::Kubernetes) {
+            properties.insert(input.id.clone(), serde_json::json!({}));
+            continue;
+        }
         if input.required && input.default.is_none() && input.when.is_none() {
             required.push(input.id.clone());
         }
@@ -5403,7 +5417,12 @@ fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
             template.push_str(&format!("{{{{- if not (hasKey $values {id:?}) -}}}}{{{{- $_ := set $values {id:?} (fromJson {json:?}) -}}}}{{{{- end -}}}}\n", id=input.id));
         }
     }
-    for input in stack.inputs().iter().filter(|input| input.when.is_some()) {
+    for input in stack.inputs().iter().filter(|input| {
+        input.when.is_some()
+            && input
+                .provided_by
+                .contains(&alien_core::StackInputProvider::Deployer)
+    }) {
         let Some(when) = &input.when else {
             continue;
         };
@@ -5412,6 +5431,13 @@ fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
             template.push_str(&format!(r#"{{{{- else if and (not .Values.management.deploymentId) (or .Values.management.token .Values.management.existingSecret.name) (not (hasKey $values {id:?})) -}}}}{{{{- fail {message:?} -}}}}"#, id=input.id, message=format!("Stack input '{}' is required", input.id)));
         }
         template.push_str("{{- end -}}\n");
+    }
+    for input in stack.inputs().iter().filter(|input| {
+        !input
+            .provided_by
+            .contains(&alien_core::StackInputProvider::Deployer)
+    }) {
+        template.push_str(&format!("{{{{- $_ := unset $values {:?} -}}}}\n", input.id));
     }
     template.push_str("{{- toJson $values -}}\n{{- end -}}\n");
     Ok(template)
@@ -8929,9 +8955,15 @@ infrastructureExistingSecret: customer-bindings
 
     #[test]
     fn conditional_inputs_are_validated_and_omitted_by_helm() {
+        for developer_controller in [false, true] {
+            conditional_helm_inputs_for_provider(developer_controller);
+        }
+    }
+
+    fn conditional_helm_inputs_for_provider(developer_controller: bool) {
         let inputs = serde_json::from_value(serde_json::json!([
             {"id":"bucket", "kind":"string", "required":true, "providedBy":["deployer"], "label":"Bucket", "description":"Snapshot bucket", "when":{"input":"enabled","equals":true}, "validation":{"minLength":3}},
-            {"id":"enabled", "kind":"boolean", "required":true, "providedBy":["deployer"], "label":"Enabled", "description":"Enable snapshots", "default":{"type":"boolean","value":true}}
+            {"id":"enabled", "kind":"boolean", "required":true, "providedBy":[if developer_controller { "developer" } else { "deployer" }], "label":"Enabled", "description":"Enable snapshots", "default":{"type":"boolean","value":true}}
         ])).unwrap();
         let stack = Stack::new("conditional-inputs".into())
             .inputs(inputs)
@@ -8960,12 +8992,16 @@ infrastructureExistingSecret: customer-bindings
             .collect();
         let values = documents
             .iter()
-            .find_map(|document| document["stringData"]["input-values.json"].as_str())
-            .expect("registered input values");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(values).unwrap(),
-            serde_json::json!({"enabled":false})
-        );
+            .find_map(|document| document["stringData"]["input-values.json"].as_str());
+        if developer_controller {
+            assert!(values.is_none(), "no deployer input applies");
+        } else {
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(values.expect("registered input values"))
+                    .unwrap(),
+                serde_json::json!({"enabled":false})
+            );
+        }
         for input_values in [
             "enabled: true",
             "enabled: true\n  bucket: ''",

@@ -755,7 +755,12 @@ fn stack_inputs_for_cloudformation(
         .inputs()
         .iter()
         .filter(|input| {
-            input.provided_by.contains(&StackInputProvider::Deployer)
+            (input.provided_by.contains(&StackInputProvider::Deployer)
+                || stack.inputs().iter().any(|dependent| {
+                    dependent.provided_by.contains(&StackInputProvider::Deployer)
+                        && dependent.applies_to_platform(platform)
+                        && dependent.when.as_ref().is_some_and(|condition| condition.input == input.id)
+                }))
                 // Deployer secrets are written into the customer's own secret
                 // store, never passed through the template.
                 && !alien_core::is_deployer_secret_input(input)
@@ -1004,31 +1009,39 @@ fn stack_input_default_expression(default: &StackInputDefaultValue) -> CfExpress
 }
 
 fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpression {
-    CfExpression::object(inputs.iter().map(|input| {
-        let parameter = stack_input_parameter_name(input);
-        let value = if input.kind == StackInputKind::StringList {
-            if input.when.is_none() {
-                list_parameter_value(&parameter)
-            } else {
-                CfExpression::object([(
-                    "Fn::Split",
-                    CfExpression::list([CfExpression::from(","), CfExpression::ref_(&parameter)]),
-                )])
-            }
-        } else {
-            CfExpression::ref_(&parameter)
-        };
-        let value = if input.when.is_some() {
-            CfExpression::if_(
-                format!("{parameter}Applies"),
-                value,
-                CfExpression::no_value(),
-            )
-        } else {
-            value
-        };
-        (input.id.clone(), value)
-    }))
+    CfExpression::object(
+        inputs
+            .iter()
+            .filter(|input| input.provided_by.contains(&StackInputProvider::Deployer))
+            .map(|input| {
+                let parameter = stack_input_parameter_name(input);
+                let value = if input.kind == StackInputKind::StringList {
+                    if input.when.is_none() {
+                        list_parameter_value(&parameter)
+                    } else {
+                        CfExpression::object([(
+                            "Fn::Split",
+                            CfExpression::list([
+                                CfExpression::from(","),
+                                CfExpression::ref_(&parameter),
+                            ]),
+                        )])
+                    }
+                } else {
+                    CfExpression::ref_(&parameter)
+                };
+                let value = if input.when.is_some() {
+                    CfExpression::if_(
+                        format!("{parameter}Applies"),
+                        value,
+                        CfExpression::no_value(),
+                    )
+                } else {
+                    value
+                };
+                (input.id.clone(), value)
+            }),
+    )
 }
 
 fn regional_service_token(

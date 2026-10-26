@@ -226,6 +226,20 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
     let stack_inputs = source_stack.inputs.clone();
+    let mut condition_values = req.input_values.clone();
+    if let Some(existing) = &approved_automatic_installation {
+        for (id, value) in &existing.input_values {
+            condition_values
+                .entry(id.clone())
+                .or_insert_with(|| value.clone());
+        }
+    }
+    req.input_values.retain(|id, _| {
+        stack_inputs
+            .iter()
+            .find(|input| input.id == *id)
+            .is_none_or(|input| input.applies(&stack_inputs, &condition_values, req.platform))
+    });
     // Generated secrets are developer-owned and never setup parameters, so a
     // setup caller must not be able to set or replace one.
     if let Err(e) =

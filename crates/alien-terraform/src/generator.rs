@@ -1819,7 +1819,12 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
         .inputs()
         .iter()
         .filter(|input| {
-            input.provided_by.contains(&StackInputProvider::Deployer)
+            (input.provided_by.contains(&StackInputProvider::Deployer)
+                || stack.inputs().iter().any(|dependent| {
+                    dependent.provided_by.contains(&StackInputProvider::Deployer)
+                        && dependent.applies_to_platform(platform)
+                        && dependent.when.as_ref().is_some_and(|condition| condition.input == input.id)
+                }))
                 // Deployer secrets are written into the customer's own secret
                 // store, so no variable (and no state) ever holds them.
                 && !alien_core::is_deployer_secret_input(input)
@@ -4139,7 +4144,10 @@ fn terraform_input_values_source(inputs: &[StackInputDefinition]) -> Option<Stri
 
     let mut required_entries = Vec::new();
     let mut optional_maps = Vec::new();
-    for input in inputs {
+    for input in inputs
+        .iter()
+        .filter(|input| input.provided_by.contains(&StackInputProvider::Deployer))
+    {
         let variable = format!("var.{}", terraform_stack_input_variable_name(input));
         let entry = format!("{} = {variable}", input.id);
         if let Some(when) = &input.when {

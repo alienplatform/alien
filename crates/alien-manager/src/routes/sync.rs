@@ -2914,7 +2914,10 @@ pub(crate) async fn build_pull_target(
     env_vars.retain(|variable| {
         !stack.inputs.iter().any(|input| {
             !input.applies(&stack.inputs, &deployment.input_values, deployment.platform)
-                && input.env.iter().any(|mapping| mapping.name == variable.name)
+                && input
+                    .env
+                    .iter()
+                    .any(|mapping| mapping.name == variable.name)
         })
     });
     // Inputs mapped to environment variables resolve against the
@@ -3510,17 +3513,6 @@ async fn initialize(
                     Ok(release) => release,
                     Err(e) => return e.into_response(),
                 };
-            if let Some(stack) = starting_release
-                .as_ref()
-                .and_then(|release| release.stacks.get(&platform))
-            {
-                if let Err(e) = crate::generated_inputs::reject_generated_input_values(
-                    &stack.inputs,
-                    &req.input_values,
-                ) {
-                    return e.into_response();
-                }
-            }
 
             // Developer-provided setup on the group applies to every deployment
             // it creates; values supplied by the deployer at install win.
@@ -3539,7 +3531,41 @@ async fn initialize(
                 Err(e) => return e.into_response(),
             };
             let mut input_values = group_setup.input_values;
-            input_values.extend(req.input_values);
+            input_values.extend(req.input_values.clone());
+            if let Some(stack) = starting_release
+                .as_ref()
+                .and_then(|release| release.stacks.get(&platform))
+            {
+                let supplied_values = req
+                    .input_values
+                    .into_iter()
+                    .filter(|(id, _)| {
+                        stack
+                            .inputs
+                            .iter()
+                            .find(|input| input.id == *id)
+                            .is_none_or(|input| {
+                                input.applies(&stack.inputs, &input_values, platform)
+                            })
+                    })
+                    .collect();
+                if let Err(error) = crate::generated_inputs::reject_generated_input_values(
+                    &stack.inputs,
+                    &supplied_values,
+                ) {
+                    return error.into_response();
+                }
+                let condition_values = input_values.clone();
+                input_values.retain(|id, _| {
+                    stack
+                        .inputs
+                        .iter()
+                        .find(|input| input.id == *id)
+                        .is_none_or(|input| {
+                            input.applies(&stack.inputs, &condition_values, platform)
+                        })
+                });
+            }
             let environment_variables = (!group_setup.environment_variables.is_empty())
                 .then_some(group_setup.environment_variables);
 

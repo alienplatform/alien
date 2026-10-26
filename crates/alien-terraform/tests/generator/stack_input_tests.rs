@@ -229,6 +229,12 @@ fn inputs_colliding_after_normalization_are_refused() {
 
 #[test]
 fn conditional_inputs_validate_with_terraform_plan() {
+    for provider in [StackInputProvider::Deployer, StackInputProvider::Developer] {
+        conditional_inputs_validate_with_terraform_plan_for_provider(provider);
+    }
+}
+
+fn conditional_inputs_validate_with_terraform_plan_for_provider(provider: StackInputProvider) {
     let mut stack = plain_input_stack();
     let mut input = serde_json::to_value(&stack.inputs[0]).unwrap();
     input["when"] = serde_json::json!({"input": "enabled", "equals": true});
@@ -239,6 +245,7 @@ fn conditional_inputs_validate_with_terraform_plan() {
         "Enable the endpoint",
         Some(true),
     ));
+    stack.inputs.last_mut().unwrap().provided_by = vec![provider];
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     assert_terraform_valid(&module, "conditional_inputs");
 

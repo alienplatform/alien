@@ -921,6 +921,12 @@ different namespaces of one cluster from colliding. */ -}}
 {{- printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
 {{- end -}}
 
+=== templates/_inputs.tpl ===
+{{- define "deployment.inputValues" -}}
+{{- $values := deepCopy (default dict .Values.inputValues) -}}
+{{- toJson $values -}}
+{{- end -}}
+
 === templates/_runtime-identity.tpl ===
 {{- define "deployment.validateRuntimeIdentity" -}}
 {{- $storage := .Values.runtime.data.persistence -}}
@@ -1183,7 +1189,7 @@ roleRef:
       {{- $currentInputs = (index $existing.data "input-values.json" | b64dec) -}}
     {{- end -}}
   {{- end -}}
-  {{- if ne $currentInputs (toJson .Values.inputValues) -}}
+  {{- if ne $currentInputs (toJson (include "deployment.inputValues" . | fromJson)) -}}
     {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
   {{- end -}}
 {{- end -}}
@@ -1193,7 +1199,7 @@ roleRef:
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector .Values.inputValues }}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector (include "deployment.inputValues" . | fromJson) }}
 {{- $collectorToken := .Values.logCollector.token -}}
 {{- if and $nodeCollector (empty $collectorToken) -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
@@ -1224,8 +1230,8 @@ stringData:
   {{- if $nodeCollector }}
   collector-token: {{ $collectorToken | quote }}
   {{- end }}
-  {{- if .Values.inputValues }}
-  input-values.json: {{ toJson .Values.inputValues | quote }}
+  {{- if (include "deployment.inputValues" . | fromJson) }}
+  input-values.json: {{ toJson (include "deployment.inputValues" . | fromJson) | quote }}
   {{- end }}
 {{- end }}
 
@@ -1431,7 +1437,7 @@ spec:
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
-            {{- if .Values.inputValues }}
+            {{- if (include "deployment.inputValues" . | fromJson) }}
             - name: STACK_INPUT_VALUES_FILE
               value: /etc/deployment/input-values/input-values.json
             {{- end }}
@@ -1501,7 +1507,7 @@ spec:
             - name: config
               mountPath: /etc/deployment/config
               readOnly: true
-            {{- if .Values.inputValues }}
+            {{- if (include "deployment.inputValues" . | fromJson) }}
             - name: input-values
               mountPath: /etc/deployment/input-values
               readOnly: true
@@ -1538,7 +1544,7 @@ spec:
         - name: config
           configMap:
             name: {{ include "deployment.fullname" . }}
-        {{- if .Values.inputValues }}
+        {{- if (include "deployment.inputValues" . | fromJson) }}
         - name: input-values
           secret:
             secretName: {{ include "deployment.fullname" . }}

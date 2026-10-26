@@ -2659,6 +2659,66 @@ async fn setup_cannot_set_a_generated_secret() {
     assert!(existing.is_none(), "nothing is created");
 }
 
+#[tokio::test]
+async fn setup_ignores_inactive_generated_secret_values() {
+    let mut stack = stack_with_storage_and_generated_secret("assets");
+    stack.inputs[0].when = Some(alien_core::StackInputCondition {
+        input: "enabled".into(),
+        equals: true,
+    });
+    stack.inputs.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "enabled", "kind": "boolean", "providedBy": ["deployer"],
+            "required": true, "label": "Enabled", "description": "Enable credentials",
+            "default": { "type": "boolean", "value": false }
+        }))
+        .unwrap(),
+    );
+    let fixture = make_fixture(Some(stack)).await;
+    let mut body = aws_s3_import_request(
+        "conditional-import",
+        "us-east-1",
+        "assets",
+        "example-imports",
+    );
+    body.input_values.insert(
+        "databasePassword".into(),
+        serde_json::json!({"invalid": true}),
+    );
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let deployment = fixture
+        .deployment_store
+        .get_deployment_by_name(
+            &alien_manager::auth::Subject::system(),
+            &fixture.deployment_group_id,
+            "conditional-import",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!deployment.input_values.contains_key("databasePassword"));
+    let (status, json) = post_initialize(
+        &fixture,
+        serde_json::json!({
+            "name": "conditional-initialize", "platform": "aws", "initialDesiredRelease": "active",
+            "inputValues": { "databasePassword": { "invalid": true } }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let deployment = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            json["deploymentId"].as_str().unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!deployment.input_values.contains_key("databasePassword"));
+}
+
 async fn post_initialize(
     fixture: &Fixture,
     body: serde_json::Value,

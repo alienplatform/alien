@@ -204,6 +204,14 @@ fn deployer_secrets_never_pass_through_the_template() {
 
 #[test]
 fn conditional_inputs_produce_a_valid_cloudformation_template() {
+    for provider in [StackInputProvider::Deployer, StackInputProvider::Developer] {
+        conditional_inputs_produce_a_valid_cloudformation_template_for_provider(provider);
+    }
+}
+
+fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
+    provider: StackInputProvider,
+) {
     let mut stack = stack_with_inputs();
     let mut input = serde_json::to_value(&stack.inputs[0]).unwrap();
     input["when"] = serde_json::json!({"input": "enabled", "equals": true});
@@ -214,6 +222,7 @@ fn conditional_inputs_produce_a_valid_cloudformation_template() {
         "Enable the endpoint",
         Some(true),
     ));
+    stack.inputs.last_mut().unwrap().provided_by = vec![provider];
     let registry = sample_registry();
     let template = generate_cloudformation_template(
         &stack,
