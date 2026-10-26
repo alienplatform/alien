@@ -66,7 +66,7 @@ pub use resource_references_exist::ResourceReferencesExistCheck;
 pub use service_account_impersonate_validation::ServiceAccountImpersonateValidationCheck;
 pub use single_exposed_port_check::SingleExposedPortCheck;
 pub use single_queue_trigger::SingleQueueTriggerCheck;
-pub use stack_inputs::StackInputsDefinitionCheck;
+pub use stack_inputs::{StackInputPlatformsCheck, StackInputsDefinitionCheck};
 pub use storage_lifecycle_rules::StorageLifecycleRulesCheck;
 pub use trigger_edge_ownership::TriggerEdgeOwnershipCheck;
 pub use unique_endpoint_host_labels::{

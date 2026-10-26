@@ -7,7 +7,10 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashSet},
+};
 use tracing::{debug, info};
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
@@ -115,23 +118,34 @@ pub async fn handle_update_pending(
         })
     })?;
 
-    // For compatibility checks, use the prepared (mutated) stack from the previous deployment
-    // if available. This ensures we compare mutated stacks (old mutated vs new mutated),
-    // not raw user stacks. Falls back to current_release.stack if prepared_stack isn't available
-    // (for backward compatibility with existing deployments).
+    // Older deployments may not have saved a prepared stack. Keep release-based
+    // compatibility checks and allocation pruning for those deployments.
     let old_stack_for_comparison = current
         .runtime_metadata
         .as_ref()
         .and_then(|m| m.prepared_stack.as_ref())
-        .or(current.current_release.as_ref().map(|r| &r.stack));
-    if let Some(old) = old_stack_for_comparison {
-        alien_preflights::runner::validate_gate_platform_changes(
-            old,
-            &target_stack,
-            current.platform,
-        )
-        .context(ErrorData::PreflightChecksFailed)?;
-    }
+        .map(Cow::Borrowed)
+        .or_else(|| {
+            current.current_release.as_ref().map(|release| {
+                let mut installed = release.stack.clone();
+                // A raw release still lists gated resources that were never installed.
+                // Preserve every ungated resource for the legacy compatibility checks.
+                let declined: Vec<_> = installed
+                    .resources
+                    .iter()
+                    .filter(|(id, entry)| {
+                        entry.enabled_when.is_some()
+                            && !stack_state
+                                .resources
+                                .get(*id)
+                                .is_some_and(|resource| resource.status != ResourceStatus::Deleted)
+                    })
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                alien_core::remove_declined_resources(&mut installed, &declined);
+                Cow::Owned(installed)
+            })
+        });
 
     // This grant is written by direct setup and retained by the store as setup-owned
     // metadata. A release or a mutable runtime setting cannot confer setup authority.
@@ -201,7 +215,7 @@ pub async fn handle_update_pending(
     // Live declines apply AFTER the mutations, so a declined workload's service
     // account and capacity stay identical to the accepted render. Its grant is
     // scrubbed, which `permission_profiles_unchanged`'s gated exemption absorbs.
-    let target_stack = crate::pending::strip_frozen_declines_with_compute_settings(
+    let target_stack = crate::pending::strip_recorded_gate_declines(
         target_stack,
         &persisted_gate_answers,
         &frozen_gating,
@@ -229,7 +243,7 @@ pub async fn handle_update_pending(
             &stack_state,
             &config,
             &client_config,
-            old_stack_for_comparison, // Pass old mutated stack for compatibility checks
+            old_stack_for_comparison.as_deref(), // Pass old mutated stack for compatibility checks
             setup_update_authorization,
             service_provider.runtime_setup_authority(current.platform),
         )
@@ -274,7 +288,9 @@ pub async fn handle_update_pending(
         let nothing_recorded = BTreeMap::new();
         refuse_changes_requiring_setup(
             &client_config,
-            old_stack_for_comparison.unwrap_or(&nothing_installed),
+            old_stack_for_comparison
+                .as_deref()
+                .unwrap_or(&nothing_installed),
             current
                 .runtime_metadata
                 .as_ref()
@@ -1012,6 +1028,15 @@ mod tests {
             installed: Stack,
             target: Stack,
         ) -> Result<DeploymentStepResult> {
+            update_with_saved_stack(authority, installed, target, true).await
+        }
+
+        async fn update_with_saved_stack(
+            authority: InitialSetupAuthority,
+            installed: Stack,
+            target: Stack,
+            save_prepared: bool,
+        ) -> Result<DeploymentStepResult> {
             let state = DeploymentState {
                 status: DeploymentStatus::UpdatePending,
                 platform: Platform::Aws,
@@ -1023,7 +1048,11 @@ mod tests {
                 runtime_metadata: Some(RuntimeMetadata {
                     initial_setup_authority: authority,
                     setup_scaffolding: recorded_for(&installed),
-                    prepared_stack: Some(prepared(installed).await),
+                    prepared_stack: if save_prepared {
+                        Some(prepared(installed).await)
+                    } else {
+                        None
+                    },
                     ..Default::default()
                 }),
                 retry_requested: false,
@@ -1037,6 +1066,54 @@ mod tests {
                 std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
             )
             .await
+        }
+
+        #[tokio::test]
+        async fn legacy_direct_setup_update_keeps_existing_scaffolding() {
+            let installed = prepared(sandbox(SandboxEgress::Allow, BUNDLE, None)).await;
+            let updated = update_with_saved_stack(
+                InitialSetupAuthority::DirectSetup,
+                installed.clone(),
+                installed,
+                false,
+            )
+            .await
+            .expect("existing scaffolding needs no new setup without a prepared stack");
+            assert_eq!(updated.state.status, DeploymentStatus::Updating);
+        }
+
+        #[tokio::test]
+        async fn legacy_update_still_refuses_frozen_resource_changes() {
+            let installed = Stack::new("legacy".into())
+                .add(
+                    alien_core::Storage::new("data".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let target = Stack::new("legacy".into())
+                .add(
+                    alien_core::Storage::new("data".into())
+                        .versioning(true)
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let error = update_with_saved_stack(
+                InitialSetupAuthority::ImportedHandoff,
+                installed,
+                target,
+                false,
+            )
+            .await
+            .expect_err("release fallback must still protect frozen storage");
+            let cause = error.source.as_ref().expect("preflight cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(
+                cause
+                    .message
+                    .contains("Frozen resource 'data' was modified"),
+                "{error:?}"
+            );
         }
 
         /// `reason`, when given, is what the refusal must name.

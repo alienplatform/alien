@@ -50,6 +50,34 @@ impl CompileTimeCheck for StackInputsDefinitionCheck {
     }
 }
 
+/// New releases must name at least one platform when restricting an input's scope.
+/// Released stacks retain the legacy meaning of an empty list on deployment/render paths.
+pub struct StackInputPlatformsCheck;
+
+#[async_trait::async_trait]
+impl CompileTimeCheck for StackInputPlatformsCheck {
+    fn description(&self) -> &'static str {
+        "Stack input platform scopes must not be empty in new releases"
+    }
+
+    fn should_run(&self, stack: &Stack, _platform: Platform) -> bool {
+        !stack.inputs().is_empty()
+    }
+
+    async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
+        let mut result = CheckResult::success();
+        for input in stack.inputs() {
+            if input.platforms.as_ref().is_some_and(Vec::is_empty) {
+                result.add_error(format!(
+                    "Stack input '{}': platforms must include at least one platform; omit platforms to allow all platforms",
+                    input.id
+                ));
+            }
+        }
+        Ok(result)
+    }
+}
+
 fn validate_input(
     input: &StackInputDefinition,
     stack: &Stack,
@@ -579,6 +607,21 @@ mod tests {
             .await
             .expect("check should run")
             .errors
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_platform_scope() {
+        let mut input = generated_secret(64);
+        input.platforms = Some(vec![]);
+        assert!(errors_for(input.clone()).await.is_empty());
+        let result = StackInputPlatformsCheck
+            .check(&test_stack(vec![input]), Platform::Aws)
+            .await
+            .unwrap();
+        assert_eq!(result.errors, vec![
+            "Stack input 'databasePassword': platforms must include at least one platform; omit platforms to allow all platforms"
+        ]);
+        assert!(!result.success);
     }
 
     #[tokio::test]

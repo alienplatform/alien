@@ -25,6 +25,7 @@ runtime-checks = ["dep:alien-aws-clients", "dep:alien-gcp-clients", "dep:alien-a
 openapi = ["utoipa", "alien-core/openapi"]
 
 [dev-dependencies]
+tracing-subscriber = { workspace = true, features = ["fmt"] }
 alien-azure-clients = { workspace = true, features = ["test-utils"] }
 httpmock = { workspace = true }
 alien-gcp-clients = { workspace = true, features = ["test-utils"] }

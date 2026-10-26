@@ -191,10 +191,12 @@ pub struct StackInputDefinition {
 
 impl StackInputDefinition {
     /// Whether this input is available on the deployment platform, independently of its base cloud.
+    /// Empty scopes retain their legacy all-platform meaning for existing releases.
+    /// Build-time checks reject empty scopes in new releases.
     pub fn applies_to(&self, platform: Platform) -> bool {
         self.platforms
             .as_ref()
-            .is_none_or(|platforms| platforms.contains(&platform))
+            .is_none_or(|platforms| platforms.is_empty() || platforms.contains(&platform))
     }
 
     /// Whether Alien generates this input's value when none is provided. A
@@ -274,14 +276,10 @@ pub fn resolve_stack_input_environment_variables(
     platform: Platform,
 ) -> crate::Result<Vec<crate::EnvironmentVariable>> {
     let mut variables: Vec<crate::EnvironmentVariable> = Vec::new();
-    let applies = |input: &&StackInputDefinition| match &input.platforms {
-        Some(platforms) if !platforms.is_empty() => platforms.contains(&platform),
-        _ => true,
-    };
     for input in inputs
         .iter()
         .filter(|input| !input.env.is_empty())
-        .filter(applies)
+        .filter(|input| input.applies_to(platform))
     {
         let value = match values.get(&input.id) {
             Some(serde_json::Value::Null) | None => match &input.default {
@@ -445,6 +443,19 @@ mod environment_tests {
             resolve_stack_input_environment_variables(&inputs, &values, Platform::Kubernetes)
                 .expect_err("duplicate names must be rejected");
         assert!(error.message.contains("SHARED"));
+    }
+
+    #[test]
+    fn legacy_empty_platform_scope_preserves_environment_variables() {
+        let mut input = input("region", StackInputKind::String, "REGION");
+        input.platforms = Some(vec![]);
+        input.default = Some(StackInputDefaultValue::String("us-east-1".into()));
+        let values = HashMap::from([("region".into(), serde_json::json!("us-west-2"))]);
+        let variables =
+            resolve_stack_input_environment_variables(&[input], &values, Platform::Aws).unwrap();
+        assert_eq!(variables.len(), 1);
+        assert_eq!(variables[0].name, "REGION");
+        assert_eq!(variables[0].value, "us-west-2");
     }
 
     #[test]
