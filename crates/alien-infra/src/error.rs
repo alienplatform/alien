@@ -609,6 +609,18 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// A retained resource cannot yet be identified. Retry after restoring provider access.
+    #[error(
+        code = "DURABLE_RESOURCE_LOOKUP_FAILED",
+        message = "Cannot verify durable resource '{resource_id}': {message}. Restore provider access and retry deletion",
+        retryable = "true",
+        internal = "false"
+    )]
+    DurableResourceLookupFailed {
+        resource_id: String,
+        message: String,
+    },
+
     /// Errors originating from cloud platform operations.
     #[error(
         code = "CLOUD_PLATFORM_ERROR",

@@ -97,12 +97,13 @@ pub async fn protect_retained_kv(
             ));
         }
         let controller = resource.get_internal_controller_typed::<AwsKvController>()?;
-        let name = controller.table_name.as_ref().ok_or_else(|| {
-            invalid(
-                id,
-                "Restore the recorded table identity before protecting retained data",
-            )
-        })?;
+        // A rejected request or a lost response can leave no checkpoint identity.
+        // Read the deterministic requested name before deciding whether data exists.
+        let requested_name = alien_permissions::aws_resource_policies::aws_prefixed_resource_name(
+            &state.resource_prefix,
+            id,
+        );
+        let name = controller.table_name.as_ref().unwrap_or(&requested_name);
         let config = client_config
             .aws_config()
             .ok_or_else(|| invalid(id, "AWS runtime credentials are required"))?;
@@ -115,7 +116,12 @@ pub async fn protect_retained_kv(
         {
             Ok(response) => response.table,
             Err(error) if missing(&error) => continue,
-            Err(error) => return Err(error.context(cloud_error(id))),
+            Err(error) => {
+                return Err(error.context(ErrorData::DurableResourceLookupFailed {
+                    resource_id: id.clone(),
+                    message: format!("DynamoDB table {name}"),
+                }))
+            }
         };
         let arn = table
             .table_arn
@@ -550,6 +556,63 @@ mod tests {
         )
         .await
         .unwrap());
+    }
+
+    #[tokio::test]
+    async fn uncertain_create_without_saved_identity_looks_up_requested_table() {
+        let mut state = installed();
+        state
+            .resources
+            .get_mut("data")
+            .unwrap()
+            .set_internal_controller(Some(Box::new(AwsKvController::default())))
+            .unwrap();
+        let mut api = MockDynamoDbApi::new();
+        api.expect_describe_table().times(1).returning(|request| {
+            assert_eq!(request.table_name, "owned-data");
+            Err(AlienError::new(ClientError::RemoteResourceNotFound {
+                resource_type: "table".into(),
+                resource_name: request.table_name,
+            }))
+        });
+        assert!(step(&state, &provider(api)).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn unknown_table_create_found_is_protected_and_denied_lookup_can_retry() {
+        let mut state = installed();
+        state
+            .resources
+            .get_mut("data")
+            .unwrap()
+            .set_internal_controller(Some(Box::new(AwsKvController::default())))
+            .unwrap();
+        let mut denied = MockDynamoDbApi::new();
+        denied
+            .expect_describe_table()
+            .times(1)
+            .returning(|request| {
+                Err(AlienError::new(ClientError::RemoteAccessDenied {
+                    resource_type: "table".into(),
+                    resource_name: request.table_name,
+                }))
+            });
+        let error = step(&state, &provider(denied)).await.unwrap_err();
+        assert!(error.retryable);
+        assert_eq!(error.code, "DURABLE_RESOURCE_LOOKUP_FAILED");
+        let mut found = MockDynamoDbApi::new();
+        ownership(&mut found, false);
+        found
+            .expect_describe_time_to_live()
+            .times(1)
+            .returning(|request| {
+                assert_eq!(request.table_name, "owned-data");
+                Ok(serde_json::from_value(
+                    json!({"TimeToLiveDescription":{"TimeToLiveStatus":"DISABLED"}}),
+                )
+                .unwrap())
+            });
+        assert!(step(&state, &provider(found)).await.unwrap());
     }
 
     #[tokio::test]
