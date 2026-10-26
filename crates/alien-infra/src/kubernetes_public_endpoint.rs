@@ -1364,6 +1364,33 @@ pub(crate) fn container_public_endpoint_target<'a>(
     })
 }
 
+/// Configured custom addresses are available before workload or endpoint readiness.
+pub(crate) fn configured_public_endpoint_urls(
+    exposure: &KubernetesExposureSettings,
+    endpoints: &[alien_core::PublicEndpoint],
+) -> Option<HashMap<String, String>> {
+    let KubernetesExposureSettings::Custom {
+        domain,
+        certificate,
+        ..
+    } = exposure
+    else {
+        return None;
+    };
+    let scheme = if matches!(certificate, KubernetesCertificateMode::None) {
+        "http"
+    } else {
+        "https"
+    };
+    Some(
+        endpoints
+            .iter()
+            .filter(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
+            .map(|endpoint| (endpoint.name.clone(), format!("{scheme}://{domain}")))
+            .collect(),
+    )
+}
+
 fn resolve_endpoint_plan(
     ctx: &ResourceControllerContext<'_>,
     target: &KubernetesPublicEndpointTarget<'_>,

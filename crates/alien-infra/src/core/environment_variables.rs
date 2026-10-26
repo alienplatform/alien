@@ -310,6 +310,33 @@ fn current_resource_public_endpoint_urls(
         return endpoint_urls.clone();
     }
 
+    // A workload may need its own URL to start, before the endpoint is healthy.
+    #[cfg(feature = "kubernetes")]
+    if ctx.platform == alien_core::Platform::Kubernetes {
+        let endpoints = ctx
+            .desired_config
+            .downcast_ref::<Container>()
+            .map(|container| container.public_endpoints.as_slice())
+            .or_else(|| {
+                ctx.desired_config
+                    .downcast_ref::<Daemon>()
+                    .map(|daemon| daemon.public_endpoints.as_slice())
+            });
+        let exposure = ctx
+            .deployment_config
+            .stack_settings
+            .kubernetes
+            .as_ref()
+            .and_then(|settings| settings.exposure.as_ref());
+        if let (Some(endpoints), Some(exposure)) = (endpoints, exposure) {
+            if let Some(urls) = crate::kubernetes_public_endpoint::configured_public_endpoint_urls(
+                exposure, endpoints,
+            ) {
+                return urls;
+            }
+        }
+    }
+
     let Some(resource) = ctx
         .deployment_config
         .domain_metadata
@@ -755,10 +782,19 @@ impl EnvironmentVariableBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "kubernetes")]
+    use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
     #[cfg(feature = "local")]
     use crate::{core::controller_test::SingleControllerExecutor, daemon::LocalDaemonController};
     #[cfg(feature = "local")]
-    use alien_core::{DaemonCode, ExposeProtocol, Platform, PublicEndpoint};
+    use alien_core::Platform;
+    #[cfg(any(feature = "local", feature = "kubernetes"))]
+    use alien_core::{DaemonCode, ExposeProtocol, PublicEndpoint};
+    #[cfg(feature = "kubernetes")]
+    use alien_core::{
+        KubernetesCertificateMode, KubernetesExposureSettings, KubernetesIngressRouteProfile,
+        KubernetesRouteProfile, KubernetesSettings, KubernetesTlsSecretRef,
+    };
     use serde_json::json;
 
     #[cfg(feature = "local")]
@@ -1081,6 +1117,77 @@ mod tests {
                 );
             }
             previous_environment = Some(environment);
+        }
+    }
+    #[cfg(feature = "kubernetes")]
+    #[test]
+    fn kubernetes_custom_urls_are_available_before_workload_readiness() {
+        let mut daemon = Daemon::new("identity".into())
+            .code(DaemonCode::Image {
+                image: "identity:latest".into(),
+            })
+            .build();
+        daemon.public_endpoints = vec![
+            PublicEndpoint {
+                name: "auth".into(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some("login".into()),
+                wildcard_subdomains: true,
+            },
+            PublicEndpoint {
+                name: "database".into(),
+                port: 5432,
+                protocol: ExposeProtocol::Tcp,
+                host_label: None,
+                wildcard_subdomains: false,
+            },
+        ];
+        let mut harness = KubernetesManifestTestHarness::new(Resource::new(daemon), vec![]);
+        let route = KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+            ingress_class_name: "nginx".into(),
+            ..Default::default()
+        });
+        let exposures = [
+            (
+                KubernetesExposureSettings::Custom {
+                    domain: "login.example.test".into(),
+                    route: route.clone(),
+                    certificate: KubernetesCertificateMode::TlsSecretRef(KubernetesTlsSecretRef {
+                        secret_name: "site-tls".into(),
+                        namespace: None,
+                    }),
+                },
+                "https://login.example.test",
+                "login.example.test",
+            ),
+            (
+                KubernetesExposureSettings::Custom {
+                    domain: "identity.example.test".into(),
+                    route,
+                    certificate: KubernetesCertificateMode::None,
+                },
+                "http://identity.example.test",
+                "identity.example.test",
+            ),
+        ];
+        for (exposure, url, host) in exposures {
+            harness.deployment_config_mut().stack_settings.kubernetes = Some(KubernetesSettings {
+                cluster: None,
+                exposure: Some(exposure),
+            });
+            let environment = EnvironmentVariableBuilder::new(&HashMap::new())
+                .add_current_resource_public_endpoint(&harness.ctx(), "identity")
+                .unwrap()
+                .build();
+            let endpoints: serde_json::Value =
+                serde_json::from_str(&environment[ENV_ALIEN_PUBLIC_ENDPOINTS_JSON]).unwrap();
+            assert_eq!(
+                endpoints,
+                json!({"auth": {
+                    "url": url, "host": host, "wildcardHost": format!("*.{host}")
+                }})
+            );
         }
     }
 }
