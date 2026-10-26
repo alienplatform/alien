@@ -1942,37 +1942,37 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_execution_claim_is_discarded_before_requesting_a_fresh_claim() {
+        type Requests = Arc<Mutex<Vec<Value>>>;
+        async fn serve(
+            State((code, requests)): State<(String, Requests)>,
+            Json(body): Json<Value>,
+        ) -> (axum::http::StatusCode, Json<Value>) {
+            requests.lock().unwrap().push(body.clone());
+            if body
+                .get("executionClaim")
+                .is_some_and(|claim| claim["attemptId"] == "attempt_expired")
+            {
+                return (
+                    axum::http::StatusCode::CONFLICT,
+                    Json(json!({
+                        "code": code, "message": "Execution claim rejected", "retryable": true,
+                        "internal": false, "httpStatusCode": 409
+                    })),
+                );
+            }
+            (
+                axum::http::StatusCode::OK,
+                Json(json!({"executionClaim": {
+                    "operationId": "operation_current", "attemptId": "attempt_fresh"
+                }})),
+            )
+        }
         for code in [
             "DEPLOYMENT_LEASE_LOST",
             "DEPLOYMENT_UPDATE_CLAIM_LOST",
             "FORBIDDEN",
             "UNAVAILABLE",
         ] {
-            type Requests = Arc<Mutex<Vec<Value>>>;
-            async fn serve(
-                State((code, requests)): State<(String, Requests)>,
-                Json(body): Json<Value>,
-            ) -> (axum::http::StatusCode, Json<Value>) {
-                requests.lock().unwrap().push(body.clone());
-                if body
-                    .get("executionClaim")
-                    .is_some_and(|claim| claim["attemptId"] == "attempt_expired")
-                {
-                    return (
-                        axum::http::StatusCode::CONFLICT,
-                        Json(json!({
-                            "code": code, "message": "Execution claim rejected", "retryable": true,
-                            "internal": false, "httpStatusCode": 409
-                        })),
-                    );
-                }
-                (
-                    axum::http::StatusCode::OK,
-                    Json(json!({"executionClaim": {
-                        "operationId": "operation_current", "attemptId": "attempt_fresh"
-                    }})),
-                )
-            }
             let requests: Requests = Arc::new(Mutex::new(Vec::new()));
             let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
                 .await
