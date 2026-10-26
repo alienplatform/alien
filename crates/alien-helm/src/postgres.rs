@@ -11,17 +11,29 @@ pub(crate) fn values(stack: &Stack) -> Value {
         }
         Some((id.clone(), json!({
             "image": {"repository": "pgvector/pgvector", "tag": format!("pg{}-bookworm", database.version)},
-            "storage": database.storage,
+            "storage": kubernetes_size(&database.storage, false),
             "storageClassName": "",
             "highAvailability": database.high_availability,
             "encryptionKey": database.encryption_key,
             "resources": {"requests": {
                 "cpu": database.cpu.as_deref().unwrap_or("250m"),
-                "memory": database.memory.as_deref().unwrap_or("256Mi")
+                "memory": kubernetes_size(database.memory.as_deref().unwrap_or("256Mi"), true)
             }}
         })))
     }).collect();
     Value::Object(databases)
+}
+
+// Postgres accepts GiB/GB aliases and treats unitless memory as GiB.
+// Kubernetes uses Gi/G and interprets unitless quantities as bytes.
+fn kubernetes_size(value: &str, memory: bool) -> String {
+    let value = value.trim();
+    if memory {
+        if let Ok(gib) = value.parse::<f64>() {
+            return format!("{gib}Gi");
+        }
+    }
+    value.strip_suffix('B').unwrap_or(value).to_string()
 }
 
 pub(crate) const HELPERS: &str = r#"

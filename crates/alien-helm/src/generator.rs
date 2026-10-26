@@ -8895,6 +8895,62 @@ mod tests {
     }
 
     #[test]
+    fn postgres_sizes_keep_their_meaning_in_kubernetes() {
+        for (memory, storage, memory_bytes, storage_bytes) in [
+            ("8", "20GiB", 8_589_934_592_u64, 21_474_836_480_u64),
+            ("8GiB", "20GB", 8_589_934_592, 20_000_000_000),
+            ("512Mi", "20Gi", 536_870_912, 21_474_836_480),
+            ("1.5", "500M", 1_610_612_736, 500_000_000),
+        ] {
+            let stack = Stack::new("database-stack".into())
+                .add(
+                    alien_core::Postgres::new("database".into())
+                        .memory(memory.to_string())
+                        .storage(storage.to_string())
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let registry = HelmRegistry::built_in();
+            let chart = generate_helm_chart(
+                &stack,
+                HelmOptions {
+                    registry: &registry,
+                    stack_settings: StackSettings::default(),
+                    chart_name: "database-stack".into(),
+                },
+            )
+            .unwrap();
+            let rendered = crate::test_utils::helm_template(&chart.files, None);
+            rendered.assert_ok("database quantities");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let database = &docs_by_kind(&docs, "StatefulSet")[0];
+            let pvc = docs_by_kind(&docs, "PersistentVolumeClaim")
+                .into_iter()
+                .find(|pvc| pvc["metadata"]["name"].as_str().unwrap().contains("-pg-"))
+                .unwrap();
+            for (quantity, expected) in [
+                (
+                    &database["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"]
+                        ["memory"],
+                    memory_bytes,
+                ),
+                (
+                    &pvc["spec"]["resources"]["requests"]["storage"],
+                    storage_bytes,
+                ),
+            ] {
+                let quantity = quantity.as_str().unwrap();
+                assert_eq!(
+                    alien_core::instance_catalog::parse_memory_bytes(quantity).unwrap(),
+                    expected,
+                    "{memory} memory and {storage} storage must retain their byte counts"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn postgres_overrides_render_without_cluster_lookups() {
         let stack = Stack::new("database-stack".into())
             .add(
