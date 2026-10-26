@@ -275,6 +275,13 @@ fn resolved_compute_architecture(
     stack: &Stack,
     platform: Platform,
 ) -> crate::error::Result<Architecture> {
+    if exact_compute_architecture(stack)?.is_none() {
+        return instance_catalog::default_architecture(platform).ok_or_else(|| {
+            AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+                message: format!("managed cloud {platform} has no default compute architecture"),
+            })
+        });
+    }
     let mut architectures = stack
         .resources()
         .filter_map(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>())
@@ -501,6 +508,39 @@ mod tests {
         let groups = plan_runner_groups_for_stack(&[Aws], &stack).expect("plan should build");
 
         assert_eq!(groups[0].name, "linux-x64");
+    }
+
+    #[test]
+    fn unconstrained_pool_build_target_does_not_depend_on_machine_sizing() {
+        let cluster = ComputeCluster::new("runtime".into())
+            .capacity_group(CapacityGroup {
+                group_id: "pool".into(),
+                instance_type: None,
+                profile: Some(MachineProfile {
+                    cpu: "100000".into(),
+                    memory_bytes: 1024,
+                    ephemeral_storage_bytes: 0,
+                    architecture: None,
+                    gpu: None,
+                    data_disk: None,
+                }),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+            })
+            .build();
+        let stack = stack_with(cluster);
+        for (platform, target) in [
+            (Aws, BinaryTarget::LinuxArm64),
+            (Gcp, BinaryTarget::LinuxX64),
+            (Azure, BinaryTarget::LinuxX64),
+        ] {
+            assert_eq!(
+                resolve_targets_for_stack_platform(&stack, platform, None).unwrap(),
+                vec![target]
+            );
+        }
     }
 
     #[test]
