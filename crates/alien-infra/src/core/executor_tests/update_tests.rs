@@ -10,13 +10,14 @@ use alien_core::{
     DeploymentConfig, KubernetesClientConfig, Platform, Resource, ResourceLifecycle, ResourceRef,
     ResourceSpec, ResourceStatus, Stack, StackResourceState, StackState,
 };
+#[cfg(feature = "kubernetes")]
 use alien_error::AlienError;
+#[cfg(feature = "kubernetes")]
 use alien_k8s_clients::kubernetes::deployments::MockDeploymentApi;
 use alien_preflights::{mutations::ComputeClusterMutation, runner::PreflightRunner, StackMutation};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+#[cfg(feature = "kubernetes")]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Tests that a config change triggers an update.
 #[tokio::test]
@@ -640,6 +641,7 @@ async fn test_combined_add_update_remove() -> Result<()> {
 
 /// Cloud setup omits logical pools; continuation must verify the namespace
 /// through their controller instead of inventing imported cloud fleet state.
+#[cfg(feature = "kubernetes")]
 #[tokio::test]
 async fn imported_kubernetes_compute_retries_namespace_verification() -> Result<()> {
     let mut deployments = MockDeploymentApi::new();
@@ -729,6 +731,7 @@ async fn imported_kubernetes_compute_retries_namespace_verification() -> Result<
 }
 
 /// Exercise derived workload profiles through compatibility and the executor's real planner.
+#[cfg(feature = "kubernetes")]
 #[tokio::test]
 async fn mutated_machine_change_passes_compatibility_and_plans_update() {
     let workload = Container::new("api".to_string())
@@ -820,6 +823,7 @@ async fn mutated_machine_change_passes_compatibility_and_plans_update() {
     assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
 }
 
+#[cfg(feature = "kubernetes")]
 async fn materialize_machine(stack: Stack, machine: &str) -> Stack {
     let mut config = default_deployment_config();
     config.stack_settings.compute = Some(ComputeSettings {
@@ -841,6 +845,7 @@ async fn materialize_machine(stack: Stack, machine: &str) -> Stack {
         .expect("compute selection should materialize")
 }
 
+#[cfg(feature = "kubernetes")]
 fn plan_machine_cluster(
     cluster: ComputeCluster,
     state: &StackState,

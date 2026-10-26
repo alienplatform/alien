@@ -1,11 +1,13 @@
 //! Tests for the plan() method that calculates diffs.
 
 use super::helpers::*;
+#[cfg(feature = "kubernetes")]
 use crate::container::{KubernetesContainerController, KubernetesContainerState};
 use crate::core::state_utils::StackResourceStateExt;
 use crate::core::{MockPlatformServiceProvider, StackExecutor};
 use crate::error::Result;
 use crate::worker::{TestWorkerController, TestWorkerState};
+#[cfg(feature = "kubernetes")]
 use alien_core::{
     ClientConfig, Container, ContainerCode, KubernetesClientConfig, Resource, StackResourceState,
 };
@@ -475,6 +477,7 @@ async fn observation_only_failure_is_not_hidden_as_a_pending_update() -> Result<
     Ok(())
 }
 
+#[cfg(feature = "kubernetes")]
 #[test]
 fn refresh_failure_waiting_for_a_dependency_is_pending_recovery() -> Result<()> {
     let config = default_deployment_config();
