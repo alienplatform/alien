@@ -635,7 +635,7 @@ mod tests {
                         .unwrap()
                         .unwrap()
                         .status,
-                    DeploymentStatus::Pending
+                    DeploymentStatus::UpdatePending
                 );
             }
         }
