@@ -31,25 +31,10 @@ pub(crate) fn deployment_has_ready_replicas(deployment: &Deployment) -> bool {
             && ready == 0
             && status.replicas.unwrap_or(0) == 0;
     }
-    if ready == 0 {
-        return false;
-    }
-    let conditions = status.conditions.as_deref().unwrap_or_default();
-    // Health refresh can race a rollout or an autoscaler. Serving replicas remain
-    // useful while the Deployment controller catches up; rollout completion below
-    // still requires the requested generation and every desired replica.
-    let progressing = status.observed_generation.unwrap_or(0)
-        < deployment.metadata.generation.unwrap_or(1)
-        || conditions.iter().any(|condition| {
-            condition.type_ == "Progressing"
-                && condition.status == "True"
-                && condition.reason.as_deref() == Some("ReplicaSetUpdated")
-        });
-    progressing
-        || (ready >= desired
-            && !conditions
-                .iter()
-                .any(|condition| condition.type_ == "Available" && condition.status == "False"))
+    // Scale-up and rolling updates can temporarily miss the requested capacity
+    // while existing replicas still serve. Heartbeats report that capacity gap;
+    // rollout completion separately checks the requested generation and count.
+    ready > 0
 }
 
 pub(crate) fn deployment_rollout_complete(
@@ -84,12 +69,13 @@ pub(crate) fn statefulset_has_ready_replicas(statefulset: &StatefulSet) -> bool 
         .as_ref()
         .and_then(|spec| spec.replicas)
         .unwrap_or(1);
-    status.observed_generation.unwrap_or(0) >= statefulset.metadata.generation.unwrap_or(1)
-        && if desired == 0 {
-            status.ready_replicas.unwrap_or(0) == 0 && status.replicas == 0
-        } else {
-            status.ready_replicas.unwrap_or(0) >= desired
-        }
+    if desired == 0 {
+        status.observed_generation.unwrap_or(0) >= statefulset.metadata.generation.unwrap_or(1)
+            && status.ready_replicas.unwrap_or(0) == 0
+            && status.replicas == 0
+    } else {
+        status.ready_replicas.unwrap_or(0) > 0
+    }
 }
 
 pub struct KubernetesWorkloadHeartbeatInput {
@@ -171,6 +157,65 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     #[test]
+    fn scale_up_with_a_completed_replicaset_keeps_serving() {
+        // A real scale-up retains NewReplicaSetAvailable while Available is false.
+        let deployment: Deployment = serde_json::from_str(
+            r#"{
+  "metadata": {
+    "generation": 6
+  },
+  "spec": {
+    "replicas": 4,
+    "minReadySeconds": 60,
+    "selector": {},
+    "template": {}
+  },
+  "status": {
+    "availableReplicas": 1,
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-10-26T09:27:24Z",
+        "lastUpdateTime": "2026-10-26T09:44:18Z",
+        "message": "ReplicaSet \"app-69d8576d88\" has successfully progressed.",
+        "reason": "NewReplicaSetAvailable",
+        "status": "True",
+        "type": "Progressing"
+      },
+      {
+        "lastTransitionTime": "2026-10-26T09:50:11Z",
+        "lastUpdateTime": "2026-10-26T09:50:11Z",
+        "message": "Deployment does not have minimum availability.",
+        "reason": "MinimumReplicasUnavailable",
+        "status": "False",
+        "type": "Available"
+      }
+    ],
+    "observedGeneration": 6,
+    "readyReplicas": 1,
+    "replicas": 4,
+    "unavailableReplicas": 3,
+    "updatedReplicas": 4
+  }
+}"#,
+        )
+        .unwrap();
+        assert!(deployment_has_ready_replicas(&deployment));
+        assert!(!deployment_rollout_complete(&deployment, 4, Some(6)));
+    }
+
+    #[test]
+    fn statefulset_scale_up_keeps_serving() {
+        let statefulset: StatefulSet = serde_json::from_value(serde_json::json!({
+            "metadata": {"generation": 2},
+            "spec": {"replicas": 3, "selector": {}, "template": {}, "serviceName": "app"},
+            "status": {"observedGeneration": 2, "replicas": 3, "readyReplicas": 1,
+                "currentRevision": "revision", "updateRevision": "revision"}
+        }))
+        .unwrap();
+        assert!(statefulset_has_ready_replicas(&statefulset));
+    }
+
+    #[test]
     fn serving_replicas_remain_healthy_during_rollout_and_scale_up() {
         let mut deployment: Deployment = serde_json::from_value(serde_json::json!({
             "metadata": {"generation": 4},
@@ -231,7 +276,8 @@ mod tests {
         let status = deployment.status.as_mut().unwrap();
         status.ready_replicas = Some(1);
         status.unavailable_replicas = None;
-        assert!(!deployment_has_ready_replicas(&deployment));
+        // Available=False can persist while ready replicas pass minReadySeconds.
+        assert!(deployment_has_ready_replicas(&deployment));
         deployment
             .status
             .as_mut()
