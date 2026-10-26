@@ -448,12 +448,19 @@ pub(super) async fn refresh_airgap_deployment(state: &OperatorState) -> Result<(
     let Some(release) = current.current_release.as_ref() else {
         return Ok(());
     };
-    let config = state.db.get_deployment_config().await?.ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
+    let Some(config) = state.db.get_deployment_config().await? else {
+        if state.db.get_airgap_receipt().await?.is_none()
+            && state.db.get_airgap_sequence().await?.is_some()
+        {
+            // Completed older installations discarded config. Preserve their status
+            // until a newer verified target provides enough context to refresh.
+            return Ok(());
+        }
+        return Err(AlienError::new(ErrorData::ConfigurationError {
             message: "The installed deployment config is unavailable for health refresh"
                 .to_string(),
-        })
-    })?;
+        }));
+    };
     let mut config = enrich_config(
         config,
         &state.config,

@@ -532,6 +532,21 @@ mod tests {
             apply_target_data(&state, "target", retry_data(&target, 7, "retry"))
                 .await
                 .unwrap();
+            if !failed {
+                super::super::deployment::refresh_airgap_deployment(&state)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    state
+                        .db
+                        .get_deployment_state()
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .status,
+                    DeploymentStatus::Running
+                );
+            }
             let (observed, sequence, attempt) = state.db.airgap_status_snapshot().await.unwrap();
             assert_eq!(observed.unwrap().retry_requested, failed);
             assert_eq!(sequence, Some(7));
@@ -539,6 +554,20 @@ mod tests {
                 attempt.as_deref(),
                 if failed { Some("retry") } else { None }
             );
+            if !failed {
+                state
+                    .db
+                    .record_airgap_target(&AirgapReceipt {
+                        sequence: 7,
+                        target_hash: "verified-target".into(),
+                        attempt: None,
+                    })
+                    .await
+                    .unwrap();
+                assert!(super::super::deployment::refresh_airgap_deployment(&state)
+                    .await
+                    .is_err());
+            }
         }
     }
 
