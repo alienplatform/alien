@@ -531,6 +531,17 @@ pub struct ReconcileOutcome {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait DeploymentStore: Send + Sync {
+    /// Record a successfully signed release bundle for an air-gapped deployment.
+    /// Stores that expose download history record their own server timestamp.
+    async fn record_airgapped_bundle_signed(
+        &self,
+        _caller: &crate::auth::Subject,
+        _deployment_id: &str,
+        _release_id: &str,
+    ) -> Result<(), AlienError> {
+        Ok(())
+    }
+
     /// Whether acquisition honors excluded IDs before applying its limit.
     /// Stores must opt in after their entire acquisition path supports exclusions.
     /// Other stores retain candidate-list filtering to avoid reacquiring skipped

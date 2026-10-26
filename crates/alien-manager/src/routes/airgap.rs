@@ -257,7 +257,7 @@ async fn bundle_signature(
     Path(id): Path<String>,
     Json(body): Json<BundleSignatureRequest>,
 ) -> Response {
-    let (_, deployment) = match airgapped_deployment(&state, &headers, &id).await {
+    let (subject, deployment) = match airgapped_deployment(&state, &headers, &id).await {
         Ok(found) => found,
         Err(response) => return response,
     };
@@ -268,17 +268,48 @@ async fn bundle_signature(
     let Ok(manifest) = base64::engine::general_purpose::STANDARD.decode(&body.manifest) else {
         return ErrorData::bad_request("manifest must be base64").into_response();
     };
+    sign_bundle_manifest(
+        state.deployment_store.as_ref(),
+        &subject,
+        &deployment.id,
+        &key,
+        &manifest,
+    )
+    .await
+}
+
+async fn sign_bundle_manifest(
+    store: &dyn crate::traits::DeploymentStore,
+    subject: &Subject,
+    deployment_id: &str,
+    key: &alien_core::bundle_signature::BundleSigningKey,
+    manifest: &[u8],
+) -> Response {
     // Sign only manifests for this deployment, so a signature can't be
     // reused to install another deployment's bundle.
-    let manifest_deployment = serde_json::from_slice::<serde_json::Value>(&manifest)
-        .ok()
-        .and_then(|value| value.get("deploymentId")?.as_str().map(str::to_string));
-    if manifest_deployment.as_deref() != Some(deployment.id.as_str()) {
+    let manifest_value = serde_json::from_slice::<serde_json::Value>(manifest).ok();
+    let manifest_deployment = manifest_value
+        .as_ref()
+        .and_then(|value| value.get("deploymentId")?.as_str());
+    if manifest_deployment != Some(deployment_id) {
         return ErrorData::bad_request("The manifest is not a bundle manifest for this deployment")
             .into_response();
     }
+    let signature = key.sign(manifest);
+    if let Some(release_id) = manifest_value
+        .as_ref()
+        .and_then(|value| value.get("releaseId")?.as_str())
+        .filter(|id| !id.trim().is_empty() && *id != "delete")
+    {
+        if let Err(error) = store
+            .record_airgapped_bundle_signed(subject, deployment_id, release_id)
+            .await
+        {
+            return error.into_response();
+        }
+    }
     Json(BundleSignatureResponse {
-        signature: key.sign(&manifest),
+        signature,
         public_key: key.public_key(),
     })
     .into_response()
@@ -617,6 +648,81 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn signed_release_records_the_authenticated_download() {
+        let key = alien_core::bundle_signature::BundleSigningKey::from_seed([7; 32]);
+        let manifest = br#"{"deploymentId":"dep_1","releaseId":"rel_1","chart":"chart.tgz"}"#;
+        let mut subject = Subject::system();
+        subject.workspace_id = "download-workspace".into();
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store
+            .expect_record_airgapped_bundle_signed()
+            .times(1)
+            .withf(|caller, deployment, release| {
+                caller.workspace_id == "download-workspace"
+                    && deployment == "dep_1"
+                    && release == "rel_1"
+            })
+            .returning(|_, _, _| Ok(()));
+        let response = sign_bundle_manifest(&store, &subject, "dep_1", &key, manifest).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let signed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        alien_core::bundle_signature::verify(
+            &key.public_key(),
+            manifest,
+            signed["signature"].as_str().unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn signing_failure_is_returned_when_download_recording_fails() {
+        let key = alien_core::bundle_signature::BundleSigningKey::from_seed([7; 32]);
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store
+            .expect_record_airgapped_bundle_signed()
+            .times(1)
+            .returning(|_, _, _| Err(ErrorData::internal("recording failed").into_generic()));
+        let response = sign_bundle_manifest(
+            &store,
+            &Subject::system(),
+            "dep_1",
+            &key,
+            br#"{"deploymentId":"dep_1","releaseId":"rel_1"}"#,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn signing_does_not_record_deletions_or_invalid_manifests() {
+        let key = alien_core::bundle_signature::BundleSigningKey::from_seed([7; 32]);
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store.expect_record_airgapped_bundle_signed().times(0);
+        for (manifest, expected) in [
+            (
+                br#"{"deploymentId":"dep_1","releaseId":"delete","chart":""}"#.as_slice(),
+                StatusCode::OK,
+            ),
+            (
+                br#"{"deploymentId":"dep_1","releaseId":""}"#.as_slice(),
+                StatusCode::OK,
+            ),
+            (
+                br#"{"deploymentId":"dep_other","releaseId":"rel_1"}"#.as_slice(),
+                StatusCode::BAD_REQUEST,
+            ),
+            (b"invalid json".as_slice(), StatusCode::BAD_REQUEST),
+        ] {
+            let response =
+                sign_bundle_manifest(&store, &Subject::system(), "dep_1", &key, manifest).await;
+            assert_eq!(response.status(), expected);
+        }
+    }
+
+    #[tokio::test]
     async fn report_reconcile_preserves_heartbeats_and_accepts_old_reports() {
         let heartbeat = serde_json::json!({
          "deploymentId": "dep_1", "resourceId": "web", "resourceType": "container",
@@ -626,8 +732,7 @@ mod tests {
          "replicas": {"desired": 7, "current": 7, "ready": 7, "available": 7, "updated": 7}, "pods": [], "events": []}}, "raw": []
         });
         for heartbeats in [None, Some(serde_json::json!([heartbeat]))] {
-            let mut body =
-                serde_json::json!({"state": {"status": "running", "platform": "kubernetes", "protocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION}});
+            let mut body = serde_json::json!({"state": {"status": "running", "platform": "kubernetes", "protocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION}});
             if let Some(heartbeats) = heartbeats {
                 body["heartbeats"] = heartbeats;
             }
