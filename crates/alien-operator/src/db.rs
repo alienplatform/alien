@@ -307,7 +307,10 @@ impl OperatorDb {
     /// Get the current deployment state
     pub async fn get_deployment_state(&self) -> Result<Option<DeploymentState>> {
         let conn = self.conn.lock().await;
+        Self::get_deployment_state_locked(&conn).await
+    }
 
+    async fn get_deployment_state_locked(conn: &Connection) -> Result<Option<DeploymentState>> {
         let mut rows = conn
             .query("SELECT value FROM state WHERE key = 'deployment_state'", ())
             .await
@@ -520,10 +523,11 @@ impl OperatorDb {
         }
     }
 
-    /// Merge deployment-step observations without replacing newer passive readings.
+    /// Merge step observations, preserving newer readings only for current resources.
     pub async fn set_pending_heartbeats(&self, heartbeats: &[ResourceHeartbeat]) -> Result<()> {
         let conn = self.conn.lock().await;
-        Self::merge_pending_heartbeats_locked(&conn, heartbeats.iter()).await
+        let state = Self::get_deployment_state_locked(&conn).await?;
+        Self::merge_pending_heartbeats_locked(&conn, heartbeats.iter(), state.as_ref()).await
     }
 
     /// Merge passive readings for unchanged workloads in the installed release.
@@ -609,13 +613,14 @@ impl OperatorDb {
             return Ok(false);
         }
 
-        Self::merge_pending_heartbeats_locked(&conn, heartbeats.into_iter()).await?;
+        Self::merge_pending_heartbeats_locked(&conn, heartbeats.into_iter(), None).await?;
         Ok(true)
     }
 
     async fn merge_pending_heartbeats_locked<'a>(
         conn: &Connection,
         heartbeats: impl Iterator<Item = &'a ResourceHeartbeat>,
+        current_state: Option<&DeploymentState>,
     ) -> Result<()> {
         let mut pending_rows = conn
             .query(
@@ -660,6 +665,18 @@ impl OperatorDb {
             } else {
                 merged.push(heartbeat.clone());
             }
+        }
+        if let Some(state) = current_state {
+            // Step batches can be partial; absence from a batch is not removal.
+            merged.retain(|heartbeat| {
+                state
+                    .stack_state
+                    .as_ref()
+                    .and_then(|stack| stack.resources.get(&heartbeat.resource_id))
+                    .is_some_and(|resource| {
+                        resource.resource_type == heartbeat.resource_type.as_ref()
+                    })
+            });
         }
         let json = serde_json::to_string(&merged).into_alien_error().context(
             ErrorData::DatabaseError {
@@ -2309,6 +2326,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn maintenance_heartbeats_prune_removed_resources() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let mut state = heartbeat_state();
+        db.set_deployment_state(&state).await.unwrap();
+        let web = container_heartbeat("web");
+        let worker = container_heartbeat("worker");
+        db.set_pending_heartbeats(&[web.clone(), worker.clone()])
+            .await
+            .unwrap();
+
+        db.set_pending_heartbeats(&[worker.clone()]).await.unwrap();
+        assert_eq!(
+            db.get_pending_heartbeats().await.unwrap(),
+            vec![web.clone(), worker.clone()]
+        );
+
+        // A release removes web; the next step only observes worker.
+        state.stack_state.as_mut().unwrap().resources.remove("web");
+        db.set_deployment_state(&state).await.unwrap();
+        db.set_pending_heartbeats(&[worker.clone()]).await.unwrap();
+        assert_eq!(
+            db.get_pending_heartbeats().await.unwrap(),
+            vec![worker.clone()]
+        );
+
+        // An old collector cannot put the removed resource back.
+        db.set_pending_heartbeats(&[web]).await.unwrap();
+        assert_eq!(db.get_pending_heartbeats().await.unwrap(), vec![worker]);
+        state.stack_state.as_mut().unwrap().resources.clear();
+        db.set_deployment_state(&state).await.unwrap();
+        db.set_pending_heartbeats(&[]).await.unwrap();
+        assert!(db.get_pending_heartbeats().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn maintenance_heartbeats_preserve_newer_passive_observations() {
         let temp = tempfile::tempdir().unwrap();
         let db = OperatorDb::new(
@@ -2317,12 +2372,13 @@ mod tests {
         )
         .await
         .unwrap();
+        db.set_deployment_state(&heartbeat_state()).await.unwrap();
         let mut recent = container_heartbeat("web");
         recent.observed_at = chrono::Utc::now();
         let mut stale = recent.clone();
         stale.observed_at -= chrono::Duration::seconds(10);
         db.set_pending_heartbeats(&[recent.clone()]).await.unwrap();
-        db.set_pending_heartbeats(&[stale, container_heartbeat("other")])
+        db.set_pending_heartbeats(&[stale, container_heartbeat("worker")])
             .await
             .unwrap();
         let pending = db.get_pending_heartbeats().await.unwrap();
