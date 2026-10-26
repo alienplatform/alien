@@ -5413,8 +5413,8 @@ fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
                 alien_core::StackInputDefaultValue::Boolean(value) => serde_json::json!(value),
                 alien_core::StackInputDefaultValue::StringList(value) => serde_json::json!(value),
             };
-            let json = value.to_string();
-            template.push_str(&format!("{{{{- if not (hasKey $values {id:?}) -}}}}{{{{- $_ := set $values {id:?} (fromJson {json:?}) -}}}}{{{{- end -}}}}\n", id=input.id));
+            let json = serde_json::json!([value]).to_string();
+            template.push_str(&format!("{{{{- if not (hasKey $values {id:?}) -}}}}{{{{- $_ := set $values {id:?} (first (fromJsonArray {json:?})) -}}}}{{{{- end -}}}}\n", id=input.id));
         }
     }
     for input in stack.inputs().iter().filter(|input| {
@@ -5768,7 +5768,8 @@ fn secret_tpl() -> String {
       {{- $currentInputs = (index $existing.data "input-values.json" | b64dec) -}}
     {{- end -}}
   {{- end -}}
-  {{- $currentContext := dict "Values" (dict "inputValues" (fromJson $currentInputs)) -}}
+  {{- $currentContext := dict "Values" (deepCopy .Values) -}}
+  {{- $_ := set $currentContext.Values "inputValues" (fromJson $currentInputs) -}}
   {{- $normalizedCurrent := include "deployment.inputValues" $currentContext | fromJson | toJson -}}
   {{- if ne $normalizedCurrent (toJson (include "deployment.inputValues" . | fromJson)) -}}
     {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
@@ -9019,22 +9020,42 @@ infrastructureExistingSecret: customer-bindings
             );
             assert!(rendered.stderr.contains("bucket"), "{}", rendered.stderr);
         }
-        crate::test_utils::helm_template(
+        let rendered = crate::test_utils::helm_template(
             &chart.files,
             Some(&format!("{base}inputValues:\n  bucket: snapshots\n")),
-        )
-        .assert_ok("boolean default activates valid input");
+        );
+        rendered.assert_ok("boolean default activates valid input");
+        let documents: Vec<YamlValue> = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| YamlValue::deserialize(document).unwrap())
+            .collect();
+        let registered = documents
+            .iter()
+            .find_map(|document| document["stringData"]["input-values.json"].as_str())
+            .unwrap();
+        let registered: serde_json::Value = serde_json::from_str(registered).unwrap();
+        assert_eq!(registered["bucket"], "snapshots");
+        if !developer_controller {
+            assert_eq!(registered["enabled"], true);
+        }
     }
 
     #[test]
     fn helm_upgrade_normalizes_legacy_input_defaults() {
         let stack = Stack::new("upgrade-inputs".into())
-            .inputs(vec![alien_core::StackInputDefinition::deployer_boolean(
-                "enabled",
-                "Enabled",
-                "Enable feature",
-                Some(true),
-            )])
+            .inputs(vec![
+                alien_core::StackInputDefinition::deployer_boolean(
+                    "enabled",
+                    "Enabled",
+                    "Enable feature",
+                    Some(true),
+                ),
+                serde_json::from_value(serde_json::json!({
+                    "id": "bucket", "kind": "string", "providedBy": ["deployer"],
+                    "required": true, "label": "Bucket", "description": "Snapshot bucket",
+                    "when": {"input": "enabled", "equals": true}
+                }))
+                .unwrap(),
+            ])
             .build();
         let registry = HelmRegistry::built_in();
         let mut chart = generate_helm_chart(
@@ -9053,7 +9074,7 @@ infrastructureExistingSecret: customer-bindings
             "lookup \"v1\" \"Secret\" .Release.Namespace (include \"deployment.fullname\" .)",
             "(dict \"data\" (dict \"input-values.json\" (b64enc \"{}\")))",
         );
-        let base = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        let base = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: dep_test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
         crate::test_utils::helm_template(&chart.files, Some(base))
             .assert_ok("legacy omitted defaults survive upgrade");
         let changed = crate::test_utils::helm_template(
