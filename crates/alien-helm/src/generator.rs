@@ -8805,6 +8805,87 @@ mod tests {
     }
 
     #[test]
+    fn postgres_names_and_bindings_distinguish_long_release_names() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let mut names = Vec::new();
+        for release in [
+            "acme-production-installation-one",
+            "acme-production-installation-two",
+        ] {
+            let rendered =
+                crate::test_utils::helm_template_for_release(&chart.files, None, release);
+            rendered.assert_ok("long database release");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let databases = docs_by_kind(&docs, "StatefulSet");
+            assert_eq!(databases.len(), 1);
+            let database = &databases[0];
+            let name = database["metadata"]["name"].as_str().unwrap();
+            assert!(name.len() <= 63);
+            let pod = &database["spec"]["template"]["spec"];
+            assert_eq!(database["spec"]["serviceName"].as_str(), Some(name));
+            assert_eq!(
+                pod["volumes"][0]["persistentVolumeClaim"]["claimName"].as_str(),
+                Some(name)
+            );
+            let password = pod["containers"][0]["env"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .find(|env| env["name"] == "POSTGRES_PASSWORD")
+                .unwrap();
+            assert_eq!(
+                password["valueFrom"]["secretKeyRef"]["name"].as_str(),
+                Some(name)
+            );
+            for kind in ["Secret", "PersistentVolumeClaim", "Service"] {
+                let matching: Vec<_> = docs_by_kind(&docs, kind)
+                    .into_iter()
+                    .filter(|doc| doc["metadata"]["name"].as_str() == Some(name))
+                    .collect();
+                assert_eq!(matching.len(), 1, "{kind} must use database identity");
+                if kind == "Service" {
+                    assert_eq!(
+                        matching[0]["spec"]["selector"],
+                        database["spec"]["selector"]["matchLabels"]
+                    );
+                }
+            }
+            let binding_secret = docs_by_kind(&docs, "Secret")
+                .into_iter()
+                .find(|secret| secret["stringData"]["external-bindings.json"].is_string())
+                .unwrap();
+            let bindings: serde_json::Value = serde_json::from_str(
+                binding_secret["stringData"]["external-bindings.json"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(bindings["database"]["host"], format!("{name}.default.svc"));
+            assert_eq!(bindings["database"]["password"]["secretRef"]["name"], name);
+            names.push(name.to_string());
+        }
+        assert_ne!(
+            names[0], names[1],
+            "different full release names must not share database resources"
+        );
+    }
+
+    #[test]
     fn postgres_pods_do_not_match_the_operator_selector() {
         let stack = Stack::new("database-stack".into())
             .add(

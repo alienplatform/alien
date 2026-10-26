@@ -26,7 +26,7 @@ pub(crate) fn values(stack: &Stack) -> Value {
 
 pub(crate) const HELPERS: &str = r#"
 {{- define "deployment.postgresName" -}}
-{{- printf "%s-pg-%s" (include "deployment.fullname" .root | trunc 28 | trimSuffix "-") (.id | trunc 20 | trimSuffix "-") -}}-{{ .id | sha256sum | trunc 8 }}
+{{- printf "%s-pg-%s" (include "deployment.fullname" .root | trunc 28 | trimSuffix "-") (.id | trunc 20 | trimSuffix "-") -}}-{{ printf "%s/%s/%s" .root.Release.Namespace .root.Release.Name .id | sha256sum | trunc 8 }}
 {{- end -}}
 
 {{- define "deployment.infrastructure" -}}
