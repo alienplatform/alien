@@ -1,8 +1,8 @@
 use crate::compatibility::narrowing::management_narrowed;
 use crate::error::Result;
 use crate::mutations::management_permission_profile::{
-    GATE_DERIVED_GLOBAL_SUFFIXES, KEY_AVAILABILITY_PERMISSION_SET_ID,
-    replica_secret_existence, secrets_guard, NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID,
+    replica_secret_existence, secrets_guard, GATE_DERIVED_GLOBAL_SUFFIXES,
+    KEY_AVAILABILITY_PERMISSION_SET_ID, NATIVE_VOLUME_MANAGEMENT_PERMISSION_SET_ID,
 };
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
@@ -246,7 +246,11 @@ fn without_added_migration_grants(
         strip(&mut profile, "*", &added_guards);
         strip(&mut profile, "*", &sandbox_secrets);
         for scope in &keys_with_installed_volume_use {
-            strip(&mut profile, scope, std::slice::from_ref(&volume_management));
+            strip(
+                &mut profile,
+                scope,
+                std::slice::from_ref(&volume_management),
+            );
         }
         for key in &keys_gaining_availability {
             strip(&mut profile, key, std::slice::from_ref(&key_availability));
@@ -328,6 +332,7 @@ impl StackCompatibilityCheck for PermissionProfilesUnchangedCheck {
         old_stack: &Stack,
         new_stack: &Stack,
         config: &alien_core::DeploymentConfig,
+        _platform: alien_core::Platform,
     ) -> Result<CheckResult> {
         check_permission_profiles(
             old_stack,
@@ -423,10 +428,10 @@ fn check_permission_profiles(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::SECRETS_VAULT_ID;
     use crate::mutations::management_permission_profile::ManagementPermissionProfileMutation;
     use crate::StackMutation;
     use alien_core::permissions::PermissionsConfig;
+    use alien_core::SECRETS_VAULT_ID;
     use alien_core::{Email, Kv, ResourceLifecycle};
     use alien_core::{Platform, StackState};
     use indexmap::IndexMap;
@@ -1125,7 +1130,11 @@ mod tests {
             .await
             .expect("check should run");
         assert!(!removed.success);
-        assert!(removed.errors[0].contains("'worker' was removed"), "{:?}", removed.errors);
+        assert!(
+            removed.errors[0].contains("'worker' was removed"),
+            "{:?}",
+            removed.errors
+        );
 
         let mut narrowed_profiles = IndexMap::new();
         narrowed_profiles.insert("worker".to_string(), PermissionProfile::new());
@@ -1136,7 +1145,11 @@ mod tests {
             .await
             .expect("check should run");
         assert!(!narrowed.success);
-        assert!(narrowed.errors[0].contains("'worker' was modified"), "{:?}", narrowed.errors);
+        assert!(
+            narrowed.errors[0].contains("'worker' was modified"),
+            "{:?}",
+            narrowed.errors
+        );
     }
 
     #[tokio::test]

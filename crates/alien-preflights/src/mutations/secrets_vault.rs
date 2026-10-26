@@ -2330,11 +2330,11 @@ mod tests {
                 assert!(updated.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID));
                 for result in [
                     PermissionProfilesUnchangedCheck
-                        .check_with_config(&setup, &updated, &config)
+                        .check_with_config(&setup, &updated, &config, platform)
                         .await
                         .unwrap(),
                     FrozenResourcesUnchangedCheck { platform }
-                        .check_with_config(&setup, &updated, &config)
+                        .check_with_config(&setup, &updated, &config, platform)
                         .await
                         .unwrap(),
                 ] {
@@ -2354,7 +2354,7 @@ mod tests {
                 .await
                 .unwrap();
             let result = PermissionProfilesUnchangedCheck
-                .check_with_config(&setup, &updated, &setup_config)
+                .check_with_config(&setup, &updated, &setup_config, platform)
                 .await
                 .unwrap();
             assert!(!result.errors.is_empty(), "a new slot still requires setup");
@@ -2381,7 +2381,7 @@ mod tests {
                 .await
                 .unwrap();
             let result = FrozenResourcesUnchangedCheck { platform }
-                .check_with_config(&setup, &updated, &setup_config)
+                .check_with_config(&setup, &updated, &setup_config, platform)
                 .await
                 .unwrap();
             assert!(
@@ -2445,7 +2445,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(updated.permissions.profiles, setup.permissions.profiles);
                 let compatibility = FrozenResourcesUnchangedCheck { platform }
-                    .check_with_config(&setup, &updated, &config)
+                    .check_with_config(&setup, &updated, &config, platform)
                     .await
                     .unwrap();
                 assert!(
@@ -2490,7 +2490,7 @@ mod tests {
             "the profile must stay as the earlier release installed it"
         );
         let compatibility = PermissionProfilesUnchangedCheck
-            .check_with_config(&stack, &updated, &legacy)
+            .check_with_config(&stack, &updated, &legacy, Platform::Aws)
             .await
             .expect("check runs");
         assert!(
@@ -3289,7 +3289,7 @@ mod tests {
                 .push(PermissionSetReference::from_name("vault/data-read"));
 
             let narrowed = PermissionProfilesUnchangedCheck
-                .check_with_config(&installed, &prepared, &config)
+                .check_with_config(&installed, &prepared, &config, platform)
                 .await
                 .unwrap();
             assert!(
@@ -3298,7 +3298,7 @@ mod tests {
                 narrowed.errors
             );
             let widened = PermissionProfilesUnchangedCheck
-                .check_with_config(&prepared, &installed, &config)
+                .check_with_config(&prepared, &installed, &config, platform)
                 .await
                 .unwrap();
             assert!(

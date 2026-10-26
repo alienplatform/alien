@@ -47,14 +47,13 @@ pub async fn prepare_direct_setup_update(
         &gate_inputs,
         stack_state.platform,
     )?;
-    let mut target_stack = target_stack;
-    alien_core::remove_off_platform_gated_resources(&mut target_stack, stack_state.platform);
     let frozen_gating = frozen_gating_inputs(&target_stack);
     let target_stack = strip_frozen_declines_with_compute_settings(
         target_stack,
         &persisted_gate_answers,
         &frozen_gating,
         config.stack_settings.compute.as_mut(),
+        stack_state.platform,
     );
     let runner = alien_preflights::runner::PreflightRunner::new();
     let (mutated_stack, _, _) = runner
@@ -143,14 +142,13 @@ pub async fn handle_pending(
     // value against: a frozen gate is answered once.
     let persisted_gate_answers =
         resolve_frozen_gate_answers(&target_stack, &stack_state, &config.input_values)?;
-    let mut target_stack = target_stack;
-    alien_core::remove_off_platform_gated_resources(&mut target_stack, stack_state.platform);
     let frozen_gating = frozen_gating_inputs(&target_stack);
     let target_stack = strip_frozen_declines_with_compute_settings(
         target_stack,
         &persisted_gate_answers,
         &frozen_gating,
         config.stack_settings.compute.as_mut(),
+        stack_state.platform,
     );
 
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
@@ -269,18 +267,20 @@ pub fn strip_frozen_declines(
     stack: Stack,
     answers: &alien_core::GateAnswers,
     still_frozen_gating: &std::collections::HashSet<String>,
+    platform: Platform,
 ) -> Stack {
-    strip_frozen_declines_with_compute_settings(stack, answers, still_frozen_gating, None)
+    strip_frozen_declines_with_compute_settings(stack, answers, still_frozen_gating, None, platform)
 }
 
 /// Strip frozen declines and their deployment-time container allocations together.
 /// Only selections for declared containers actually removed by the gate are discarded;
 /// unknown IDs and selections for other resource kinds still fail normal validation.
 pub fn strip_frozen_declines_with_compute_settings(
-    stack: Stack,
+    mut stack: Stack,
     answers: &alien_core::GateAnswers,
     still_frozen_gating: &std::collections::HashSet<String>,
     compute: Option<&mut alien_core::ComputeSettings>,
+    platform: Platform,
 ) -> Stack {
     let container_ids: Vec<_> = stack
         .resources
@@ -293,6 +293,7 @@ pub fn strip_frozen_declines_with_compute_settings(
         })
         .map(|(id, _)| id.clone())
         .collect();
+    alien_core::remove_off_platform_gated_resources(&mut stack, platform);
     let stack = strip_declined_frozen_resources(stack, answers);
     let stack = strip_frozen_dominated_live_resources(stack, answers, still_frozen_gating);
     if let Some(compute) = compute {
@@ -639,6 +640,7 @@ mod tests {
                 &alien_core::GateAnswers::from([("analyticsEnabled".to_string(), accepted)]),
                 &frozen_gating,
                 Some(&mut compute),
+                alien_core::Platform::Aws,
             );
             assert_eq!(stack.resources.contains_key("optional-api"), accepted);
             assert_eq!(compute.containers.contains_key("optional-api"), accepted);
@@ -649,6 +651,22 @@ mod tests {
             )
             .expect("resource selections must remain valid after either gate answer");
         }
+        let mut off_platform = declared.clone();
+        off_platform.inputs[0].platforms = Some(vec![Platform::Gcp]);
+        let mut compute = selections.clone();
+        let mut stripped = strip_frozen_declines_with_compute_settings(
+            off_platform,
+            &Default::default(),
+            &frozen_gating,
+            Some(&mut compute),
+            Platform::Aws,
+        );
+        assert!(!stripped.resources.contains_key("optional-api"));
+        assert!(!compute.containers.contains_key("optional-api"));
+        assert!(compute.containers.contains_key("api"));
+        alien_core::container_resources::resolve_container_resources(&mut stripped, Some(&compute))
+            .expect("off-platform allocations must be removed even without a recorded answer");
+
         for invalid_id in ["missing", "analytics"] {
             let mut compute = selections.clone();
             compute
@@ -659,6 +677,7 @@ mod tests {
                 &alien_core::GateAnswers::from([("analyticsEnabled".to_string(), false)]),
                 &frozen_gating,
                 Some(&mut compute),
+                alien_core::Platform::Aws,
             );
             let error = alien_core::container_resources::resolve_container_resources(
                 &mut stack,
@@ -1290,6 +1309,23 @@ mod tests {
         )
         .expect_err("no value and no default cannot resolve");
         assert!(error.message.contains("cacheEnabled"), "{}", error.message);
+    }
+
+    #[test]
+    fn off_platform_frozen_gate_ignores_input_and_import_presence() {
+        let mut stack = gated_stack();
+        stack.inputs[0].platforms = Some(vec![Platform::Gcp]);
+        let values =
+            std::collections::HashMap::from([("analyticsEnabled".into(), serde_json::json!(true))]);
+        for present in [
+            std::collections::HashSet::new(),
+            std::collections::HashSet::from(["analytics".into()]),
+        ] {
+            let answers =
+                resolve_frozen_gate_answers_from_presence(&stack, &present, &values, Platform::Aws)
+                    .unwrap();
+            assert_eq!(answers.get("analyticsEnabled"), Some(&false));
+        }
     }
 
     /// Answers derive from import presence when a state exists, from the

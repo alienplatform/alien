@@ -286,24 +286,93 @@ mod tests {
     use super::*;
 
     #[test]
+    fn off_platform_gate_needs_neither_a_valid_value_nor_a_default() {
+        let mut input = StackInputDefinition::deployer_boolean(
+            "managedBucket",
+            "Managed bucket",
+            "Create a bucket",
+            None,
+        );
+        input.platforms = Some(vec![Platform::Aws]);
+        let values = HashMap::from([(input.id.clone(), serde_json::json!("not a boolean"))]);
+        assert!(!gate_resolves_true(
+            std::slice::from_ref(&input),
+            &input.id,
+            &values,
+            "data",
+            Platform::Machines
+        )
+        .unwrap());
+        assert!(gate_resolves_true(
+            std::slice::from_ref(&input),
+            &input.id,
+            &values,
+            "data",
+            Platform::Aws
+        )
+        .is_err());
+    }
+
+    #[test]
     fn platform_scope_overrides_defaults_provided_and_recorded_answers() {
         for platforms in [None, Some(vec![Platform::Aws]), Some(vec![])] {
             for default in [false, true] {
-                let mut input = StackInputDefinition::deployer_boolean("managedBucket", "Managed bucket", "Create a bucket", Some(default));
+                let mut input = StackInputDefinition::deployer_boolean(
+                    "managedBucket",
+                    "Managed bucket",
+                    "Create a bucket",
+                    Some(default),
+                );
                 input.platforms = platforms.clone();
-                for platform in [Platform::Aws, Platform::Machines, Platform::Local, Platform::Kubernetes] {
+                for platform in [
+                    Platform::Aws,
+                    Platform::Machines,
+                    Platform::Local,
+                    Platform::Kubernetes,
+                ] {
                     for provided in [None, Some(false), Some(true)] {
-                        let values = provided.map(|value| (input.id.clone(), serde_json::json!(value))).into_iter().collect();
-                        let excluded = platforms.as_ref().is_some_and(|scope| !scope.contains(&platform));
+                        let values = provided
+                            .map(|value| (input.id.clone(), serde_json::json!(value)))
+                            .into_iter()
+                            .collect();
+                        let excluded = platforms
+                            .as_ref()
+                            .is_some_and(|scope| !scope.contains(&platform));
                         let expected = !excluded && provided.unwrap_or(default);
-                        assert_eq!(gate_resolves_true(std::slice::from_ref(&input), &input.id, &values, "data", platform).unwrap(), expected);
+                        assert_eq!(
+                            gate_resolves_true(
+                                std::slice::from_ref(&input),
+                                &input.id,
+                                &values,
+                                "data",
+                                platform
+                            )
+                            .unwrap(),
+                            expected
+                        );
                         for recorded in [false, true] {
                             let answers = GateAnswers::from([(input.id.clone(), recorded)]);
                             for frozen in [HashSet::new(), HashSet::from([input.id.clone()])] {
-                                let expected = !excluded && provided.unwrap_or(if frozen.is_empty() { default } else { recorded });
-                                let (actual, source) = live_gate_resolves_true(std::slice::from_ref(&input), &input.id, &values, &answers, &frozen, "data", platform).unwrap();
+                                let expected = !excluded
+                                    && provided.unwrap_or(if frozen.is_empty() {
+                                        default
+                                    } else {
+                                        recorded
+                                    });
+                                let (actual, source) = live_gate_resolves_true(
+                                    std::slice::from_ref(&input),
+                                    &input.id,
+                                    &values,
+                                    &answers,
+                                    &frozen,
+                                    "data",
+                                    platform,
+                                )
+                                .unwrap();
                                 assert_eq!(actual, expected);
-                                if excluded { assert_eq!(source, "platform"); }
+                                if excluded {
+                                    assert_eq!(source, "platform");
+                                }
                             }
                         }
                     }

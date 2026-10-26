@@ -540,3 +540,18 @@ fn an_ungated_azure_storage_stack_is_untouched() {
     assert_ungated_registration_list_is_a_plain_array(main);
     assert_terraform_valid(&module, "ungated azure storage stack");
 }
+
+#[test]
+fn platform_scoped_storage_matches_aws_module_target() {
+    for scope in [alien_core::Platform::Aws, alien_core::Platform::Gcp] {
+        let mut stack = gated_stack();
+        stack.inputs[0].platforms = Some(vec![scope]);
+        let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+        assert_terraform_valid(&module, "platform-scoped storage");
+        let blocks = declared_block_types(&normalized(&module));
+        assert_eq!(
+            blocks.iter().any(|kind| kind == "aws_s3_bucket"),
+            scope == alien_core::Platform::Aws
+        );
+    }
+}

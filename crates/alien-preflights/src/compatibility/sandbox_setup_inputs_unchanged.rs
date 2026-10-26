@@ -79,6 +79,7 @@ impl StackCompatibilityCheck for SandboxSetupInputsUnchangedCheck {
         old_stack: &Stack,
         new_stack: &Stack,
         config: &DeploymentConfig,
+        platform: alien_core::Platform,
     ) -> Result<CheckResult> {
         let (answers, still_frozen_gating) = surviving_frozen_gate_answers(new_stack);
         let declined = declined_live_resources(
@@ -86,7 +87,7 @@ impl StackCompatibilityCheck for SandboxSetupInputsUnchangedCheck {
             &config.input_values,
             &answers,
             &still_frozen_gating,
-            alien_core::Platform::Aws,
+            platform,
         )
         .map_err(|message| {
             AlienError::new(ErrorData::StackCompatibilityCheckFailed {
@@ -150,6 +151,43 @@ mod tests {
             .check(&old, &new)
             .await
             .expect("check runs")
+    }
+
+    #[tokio::test]
+    async fn scoped_gate_uses_the_deployment_platform_for_compatibility() {
+        let old = Stack::new("stack".into()).build();
+        let mut new = stack(Some(REPO_A), BUNDLE_V1);
+        new.resources.get_mut("agents").unwrap().enabled_when = Some("enabled".into());
+        let mut input = alien_core::StackInputDefinition::deployer_boolean(
+            "enabled",
+            "Enabled",
+            "Enable sandbox",
+            Some(true),
+        );
+        input.platforms = Some(vec![alien_core::Platform::Gcp]);
+        new.inputs.push(input);
+        let config = DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(Default::default())
+            .allow_frozen_changes(false)
+            .build();
+        for platform in [alien_core::Platform::Aws, alien_core::Platform::Gcp] {
+            let result = SandboxSetupInputsUnchangedCheck
+                .check_with_config(&old, &new, &config, platform)
+                .await
+                .unwrap();
+            assert_eq!(
+                result.success,
+                platform == alien_core::Platform::Aws,
+                "{:?}",
+                result.errors
+            );
+        }
     }
 
     #[tokio::test]

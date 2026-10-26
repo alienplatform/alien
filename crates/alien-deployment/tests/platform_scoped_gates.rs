@@ -15,22 +15,37 @@ fn release(stack: Stack, version: &str) -> ReleaseInfo {
 
 fn stack_with_bucket(lifecycle: ResourceLifecycle) -> Stack {
     let mut input = StackInputDefinition::deployer_boolean(
-        "managedBucket", "Managed bucket", "Create a bucket", Some(true),
+        "managedBucket",
+        "Managed bucket",
+        "Create a bucket",
+        Some(true),
     );
     input.platforms = Some(vec![Platform::Aws]);
     Stack::new("scoped-gate".into())
         .inputs(vec![input])
-        .add_enabled_when(Storage::new("data".into()).build(), lifecycle, "managedBucket")
+        .add_enabled_when(
+            Storage::new("data".into()).build(),
+            lifecycle,
+            "managedBucket",
+        )
         .build()
 }
 
 async fn run(mut state: DeploymentState, config: &DeploymentConfig) -> DeploymentState {
     for _ in 0..30 {
         state = alien_deployment::step(state, config.clone(), ClientConfig::Machines, None)
-            .await.expect("deployment step").state;
+            .await
+            .expect("deployment step")
+            .state;
         println!("status={:?}, error={:?}", state.status, state.error);
-        if state.status == DeploymentStatus::Running { return state; }
-        assert!(state.error.is_none(), "deployment failed: {:?}", state.error);
+        if state.status == DeploymentStatus::Running {
+            return state;
+        }
+        assert!(
+            state.error.is_none(),
+            "deployment failed: {:?}",
+            state.error
+        );
     }
     panic!("did not reach Running: {:?}", state.status);
 }
@@ -42,13 +57,17 @@ async fn machines_create_and_upgrade_decline_aws_only_storage() {
             let mut config = DeploymentConfig::builder()
                 .stack_settings(alien_core::StackSettings::default())
                 .environment_variables(alien_core::EnvironmentVariablesSnapshot {
-                    variables: vec![], hash: String::new(), created_at: String::new(),
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
                 })
                 .allow_frozen_changes(false)
                 .external_bindings(alien_core::ExternalBindings::default())
                 .build();
             if let Some(value) = provided {
-                config.input_values.insert("managedBucket".into(), serde_json::json!(value));
+                config
+                    .input_values
+                    .insert("managedBucket".into(), serde_json::json!(value));
             }
             let empty = Stack::new("scoped-gate".into()).build();
             let mut initial = DeploymentState {
@@ -67,11 +86,29 @@ async fn machines_create_and_upgrade_decline_aws_only_storage() {
             state.target_release = Some(release(stack_with_bucket(lifecycle), "2.0.0"));
             state.status = DeploymentStatus::UpdatePending;
             let updated = run(state, &config).await;
-            assert!(!updated.stack_state.as_ref().unwrap().resources.contains_key("data"));
-            assert!(!updated.runtime_metadata.as_ref().unwrap().prepared_stack.as_ref().unwrap().resources.contains_key("data"));
+            assert!(!updated
+                .stack_state
+                .as_ref()
+                .unwrap()
+                .resources
+                .contains_key("data"));
+            assert!(!updated
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .prepared_stack
+                .as_ref()
+                .unwrap()
+                .resources
+                .contains_key("data"));
             initial.target_release = Some(release(stack_with_bucket(lifecycle), "2.0.0"));
             let created = run(initial, &config).await;
-            assert!(!created.stack_state.as_ref().unwrap().resources.contains_key("data"));
+            assert!(!created
+                .stack_state
+                .as_ref()
+                .unwrap()
+                .resources
+                .contains_key("data"));
         }
     }
 }

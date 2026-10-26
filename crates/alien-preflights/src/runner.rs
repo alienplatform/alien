@@ -32,6 +32,9 @@ impl PreflightRunner {
         platform: Platform,
     ) -> Result<PreflightSummary> {
         info!("Running compile-time checks for platform {:?}", platform);
+        let mut platform_stack = stack.clone();
+        alien_core::remove_off_platform_gated_resources(&mut platform_stack, platform);
+        let stack = &platform_stack;
 
         let checks = self.registry.get_compile_time_checks(stack, platform);
         let results = run_stack_checks(checks, stack, platform).await?;
@@ -60,7 +63,7 @@ impl PreflightRunner {
             debug!("Running compatibility check: {}", check.description());
 
             let mut result = check
-                .check_with_config(old_stack, new_stack, config)
+                .check_with_config(old_stack, new_stack, config, platform)
                 .await
                 .context(ErrorData::StackCompatibilityCheckFailed {
                     check_name: check.description().to_string(),
@@ -210,6 +213,7 @@ impl PreflightRunner {
         );
 
         let mut current_stack = stack;
+        alien_core::remove_off_platform_gated_resources(&mut current_stack, stack_state.platform);
 
         for mutation in self.registry.get_all_mutations() {
             if !mutation.should_run(&current_stack, stack_state, config) {
@@ -282,6 +286,9 @@ impl PreflightRunner {
             platform
         );
 
+        let mut platform_stack = stack.clone();
+        alien_core::remove_off_platform_gated_resources(&mut platform_stack, platform);
+        let stack = &platform_stack;
         let checks = self.registry.get_template_checks(stack, platform);
         let mut results = Vec::new();
 

@@ -190,6 +190,7 @@ impl crate::StackCompatibilityCheck for ContainerNetworkSettingsCheck {
         old_stack: &Stack,
         new_stack: &Stack,
         config: &alien_core::DeploymentConfig,
+        _platform: alien_core::Platform,
     ) -> Result<CheckResult> {
         if matches!(
             config.compute_backend,

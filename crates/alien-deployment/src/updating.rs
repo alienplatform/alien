@@ -168,9 +168,10 @@ pub async fn handle_update_pending(
         .as_ref()
         .map(|metadata| metadata.persisted_gate_answers.clone())
         .unwrap_or_default();
-    let mut target_stack = target_stack;
-    alien_core::remove_off_platform_gated_resources(&mut target_stack, current.platform);
-    let frozen_gating = crate::pending::frozen_gating_inputs(&target_stack);
+    let mut frozen_gating = crate::pending::frozen_gating_inputs(&target_stack);
+    frozen_gating.retain(|input| {
+        !alien_core::gate_is_off_platform(&target_stack.inputs, input, current.platform)
+    });
     crate::pending::enforce_frozen_gate_fixity(
         &persisted_gate_answers,
         &frozen_gating,
@@ -190,6 +191,7 @@ pub async fn handle_update_pending(
         &persisted_gate_answers,
         &frozen_gating,
         config.stack_settings.compute.as_mut(),
+        current.platform,
     );
 
     let runner = alien_preflights::runner::PreflightRunner::new();
