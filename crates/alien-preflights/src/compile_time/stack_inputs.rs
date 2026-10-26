@@ -68,6 +68,13 @@ fn validate_input(
         ));
     }
 
+    if input.platforms.as_ref().is_some_and(Vec::is_empty) {
+        errors.push(format!(
+            "Stack input '{}': platforms must include at least one platform; omit platforms to allow all platforms",
+            input.id
+        ));
+    }
+
     if input.provided_by.is_empty() {
         errors.push(format!(
             "Stack input '{}': providedBy must include at least one provider",
@@ -579,6 +586,15 @@ mod tests {
             .await
             .expect("check should run")
             .errors
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_platform_scope() {
+        let mut input = generated_secret(64);
+        input.platforms = Some(vec![]);
+        assert_eq!(errors_for(input).await, vec![
+            "Stack input 'databasePassword': platforms must include at least one platform; omit platforms to allow all platforms"
+        ]);
     }
 
     #[tokio::test]

@@ -274,14 +274,10 @@ pub fn resolve_stack_input_environment_variables(
     platform: Platform,
 ) -> crate::Result<Vec<crate::EnvironmentVariable>> {
     let mut variables: Vec<crate::EnvironmentVariable> = Vec::new();
-    let applies = |input: &&StackInputDefinition| match &input.platforms {
-        Some(platforms) if !platforms.is_empty() => platforms.contains(&platform),
-        _ => true,
-    };
     for input in inputs
         .iter()
         .filter(|input| !input.env.is_empty())
-        .filter(applies)
+        .filter(|input| input.applies_to(platform))
     {
         let value = match values.get(&input.id) {
             Some(serde_json::Value::Null) | None => match &input.default {
@@ -445,6 +441,19 @@ mod environment_tests {
             resolve_stack_input_environment_variables(&inputs, &values, Platform::Kubernetes)
                 .expect_err("duplicate names must be rejected");
         assert!(error.message.contains("SHARED"));
+    }
+
+    #[test]
+    fn empty_platform_scope_produces_no_environment_variables() {
+        let mut input = input("region", StackInputKind::String, "REGION");
+        input.platforms = Some(vec![]);
+        input.default = Some(StackInputDefaultValue::String("us-east-1".into()));
+        let values = HashMap::from([("region".into(), serde_json::json!("us-west-2"))]);
+        assert!(
+            resolve_stack_input_environment_variables(&[input], &values, Platform::Aws)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

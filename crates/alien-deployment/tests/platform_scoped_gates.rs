@@ -277,3 +277,77 @@ async fn kubernetes_on_aws_declines_aws_scoped_gate() {
         .resources
         .contains_key("data"));
 }
+
+#[tokio::test]
+async fn removing_a_resource_while_narrowing_its_input_is_allowed() {
+    for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+        let old = stack_with_bucket(lifecycle);
+        let mut target = old.clone();
+        target.resources.clear();
+        target.inputs[0].platforms = Some(vec![Platform::Gcp]);
+        let metadata = alien_core::RuntimeMetadata {
+            prepared_stack: Some(old),
+            persisted_gate_answers: [("managedBucket".into(), true)].into(),
+            ..Default::default()
+        };
+        let prepared = alien_deployment::prepare_direct_setup_update(
+            target,
+            &alien_core::StackState::new(Platform::Aws),
+            &config(),
+            &ClientConfig::Local {
+                state_directory: "/unused".into(),
+            },
+            &metadata,
+        )
+        .await
+        .expect("explicit removal is not scope narrowing of an installed resource");
+        assert!(!prepared
+            .prepared_stack
+            .unwrap()
+            .resources
+            .contains_key("data"));
+    }
+}
+
+#[tokio::test]
+async fn legacy_update_does_not_treat_a_declined_release_resource_as_installed() {
+    for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+        let old = stack_with_bucket(lifecycle);
+        let initial = DeploymentState {
+            status: DeploymentStatus::Pending,
+            platform: Platform::Machines,
+            current_release: None,
+            target_release: Some(release(old, "1.0.0")),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let mut state = run(initial, &config()).await;
+        assert!(!state
+            .stack_state
+            .as_ref()
+            .unwrap()
+            .resources
+            .contains_key("data"));
+        let metadata = state.runtime_metadata.as_mut().unwrap();
+        metadata.prepared_stack = None;
+        metadata.automatic_setup = false;
+        let mut target = stack_with_bucket(lifecycle);
+        target.inputs[0].platforms = Some(vec![Platform::Gcp]);
+        state.target_release = Some(release(target, "2.0.0"));
+        state.status = DeploymentStatus::UpdatePending;
+        let updated = run(state, &config()).await;
+        assert!(updated.error.is_none());
+        assert!(!updated.stack_state.unwrap().resources.contains_key("data"));
+        assert!(!updated
+            .runtime_metadata
+            .unwrap()
+            .prepared_stack
+            .unwrap()
+            .resources
+            .contains_key("data"));
+    }
+}

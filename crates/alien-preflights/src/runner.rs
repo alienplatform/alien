@@ -49,7 +49,6 @@ impl PreflightRunner {
         platform: Platform,
     ) -> Result<PreflightSummary> {
         info!("Running stack compatibility checks");
-        validate_gate_platform_changes(old_stack, new_stack, platform)?;
 
         let frozen_check = crate::compatibility::FrozenResourcesUnchangedCheck { platform };
         let mut checks = self.registry.get_compatibility_checks();
@@ -442,12 +441,21 @@ impl PreflightRunner {
         if let Some(old_stack) = old_stack {
             validate_gate_platform_changes(old_stack, &stack, platform)?;
         }
-        for input in &stack.inputs {
-            if !input.applies_to(platform) && config.input_values.contains_key(&input.id) {
-                warn!(input_id = %input.id, %platform,
-                    "Ignoring a supplied input because it is unavailable on this deployment platform");
-            }
-        }
+        let warnings = stack
+            .inputs
+            .iter()
+            .filter(|input| {
+                !input.applies_to(platform)
+                    && config.input_values.contains_key(&input.id)
+                    && stack.resources.values().any(|entry| {
+                        entry.enabled_when.as_deref() == Some(input.id.as_str())
+                    })
+            })
+            .map(|input| format!(
+                "Ignoring supplied gate input '{}' because it is unavailable on deployment platform '{platform}'; its gated resources are declined",
+                input.id
+            ))
+            .collect::<Vec<_>>();
         let mut stack = stack;
         alien_core::remove_off_platform_gated_resources(
             &mut stack,
@@ -461,6 +469,11 @@ impl PreflightRunner {
         );
 
         let mut all_results: Vec<CheckResult> = Vec::new();
+        if !warnings.is_empty() {
+            all_results.push(CheckResult::with_warnings(warnings).with_check_description(
+                "Supplied gate inputs must apply to the deployment platform".into(),
+            ));
+        }
 
         // Run compile-time checks first (fast, no cloud API calls)
         let compile_summary = self.run_compile_time_checks(&stack, platform).await?;
@@ -1890,13 +1903,11 @@ async fn run_stack_checks(
 
 /// Reject scope narrowing before setup authorization can allow an installed resource's removal.
 pub fn validate_gate_platform_changes(old: &Stack, new: &Stack, platform: Platform) -> Result<()> {
-    for (id, entry) in old.resources() {
+    for id in old.resources.keys() {
         let Some(input_id) = new
             .resources
             .get(id)
-            .unwrap_or(entry)
-            .enabled_when
-            .as_deref()
+            .and_then(|entry| entry.enabled_when.as_deref())
         else {
             continue;
         };

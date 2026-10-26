@@ -191,3 +191,69 @@ async fn build_checks_ignore_excluded_public_container() {
         "{error:?}"
     );
 }
+
+#[tokio::test]
+async fn ignored_gate_values_are_preflight_warnings_without_values_or_non_gate_inputs() {
+    for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+        let mut gate = StackInputDefinition::deployer_boolean(
+            "enabled",
+            "Enabled",
+            "Create storage",
+            Some(true),
+        );
+        gate.platforms = Some(vec![Platform::Aws]);
+        let mut unused = gate.clone();
+        unused.id = "unused".into();
+        let stack = Stack::new("scoped-gate".into())
+            .inputs(vec![gate, unused])
+            .add_enabled_when(Storage::new("data".into()).build(), lifecycle, "enabled")
+            .build();
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(Default::default())
+            .allow_frozen_changes(false)
+            .build();
+        for supplied in [false, true] {
+            config.input_values = if supplied {
+                [
+                    ("enabled".into(), serde_json::json!("private-value")),
+                    ("unused".into(), serde_json::json!(true)),
+                ]
+                .into()
+            } else {
+                Default::default()
+            };
+            let (prepared, summary, _) = PreflightRunner::new()
+                .run_deployment_time_preflights(
+                    stack.clone(),
+                    &StackState::new(Platform::Machines),
+                    &config,
+                    &alien_core::ClientConfig::Machines,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .expect("off-platform storage has no external-binding prerequisite");
+            assert!(summary.success);
+            assert!(!prepared.resources.contains_key("data"));
+            let warnings: Vec<_> = summary
+                .results
+                .iter()
+                .flat_map(|result| &result.warnings)
+                .collect();
+            assert_eq!(warnings.len(), usize::from(supplied), "{warnings:?}");
+            if supplied {
+                assert!(warnings[0].contains("'enabled'"));
+                assert!(warnings[0].contains("'machines'"));
+                assert!(!warnings[0].contains("unused"));
+                assert!(!warnings[0].contains("private-value"));
+            }
+        }
+    }
+}

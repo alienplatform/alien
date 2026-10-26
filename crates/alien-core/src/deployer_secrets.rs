@@ -96,12 +96,7 @@ pub fn deployer_secret_slots<'a>(
     inputs
         .iter()
         .filter(|input| is_deployer_secret_input(input))
-        .filter(|input| {
-            input
-                .platforms
-                .as_ref()
-                .is_none_or(|platforms| platforms.is_empty() || platforms.contains(&platform))
-        })
+        .filter(|input| input.applies_to(platform))
         .filter_map(|input| {
             let has_stored_value = stored_secret_input_ids
                 .is_some_and(|ids| ids.contains(&input.id))
@@ -916,6 +911,16 @@ mod tests {
         assert_eq!(
             deployer_secret_slots(&inputs, &HashMap::new(), Some(&[]), &[], Platform::Aws).len(),
             1
+        );
+    }
+
+    #[test]
+    fn empty_platform_scope_produces_no_secret_slots() {
+        let mut input = secret("token", vec![StackInputProvider::Deployer]);
+        input.platforms = Some(vec![]);
+        assert!(
+            deployer_secret_slots(&[input], &HashMap::new(), Some(&[]), &[], Platform::Aws)
+                .is_empty()
         );
     }
 

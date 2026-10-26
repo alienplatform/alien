@@ -18,14 +18,6 @@ pub async fn prepare_direct_setup_update(
     client_config: &ClientConfig,
     existing_metadata: &alien_core::RuntimeMetadata,
 ) -> Result<alien_core::RuntimeMetadata> {
-    if let Some(old) = existing_metadata.prepared_stack.as_ref() {
-        alien_preflights::runner::validate_gate_platform_changes(
-            old,
-            &target_stack,
-            stack_state.platform,
-        )
-        .context(ErrorData::PreflightChecksFailed)?;
-    }
     let mut config = config.clone();
     // Automatic installations answer from the requested inputs. Manual setup
     // preserves recorded choices, but a new gate must use the setup inputs:
@@ -56,7 +48,7 @@ pub async fn prepare_direct_setup_update(
         stack_state.platform,
     )?;
     let frozen_gating = frozen_gating_inputs(&target_stack, stack_state.platform);
-    let target_stack = strip_frozen_declines_with_compute_settings(
+    let target_stack = strip_recorded_gate_declines(
         target_stack,
         &persisted_gate_answers,
         &frozen_gating,
@@ -151,7 +143,7 @@ pub async fn handle_pending(
     let persisted_gate_answers =
         resolve_frozen_gate_answers(&target_stack, &stack_state, &config.input_values)?;
     let frozen_gating = frozen_gating_inputs(&target_stack, stack_state.platform);
-    let target_stack = strip_frozen_declines_with_compute_settings(
+    let target_stack = strip_recorded_gate_declines(
         target_stack,
         &persisted_gate_answers,
         &frozen_gating,
@@ -290,6 +282,24 @@ pub fn strip_frozen_declines_with_compute_settings(
     compute: Option<&mut alien_core::ComputeSettings>,
     platform: Platform,
 ) -> Stack {
+    let mut compute = compute;
+    alien_core::remove_off_platform_gated_resources(&mut stack, platform, compute.as_deref_mut());
+    strip_recorded_gate_declines(stack, answers, still_frozen_gating, compute, platform)
+}
+
+/// Leave off-platform gates for deployment preflights to validate and report before filtering.
+pub(crate) fn strip_recorded_gate_declines(
+    stack: Stack,
+    answers: &alien_core::GateAnswers,
+    still_frozen_gating: &std::collections::HashSet<String>,
+    compute: Option<&mut alien_core::ComputeSettings>,
+    platform: Platform,
+) -> Stack {
+    let answers = answers
+        .iter()
+        .filter(|(id, _)| !alien_core::gate_is_off_platform(&stack.inputs, id, platform))
+        .map(|(id, answer)| (id.clone(), *answer))
+        .collect();
     let container_ids: Vec<_> = stack
         .resources
         .iter()
@@ -301,9 +311,8 @@ pub fn strip_frozen_declines_with_compute_settings(
         })
         .map(|(id, _)| id.clone())
         .collect();
-    alien_core::remove_off_platform_gated_resources(&mut stack, platform, None);
-    let stack = strip_declined_frozen_resources(stack, answers);
-    let stack = strip_frozen_dominated_live_resources(stack, answers, still_frozen_gating);
+    let stack = strip_declined_frozen_resources(stack, &answers);
+    let stack = strip_frozen_dominated_live_resources(stack, &answers, still_frozen_gating);
     if let Some(compute) = compute {
         for id in container_ids {
             if !stack.resources.contains_key(&id) {

@@ -115,23 +115,12 @@ pub async fn handle_update_pending(
         })
     })?;
 
-    // For compatibility checks, use the prepared (mutated) stack from the previous deployment
-    // if available. This ensures we compare mutated stacks (old mutated vs new mutated),
-    // not raw user stacks. Falls back to current_release.stack if prepared_stack isn't available
-    // (for backward compatibility with existing deployments).
+    // Only the saved prepared stack describes what was installed. A raw release
+    // can still contain resources whose gates were declined.
     let old_stack_for_comparison = current
         .runtime_metadata
         .as_ref()
-        .and_then(|m| m.prepared_stack.as_ref())
-        .or(current.current_release.as_ref().map(|r| &r.stack));
-    if let Some(old) = old_stack_for_comparison {
-        alien_preflights::runner::validate_gate_platform_changes(
-            old,
-            &target_stack,
-            current.platform,
-        )
-        .context(ErrorData::PreflightChecksFailed)?;
-    }
+        .and_then(|m| m.prepared_stack.as_ref());
 
     // This grant is written by direct setup and retained by the store as setup-owned
     // metadata. A release or a mutable runtime setting cannot confer setup authority.
@@ -201,7 +190,7 @@ pub async fn handle_update_pending(
     // Live declines apply AFTER the mutations, so a declined workload's service
     // account and capacity stay identical to the accepted render. Its grant is
     // scrubbed, which `permission_profiles_unchanged`'s gated exemption absorbs.
-    let target_stack = crate::pending::strip_frozen_declines_with_compute_settings(
+    let target_stack = crate::pending::strip_recorded_gate_declines(
         target_stack,
         &persisted_gate_answers,
         &frozen_gating,
