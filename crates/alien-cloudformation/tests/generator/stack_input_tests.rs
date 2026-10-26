@@ -232,6 +232,14 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
     labels.kind = StackInputKind::StringList;
     labels.required = false;
     labels.validation = None;
+    let mut optional_labels = labels.clone();
+    optional_labels.id = "optionalLabels".into();
+    optional_labels.validation =
+        Some(serde_json::from_value(serde_json::json!({"minItems":1})).unwrap());
+    stack.inputs.push(optional_labels);
+    labels.default = Some(alien_core::StackInputDefaultValue::StringList(vec![
+        "default".into(),
+    ]));
     stack.inputs.push(labels);
     for (id, kind) in [
         ("optionalNumber", StackInputKind::Number),
@@ -247,6 +255,11 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
         input.validation = None;
         stack.inputs.push(input);
     }
+
+    let mut optional_text = stack.inputs[0].clone();
+    optional_text.id = "optionalText".into();
+    optional_text.required = false;
+    stack.inputs.push(optional_text);
 
     let registry = sample_registry();
     let template = generate_cloudformation_template(
@@ -273,23 +286,49 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
         &template.resources["DeploymentRegistration"].properties["InputValues"],
     )
     .unwrap();
-    for (raw, expected) in [
-        ("", serde_json::json!([])),
-        ("one,two", serde_json::json!(["one", "two"])),
+    for (id, parameter, empty) in [
+        ("labels", "InputLabels", serde_json::json!([])),
+        (
+            "optionalLabels",
+            "InputOptionalLabels",
+            serde_json::Value::Null,
+        ),
     ] {
-        let mut parameters = serde_json::json!({"InputEnabled":"true", "InputLabels": raw});
-        for (name, condition) in &template.conditions {
-            if name == "HasInputLabels" || name == "InputLabelsApplies" {
-                parameters[name] =
-                    evaluate_rule(&serde_json::to_value(condition).unwrap(), &parameters);
+        for (raw, expected) in [("", empty), ("one,two", serde_json::json!(["one", "two"]))] {
+            let mut parameters = serde_json::json!({"InputEnabled":"true"});
+            parameters[parameter] = serde_json::json!(raw);
+            for (name, condition) in &template.conditions {
+                if name == &format!("Has{parameter}") || name == &format!("{parameter}Applies") {
+                    parameters[name] =
+                        evaluate_rule(&serde_json::to_value(condition).unwrap(), &parameters);
+                }
             }
+            let value = evaluate_rule(&registered[id], &parameters);
+            assert_eq!(value, expected);
+            let mut answers = std::collections::HashMap::from([
+                ("enabled".to_string(), serde_json::json!(true)),
+                (
+                    "apiBaseUrl".to_string(),
+                    serde_json::json!("https://example.test"),
+                ),
+            ]);
+            if !value.is_null() {
+                answers.insert(id.to_string(), value);
+            }
+            let resolved = alien_core::resolve_stack_input_values(
+                &stack.inputs,
+                &answers,
+                alien_core::Platform::Aws,
+            )
+            .unwrap();
+            assert_eq!(resolved.get(id), (!expected.is_null()).then_some(&expected));
         }
-        assert_eq!(evaluate_rule(&registered["labels"], &parameters), expected);
     }
     for (id, parameter, answer) in [
         ("optionalNumber", "InputOptionalNumber", "42"),
         ("optionalBoolean", "InputOptionalBoolean", "false"),
         ("optionalString", "InputOptionalString", "custom-answer"),
+        ("optionalText", "InputOptionalText", "https://example.test"),
     ] {
         let empty = if id == "optionalString" {
             serde_json::json!("")

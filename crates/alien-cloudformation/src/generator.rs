@@ -915,12 +915,7 @@ fn add_stack_input_parameters(
             }
         }
         if let Some(when) = &input.when {
-            if !input.required
-                && matches!(
-                    input.kind,
-                    StackInputKind::Number | StackInputKind::Integer | StackInputKind::Boolean
-                )
-            {
+            if stack_input_omits_empty_value(input) && input.kind != StackInputKind::StringList {
                 template.conditions.insert(
                     format!("Has{parameter_name}"),
                     CfExpression::not(equals_ref(&parameter_name, "")),
@@ -1032,6 +1027,18 @@ fn stack_input_default_expression(default: &StackInputDefaultValue) -> CfExpress
     }
 }
 
+// A blank parameter without an input default represents an unanswered optional input.
+// With a text/list default, blank is an explicit empty answer; numeric/boolean kinds cannot
+// represent that answer and must omit the placeholder instead.
+fn stack_input_omits_empty_value(input: &StackInputDefinition) -> bool {
+    !input.required
+        && (input.default.is_none()
+            || matches!(
+                input.kind,
+                StackInputKind::Number | StackInputKind::Integer | StackInputKind::Boolean
+            ))
+}
+
 fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpression {
     CfExpression::object(
         inputs
@@ -1052,20 +1059,20 @@ fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpressio
                                     CfExpression::ref_(&parameter),
                                 ]),
                             )]),
-                            CfExpression::list(Vec::<CfExpression>::new()),
+                            if stack_input_omits_empty_value(input) {
+                                CfExpression::no_value()
+                            } else {
+                                CfExpression::list(Vec::<CfExpression>::new())
+                            },
                         )
                     }
                 } else {
                     CfExpression::ref_(&parameter)
                 };
                 let value = if input.when.is_some() {
-                    let value = if !input.required
-                        && matches!(
-                            input.kind,
-                            StackInputKind::Number
-                                | StackInputKind::Integer
-                                | StackInputKind::Boolean
-                        ) {
+                    let value = if stack_input_omits_empty_value(input)
+                        && input.kind != StackInputKind::StringList
+                    {
                         CfExpression::if_(
                             format!("Has{parameter}"),
                             value,
