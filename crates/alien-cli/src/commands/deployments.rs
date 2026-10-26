@@ -487,69 +487,80 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             clear: _,
             json,
         } => {
-            if !ctx.is_platform() {
+            #[cfg(not(feature = "platform"))]
+            {
+                let _ = (id, resource, endpoints, json);
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "Managed custom domains require a platform deployment".to_string(),
+                    message: "Managed custom domains require a platform-enabled CLI".to_string(),
                 }));
             }
-            let mut names = std::collections::HashMap::new();
-            for endpoint in endpoints {
-                let (name, hostname) = endpoint
-                    .split_once('=')
-                    .filter(|(name, hostname)| !name.is_empty() && !hostname.is_empty())
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::ValidationError {
-                            field: "endpoint".to_string(),
-                            message: "Use --endpoint name=hostname".to_string(),
-                        })
-                    })?;
-                if names
-                    .insert(name.to_string(), hostname.to_string())
-                    .is_some()
-                {
+            #[cfg(feature = "platform")]
+            {
+                if !ctx.is_platform() {
                     return Err(AlienError::new(ErrorData::ValidationError {
-                        field: "endpoint".to_string(),
-                        message: format!("Endpoint {name} was specified twice"),
+                        field: "command".to_string(),
+                        message: "Managed custom domains require a platform deployment".to_string(),
                     }));
                 }
-            }
-            let body: alien_platform_api::types::UpdateDeploymentDomainsBody =
-                serde_json::from_value(
-                    serde_json::json!({ "resourceId": resource, "endpoints": names }),
+                let mut names = std::collections::HashMap::new();
+                for endpoint in endpoints {
+                    let (name, hostname) = endpoint
+                        .split_once('=')
+                        .filter(|(name, hostname)| !name.is_empty() && !hostname.is_empty())
+                        .ok_or_else(|| {
+                            AlienError::new(ErrorData::ValidationError {
+                                field: "endpoint".to_string(),
+                                message: "Use --endpoint name=hostname".to_string(),
+                            })
+                        })?;
+                    if names
+                        .insert(name.to_string(), hostname.to_string())
+                        .is_some()
+                    {
+                        return Err(AlienError::new(ErrorData::ValidationError {
+                            field: "endpoint".to_string(),
+                            message: format!("Endpoint {name} was specified twice"),
+                        }));
+                    }
+                }
+                let body: alien_platform_api::types::UpdateDeploymentDomainsBody =
+                    serde_json::from_value(
+                        serde_json::json!({ "resourceId": resource, "endpoints": names }),
+                    )
+                    .into_alien_error()
+                    .context(ErrorData::ValidationError {
+                        field: "domains".to_string(),
+                        message: "Invalid endpoint hostnames".to_string(),
+                    })?;
+                let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+                let client = ctx.sdk_client().await?;
+                let deployment = crate::platform_deployment_resolver::resolve(
+                    &ctx, &client, &workspace, &id, None, !json,
                 )
-                .into_alien_error()
-                .context(ErrorData::ValidationError {
-                    field: "domains".to_string(),
-                    message: "Invalid endpoint hostnames".to_string(),
-                })?;
-            let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
-            let client = ctx.sdk_client().await?;
-            let deployment = crate::platform_deployment_resolver::resolve(
-                &ctx, &client, &workspace, &id, None, !json,
-            )
-            .await?;
-            let response = client
-                .update_deployment_domains()
-                .workspace(workspace.as_str())
-                .id(deployment.id.as_str())
-                .body(body)
-                .send()
-                .await
-                .into_sdk_error()
-                .context(ErrorData::ApiRequestFailed {
-                    message: "Updating deployment domains".to_string(),
-                    url: None,
-                })?
-                .into_inner();
-            if json {
-                print_json(&response)?;
-            } else {
-                println!(
-                    "Domain settings saved. Use `alien deployments get {id}` to check certificate status and traffic records."
-                );
+                .await?;
+                let response = client
+                    .update_deployment_domains()
+                    .workspace(workspace.as_str())
+                    .id(deployment.id.as_str())
+                    .body(body)
+                    .send()
+                    .await
+                    .into_sdk_error()
+                    .context(ErrorData::ApiRequestFailed {
+                        message: "Updating deployment domains".to_string(),
+                        url: None,
+                    })?
+                    .into_inner();
+                if json {
+                    print_json(&response)?;
+                } else {
+                    println!(
+                        "Domain settings saved. Use `alien deployments get {id}` to check certificate status and traffic records."
+                    );
+                }
+                Ok(())
             }
-            Ok(())
         }
         // Platform mode lists canonical platform records; local modes list manager records.
         DeploymentsCmd::Ls { project, json } => {
