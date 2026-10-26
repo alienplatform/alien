@@ -33,7 +33,7 @@ use std::{
 use std::os::unix::fs::PermissionsExt as _;
 
 use alien_cli_common::airgap::{self, BundleManifest, RegistryAccess};
-use alien_core::{embedded_config::DeployCliConfig, ResourceHeartbeat};
+use alien_core::{embedded_config::DeployCliConfig, DeletionPolicy, ResourceHeartbeat};
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::Engine as _;
 use clap::Parser;
@@ -233,6 +233,8 @@ struct MachineState {
     values: Vec<PathBuf>,
     #[serde(default)]
     kube_context: Option<String>,
+    #[serde(default)]
+    deletion_inventory: Option<DeletionInventory>,
 }
 
 /// How the online side reaches the manager.
@@ -914,6 +916,7 @@ async fn send_report(
 ) -> Result<()> {
     let last = report.telemetry.iter().map(|batch| batch.id).max();
     let deleting = report.state["status"].as_str() == Some("deleted");
+    let terminal = deleting || report.state["status"].as_str() == Some("retained");
     loop {
         let mut body = serde_json::json!({
             "state": report.state, "telemetry": [], "writtenAt": report.written_at,
@@ -948,7 +951,7 @@ async fn send_report(
         let sending = !fresh.is_empty();
         // A Deleted state removes the deployment metadata. Send it only after
         // every batch is durably acknowledged, in a separate empty request.
-        if deleting && sending {
+        if terminal && sending {
             body["state"]["status"] = "deleting".into();
         }
         body["telemetry"] = serde_json::Value::Array(fresh);
@@ -997,7 +1000,7 @@ async fn send_report(
         // Saved after every request, so progress is never lost.
         save_site(folder, site)?;
         if last.is_some_and(|last| confirmed >= last) {
-            if !deleting {
+            if !terminal {
                 return Ok(());
             }
         } else {
@@ -1027,6 +1030,13 @@ async fn download_update(
         &format!("/v1/deployments/{}/target", site.deployment_id),
     )
     .await?;
+    if target["action"].as_str() == Some("retained") {
+        println!(
+            "{} is uninstalled; its data and recovery metadata are retained.",
+            site.name
+        );
+        return Ok(());
+    }
     let release_id = target["releaseInfo"]["releaseId"]
         .as_str()
         .ok_or_else(|| {
@@ -1199,6 +1209,7 @@ async fn download_update(
             .context(config_error("checksumming"))?,
         omitted_blobs: omitted.clone(),
         telemetry_ack: (site.uploaded_through > 0).then_some(site.uploaded_through),
+        deletion_policy: None,
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)
         .into_alien_error()
@@ -1310,6 +1321,16 @@ async fn download_deletion(
             .context(config_error("checksumming deletion"))?,
         omitted_blobs: BTreeSet::new(),
         telemetry_ack: None,
+        deletion_policy: Some(
+            serde_json::from_value(
+                target
+                    .get("deletionPolicy")
+                    .cloned()
+                    .unwrap_or_else(|| "retain".into()),
+            )
+            .into_alien_error()
+            .context(config_error("parsing deletion policy"))?,
+        ),
     };
     let bytes = serde_json::to_vec_pretty(&manifest)
         .into_alien_error()
@@ -1341,6 +1362,369 @@ async fn download_deletion(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletionInventory {
+    namespace: String,
+    stack_id: String,
+    kube_context: Option<String>,
+    objects: Vec<DeletionObject>,
+    #[serde(default)]
+    runtime_selector: Option<String>,
+    #[serde(default)]
+    report: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletionObject {
+    resource: String,
+    name: String,
+    uid: String,
+    #[serde(default)]
+    volume: Option<DeletionVolume>,
+}
+
+async fn deletion_inventory(
+    settings: &SiteSide,
+    stack_id: &str,
+    namespace: &str,
+) -> Result<DeletionInventory> {
+    let mut command = Command::new("helm");
+    command.args(["get", "manifest", stack_id, "--namespace", namespace]);
+    if let Some(context) = &settings.kube_context {
+        command.args(["--kube-context", context]);
+    }
+    let manifest = run(command, "reading the installed chart").await?;
+    let mut retained = BTreeSet::new();
+    let mut scope = None;
+    for document in serde_yaml::Deserializer::from_slice(&manifest) {
+        let value = serde_json::Value::deserialize(document)
+            .into_alien_error()
+            .context(config_error("parsing the installed chart"))?;
+        if matches!(
+            value["kind"].as_str(),
+            Some("PersistentVolumeClaim" | "Secret")
+        ) && value["metadata"]["annotations"]["helm.sh/resource-policy"] == "keep"
+        {
+            if let (Some(kind), Some(name)) =
+                (value["kind"].as_str(), value["metadata"]["name"].as_str())
+            {
+                retained.insert((kind.to_string(), name.to_string()));
+            }
+        }
+        if value["kind"] == "Deployment" {
+            let env = value
+                .pointer("/spec/template/spec/containers/0/env")
+                .and_then(|v| v.as_array());
+            if let Some(env) = env {
+                let get = |name| {
+                    env.iter()
+                        .find(|v| v["name"] == name)
+                        .and_then(|v| v["value"].as_str())
+                        .map(str::to_owned)
+                };
+                if let (Some(key), Some(prefix)) = (
+                    get("ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY"),
+                    get("OPERATOR_RESOURCE_PREFIX"),
+                ) {
+                    scope = Some((key, prefix));
+                }
+            }
+        }
+    }
+    let mut get = kubectl(settings.kube_context.as_deref());
+    get.args([
+        "get",
+        "pvc,secret,statefulset",
+        "--namespace",
+        namespace,
+        "-o",
+        "json",
+    ]);
+    let objects: serde_json::Value =
+        serde_json::from_slice(&run(get, "reading owned data inventory").await?)
+            .into_alien_error()
+            .context(config_error("parsing owned data inventory"))?;
+    let items = objects["items"]
+        .as_array()
+        .ok_or_else(|| AlienError::new(config_error("missing data inventory")))?;
+    let runtime_owned = |object: &serde_json::Value| {
+        scope.as_ref().is_some_and(|(key, prefix)| {
+            object["metadata"]["labels"]["managed-by"] == "runtime"
+                && object["metadata"]["labels"][key] == *prefix
+        })
+    };
+    let mut claim_prefixes = Vec::new();
+    for object in items
+        .iter()
+        .filter(|v| v["kind"] == "StatefulSet" && runtime_owned(v))
+    {
+        if let (Some(name), Some(claims)) = (
+            object["metadata"]["name"].as_str(),
+            object["spec"]["volumeClaimTemplates"].as_array(),
+        ) {
+            for claim in claims {
+                if let Some(claim) = claim["metadata"]["name"].as_str() {
+                    claim_prefixes.push(format!("{claim}-{name}-"));
+                }
+            }
+        }
+    }
+    let mut data = Vec::new();
+    for object in items {
+        let resource = match object["kind"].as_str() {
+            Some("PersistentVolumeClaim") => "persistentvolumeclaims",
+            Some("Secret") => "secrets",
+            _ => continue,
+        };
+        let name = object["metadata"]["name"]
+            .as_str()
+            .ok_or_else(|| AlienError::new(config_error("data object has no name")))?;
+        let annotations = &object["metadata"]["annotations"];
+        let helm_owned = retained.contains(&(
+            object["kind"].as_str().unwrap().to_string(),
+            name.to_string(),
+        )) && annotations["meta.helm.sh/release-name"] == stack_id
+            && annotations["meta.helm.sh/release-namespace"] == namespace
+            && object["metadata"]["labels"]["app.kubernetes.io/managed-by"] == "Helm";
+        // StatefulSet claim templates predate deployment labels on PVCs.
+        let runtime_claim = resource == "persistentvolumeclaims"
+            && object["metadata"]["labels"]["managed-by"] == "runtime"
+            && claim_prefixes.iter().any(|prefix| {
+                name.strip_prefix(prefix).is_some_and(|ordinal| {
+                    !ordinal.is_empty() && ordinal.bytes().all(|b| b.is_ascii_digit())
+                })
+            });
+        if helm_owned || runtime_owned(object) || runtime_claim {
+            let uid = object["metadata"]["uid"]
+                .as_str()
+                .ok_or_else(|| AlienError::new(config_error("data object has no UID")))?;
+            data.push(DeletionObject {
+                resource: resource.into(),
+                name: name.into(),
+                uid: uid.into(),
+                volume: None,
+            });
+        }
+    }
+    Ok(DeletionInventory {
+        namespace: namespace.into(),
+        stack_id: stack_id.into(),
+        kube_context: settings.kube_context.clone(),
+        objects: data,
+        runtime_selector: scope.map(|(key, prefix)| format!("managed-by=runtime,{key}={prefix}")),
+        report: None,
+    })
+}
+
+async fn erase_inventory(settings: &SiteSide, inventory: &DeletionInventory) -> Result<()> {
+    let work = tempfile::tempdir()
+        .into_alien_error()
+        .context(config_error("preparing data deletion"))?;
+    for object in &inventory.objects {
+        let mut get = kubectl(settings.kube_context.as_deref());
+        get.args([
+            "get",
+            &object.resource,
+            &object.name,
+            "--namespace",
+            &inventory.namespace,
+            "--ignore-not-found",
+            "-o",
+            "json",
+        ]);
+        let bytes = run(get, "checking data identity").await?;
+        if bytes.is_empty() {
+            continue;
+        }
+        let current: serde_json::Value = serde_json::from_slice(&bytes)
+            .into_alien_error()
+            .context(config_error("parsing data identity"))?;
+        if current["metadata"]["uid"] != object.uid {
+            return Err(AlienError::new(config_error(format!(
+                "{}/{} was replaced; refusing to erase a different object",
+                object.resource, object.name
+            ))));
+        }
+        let options = work.path().join("delete.json");
+        std::fs::write(&options, serde_json::json!({"apiVersion":"v1","kind":"DeleteOptions","preconditions":{"uid":object.uid}}).to_string())
+            .into_alien_error().context(config_error("writing deletion precondition"))?;
+        let mut delete = kubectl(settings.kube_context.as_deref());
+        delete
+            .args([
+                "delete",
+                "--raw",
+                &format!(
+                    "/api/v1/namespaces/{}/{}/{}",
+                    inventory.namespace, object.resource, object.name
+                ),
+                "-f",
+            ])
+            .arg(options);
+        run(delete, "erasing owned data").await?;
+        let mut wait = kubectl(settings.kube_context.as_deref());
+        wait.args([
+            "wait",
+            "--for=delete",
+            &format!("{}/{}", object.resource, object.name),
+            "--namespace",
+            &inventory.namespace,
+            "--timeout=120s",
+        ]);
+        run(wait, "waiting for data deletion").await?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletionVolume {
+    name: String,
+    uid: String,
+}
+
+async fn prepare_volume_erasure(
+    settings: &SiteSide,
+    inventory: &mut DeletionInventory,
+) -> Result<()> {
+    for object in &mut inventory.objects {
+        if object.resource != "persistentvolumeclaims" || object.volume.is_some() {
+            continue;
+        }
+        let mut get = kubectl(settings.kube_context.as_deref());
+        get.args([
+            "get",
+            "pvc",
+            &object.name,
+            "-n",
+            &inventory.namespace,
+            "--ignore-not-found",
+            "-o",
+            "json",
+        ]);
+        let bytes = run(get, "reading the volume claim").await?;
+        if bytes.is_empty() {
+            continue;
+        }
+        let claim: serde_json::Value = serde_json::from_slice(&bytes)
+            .into_alien_error()
+            .context(config_error("parsing the volume claim"))?;
+        if claim["metadata"]["uid"] != object.uid {
+            return Err(AlienError::new(config_error(
+                "volume claim was replaced; refusing to erase it",
+            )));
+        }
+        let Some(name) = claim["spec"]["volumeName"].as_str() else {
+            continue;
+        };
+        let mut get = kubectl(settings.kube_context.as_deref());
+        get.args(["get", "pv", name, "-o", "json"]);
+        let volume: serde_json::Value =
+            serde_json::from_slice(&run(get, "reading the bound volume").await?)
+                .into_alien_error()
+                .context(config_error("parsing the bound volume"))?;
+        if volume["spec"]["claimRef"]["uid"] != object.uid
+            || volume["spec"]["claimRef"]["namespace"] != inventory.namespace
+            || volume["metadata"]["annotations"]["pv.kubernetes.io/provisioned-by"]
+                .as_str()
+                .is_none_or(str::is_empty)
+        {
+            return Err(AlienError::new(config_error(
+                "erasure requires a dynamically provisioned volume bound to the recorded claim",
+            )));
+        }
+        let uid = volume["metadata"]["uid"]
+            .as_str()
+            .ok_or_else(|| AlienError::new(config_error("bound volume has no UID")))?;
+        let patch = serde_json::json!([
+            {"op":"test","path":"/metadata/uid","value":uid},
+            {"op":"test","path":"/spec/claimRef/uid","value":object.uid},
+            {"op":"replace","path":"/spec/persistentVolumeReclaimPolicy","value":"Delete"}
+        ])
+        .to_string();
+        let mut command = kubectl(settings.kube_context.as_deref());
+        command.args(["patch", "pv", name, "--type=json", "-p", &patch]);
+        run(command, "setting owned volume erasure").await?;
+        object.volume = Some(DeletionVolume {
+            name: name.into(),
+            uid: uid.into(),
+        });
+    }
+    Ok(())
+}
+
+async fn wait_for_erased_volumes(settings: &SiteSide, inventory: &DeletionInventory) -> Result<()> {
+    for volume in inventory
+        .objects
+        .iter()
+        .filter_map(|object| object.volume.as_ref())
+    {
+        let mut get = kubectl(settings.kube_context.as_deref());
+        get.args([
+            "get",
+            "pv",
+            &volume.name,
+            "--ignore-not-found",
+            "-o",
+            "json",
+        ]);
+        let bytes = run(get, "checking erased volume").await?;
+        if bytes.is_empty() {
+            continue;
+        }
+        let current: serde_json::Value = serde_json::from_slice(&bytes)
+            .into_alien_error()
+            .context(config_error("parsing erased volume"))?;
+        if current["metadata"]["uid"] != volume.uid {
+            return Err(AlienError::new(config_error(
+                "bound volume was replaced; refusing to report erasure",
+            )));
+        }
+        let mut wait = kubectl(settings.kube_context.as_deref());
+        wait.args([
+            "wait",
+            "--for=delete",
+            &format!("pv/{}", volume.name),
+            "--timeout=180s",
+        ]);
+        run(
+            wait,
+            "waiting for the storage provisioner to erase the volume",
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn operator_deployment_name(values: &serde_json::Value, release: &str) -> String {
+    values["fullnameOverride"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(release)
+        .chars()
+        .take(63)
+        .collect::<String>()
+        .trim_end_matches('-')
+        .to_string()
+}
+
+async fn wait_for_deleted_pods(settings: &SiteSide, namespace: &str, selector: &str) -> Result<()> {
+    let mut wait = kubectl(settings.kube_context.as_deref());
+    wait.args([
+        "wait",
+        "--for=delete",
+        "pods",
+        "-n",
+        namespace,
+        "-l",
+        selector,
+        "--timeout=180s",
+    ]);
+    run(wait, "waiting for workload pods to stop").await?;
+    Ok(())
+}
+
 async fn uninstall_site(
     folder: &Path,
     site: &SiteState,
@@ -1349,6 +1733,18 @@ async fn uninstall_site(
     dry_run: bool,
 ) -> Result<()> {
     let namespace = settings.namespace(&manifest.stack_id);
+    let policy = manifest.deletion_policy.unwrap_or_default();
+    let mut machine = load_machine(&site.deployment_id)?;
+    if let Some(inventory) = &machine.deletion_inventory {
+        if inventory.namespace != namespace
+            || inventory.stack_id != manifest.stack_id
+            || inventory.kube_context != settings.kube_context
+        {
+            return Err(AlienError::new(config_error(
+                "saved deletion inventory belongs to a different site location",
+            )));
+        }
+    }
     let values = release_values(settings, &manifest.stack_id, &namespace).await?;
     if let Some(values) = &values {
         if values["management"]["deploymentId"].as_str() != Some(site.deployment_id.as_str()) {
@@ -1361,6 +1757,15 @@ async fn uninstall_site(
                 "enable runtime.cleanup.onUninstall.enabled before deleting the site",
             )));
         }
+    }
+    if policy == DeletionPolicy::Retain
+        && values.as_ref().is_some_and(|v| {
+            v["runtime"]["cleanup"]["onUninstall"]["deletePersistentVolumeClaims"] == true
+        })
+    {
+        return Err(AlienError::new(config_error(
+            "disable runtime.cleanup.onUninstall.deletePersistentVolumeClaims before applying a retain request",
+        )));
     }
     if dry_run {
         println!(
@@ -1380,6 +1785,14 @@ async fn uninstall_site(
         )
         .into_alien_error()
         .context(config_error("parsing deletion snapshot"))?
+    } else if let Some(report) = machine
+        .deletion_inventory
+        .as_ref()
+        .and_then(|v| v.report.as_ref())
+    {
+        serde_json::from_value(report.clone())
+            .into_alien_error()
+            .context(config_error("reading the site-local deletion report"))?
     } else {
         let (_, installed) = installed_bundles(folder)?
             .into_iter()
@@ -1417,26 +1830,48 @@ async fn uninstall_site(
             "deletion snapshot belongs to another deployment",
         )));
     }
-    if values.is_some() {
+    if let Some(values) = &values {
+        let operator_name = operator_deployment_name(values, &manifest.stack_id);
         // A previous cleanup hook may have removed the Operator before failing.
         let mut get = kubectl(settings.kube_context.as_deref());
         get.args([
             "get",
             "deployment",
-            &manifest.stack_id,
+            &operator_name,
             "--namespace",
             &namespace,
             "--ignore-not-found",
             "-o",
-            "name",
+            "json",
         ]);
-        if !run(get, "checking for the Operator").await?.is_empty() {
+        let deployment = run(get, "checking for the Operator").await?;
+        if !deployment.is_empty() {
+            let deployment: serde_json::Value = serde_json::from_slice(&deployment)
+                .into_alien_error()
+                .context(config_error("reading the Operator selector"))?;
+            let labels = deployment
+                .pointer("/spec/selector/matchLabels")
+                .and_then(serde_json::Value::as_object)
+                .filter(|labels| !labels.is_empty())
+                .ok_or_else(|| AlienError::new(config_error("the Operator has no pod selector")))?;
+            let selector = labels
+                .iter()
+                .map(|(key, value)| {
+                    value
+                        .as_str()
+                        .map(|value| format!("{key}={value}"))
+                        .ok_or_else(|| {
+                            AlienError::new(config_error("invalid Operator pod selector"))
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?
+                .join(",");
             // Stop reconciliation before the chart removes its runtime resources.
             let mut stop = kubectl(settings.kube_context.as_deref());
             stop.args([
                 "scale",
                 "deployment",
-                &manifest.stack_id,
+                &operator_name,
                 "--namespace",
                 &namespace,
                 "--replicas=0",
@@ -1446,13 +1881,45 @@ async fn uninstall_site(
             wait.args([
                 "rollout",
                 "status",
-                &format!("deployment/{}", manifest.stack_id),
+                &format!("deployment/{operator_name}"),
                 "--namespace",
                 &namespace,
                 "--timeout=120s",
             ]);
             run(wait, "waiting for the Operator to stop").await?;
+            wait_for_deleted_pods(settings, &namespace, &selector).await?;
         }
+    }
+    // This receipt stays on the site machine, outside the carried folder.
+    // It survives Helm removal and never authorizes deletion of a replacement UID.
+    if machine.deletion_inventory.is_none() && values.is_some() {
+        machine.deletion_inventory =
+            Some(deletion_inventory(settings, &manifest.stack_id, &namespace).await?);
+        save_machine(&site.deployment_id, &machine)?;
+    }
+    if policy == DeletionPolicy::Erase && machine.deletion_inventory.is_none() {
+        return Err(AlienError::new(config_error(
+            "no site-local data inventory remains; restore the site machine's sync settings before erasing",
+        )));
+    }
+    if policy == DeletionPolicy::Erase {
+        prepare_volume_erasure(
+            settings,
+            machine
+                .deletion_inventory
+                .as_mut()
+                .expect("checked erase inventory"),
+        )
+        .await?;
+        save_machine(&site.deployment_id, &machine)?;
+    }
+    if let Some(inventory) = &mut machine.deletion_inventory {
+        inventory.report = Some(
+            serde_json::to_value(&report)
+                .into_alien_error()
+                .context(config_error("encoding deletion recovery state"))?,
+        );
+        save_machine(&site.deployment_id, &machine)?;
     }
     let mut command = Command::new("helm");
     command.args([
@@ -1469,10 +1936,61 @@ async fn uninstall_site(
         command.args(["--kube-context", context]);
     }
     run(command, "helm uninstall").await?;
-    // The chart's cleanup hook removed Live workloads; external bindings and
-    // retained data volumes keep the same ownership as a connected uninstall.
-    report.state["status"] = serde_json::json!("deleted");
-    report.state["currentRelease"] = serde_json::Value::Null;
+    wait_for_deleted_pods(
+        settings,
+        &namespace,
+        &format!(
+            "app.kubernetes.io/managed-by=Helm,app.kubernetes.io/instance={}",
+            manifest.stack_id
+        ),
+    )
+    .await?;
+    if let Some(selector) = machine
+        .deletion_inventory
+        .as_ref()
+        .and_then(|inventory| inventory.runtime_selector.as_deref())
+    {
+        wait_for_deleted_pods(settings, &namespace, selector).await?;
+    }
+    if policy == DeletionPolicy::Erase {
+        prepare_volume_erasure(
+            settings,
+            machine
+                .deletion_inventory
+                .as_mut()
+                .expect("checked erase inventory"),
+        )
+        .await?;
+        save_machine(&site.deployment_id, &machine)?;
+        erase_inventory(
+            settings,
+            machine
+                .deletion_inventory
+                .as_ref()
+                .expect("checked erase inventory"),
+        )
+        .await?;
+        wait_for_erased_volumes(
+            settings,
+            machine
+                .deletion_inventory
+                .as_ref()
+                .expect("checked erase inventory"),
+        )
+        .await?;
+        report.state["currentRelease"] = serde_json::Value::Null;
+    }
+    report.state["status"] = serde_json::json!(if policy == DeletionPolicy::Erase {
+        "deleted"
+    } else {
+        "retained"
+    });
+    if !report.state["runtimeMetadata"].is_object() {
+        report.state["runtimeMetadata"] = serde_json::json!({});
+    }
+    report.state["runtimeMetadata"]["deletionPolicy"] = serde_json::to_value(policy)
+        .into_alien_error()
+        .context(config_error("encoding deletion policy"))?;
     report.state["targetRelease"] = serde_json::Value::Null;
     report.state["error"] = serde_json::Value::Null;
     if let Some(resources) = report
@@ -1481,7 +1999,7 @@ async fn uninstall_site(
         .and_then(serde_json::Value::as_object_mut)
     {
         for resource in resources.values_mut() {
-            if resource["lifecycle"].as_str() == Some("live") {
+            if policy == DeletionPolicy::Erase || resource["lifecycle"].as_str() == Some("live") {
                 resource["status"] = serde_json::json!("deleted");
             }
         }
@@ -1490,6 +2008,14 @@ async fn uninstall_site(
     report.written_at = chrono::Utc::now().to_rfc3339();
     report.heartbeats.clear();
     save_report(folder, &report)?;
+    if let Some(inventory) = &mut machine.deletion_inventory {
+        inventory.report = Some(
+            serde_json::to_value(&report)
+                .into_alien_error()
+                .context(config_error("encoding completed deletion"))?,
+        );
+        save_machine(&site.deployment_id, &machine)?;
+    }
     remove_transport_secrets(settings, &manifest.stack_id, &namespace).await?;
     for (_, pending) in by_sequence(&folder.join(TO_SITE), Some(BUNDLE_EXTENSION))? {
         std::fs::remove_file(pending)
@@ -1501,9 +2027,11 @@ async fn uninstall_site(
             .into_alien_error()
             .context(config_error("removing deleted install history"))?;
     }
-    std::fs::remove_file(snapshot)
-        .into_alien_error()
-        .context(config_error("removing deletion snapshot"))?;
+    if snapshot.exists() {
+        std::fs::remove_file(snapshot)
+            .into_alien_error()
+            .context(config_error("removing deletion snapshot"))?;
+    }
     println!(
         "Uninstalled {}. Copy the folder out to complete deletion.",
         site.name
@@ -1818,7 +2346,13 @@ async fn install_pending(
     let verified_target: serde_json::Value = serde_json::from_slice(&target_bytes)
         .into_alien_error()
         .context(config_error("parsing the target"))?;
-    if verified_target["action"].as_str() == Some("delete") {
+    let deleting = verified_target["action"].as_str() == Some("delete");
+    if deleting != (manifest.release_id == "delete") {
+        return Err(AlienError::new(config_error(
+            "the signed deletion action and manifest do not agree",
+        )));
+    }
+    if deleting {
         return uninstall_site(folder, site, settings, &manifest, args.dry_run).await;
     }
     let observation = read_status(settings, &manifest.stack_id, &namespace).await?;
@@ -1917,6 +2451,9 @@ async fn install_pending(
         &site.name,
     )
     .await?;
+    let mut machine = load_machine(&site.deployment_id)?;
+    machine.deletion_inventory = None;
+    save_machine(&site.deployment_id, &machine)?;
     // Helm has installed the Operator even if rollout later fails. Keep the
     // record now so reports, signed deletion, and rollback remain available.
     // Save signed originals: rollback verifies them again because the folder
@@ -2401,11 +2938,15 @@ async fn export_telemetry(
     token: &str,
     after: i64,
 ) -> Result<(Vec<ReportedBatch>, u64)> {
+    let values = release_values(settings, release, namespace)
+        .await?
+        .unwrap_or_default();
+    let deployment = operator_deployment_name(&values, release);
     let mut port_cmd = kubectl(settings.kube_context.as_deref());
     port_cmd.args([
         "get",
         "deployment",
-        release,
+        &deployment,
         "-n",
         namespace,
         "-o",
@@ -2423,7 +2964,7 @@ async fn export_telemetry(
     forward
         .args([
             "port-forward",
-            &format!("deployment/{release}"),
+            &format!("deployment/{deployment}"),
             &format!(":{port}"),
             "-n",
             namespace,
@@ -3104,10 +3645,13 @@ mod tests {
         let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
         let namespace = format!("sync-delete-retry-{}", std::process::id());
         let (folder, mut site) = folder_with_report();
+        site.deployment_id = format!("dep_retry_{}", std::process::id());
         let snapshot = folder.path().join("deleting-report.json");
         std::fs::rename(report_path(folder.path()), &snapshot).unwrap();
-        let original: SiteReport =
+        let mut original: SiteReport =
             serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
+        original.deployment_id = site.deployment_id.clone();
+        std::fs::write(&snapshot, serde_json::to_vec(&original).unwrap()).unwrap();
         let settings = SiteSide {
             registry: "registry.example.com/site".into(),
             registry_credentials: None,
@@ -3157,7 +3701,7 @@ metadata:
             "--kube-context",
             &context,
             "--set",
-            "management.deploymentId=dep_1",
+            &format!("management.deploymentId={}", site.deployment_id),
             "--set",
             "runtime.cleanup.onUninstall.enabled=true",
         ]);
@@ -3192,6 +3736,7 @@ metadata:
             files: airgap::checksums(bundle.path()).await.unwrap(),
             omitted_blobs: BTreeSet::new(),
             telemetry_ack: None,
+            deletion_policy: None,
         };
         let bytes = serde_json::to_vec(&manifest).unwrap();
         let key = BundleSigningKey::from_seed([6; 32]);
@@ -3225,13 +3770,251 @@ metadata:
         assert_eq!(reports.len(), 1);
         let report: SiteReport =
             serde_json::from_slice(&std::fs::read(&reports[0].1).unwrap()).unwrap();
-        assert_eq!(report.state["status"], "deleted");
+        assert_eq!(report.state["status"], "retained");
         assert_eq!(
             serde_json::to_value(&report.telemetry).unwrap(),
             serde_json::to_value(&original.telemetry).unwrap()
         );
         assert!(!snapshot.exists());
         assert!(!pending.exists());
+        let mut delete = kubectl(Some(&context));
+        delete.args(["delete", "namespace", &namespace]);
+        run(delete, "removing test namespace").await.unwrap();
+    }
+
+    /// Retry a signed deletion after a cleanup hook has removed the Operator.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
+    async fn signed_erase_removes_only_owned_data() {
+        let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("sync-erase-{}", std::process::id());
+        let (folder, mut site) = folder_with_report();
+        site.deployment_id = format!("dep_erase_{}", std::process::id());
+        let snapshot = folder.path().join("deleting-report.json");
+        std::fs::rename(report_path(folder.path()), &snapshot).unwrap();
+        let mut original: SiteReport =
+            serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
+        original.deployment_id = site.deployment_id.clone();
+        std::fs::write(&snapshot, serde_json::to_vec(&original).unwrap()).unwrap();
+        let settings = SiteSide {
+            registry: "registry.example.com/site".into(),
+            registry_credentials: None,
+            insecure_registry: false,
+            namespace: Some(namespace.clone()),
+            values: Vec::new(),
+            kube_context: Some(context.clone()),
+        };
+        let chart = tempfile::tempdir().unwrap();
+        std::fs::create_dir(chart.path().join("templates")).unwrap();
+        std::fs::write(
+            chart.path().join("Chart.yaml"),
+            "apiVersion: v2\nname: app\nversion: 0.1.0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            chart.path().join("templates/runtime.yaml"),
+            r#"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app: app}
+  template:
+    metadata:
+      labels: {app: app}
+    spec:
+      containers:
+        - name: operator
+          image: registry.k8s.io/pause:3.10
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: runtime
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: database
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: ""
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Mi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: database-password
+  annotations:
+    helm.sh/resource-policy: keep
+stringData:
+  value: fixture
+"#,
+        )
+        .unwrap();
+        let mut install = Command::new("helm");
+        install.args(["install", "app"]).arg(chart.path()).args([
+            "--namespace",
+            &namespace,
+            "--create-namespace",
+            "--kube-context",
+            &context,
+            "--set",
+            &format!("management.deploymentId={}", site.deployment_id),
+            "--set",
+            "runtime.cleanup.onUninstall.enabled=true",
+        ]);
+        run(install, "installing test release").await.unwrap();
+        let mut delete = kubectl(Some(&context));
+        delete.args(["delete", "deployment", "app", "--namespace", &namespace]);
+        run(delete, "removing the Operator before retry")
+            .await
+            .unwrap();
+        assert!(release_values(&settings, "app", &namespace)
+            .await
+            .unwrap()
+            .is_some());
+
+        let recorded_data = deletion_inventory(&settings, "app", &namespace)
+            .await
+            .unwrap();
+
+        let bundle = tempfile::tempdir().unwrap();
+        std::fs::write(
+            bundle.path().join(airgap::TARGET_FILE),
+            br#"{"action":"delete"}"#,
+        )
+        .unwrap();
+        let manifest = BundleManifest {
+            format_version: airgap::FORMAT_VERSION,
+            deployment_id: site.deployment_id.clone(),
+            deployment_name: site.name.clone(),
+            release_id: "delete".into(),
+            sequence: 2,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            stack_id: "app".into(),
+            images: Vec::new(),
+            chart_images: BTreeMap::new(),
+            chart: String::new(),
+            files: airgap::checksums(bundle.path()).await.unwrap(),
+            omitted_blobs: BTreeSet::new(),
+            telemetry_ack: None,
+            deletion_policy: None,
+        };
+        let mut signed_manifest = serde_json::to_value(&manifest).unwrap();
+        signed_manifest["deletionPolicy"] = "erase".into();
+        let bytes = serde_json::to_vec(&signed_manifest).unwrap();
+        let key = BundleSigningKey::from_seed([6; 32]);
+        std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
+        std::fs::write(bundle.path().join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
+        std::fs::create_dir_all(folder.path().join(TO_SITE)).unwrap();
+        let pending = folder.path().join(TO_SITE).join("2-delete.bundle");
+        airgap::pack(bundle.path(), &pending).unwrap();
+        let args = SyncArgs::try_parse_from(["sync", "--trusted-key", &key.public_key()]).unwrap();
+        let mut mismatched = signed_manifest.clone();
+        mismatched["releaseId"] = "rel_other".into();
+        let mismatched = serde_json::to_vec(&mismatched).unwrap();
+        std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &mismatched).unwrap();
+        std::fs::write(
+            bundle.path().join(airgap::SIGNATURE_FILE),
+            key.sign(&mismatched),
+        )
+        .unwrap();
+        airgap::pack(bundle.path(), &pending).unwrap();
+        let error = install_pending(folder.path(), &mut site, &settings, &args)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("signed deletion action and manifest"));
+        assert!(release_values(&settings, "app", &namespace)
+            .await
+            .unwrap()
+            .is_some());
+        std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
+        std::fs::write(bundle.path().join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
+        airgap::pack(bundle.path(), &pending).unwrap();
+        install_pending(folder.path(), &mut site, &settings, &args)
+            .await
+            .unwrap();
+
+        assert!(release_values(&settings, "app", &namespace)
+            .await
+            .unwrap()
+            .is_none());
+        let mut get = kubectl(Some(&context));
+        get.args([
+            "get",
+            "configmap",
+            "runtime",
+            "--namespace",
+            &namespace,
+            "--ignore-not-found",
+            "-o",
+            "name",
+        ]);
+        assert!(run(get, "checking Helm cleanup").await.unwrap().is_empty());
+        let reports = by_sequence(&folder.path().join(FROM_SITE), Some(REPORT_EXTENSION)).unwrap();
+        assert_eq!(reports.len(), 1);
+        let report: SiteReport =
+            serde_json::from_slice(&std::fs::read(&reports[0].1).unwrap()).unwrap();
+        assert_eq!(report.state["status"], "deleted");
+        assert_eq!(report.state["runtimeMetadata"]["deletionPolicy"], "erase");
+        let mut get = kubectl(Some(&context));
+        get.args(["get", "pvc,secret", "--namespace", &namespace, "-o", "json"]);
+        let remaining: serde_json::Value =
+            serde_json::from_slice(&run(get, "checking data erasure").await.unwrap()).unwrap();
+        assert!(!remaining["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|object| matches!(
+                object["metadata"]["name"].as_str(),
+                Some("database" | "database-password")
+            )));
+        assert_eq!(
+            serde_json::to_value(&report.telemetry).unwrap(),
+            serde_json::to_value(&original.telemetry).unwrap()
+        );
+        assert!(!snapshot.exists());
+        assert!(!pending.exists());
+        // A completed erase receipt must not delete data recreated at the same name.
+        let mut create = kubectl(Some(&context));
+        create.args([
+            "create",
+            "secret",
+            "generic",
+            "database-password",
+            "--namespace",
+            &namespace,
+            "--from-literal=value=replacement",
+        ]);
+        run(create, "creating replacement data").await.unwrap();
+        let error = erase_inventory(&settings, &recorded_data)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("was replaced"));
+        let mut get = kubectl(Some(&context));
+        get.args([
+            "get",
+            "secret",
+            "database-password",
+            "--namespace",
+            &namespace,
+            "-o",
+            "json",
+        ]);
+        let replacement: serde_json::Value =
+            serde_json::from_slice(&run(get, "checking replacement data").await.unwrap()).unwrap();
+        assert_eq!(replacement["data"]["value"], "cmVwbGFjZW1lbnQ=");
         let mut delete = kubectl(Some(&context));
         delete.args(["delete", "namespace", &namespace]);
         run(delete, "removing test namespace").await.unwrap();
@@ -3646,6 +4429,7 @@ metadata:
             files: airgap::checksums(bundle.path()).await.unwrap(),
             omitted_blobs: BTreeSet::new(),
             telemetry_ack: None,
+            deletion_policy: None,
         };
         let bytes = serde_json::to_vec(&manifest).unwrap();
         let key = BundleSigningKey::from_seed([5; 32]);

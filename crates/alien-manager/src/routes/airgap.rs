@@ -67,7 +67,7 @@ async fn airgapped_deployment(
             return Err(alien_error::AlienError::new(ErrorData::DeploymentNotFound {
                 deployment_id: id.to_string(),
             })
-            .into_response())
+            .into_response());
         }
         Err(e) => return Err(e.into_response()),
     };
@@ -137,6 +137,9 @@ async fn target(
         Ok(found) => found,
         Err(response) => return response,
     };
+    if deployment.status == "retained" {
+        return Json(serde_json::json!({"action": "retained"})).into_response();
+    }
     let deleting = matches!(
         deployment.status.as_str(),
         "delete-pending" | "deleting" | "delete-failed" | "teardown-required" | "teardown-failed"
@@ -157,6 +160,7 @@ async fn target(
         };
         return Json(serde_json::json!({
             "action": "delete",
+            "deletionPolicy": deployment.runtime_metadata.as_ref().map(|m| m.deletion_policy).unwrap_or_default(),
             "releaseInfo": {"releaseId": release.id, "stack": {"id": stack.id()}},
         }))
         .into_response();
@@ -268,6 +272,40 @@ async fn bundle_signature(
     let Ok(manifest) = base64::engine::general_purpose::STANDARD.decode(&body.manifest) else {
         return ErrorData::bad_request("manifest must be base64").into_response();
     };
+    let value: serde_json::Value = match serde_json::from_slice(&manifest) {
+        Ok(value) => value,
+        Err(_) => return ErrorData::bad_request("manifest must be JSON").into_response(),
+    };
+    if value["releaseId"] == "delete" {
+        let policy: alien_core::DeletionPolicy = match serde_json::from_value(
+            value
+                .get("deletionPolicy")
+                .cloned()
+                .unwrap_or_else(|| "retain".into()),
+        ) {
+            Ok(policy) => policy,
+            Err(_) => return ErrorData::bad_request("invalid deletion policy").into_response(),
+        };
+        let accepted = deployment
+            .runtime_metadata
+            .as_ref()
+            .map(|m| m.deletion_policy)
+            .unwrap_or_default();
+        if !matches!(
+            deployment.status.as_str(),
+            "delete-pending"
+                | "deleting"
+                | "delete-failed"
+                | "teardown-required"
+                | "teardown-failed"
+        ) || policy != accepted
+        {
+            return ErrorData::bad_request(
+                "The deletion manifest must match the accepted deletion request",
+            )
+            .into_response();
+        }
+    }
     sign_bundle_manifest(
         state.deployment_store.as_ref(),
         &subject,
@@ -393,7 +431,7 @@ async fn status_report(
             "traces" => TelemetrySignal::Traces,
             other => {
                 return ErrorData::bad_request(format!("Unknown telemetry signal '{other}'"))
-                    .into_response()
+                    .into_response();
             }
         };
         // The same rule live telemetry from this deployment follows.
@@ -423,7 +461,10 @@ async fn status_report(
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_default();
-    let deleting = report.state.status == alien_core::DeploymentStatus::Deleted;
+    let deleting = matches!(
+        report.state.status,
+        alien_core::DeploymentStatus::Deleted | alien_core::DeploymentStatus::Retained
+    );
     if deleting && report.telemetry.iter().any(|batch| batch.id.is_none()) {
         return ErrorData::bad_request("Final deletion reports require telemetry batch IDs")
             .into_response();
@@ -470,7 +511,13 @@ async fn status_report(
         Err(e) => return ErrorData::internal(format!("forwarding telemetry: {e}")).into_response(),
     };
 
-    if deleting && last_batch.is_none_or(|last| forwarded.through.is_some_and(|mark| mark >= last))
+    // Retained data is a completed checkpoint. A repeated report can finish
+    // acknowledging telemetry without replacing that checkpoint.
+    let retained_replay = deployment.status == "retained"
+        && report_state.status == alien_core::DeploymentStatus::Retained;
+    if deleting
+        && !retained_replay
+        && last_batch.is_none_or(|last| forwarded.through.is_some_and(|mark| mark >= last))
     {
         if let Err(error) = reconcile_report(
             state.deployment_store.as_ref(),

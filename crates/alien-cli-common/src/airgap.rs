@@ -116,6 +116,9 @@ pub struct BundleManifest {
     /// Operator frees everything up to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry_ack: Option<i64>,
+    /// Accepted deletion intent. Old bundles retain data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletion_policy: Option<alien_core::DeletionPolicy>,
 }
 
 /// One image in the bundle's OCI layout.
@@ -393,7 +396,7 @@ pub async fn import_images(
                 return Err(AlienError::new(copy_failed(
                     &image.source,
                     "registry returned a different manifest digest",
-                )))
+                )));
             }
             // A registry may hide an absent repository behind an auth response.
             // Try the authorized push; a real permission failure still propagates.
@@ -417,7 +420,7 @@ pub async fn import_images(
                 return Err(error).into_alien_error().context(copy_failed(
                     &image.source,
                     "checking the destination manifest",
-                ))
+                ));
             }
         }
         push_manifest_tree(&client, &target, layout, &image.digest, true).await?;
@@ -1290,6 +1293,7 @@ mod tests {
             files: checksums(dir.path()).await.unwrap(),
             omitted_blobs: BTreeSet::new(),
             telemetry_ack: None,
+            deletion_policy: None,
         };
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         tokio::fs::write(dir.path().join(MANIFEST_FILE), &manifest_bytes)
@@ -1360,6 +1364,7 @@ mod tests {
             files: checksums(dir.path()).await.unwrap(),
             omitted_blobs: BTreeSet::new(),
             telemetry_ack: None,
+            deletion_policy: None,
         };
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         let key = BundleSigningKey::from_seed([5; 32]);
@@ -1422,6 +1427,7 @@ mod tests {
             files: checksums(dir.path()).await.unwrap(),
             omitted_blobs: BTreeSet::new(),
             telemetry_ack: None,
+            deletion_policy: None,
         };
         let key = BundleSigningKey::from_seed([5; 32]);
         let signature = key.sign(&serde_json::to_vec(&manifest).unwrap());
