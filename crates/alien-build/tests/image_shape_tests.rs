@@ -670,6 +670,9 @@ async fn container_build_uses_compute_pool_targets() {
         PlatformBuildSettings::Kubernetes {
             base_platform: None,
         },
+        PlatformBuildSettings::Kubernetes {
+            base_platform: Some(alien_core::Platform::Aws),
+        },
     ] {
         for targets in [None, Some(vec![BinaryTarget::LinuxX64])] {
             let output = tempdir().expect("output directory");
@@ -776,5 +779,95 @@ async fn container_build_uses_compute_pool_targets() {
                 .expect_err("explicit target must match pool");
             assert!(error.to_string().contains("expected LinuxX64"), "{error}");
         }
+    }
+}
+
+#[tokio::test]
+async fn container_build_preserves_base_platform_defaults() {
+    let src = tempdir().expect("source directory");
+    std::fs::write(
+        src.path().join("Dockerfile"),
+        "FROM scratch\nCOPY marker /marker\n",
+    )
+    .expect("write Dockerfile");
+    std::fs::write(src.path().join("marker"), "built\n").expect("write marker");
+
+    for (base_platform, expected) in [
+        (
+            Some(alien_core::Platform::Aws),
+            vec![BinaryTarget::LinuxArm64],
+        ),
+        (
+            Some(alien_core::Platform::Gcp),
+            vec![BinaryTarget::LinuxX64],
+        ),
+        (
+            Some(alien_core::Platform::Azure),
+            vec![BinaryTarget::LinuxX64],
+        ),
+        (None, vec![BinaryTarget::LinuxX64, BinaryTarget::LinuxArm64]),
+    ] {
+        let platform = PlatformBuildSettings::Kubernetes { base_platform };
+        let output = tempdir().expect("output directory");
+        let container = Container::new("app".to_string())
+            .cpu(alien_core::ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.25".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "256Mi".to_string(),
+                desired: "256Mi".to_string(),
+            })
+            .permissions("execution".to_string())
+            .code(ContainerCode::Source {
+                src: src.path().display().to_string(),
+                toolchain: alien_core::ToolchainConfig::Docker {
+                    dockerfile: None,
+                    target: None,
+                    build_args: None,
+                },
+            })
+            .build();
+        let stack = alien_core::Stack::new("pool-targets".to_string())
+            .permission("execution", PermissionProfile::new())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let settings = BuildSettings {
+            platform: platform.clone(),
+            output_directory: output.path().display().to_string(),
+            targets: None,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: true,
+            pull_base_images: false,
+        };
+
+        build_stack(stack.clone(), &settings)
+            .await
+            .expect("build x86 pool container");
+        let platform_dir = output
+            .path()
+            .join("build")
+            .join(platform.runtime_platform().as_str());
+        let first = find_image_tarball(&platform_dir, "app", expected[0]);
+        let mut actual = std::fs::read_dir(first.parent().expect("image directory"))
+            .expect("read built images")
+            .map(|entry| {
+                entry
+                    .expect("image entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.ends_with(".oci.tar"))
+            .collect::<Vec<_>>();
+        let mut expected_files = expected
+            .iter()
+            .map(|target| format!("{}.oci.tar", target.runtime_platform_id()))
+            .collect::<Vec<_>>();
+        actual.sort();
+        expected_files.sort();
+        assert_eq!(actual, expected_files, "base={base_platform:?}");
     }
 }

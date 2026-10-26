@@ -167,10 +167,18 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     // Release auto-builds and library callers can construct BuildSettings directly instead of
     // going through the CLI planner. Enforce the platform's architecture contract here so every
     // path fails before doing build work or writing artifacts.
+    let default_targets = if settings.targets.is_none()
+        && settings.platform.base_platform().is_some()
+        && plan::exact_compute_architecture(&stack)?.is_none()
+    {
+        Some(settings.get_targets())
+    } else {
+        None
+    };
     let targets = plan::resolve_targets_for_stack_platform(
         &stack,
         settings.platform.runtime_platform(),
-        settings.targets.as_deref(),
+        settings.targets.as_deref().or(default_targets.as_deref()),
     )?;
     let mut resolved_settings = settings.clone();
     if matches!(

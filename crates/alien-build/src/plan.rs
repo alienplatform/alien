@@ -248,7 +248,9 @@ pub fn resolve_targets_for_stack_platform(
     Ok(resolved)
 }
 
-fn exact_compute_architecture(stack: &Stack) -> crate::error::Result<Option<Architecture>> {
+pub(crate) fn exact_compute_architecture(
+    stack: &Stack,
+) -> crate::error::Result<Option<Architecture>> {
     let mut architectures = stack
         .resources()
         .filter_map(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>())
