@@ -236,12 +236,14 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
     for (id, kind) in [
         ("optionalNumber", StackInputKind::Number),
         ("optionalBoolean", StackInputKind::Boolean),
+        ("optionalString", StackInputKind::String),
     ] {
         let mut input = stack.inputs[0].clone();
         input.id = id.into();
         input.kind = kind;
         input.required = false;
-        input.default = None;
+        input.default = (input.kind == StackInputKind::String)
+            .then(|| alien_core::StackInputDefaultValue::String("default-answer".into()));
         input.validation = None;
         stack.inputs.push(input);
     }
@@ -287,11 +289,14 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
     for (id, parameter, answer) in [
         ("optionalNumber", "InputOptionalNumber", "42"),
         ("optionalBoolean", "InputOptionalBoolean", "false"),
+        ("optionalString", "InputOptionalString", "custom-answer"),
     ] {
-        for (raw, expected) in [
-            ("", serde_json::Value::Null),
-            (answer, serde_json::json!(answer)),
-        ] {
+        let empty = if id == "optionalString" {
+            serde_json::json!("")
+        } else {
+            serde_json::Value::Null
+        };
+        for (raw, expected) in [("", empty), (answer, serde_json::json!(answer))] {
             let mut parameters = serde_json::json!({"InputEnabled":"true"});
             parameters[parameter] = serde_json::json!(raw);
             for (name, condition) in &template.conditions {
@@ -312,12 +317,15 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
             if !value.is_null() {
                 answers.insert(id.to_string(), value);
             }
-            alien_core::resolve_stack_input_values(
+            let resolved = alien_core::resolve_stack_input_values(
                 &stack.inputs,
                 &answers,
                 alien_core::Platform::Aws,
             )
             .unwrap();
+            if id == "optionalString" {
+                assert_eq!(resolved[id], serde_json::json!(raw));
+            }
         }
     }
     let rule = template
