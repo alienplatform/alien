@@ -647,7 +647,11 @@ fn accept_target_release(
             | alien_core::DeploymentStatus::UpdateFailed
             | alien_core::DeploymentStatus::RefreshFailed
     ) {
-        deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
+        deployment_state.status = if deployment_state.stack_state.is_none() {
+            alien_core::DeploymentStatus::Pending
+        } else {
+            alien_core::DeploymentStatus::UpdatePending
+        };
         if let Some(metadata) = deployment_state.runtime_metadata.as_mut() {
             metadata.pending_prepared_stack = None;
             metadata.pending_prepared_release_id = None;
@@ -1013,7 +1017,7 @@ mod tests {
             status: DeploymentStatus::Running,
             current_release: Some(release.clone()),
             target_release: None,
-            stack_state: None,
+            stack_state: Some(alien_core::StackState::new(Platform::Kubernetes)),
             error: None,
             environment_info: None,
             runtime_metadata: None,
@@ -1031,6 +1035,37 @@ mod tests {
         state.target_release = None;
         accept_target_release(&mut state, release.clone());
         assert_eq!(state.status, DeploymentStatus::UpdatePending);
+    }
+
+    #[test]
+    fn corrective_target_without_provisioned_state_restarts_initial_preflights() {
+        let release = ReleaseInfo {
+            release_id: Some("rel_corrected".into()),
+            version: None,
+            description: None,
+            stack: Stack::new("corrected".into()).build(),
+        };
+        let mut state = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::ProvisioningFailed,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: true,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        accept_target_release(&mut state, release.clone());
+        assert_eq!(state.status, DeploymentStatus::Pending);
+        assert_eq!(state.target_release, Some(release.clone()));
+        assert!(!state.retry_requested);
+        state.status = DeploymentStatus::ProvisioningFailed;
+        state.stack_state = Some(alien_core::StackState::new(Platform::Kubernetes));
+        accept_target_release(&mut state, release);
+        assert_eq!(state.status, DeploymentStatus::UpdatePending);
+        assert!(state.stack_state.is_some());
     }
 
     #[test]
@@ -1052,7 +1087,7 @@ mod tests {
                 status,
                 current_release: None,
                 target_release: None,
-                stack_state: None,
+                stack_state: Some(alien_core::StackState::new(Platform::Kubernetes)),
                 error: None,
                 environment_info: None,
                 runtime_metadata: Some(metadata),
