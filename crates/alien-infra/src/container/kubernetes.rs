@@ -180,6 +180,9 @@ pub struct KubernetesContainerController {
     pub(crate) service_ports: Vec<u16>,
     /// The container ID (for binding construction)
     pub(crate) container_id: Option<String>,
+    /// Whether the previous health check also found zero ready replicas.
+    #[serde(default)]
+    pub(crate) zero_ready_observed: bool,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
     /// Tracks the env-Secret checksum so `needs_update` can detect secret
@@ -820,6 +823,17 @@ impl KubernetesContainerController {
                 }
                 KubernetesWorkload::DaemonSet(_) => false,
             };
+            let zero_ready = ready_replicas.unwrap_or(0) == 0;
+            let previous_zero = self.zero_ready_observed;
+            self.zero_ready_observed = !healthy && zero_ready;
+            if !healthy && zero_ready && !previous_zero {
+                // One zero-ready read can be a pod restart. Confirm it on the
+                // next check before turning a running workload into a failure.
+                return Ok(HandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(Duration::from_secs(5)),
+                });
+            }
             if !healthy {
                 return Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: config.id.clone(),
@@ -988,6 +1002,7 @@ impl KubernetesContainerController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        self.zero_ready_observed = false;
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
         // A refresh started from Ready (gateway configuration, linked binding drift) can come
@@ -2031,6 +2046,7 @@ mod output_tests {
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         };
 
@@ -2098,6 +2114,7 @@ mod output_tests {
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         };
 
@@ -2164,6 +2181,7 @@ impl KubernetesContainerController {
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         }
     }
@@ -2772,6 +2790,58 @@ mod tests {
     use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
 
     #[tokio::test]
+    async fn single_replica_restart_requires_a_second_unhealthy_observation() {
+        for stateful in [false, true] {
+            let server = httpmock::MockServer::start_async().await;
+            let kind = if stateful {
+                "StatefulSet"
+            } else {
+                "Deployment"
+            };
+            let collection = if stateful {
+                "statefulsets"
+            } else {
+                "deployments"
+            };
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path(format!("/apis/apps/v1/namespaces/test-ns/{collection}/web"));
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion":"apps/v1", "kind":kind,
+                    "metadata":{"name":"web", "generation":1},
+                    "spec":{"replicas":1,"selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[]}}},
+                    "status":{"replicas":1,"updatedReplicas":1,"observedGeneration":1}
+                }));
+            });
+            let config = manifest_test_container(&[], stateful);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+            let mut ctx = harness.ctx();
+            point_at(&mut ctx, &server);
+            let mut controller = manifest_test_controller();
+            controller.is_stateful = stateful;
+            assert!(matches!(
+                controller
+                    .ready(&ctx)
+                    .await
+                    .expect("first zero may be a restart"),
+                KubernetesContainerHandlerAction::Stay { .. }
+            ));
+            let error = controller
+                .ready(&ctx)
+                .await
+                .expect_err("persistent zero is drift");
+            assert_eq!(error.code, "RESOURCE_DRIFT");
+        }
+    }
+
+    #[test]
+    fn zero_replica_workload_waits_for_the_controller_to_observe_its_generation() {
+        assert!(!workload_ready(0, None, None, None, Some(2)));
+        assert!(!workload_ready(0, None, None, Some(1), Some(2)));
+        assert!(workload_ready(0, None, None, Some(2), Some(2)));
+        assert!(!workload_ready(0, Some(1), Some(1), Some(2), Some(2)));
+    }
+
+    #[tokio::test]
     async fn initial_workload_accepts_ready_capacity_and_waits_for_unready_pods() {
         for stateful in [false, true] {
             for (ready, total, complete) in
@@ -2866,7 +2936,6 @@ mod tests {
                 generation: Some(2),
                 ..Default::default()
             },
-
             status: Some(DeploymentStatus {
                 observed_generation: Some(1),
                 ..Default::default()
@@ -3068,6 +3137,7 @@ mod tests {
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         };
         let harness =

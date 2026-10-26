@@ -46,6 +46,9 @@ pub struct KubernetesWorkerController {
     /// Generation returned when the current update was submitted.
     #[serde(default)]
     pub(crate) expected_generation: Option<i64>,
+    /// Whether the previous health check also found zero ready replicas.
+    #[serde(default)]
+    pub(crate) zero_ready_observed: bool,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
 }
@@ -392,7 +395,23 @@ impl KubernetesWorkerController {
                 }
             }
 
-            if !deployment_has_ready_replicas(&deployment) {
+            let healthy = deployment_has_ready_replicas(&deployment);
+            let zero_ready = deployment
+                .status
+                .as_ref()
+                .and_then(|status| status.ready_replicas)
+                .unwrap_or(0)
+                == 0;
+            let previous_zero = self.zero_ready_observed;
+            self.zero_ready_observed = !healthy && zero_ready;
+            if !healthy && zero_ready && !previous_zero {
+                // Confirm zero readiness after a possible transient pod restart.
+                return Ok(HandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(Duration::from_secs(5)),
+                });
+            }
+            if !healthy {
                 return Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: config.id.clone(),
                     message: "Deployment does not have the requested ready replicas".into(),
@@ -512,6 +531,7 @@ impl KubernetesWorkerController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        self.zero_ready_observed = false;
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Worker>()?;
 
@@ -1174,6 +1194,7 @@ impl KubernetesWorkerController {
             commands_enabled: false,
             public_endpoint: KubernetesPublicEndpointState::default(),
             expected_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         }
     }
@@ -1183,6 +1204,52 @@ impl KubernetesWorkerController {
 mod tests {
     use super::*;
     use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+
+    #[tokio::test]
+    async fn single_replica_restart_requires_a_second_unhealthy_observation() {
+        let server = httpmock::MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+            then.status(200).json_body(serde_json::json!({
+                "metadata":{"name":"worker","generation":1},
+                "spec":{"replicas":1,"selector":{},"template":{"spec":{"containers":[]}}},
+                "status":{"replicas":1,"updatedReplicas":1,"observedGeneration":1}
+            }));
+        });
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:1".into(),
+            })
+            .permissions("default".into())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes client")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual client")
+        };
+        *server_url = server.base_url();
+        let mut controller = KubernetesWorkerController {
+            deployment_name: Some("worker".into()),
+            namespace: Some("test-ns".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            controller
+                .ready(&ctx)
+                .await
+                .expect("first zero may be a restart"),
+            KubernetesWorkerHandlerAction::Stay { .. }
+        ));
+        let error = controller
+            .ready(&ctx)
+            .await
+            .expect_err("persistent zero is drift");
+        assert_eq!(error.code, "RESOURCE_DRIFT");
+    }
 
     #[tokio::test]
     async fn worker_create_accepts_ready_capacity_and_update_waits_through_slow_rollouts() {
@@ -1365,6 +1432,7 @@ mod tests {
             commands_enabled: true,
             public_endpoint,
             expected_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         };
 
@@ -1404,6 +1472,7 @@ mod tests {
             commands_enabled: false,
             public_endpoint,
             expected_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         };
 
