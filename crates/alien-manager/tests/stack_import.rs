@@ -2847,6 +2847,208 @@ async fn imported_installations_cannot_request_automatic_setup() {
 }
 
 #[tokio::test]
+async fn reserved_manual_setup_management_must_match_registration() {
+    assert_reserved_setup_management("manual", false, ImportSourceKind::Terraform).await;
+}
+
+#[tokio::test]
+async fn reserved_automatic_setup_management_must_match_registration() {
+    assert_reserved_setup_management("automatic", false, ImportSourceKind::Terraform).await;
+}
+
+#[tokio::test]
+async fn installed_manual_setup_management_must_match_registration() {
+    for source in [
+        ImportSourceKind::Terraform,
+        ImportSourceKind::CloudFormation,
+    ] {
+        assert_reserved_setup_management("manual", true, source).await;
+    }
+}
+
+#[tokio::test]
+async fn installed_automatic_setup_management_must_match_registration() {
+    for source in [
+        ImportSourceKind::Terraform,
+        ImportSourceKind::CloudFormation,
+    ] {
+        assert_reserved_setup_management("automatic", true, source).await;
+    }
+}
+
+async fn assert_reserved_setup_management(
+    reserved_mode: &str,
+    installed: bool,
+    source: ImportSourceKind,
+) {
+    // None covers old payloads that omit setupManagement; they mean manual.
+    for requested_mode in [None, Some("manual"), Some("automatic")] {
+        let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+        let settings: StackSettings = serde_json::from_value(serde_json::json!({
+            "setupManagement": reserved_mode
+        }))
+        .unwrap();
+        let mut reserved = fixture
+            .deployment_store
+            .create_with_state(
+                &alien_manager::auth::Subject::system(),
+                CreateImportedDeploymentParams {
+                    name: "setup-management".into(),
+                    deployment_group_id: fixture.deployment_group_id.clone(),
+                    platform: Platform::Aws,
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    base_platform: None,
+                    stack_settings: settings.clone(),
+                    stack_state: StackState::new(Platform::Aws),
+                    environment_info: None,
+                    runtime_metadata: RuntimeMetadata::default(),
+                    status: "pending".into(),
+                    current_release_id: None,
+                    desired_release_id: None,
+                    import_source: Some(source),
+                    setup_metadata: Some(serde_json::json!({
+                        "setupReservation": { "releaseId": fixture.release_id }
+                    })),
+                    setup_target: "aws".into(),
+                    setup_fingerprint: "test".into(),
+                    setup_fingerprint_version: 1,
+                    deployment_token: None,
+                    management_config: None,
+                    input_values: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        if installed {
+            let mut initial = if reserved_mode == "automatic" {
+                aws_remote_management_import_request(
+                    "setup-management",
+                    "us-west-2",
+                    "management",
+                    "test-account",
+                )
+            } else {
+                aws_s3_import_request("setup-management", "us-west-2", "assets", "acme-assets")
+            };
+            initial.source_kind = Some(source);
+            initial.stack_settings.setup_management = settings.setup_management;
+            let (status, body) = post_import(&fixture, Some(&fixture.dg_token), &initial).await;
+            assert_eq!(status, StatusCode::OK, "{body:#}");
+            let imported = fixture
+                .deployment_store
+                .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
+                .await
+                .unwrap()
+                .unwrap();
+            fixture
+                .deployment_store
+                .reconcile(
+                    &alien_manager::auth::Subject::system(),
+                    ReconcileData {
+                        deployment_id: reserved.id.clone(),
+                        session: "setup-completed".into(),
+                        execution_claim: None,
+                        state: DeploymentState {
+                            status: DeploymentStatus::Running,
+                            platform: Platform::Aws,
+                            current_release: Some(ReleaseInfo {
+                                release_id: fixture.release_id.clone(),
+                                version: None,
+                                description: None,
+                                stack: stack_with_storage("assets"),
+                            }),
+                            target_release: None,
+                            stack_state: imported.stack_state,
+                            error: None,
+                            environment_info: imported.environment_info,
+                            runtime_metadata: imported.runtime_metadata,
+                            retry_requested: false,
+                            protocol_version: imported.deployment_protocol_version,
+                        },
+                        update_heartbeat: false,
+                        suggested_delay_ms: None,
+                        heartbeats: vec![],
+                        observed_inventory_batches: vec![],
+                        capabilities: vec![],
+                        operator_version: None,
+                        operations_report: None,
+                    },
+                )
+                .await
+                .unwrap();
+            reserved = fixture
+                .deployment_store
+                .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(reserved.status, "running");
+            assert_eq!(
+                reserved.runtime_metadata.as_ref().unwrap().automatic_setup,
+                reserved_mode == "automatic"
+            );
+        }
+        let mut request = if requested_mode == Some("automatic") {
+            aws_remote_management_import_request(
+                "setup-management",
+                "us-west-2",
+                "management",
+                "test-account",
+            )
+        } else {
+            aws_s3_import_request("setup-management", "us-west-2", "assets", "acme-assets")
+        };
+        request.source_kind = Some(source);
+        let mut request = serde_json::to_value(request).unwrap();
+        if let Some(mode) = requested_mode {
+            request["stackSettings"]["setupManagement"] = mode.into();
+        } else {
+            request["stackSettings"]
+                .as_object_mut()
+                .unwrap()
+                .remove("setupManagement");
+        }
+        let (status, body) = post_import_json(&fixture, Some(&fixture.dg_token), request).await;
+        let installed = fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let requested_mode = requested_mode.unwrap_or("manual");
+        if requested_mode != reserved_mode {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body:#}");
+            let expected = format!(
+                    "This setup artifact was built for {requested_mode} setup, but the deployment was prepared for {reserved_mode} setup. Regenerate the setup artifact for the requested setup management."
+                );
+            assert_eq!(body["message"], expected, "{body:#}");
+            assert_eq!(installed.status, reserved.status);
+            assert_eq!(
+                serde_json::to_value(&installed.stack_settings).unwrap(),
+                serde_json::to_value(&reserved.stack_settings).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(&installed.stack_state).unwrap(),
+                serde_json::to_value(&reserved.stack_state).unwrap()
+            );
+            assert_eq!(installed.setup_metadata, reserved.setup_metadata);
+            assert_eq!(
+                serde_json::to_value(&installed.runtime_metadata).unwrap(),
+                serde_json::to_value(&reserved.runtime_metadata).unwrap()
+            );
+        } else {
+            assert_eq!(status, StatusCode::OK, "{body:#}");
+            assert_eq!(body["deploymentId"], reserved.id);
+            assert_eq!(
+                installed.stack_settings.unwrap().setup_management,
+                reserved.stack_settings.unwrap().setup_management
+            );
+            assert_ne!(installed.status, "pending");
+        }
+    }
+}
+
+#[tokio::test]
 async fn automatic_registration_requires_approval_and_defers_application_resources() {
     for (platform, approved) in [
         (Platform::Aws, false),

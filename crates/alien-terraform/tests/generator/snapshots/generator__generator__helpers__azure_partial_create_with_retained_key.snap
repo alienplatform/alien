@@ -616,6 +616,13 @@ resource "terraform_data" "deployment_registration" {
     azurerm_role_assignment.retained_key_installer_key_admin,
     time_sleep.retained_key_installer_rbac
   ]
+
+  lifecycle {
+    precondition {
+      condition     = try(local.deployment_settings.setupManagement, "manual") == "manual"
+      error_message = format("This setup module was built for manual setup, but the settings request %s setup. Regenerate the setup artifact for the requested setup management.", nonsensitive(sensitive(try(local.deployment_settings.setupManagement == "manual", true))) ? "manual" : nonsensitive(sensitive(try(local.deployment_settings.setupManagement == "automatic", false))) ? "automatic" : "invalid")
+    }
+  }
 }
 
 === outputs.tf ===
