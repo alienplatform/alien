@@ -1377,15 +1377,16 @@ pub(crate) fn configured_public_endpoint_urls(
     else {
         return None;
     };
-    let scheme = if matches!(certificate, KubernetesCertificateMode::None) {
-        "http"
-    } else {
-        "https"
+    let scheme = match certificate {
+        KubernetesCertificateMode::None => "http",
+        KubernetesCertificateMode::TlsSecretRef(_) => "https",
+        _ => return None,
     };
     Some(
         endpoints
             .iter()
-            .filter(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
+            .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
+            .into_iter()
             .map(|endpoint| (endpoint.name.clone(), format!("{scheme}://{domain}")))
             .collect(),
     )

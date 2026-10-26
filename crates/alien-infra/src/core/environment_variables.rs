@@ -1136,6 +1136,13 @@ mod tests {
                 wildcard_subdomains: true,
             },
             PublicEndpoint {
+                name: "metrics".into(),
+                port: 9090,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            },
+            PublicEndpoint {
                 name: "database".into(),
                 port: 5432,
                 protocol: ExposeProtocol::Tcp,
