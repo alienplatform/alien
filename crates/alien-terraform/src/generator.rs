@@ -538,6 +538,12 @@ fn generate_terraform_module_internal(
             include_awscc_provider,
             include_google_beta_provider,
             has_ephemeral,
+            per_resource.values().any(|fragment| {
+                fragment
+                    .moved_blocks
+                    .iter()
+                    .any(|block| block.identifier.as_str() == "removed")
+            }),
             target == TerraformTarget::Azure
                 && stack.resources().any(|(_, entry)| {
                     entry
@@ -1679,6 +1685,7 @@ fn versions_body(
     include_awscc_provider: bool,
     include_google_beta_provider: bool,
     include_ephemeral: bool,
+    include_removed: bool,
     include_azure_lifecycle: bool,
 ) -> Body {
     // Conditional imports need a patched OpenTofu reader (1.11.0 rejects
@@ -1689,6 +1696,8 @@ fn versions_body(
         ">= 1.11.0"
     } else if matches!(target, TerraformTarget::Eks) {
         ">= 1.9.0"
+    } else if include_removed {
+        ">= 1.7.0"
     } else {
         ">= 1.5.0"
     };
@@ -4618,7 +4627,9 @@ fn resource_inventory(stack: &Stack, fragments: &IndexMap<String, TfFragment>) -
     {
         return String::new();
     }
-    let mut text = String::from("## Resources\n\nNames and purpose are authored documentation. Setup components below are derived from this module; review their `.tf` files for permissions and deletion policies. Frozen resources are setup-owned; Live resources are runtime-owned.\n\n| Name | ID | Purpose | Lifecycle | Setup components |\n| --- | --- | --- | --- | --- |\n");
+    let mut text = String::from(
+        "## Resources\n\nNames and purpose are authored documentation. Setup components below are derived from this module; review their `.tf` files for permissions and deletion policies. Frozen resources are setup-owned; Live resources are runtime-owned.\n\n| Name | ID | Purpose | Lifecycle | Setup components |\n| --- | --- | --- | --- | --- |\n",
+    );
     for (id, entry) in &stack.resources {
         let components = fragments
             .get(id)
@@ -5103,6 +5114,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    false,
                 ))
                 .expect("versions should render"),
             ),
@@ -5298,6 +5310,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         let versions = render_body(versions_body(
             TerraformTarget::Aws,
             Some(&registration),
+            false,
             false,
             false,
             false,
