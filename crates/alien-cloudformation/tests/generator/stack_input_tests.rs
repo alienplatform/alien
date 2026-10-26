@@ -201,3 +201,88 @@ fn deployer_secrets_never_pass_through_the_template() {
         assert_eq!(evaluate(&output.value, stack_name), expected.name);
     }
 }
+
+#[test]
+fn conditional_inputs_produce_a_valid_cloudformation_template() {
+    let mut stack = stack_with_inputs();
+    let mut input = serde_json::to_value(&stack.inputs[0]).unwrap();
+    input["when"] = serde_json::json!({"input": "enabled", "equals": true});
+    stack.inputs[0] = serde_json::from_value(input).unwrap();
+    stack.inputs.push(StackInputDefinition::deployer_boolean(
+        "enabled",
+        "Enabled",
+        "Enable the endpoint",
+        Some(true),
+    ));
+    let registry = sample_registry();
+    let template = generate_cloudformation_template(
+        &stack,
+        CloudFormationOptions {
+            registry: &registry,
+            target: CloudFormationTarget::Aws,
+            stack_settings: StackSettings::default(),
+            setup_target: "aws".into(),
+            setup_fingerprint: "test".into(),
+            setup_fingerprint_version: 1,
+            registration: RegistrationMode::CustomResource {
+                lambda_arn: "arn:aws:lambda:us-east-1:123456789012:function:register".into(),
+                callback_url: None,
+            },
+            description: None,
+            management_trust: Default::default(),
+        },
+    )
+    .unwrap();
+    alien_cloudformation::test_utils::cfn_lint(&to_yaml(&template).unwrap())
+        .assert_ok("conditional input template");
+    let rule = template
+        .rules
+        .get("InputApiBaseUrlRequired")
+        .expect("conditional required rule");
+    for (enabled, url, accepted) in [
+        ("false", "", true),
+        ("true", "", false),
+        ("true", "https://example.test", true),
+    ] {
+        let parameters = serde_json::json!({"InputEnabled": enabled, "InputApiBaseUrl": url});
+        for assertion in &rule.assertions {
+            assert_eq!(
+                evaluate_rule(
+                    &serde_json::to_value(&assertion.assertion).unwrap(),
+                    &parameters
+                ),
+                serde_json::json!(accepted)
+            );
+        }
+    }
+}
+
+// Evaluate the documented CloudFormation rule operators over parameter values.
+fn evaluate_rule(
+    expression: &serde_json::Value,
+    parameters: &serde_json::Value,
+) -> serde_json::Value {
+    if let Some(reference) = expression.get("Ref") {
+        return parameters[reference.as_str().unwrap()].clone();
+    }
+    if let Some(values) = expression.get("Fn::Equals") {
+        return serde_json::json!(
+            evaluate_rule(&values[0], parameters) == evaluate_rule(&values[1], parameters)
+        );
+    }
+    if let Some(values) = expression.get("Fn::Not") {
+        return serde_json::json!(!evaluate_rule(&values[0], parameters).as_bool().unwrap());
+    }
+    if let Some(values) = expression.get("Fn::Or") {
+        return serde_json::json!(values.as_array().unwrap().iter().any(|value| evaluate_rule(
+            value, parameters
+        )
+        .as_bool()
+        .unwrap()));
+    }
+    assert!(
+        !expression.is_object(),
+        "unsupported rule operator: {expression}"
+    );
+    expression.clone()
+}

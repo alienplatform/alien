@@ -270,6 +270,10 @@ fn generate_helm_chart_internal(
     files.insert("values.schema.json".to_string(), values_schema_json(stack)?);
     files.insert("templates/_helpers.tpl".to_string(), helpers_tpl());
     files.insert(
+        "templates/_inputs.tpl".to_string(),
+        stack_inputs_tpl(stack)?,
+    );
+    files.insert(
         "templates/_runtime-identity.tpl".to_string(),
         include_str!("templates/_runtime-identity.tpl").to_string(),
     );
@@ -5237,8 +5241,9 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
     input_schema["additionalProperties"] = serde_json::Value::Bool(false);
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
+    let mut conditional = Vec::new();
     for input in deployer_inputs {
-        if input.required && input.default.is_none() {
+        if input.required && input.default.is_none() && input.when.is_none() {
             required.push(input.id.clone());
         }
         use alien_core::StackInputKind;
@@ -5294,7 +5299,28 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
                 field["format"] = serde_json::json!("uri");
             }
         }
-        properties.insert(input.id.clone(), field);
+        if let Some(when) = &input.when {
+            let reference = stack
+                .inputs()
+                .iter()
+                .find(|reference| reference.id == when.input);
+            let mut condition =
+                serde_json::json!({"properties": {&when.input: {"const": when.equals}}});
+            if !reference.is_some_and(|reference| reference.applies_to_platform(Platform::Kubernetes)) {
+                condition = serde_json::Value::Bool(false);
+            } else if !reference.is_some_and(|reference| matches!(reference.default, Some(alien_core::StackInputDefaultValue::Boolean(value)) if value == when.equals)) {
+                condition["required"] = serde_json::json!([&when.input]);
+            }
+            conditional.push(
+                serde_json::json!({"if": condition, "then": {"properties": {&input.id: field}}}),
+            );
+            properties.insert(input.id.clone(), serde_json::json!({}));
+        } else {
+            properties.insert(input.id.clone(), field);
+        }
+    }
+    if !conditional.is_empty() {
+        input_schema["allOf"] = serde_json::json!(conditional);
     }
     input_schema["properties"] = serde_json::Value::Object(properties);
     if !required.is_empty() {
@@ -5349,6 +5375,46 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         .context(ErrorData::JsonSerializationFailed {
             reason: "failed to serialize Helm input values schema".to_string(),
         })
+}
+
+fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
+    let mut template = String::from(
+        r#"{{- define "deployment.inputValues" -}}
+{{- $values := deepCopy (default dict .Values.inputValues) -}}
+"#,
+    );
+    for input in stack.inputs() {
+        if !input.applies_to_platform(Platform::Kubernetes) {
+            template.push_str(&format!("{{{{- $_ := unset $values {:?} -}}}}\n", input.id));
+            continue;
+        }
+        if let Some(default) = &input.default {
+            let value = match default {
+                alien_core::StackInputDefaultValue::String(value) => serde_json::json!(value),
+                alien_core::StackInputDefaultValue::Number(value) => serde_json::from_str(value)
+                    .into_alien_error()
+                    .context(ErrorData::JsonSerializationFailed {
+                        reason: format!("invalid numeric default for '{}'", input.id),
+                    })?,
+                alien_core::StackInputDefaultValue::Boolean(value) => serde_json::json!(value),
+                alien_core::StackInputDefaultValue::StringList(value) => serde_json::json!(value),
+            };
+            let json = value.to_string();
+            template.push_str(&format!("{{{{- if not (hasKey $values {id:?}) -}}}}{{{{- $_ := set $values {id:?} (fromJson {json:?}) -}}}}{{{{- end -}}}}\n", id=input.id));
+        }
+    }
+    for input in stack.inputs().iter().filter(|input| input.when.is_some()) {
+        let Some(when) = &input.when else {
+            continue;
+        };
+        template.push_str(&format!("{{{{- if not (and (hasKey $values {reference:?}) (eq (toJson (get $values {reference:?})) {expected:?})) -}}}}{{{{- $_ := unset $values {id:?} -}}}}", reference=when.input, expected=when.equals.to_string(), id=input.id));
+        if input.required && !is_deployer_secret_input(input) {
+            template.push_str(&format!(r#"{{{{- else if and (not .Values.management.deploymentId) (or .Values.management.token .Values.management.existingSecret.name) (not (hasKey $values {id:?})) -}}}}{{{{- fail {message:?} -}}}}"#, id=input.id, message=format!("Stack input '{}' is required", input.id)));
+        }
+        template.push_str("{{- end -}}\n");
+    }
+    template.push_str("{{- toJson $values -}}\n{{- end -}}\n");
+    Ok(template)
 }
 
 fn helpers_tpl() -> String {
@@ -5676,7 +5742,7 @@ fn secret_tpl() -> String {
       {{- $currentInputs = (index $existing.data "input-values.json" | b64dec) -}}
     {{- end -}}
   {{- end -}}
-  {{- if ne $currentInputs (toJson .Values.inputValues) -}}
+  {{- if ne $currentInputs (toJson (include "deployment.inputValues" . | fromJson)) -}}
     {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
   {{- end -}}
 {{- end -}}
@@ -5686,7 +5752,7 @@ fn secret_tpl() -> String {
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector .Values.inputValues }}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector (include "deployment.inputValues" . | fromJson) }}
 {{- $collectorToken := .Values.logCollector.token -}}
 {{- if and $nodeCollector (empty $collectorToken) -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
@@ -5717,8 +5783,8 @@ stringData:
   {{- if $nodeCollector }}
   collector-token: {{ $collectorToken | quote }}
   {{- end }}
-  {{- if .Values.inputValues }}
-  input-values.json: {{ toJson .Values.inputValues | quote }}
+  {{- if (include "deployment.inputValues" . | fromJson) }}
+  input-values.json: {{ toJson (include "deployment.inputValues" . | fromJson) | quote }}
   {{- end }}
 {{- end }}
 "#
@@ -6589,7 +6655,7 @@ spec:
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
-            {{- if .Values.inputValues }}
+            {{- if (include "deployment.inputValues" . | fromJson) }}
             - name: STACK_INPUT_VALUES_FILE
               value: /etc/deployment/input-values/input-values.json
             {{- end }}
@@ -6659,7 +6725,7 @@ spec:
             - name: config
               mountPath: /etc/deployment/config
               readOnly: true
-            {{- if .Values.inputValues }}
+            {{- if (include "deployment.inputValues" . | fromJson) }}
             - name: input-values
               mountPath: /etc/deployment/input-values
               readOnly: true
@@ -6696,7 +6762,7 @@ spec:
         - name: config
           configMap:
             name: {{ include "deployment.fullname" . }}
-        {{- if .Values.inputValues }}
+        {{- if (include "deployment.inputValues" . | fromJson) }}
         - name: input-values
           secret:
             secretName: {{ include "deployment.fullname" . }}
@@ -8859,6 +8925,67 @@ infrastructureExistingSecret: customer-bindings
                         && mount["mountPath"] == "/etc/deployment/secrets/external-bindings.json"
                 })
             }));
+    }
+
+    #[test]
+    fn conditional_inputs_are_validated_and_omitted_by_helm() {
+        let inputs = serde_json::from_value(serde_json::json!([
+            {"id":"bucket", "kind":"string", "required":true, "providedBy":["deployer"], "label":"Bucket", "description":"Snapshot bucket", "when":{"input":"enabled","equals":true}, "validation":{"minLength":3}},
+            {"id":"enabled", "kind":"boolean", "required":true, "providedBy":["deployer"], "label":"Enabled", "description":"Enable snapshots", "default":{"type":"boolean","value":true}}
+        ])).unwrap();
+        let stack = Stack::new("conditional-inputs".into())
+            .inputs(inputs)
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "conditional-inputs".into(),
+            },
+        )
+        .unwrap();
+        crate::test_utils::helm_lint(&chart.files).assert_ok("conditional chart defaults");
+        let base = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        let rendered = crate::test_utils::helm_template(
+            &chart.files,
+            Some(&format!(
+                "{base}inputValues:\n  enabled: false\n  bucket: 42\n"
+            )),
+        );
+        rendered.assert_ok("inactive malformed value is ignored");
+        let documents: Vec<YamlValue> = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| YamlValue::deserialize(document).unwrap())
+            .collect();
+        let values = documents
+            .iter()
+            .find_map(|document| document["stringData"]["input-values.json"].as_str())
+            .expect("registered input values");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(values).unwrap(),
+            serde_json::json!({"enabled":false})
+        );
+        for input_values in [
+            "enabled: true",
+            "enabled: true\n  bucket: ''",
+            "enabled: true\n  bucket: 42",
+        ] {
+            let rendered = crate::test_utils::helm_template(
+                &chart.files,
+                Some(&format!("{base}inputValues:\n  {input_values}\n")),
+            );
+            assert!(
+                !rendered.is_ok(),
+                "invalid active input accepted: {input_values}"
+            );
+            assert!(rendered.stderr.contains("bucket"), "{}", rendered.stderr);
+        }
+        crate::test_utils::helm_template(
+            &chart.files,
+            Some(&format!("{base}inputValues:\n  bucket: snapshots\n")),
+        )
+        .assert_ok("boolean default activates valid input");
     }
 
     #[test]

@@ -761,6 +761,15 @@ fn stack_inputs_for_cloudformation(
                 && !alien_core::is_deployer_secret_input(input)
                 && input.applies_to(platform)
         })
+        .filter(|input| {
+            input.when.as_ref().is_none_or(|condition| {
+                stack
+                    .inputs()
+                    .iter()
+                    .find(|reference| reference.id == condition.input)
+                    .is_some_and(|reference| reference.applies_to_platform(platform))
+            })
+        })
         .cloned()
         .collect()
 }
@@ -884,8 +893,32 @@ fn add_stack_input_parameters(
                 ),
             }));
         }
-        if input.kind == StackInputKind::StringList {
+        if input.kind == StackInputKind::StringList && input.when.is_none() {
             add_list_parameter_condition(template, &parameter_name);
+        }
+        if let Some(when) = &input.when {
+            let controller = stack_input_parameter_name_for_id(&when.input);
+            let active = equals_ref(&controller, &when.equals.to_string());
+            template
+                .conditions
+                .insert(format!("{parameter_name}Applies"), active.clone());
+            if input.required {
+                template.rules.insert(
+                    format!("{parameter_name}Required"),
+                    CfRule {
+                        assertions: vec![CfRuleAssertion {
+                            assertion: CfExpression::or([
+                                CfExpression::not(active),
+                                CfExpression::not(equals_ref(&parameter_name, "")),
+                            ]),
+                            assert_description: format!(
+                                "{} is required when {} is {}.",
+                                input.id, when.input, when.equals
+                            ),
+                        }],
+                    },
+                );
+            }
         }
         template
             .parameters
@@ -935,6 +968,20 @@ fn stack_input_parameter(input: &StackInputDefinition) -> CfParameter {
         ]);
     }
 
+    if input.when.is_some() {
+        // CloudFormation applies parameter constraints before Rules, even to
+        // inactive inputs. The registration endpoint validates active values.
+        parameter.parameter_type = "String".into();
+        parameter
+            .default
+            .get_or_insert_with(|| CfExpression::from(""));
+        parameter.allowed_values = None;
+        parameter.allowed_pattern = None;
+        parameter.min_length = None;
+        parameter.max_length = None;
+        parameter.min_value = None;
+        parameter.max_value = None;
+    }
     parameter
 }
 
@@ -958,14 +1005,29 @@ fn stack_input_default_expression(default: &StackInputDefaultValue) -> CfExpress
 
 fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpression {
     CfExpression::object(inputs.iter().map(|input| {
-        (
-            input.id.clone(),
-            if input.kind == StackInputKind::StringList {
-                list_parameter_value(&stack_input_parameter_name(input))
+        let parameter = stack_input_parameter_name(input);
+        let value = if input.kind == StackInputKind::StringList {
+            if input.when.is_none() {
+                list_parameter_value(&parameter)
             } else {
-                CfExpression::ref_(stack_input_parameter_name(input))
-            },
-        )
+                CfExpression::object([(
+                    "Fn::Split",
+                    CfExpression::list([CfExpression::from(","), CfExpression::ref_(&parameter)]),
+                )])
+            }
+        } else {
+            CfExpression::ref_(&parameter)
+        };
+        let value = if input.when.is_some() {
+            CfExpression::if_(
+                format!("{parameter}Applies"),
+                value,
+                CfExpression::no_value(),
+            )
+        } else {
+            value
+        };
+        (input.id.clone(), value)
     }))
 }
 

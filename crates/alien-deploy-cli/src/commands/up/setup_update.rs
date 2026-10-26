@@ -3,8 +3,8 @@
 use super::{
     collect_deployer_input_values, create_manager_client, create_manager_http_client,
     deployment_info_url, load_public_endpoints, load_stack_settings, push_initial_setup_targeted,
-    resolve_base_url, resolve_token, stack_input_matches_context, DeployConfigFile,
-    DeploymentInfoSetupConfig, SetupRunOutcome, UpArgs,
+    resolve_base_url, resolve_token, DeployConfigFile, DeploymentInfoSetupConfig, SetupRunOutcome,
+    UpArgs,
 };
 use crate::{
     error::{ErrorData, Result},
@@ -185,7 +185,7 @@ fn explicit_input_values(
         .and_then(|config| config.inputs.clone())
         .unwrap_or_default()
         .into_iter()
-        .filter(|input| stack_input_matches_context(input, Platform::Machines))
+        .filter(|input| input.applies_to_platform(Platform::Machines))
         .collect::<Vec<_>>();
     if inputs.is_empty() {
         return Err(invalid_target(
@@ -196,8 +196,15 @@ fn explicit_input_values(
     // not prompted for again or replaced by release defaults.
     for input in &mut inputs {
         input.required = false;
+        if let Some(value) = setup_config
+            .and_then(|config| config.values.get(&input.id))
+            .and_then(Value::as_bool)
+        {
+            input.default = Some(alien_core::StackInputDefaultValue::Boolean(value));
+        }
     }
     collect_deployer_input_values(
+        Platform::Machines,
         &inputs,
         &args.input_values,
         &args.secret_input_values,
@@ -636,6 +643,29 @@ mod tests {
             StackInputDefinition::deployer_boolean("archiveEnabled", "Archive", "Enable archive", None),
             StackInputDefinition::deployer_boolean("alreadyConfigured", "Existing choice", "Keep prior answer", None)
         ]})
+    }
+
+    #[test]
+    fn conditional_patch_uses_stored_toggle_and_explicit_override() {
+        let definitions: DeploymentInfoSetupConfig = serde_json::from_value(json!({
+            "inputs": [
+                {"id":"bucket", "kind":"integer", "providedBy":["deployer"], "required":true, "label":"Bucket", "description":"Bucket count", "when":{"input":"enabled","equals":true}},
+                {"id":"enabled", "kind":"boolean", "providedBy":["deployer"], "required":true, "label":"Enabled", "description":"Enable snapshots", "default":{"type":"boolean","value":false}}
+            ],
+            "values": {"enabled": true}
+        })).unwrap();
+        let args = UpArgs::parse_from(["democtl", "--input", "bucket=3"]);
+        let values = explicit_input_values(&args, None, Some(&definitions)).unwrap();
+        assert_eq!(values, HashMap::from([("bucket".into(), json!(3))]));
+        let args = UpArgs::parse_from([
+            "democtl",
+            "--input",
+            "enabled=false",
+            "--input",
+            "bucket=invalid",
+        ]);
+        let values = explicit_input_values(&args, None, Some(&definitions)).unwrap();
+        assert_eq!(values, HashMap::from([("enabled".into(), json!(false))]));
     }
 
     #[test]

@@ -3669,7 +3669,7 @@ apiKey = "secret-value"
             stack_input("region", StackInputKind::String, true),
             stack_input("apiKey", StackInputKind::Secret, true),
         ];
-        let error = collect_deployer_input_values(&inputs, &[], &[], Some(&config))
+        let error = collect_deployer_input_values(Platform::Aws, &inputs, &[], &[], Some(&config))
             .expect_err("a deployer secret value in the config is refused");
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert!(
@@ -3684,7 +3684,7 @@ apiKey = "secret-value"
             secret_inputs: None,
             ..config
         };
-        let values = collect_deployer_input_values(&inputs, &[], &[], Some(&config))
+        let values = collect_deployer_input_values(Platform::Aws, &inputs, &[], &[], Some(&config))
             .expect("input values should parse");
         assert_eq!(
             values,
@@ -3699,9 +3699,14 @@ apiKey = "secret-value"
             (vec!["apiKey=secret-value".to_string()], vec![]),
             (vec![], vec!["apiKey=secret-value".to_string()]),
         ] {
-            let error =
-                collect_deployer_input_values(&inputs, &input_values, &secret_input_values, None)
-                    .expect_err("a deployer secret value is refused");
+            let error = collect_deployer_input_values(
+                Platform::Aws,
+                &inputs,
+                &input_values,
+                &secret_input_values,
+                None,
+            )
+            .expect_err("a deployer secret value is refused");
             assert!(
                 error.message.contains("'apiKey' is a deployer secret"),
                 "{}",
@@ -3709,9 +3714,14 @@ apiKey = "secret-value"
             );
         }
         // Even without stack metadata to recognise the input.
-        let error =
-            collect_deployer_input_values(&[], &[], &["apiKey=secret-value".to_string()], None)
-                .expect_err("a secret value is refused without metadata");
+        let error = collect_deployer_input_values(
+            Platform::Aws,
+            &[],
+            &[],
+            &["apiKey=secret-value".to_string()],
+            None,
+        )
+        .expect_err("a secret value is refused without metadata");
         assert!(
             error.message.contains("deployer secret"),
             "{}",
@@ -3744,6 +3754,7 @@ region = "old"
             .expect("config should load")
             .expect("config should exist");
         let values = collect_deployer_input_values(
+            Platform::Aws,
             &[stack_input("region", StackInputKind::String, true)],
             &args.input_values,
             &args.secret_input_values,
@@ -3755,8 +3766,52 @@ region = "old"
     }
 
     #[test]
+    fn conditional_inputs_are_collected_after_their_toggle() {
+        let mut bucket = stack_input("bucket", StackInputKind::Integer, true);
+        bucket.when = Some(alien_core::StackInputCondition {
+            input: "enabled".into(),
+            equals: true,
+        });
+        let toggle = StackInputDefinition::deployer_boolean(
+            "enabled",
+            "Enabled",
+            "Enable snapshots",
+            Some(false),
+        );
+        let inputs = [bucket, toggle];
+        let values = collect_deployer_input_values(
+            Platform::Aws,
+            &inputs,
+            &["bucket=invalid".into()],
+            &[],
+            None,
+        )
+        .unwrap();
+        assert!(values.is_empty());
+        let error = collect_deployer_input_values(
+            Platform::Aws,
+            &inputs,
+            &["enabled=true".into()],
+            &[],
+            None,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("bucket"));
+        let values = collect_deployer_input_values(
+            Platform::Aws,
+            &inputs,
+            &["enabled=true".into(), "bucket=42".into()],
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(values["bucket"], serde_json::json!(42));
+    }
+
+    #[test]
     fn required_stack_inputs_fail_non_interactively() {
         let error = collect_deployer_input_values(
+            Platform::Aws,
             &[stack_input("region", StackInputKind::String, true)],
             &[],
             &[],
@@ -3921,6 +3976,7 @@ type = "create"
     #[test]
     fn stack_input_values_are_typed() {
         let values = collect_deployer_input_values(
+            Platform::Aws,
             &[
                 stack_input("replicas", StackInputKind::Integer, true),
                 stack_input("enabled", StackInputKind::Boolean, true),
@@ -4054,6 +4110,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         }
     };
     let stack_input_values = collect_deployer_input_values(
+        platform,
         &deployer_inputs,
         &args.input_values,
         &args.secret_input_values,
@@ -5679,6 +5736,8 @@ fn select_setup_item(
 #[serde(rename_all = "camelCase")]
 struct DeploymentInfoSetupConfig {
     inputs: Option<Vec<StackInputDefinition>>,
+    #[serde(default)]
+    values: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5782,7 +5841,7 @@ fn deployer_inputs_from_info(
         .and_then(|setup_config| setup_config.inputs.clone())
         .unwrap_or_default()
         .into_iter()
-        .filter(|input| stack_input_matches_context(input, platform))
+        .filter(|input| input.applies_to_platform(platform))
         .collect()
 }
 
@@ -5818,50 +5877,44 @@ fn validate_deployment_readiness(info: &DeploymentInfoResponse, platform: Platfo
     Ok(())
 }
 
-fn stack_input_matches_context(input: &StackInputDefinition, platform: Platform) -> bool {
-    if !input.provided_by.contains(&StackInputProvider::Deployer) {
-        return false;
-    }
-    if let Some(platforms) = &input.platforms {
-        if !platforms.contains(&platform) {
-            return false;
-        }
-    }
-    true
-}
-
 fn collect_deployer_input_values(
+    platform: Platform,
     inputs: &[StackInputDefinition],
     input_values: &[String],
     secret_input_values: &[String],
     deploy_config: Option<&DeployConfigFile>,
 ) -> Result<HashMap<String, serde_json::Value>> {
-    // No deployer secret value may reach the platform, so refuse every way of
-    // passing one before reading anything else.
-    let config_secret_ids = deploy_config
-        .and_then(|config| config.secret_inputs.as_ref())
-        .into_iter()
-        .flat_map(|secret_inputs| secret_inputs.keys().cloned());
-    let flag_secret_ids = secret_input_values
-        .iter()
-        .map(|input| parse_stack_input_arg(input, "--secret-input").map(|(id, _)| id))
-        .collect::<Result<Vec<_>>>()?;
-    if let Some(id) = config_secret_ids.chain(flag_secret_ids).next() {
-        return Err(deployer_secret_value_error(inputs, &id));
-    }
-
     let mut raw_values = HashMap::<String, String>::new();
-    if let Some(config_inputs) = deploy_config.and_then(|config| config.inputs.as_ref()) {
-        for (id, value) in config_inputs {
+    if let Some(config) = deploy_config {
+        for (id, value) in config
+            .inputs
+            .iter()
+            .chain(config.secret_inputs.iter())
+            .flat_map(|values| values.iter())
+        {
             raw_values.insert(id.clone(), value.clone());
         }
     }
-    for input in input_values {
-        let (id, value) = parse_stack_input_arg(input, "--input")?;
+    for (input, flag) in input_values.iter().map(|value| (value, "--input")).chain(
+        secret_input_values
+            .iter()
+            .map(|value| (value, "--secret-input")),
+    ) {
+        let (id, value) = parse_stack_input_arg(input, flag)?;
         raw_values.insert(id, value);
     }
 
     if inputs.is_empty() {
+        let config_secret = deploy_config
+            .and_then(|config| config.secret_inputs.as_ref())
+            .and_then(|values| values.keys().next());
+        if let Some(id) = config_secret {
+            return Err(deployer_secret_value_error(inputs, id));
+        }
+        if let Some(arg) = secret_input_values.first() {
+            let (id, _) = parse_stack_input_arg(arg, "--secret-input")?;
+            return Err(deployer_secret_value_error(inputs, &id));
+        }
         return Ok(raw_values
             .into_iter()
             .map(|(id, value)| (id, serde_json::Value::String(value)))
@@ -5869,48 +5922,58 @@ fn collect_deployer_input_values(
     }
 
     for id in raw_values.keys() {
-        match inputs.iter().find(|input| input.id == *id) {
-            None => {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "input".to_string(),
-                    message: format!("Unknown or unavailable deployer stack input '{id}'."),
-                }));
-            }
-            Some(input) if is_deployer_secret_input(input) => {
-                return Err(deployer_secret_value_error(inputs, id));
-            }
-            Some(_) => {}
-        }
-    }
-
-    // Deployer secrets are never asked for: the deployment reports them
-    // missing until they are written into the secret store.
-    for input in inputs
-        .iter()
-        .filter(|input| input.required && !is_deployer_secret_input(input))
-    {
-        if raw_values.contains_key(&input.id) {
-            continue;
-        }
-        if !can_prompt() {
+        if !inputs.iter().any(|input| {
+            input.id == *id && input.provided_by.contains(&StackInputProvider::Deployer)
+        }) {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "input".to_string(),
-                message: format!(
-                    "Missing deployer input: {}. Pass --input {}=... or add [inputs] to deployment.toml.",
-                    input.label, input.id,
-                ),
+                message: format!("Unknown or unavailable deployer stack input '{id}'."),
             }));
         }
-        let value = prompt_input_value(input)?;
-        raw_values.insert(input.id.clone(), value);
     }
 
+    // Resolve and ask unconditional inputs first, regardless of declaration order.
+    let mut ordered: Vec<_> = inputs
+        .iter()
+        .filter(|input| input.provided_by.contains(&StackInputProvider::Deployer))
+        .collect();
+    ordered.sort_by_key(|input| input.when.is_some());
     let mut values = HashMap::new();
-    for input in inputs {
-        let Some(raw_value) = raw_values.get(&input.id) else {
+    for input in ordered {
+        if !input.applies(inputs, &values, platform) {
             continue;
-        };
-        values.insert(input.id.clone(), parse_stack_input_value(input, raw_value)?);
+        }
+        let supplied_as_secret = deploy_config
+            .and_then(|config| config.secret_inputs.as_ref())
+            .is_some_and(|values| values.contains_key(&input.id))
+            || secret_input_values.iter().any(|arg| {
+                arg.split_once('=')
+                    .is_some_and(|(id, _)| id.trim() == input.id)
+            });
+        if supplied_as_secret {
+            return Err(deployer_secret_value_error(inputs, &input.id));
+        }
+        if is_deployer_secret_input(input) {
+            if raw_values.contains_key(&input.id) {
+                return Err(deployer_secret_value_error(inputs, &input.id));
+            }
+            continue;
+        }
+        if !raw_values.contains_key(&input.id) && input.required && input.default.is_none() {
+            if !can_prompt() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "input".to_string(),
+                    message: format!(
+                        "Missing deployer input: {}. Pass --input {}=... or add [inputs] to deployment.toml.",
+                        input.label, input.id,
+                    ),
+                }));
+            }
+            raw_values.insert(input.id.clone(), prompt_input_value(input)?);
+        }
+        if let Some(raw_value) = raw_values.get(&input.id) {
+            values.insert(input.id.clone(), parse_stack_input_value(input, raw_value)?);
+        }
     }
     Ok(values)
 }

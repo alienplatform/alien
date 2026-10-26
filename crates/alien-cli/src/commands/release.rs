@@ -1856,7 +1856,7 @@ fn onboard_command_hint(config: &ReleaseConfig) -> String {
     let required_inputs = config
         .onboarding_inputs
         .iter()
-        .filter(|input| input.required)
+        .filter(|input| input.required && input.when.is_none())
         .filter(|input| input.provided_by.contains(&StackInputProvider::Developer))
         .filter(|input| !is_deployer_secret_input(input))
         .filter(|input| input_applies_to_any_platform(input, &selected_platforms))

@@ -58,3 +58,38 @@ CloudFormation exposes declared choices as parameters such as `ContainerApiCpu`
 and `ContainerApiMemory`. Terraform and API deployments carry selections in
 deployment settings. The deployment portal exposes the declared ranges and
 replans machine choices when allocations change.
+
+### Conditional inputs
+
+Use `when` for inputs that only apply while another boolean input has a given value:
+
+```ts
+const io = alien.inputs({
+  snapshotsEnabled: alien.boolean({
+    providedBy: "deployer", required: true, default: true,
+    label: "Snapshots enabled", description: "Keep periodic snapshots.",
+  }),
+  snapshotBucket: alien.string({
+    providedBy: "deployer", required: true,
+    label: "Snapshot bucket", description: "Bucket for snapshots.",
+    when: { input: "snapshotsEnabled", equals: true },
+    env: "SNAPSHOT_BUCKET",
+  }),
+})
+```
+
+The condition reads the provided boolean, otherwise its default. Inactive inputs
+are not asked for, required, validated or mapped into environment variables.
+Provided values for inactive inputs are ignored, so callers can submit full forms.
+When active, the input's normal requiredness and validation apply.
+
+The referenced input must be a boolean in the same stack and must not have its own
+`when`. Self-references, chains and cycles are rejected. A conditional boolean
+cannot gate a resource with `.enabled()`. If either input excludes the deployment
+platform, the dependent input does not apply. An unanswered reference does not
+match either boolean value, including `equals: false`.
+
+Terraform modules using conditional inputs require Terraform 1.9 or newer.
+CloudFormation uses Rules for conditional requiredness; other constraints are
+validated during registration because CloudFormation parameter constraints apply
+even when an input is inactive.

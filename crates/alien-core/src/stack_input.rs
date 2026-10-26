@@ -332,11 +332,12 @@ pub fn resolve_stack_input_environment_variables(
     values: &std::collections::HashMap<String, serde_json::Value>,
     platform: Platform,
 ) -> crate::Result<Vec<crate::EnvironmentVariable>> {
+    let values = crate::resolve_stack_input_values(inputs, values, platform)?;
     let mut variables: Vec<crate::EnvironmentVariable> = Vec::new();
     for input in inputs
         .iter()
         .filter(|input| !input.env.is_empty())
-        .filter(|input| input.applies(inputs, values, platform))
+        .filter(|input| input.applies(inputs, &values, platform))
     {
         let value = match values.get(&input.id) {
             Some(serde_json::Value::Null) | None => match &input.default {

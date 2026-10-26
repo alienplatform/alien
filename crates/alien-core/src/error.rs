@@ -7,6 +7,16 @@ use crate::{Platform, ResourceType};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// An applicable stack input is missing or violates its declared constraints.
+    #[error(
+        code = "STACK_INPUT_INVALID",
+        message = "Stack input '{input_id}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    StackInputInvalid { input_id: String, reason: String },
+
     /// Federation metadata cannot safely identify the intended trust or target.
     #[error(
         code = "GCP_FEDERATION_INVALID",

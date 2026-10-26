@@ -2911,6 +2911,12 @@ pub(crate) async fn build_pull_target(
         .user_environment_variables
         .clone()
         .unwrap_or_default();
+    env_vars.retain(|variable| {
+        !stack.inputs.iter().any(|input| {
+            !input.applies(&stack.inputs, &deployment.input_values, deployment.platform)
+                && input.env.iter().any(|mapping| mapping.name == variable.name)
+        })
+    });
     // Inputs mapped to environment variables resolve against the
     // target release, so a release that adds a mapped input takes
     // effect without re-onboarding. Variables the deployment already
@@ -2927,6 +2933,9 @@ pub(crate) async fn build_pull_target(
                     .iter()
                     .any(|existing| existing.name == mapping.name)
             });
+            if input.env.is_empty() {
+                input.required = false;
+            }
             input
         })
         .collect();

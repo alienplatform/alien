@@ -38,6 +38,9 @@ pub fn generate_missing_input_values(
     values: &mut HashMap<String, serde_json::Value>,
 ) {
     for (input, generate) in generated_inputs(inputs, platform) {
+        if !input.applies(inputs, values, platform) {
+            continue;
+        }
         values
             .entry(input.id.clone())
             .or_insert_with(|| serde_json::Value::String(generate_value(generate)));

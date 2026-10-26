@@ -23,18 +23,18 @@ use crate::{
     target::TerraformTarget,
 };
 use alien_core::{
+    import::{setup_import_format_version_for_platform, EmitContext},
     ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
     StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
     TelemetryMode, UpdatesMode,
-    import::{EmitContext, setup_import_format_version_for_platform},
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use hcl::{
-    Identifier,
     expr::Expression,
     structure::{Block, BlockLabel, Body, Structure},
+    Identifier,
 };
 use indexmap::IndexMap;
 use std::collections::HashSet;
@@ -558,6 +558,7 @@ fn generate_terraform_module_internal(
                         .downcast_ref::<alien_core::Storage>()
                         .is_some_and(|storage| !storage.lifecycle_rules.is_empty())
                 }),
+            stack_inputs.iter().any(|input| input.when.is_some()),
         ))?,
     );
     files.insert(
@@ -1695,6 +1696,7 @@ fn versions_body(
     include_ephemeral: bool,
     include_removed: bool,
     include_azure_lifecycle: bool,
+    include_input_conditions: bool,
 ) -> Body {
     // Conditional imports need a patched OpenTofu reader (1.11.0 rejects
     // variables in import.for_each). Keep one minimum for both setup CLIs.
@@ -1702,7 +1704,7 @@ fn versions_body(
         ">= 1.11.1"
     } else if include_ephemeral {
         ">= 1.11.0"
-    } else if matches!(target, TerraformTarget::Eks) {
+    } else if include_input_conditions || matches!(target, TerraformTarget::Eks) {
         ">= 1.9.0"
     } else if include_removed {
         ">= 1.7.0"
@@ -1822,6 +1824,15 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
                 // store, so no variable (and no state) ever holds them.
                 && !alien_core::is_deployer_secret_input(input)
                 && input.applies_to(platform)
+        })
+        .filter(|input| {
+            input.when.as_ref().is_none_or(|condition| {
+                stack
+                    .inputs()
+                    .iter()
+                    .find(|reference| reference.id == condition.input)
+                    .is_some_and(|reference| reference.applies_to_platform(platform))
+            })
         })
         .cloned()
         .collect()
@@ -3099,7 +3110,14 @@ fn optional_validated_sensitive_string_variable_block(
 fn stack_input_variable_block(input: &StackInputDefinition) -> Block {
     let variable_name = terraform_stack_input_variable_name(input);
     let mut body: Vec<Structure> = vec![
-        attr("type", stack_input_terraform_type(input)),
+        attr(
+            "type",
+            if input.when.is_some() {
+                expr::raw("any")
+            } else {
+                stack_input_terraform_type(input)
+            },
+        ),
         attr(
             "description",
             // The label is a heading, not a sentence, so give it a stop of its
@@ -3109,14 +3127,52 @@ fn stack_input_variable_block(input: &StackInputDefinition) -> Block {
     ];
     if let Some(default) = input.default.as_ref().map(stack_input_default_expression) {
         body.push(attr("default", default));
-    } else if !input.required {
+    } else if !input.required || input.when.is_some() {
         body.push(attr("default", expr::raw("null")));
         body.push(attr("nullable", Expression::Bool(true)));
     }
     if input.kind == StackInputKind::Secret {
         body.push(attr("sensitive", Expression::Bool(true)));
     }
-    for condition in stack_input_validation_conditions(input, &variable_name) {
+    let mut conditions = stack_input_validation_conditions(input, &variable_name);
+    if let Some(when) = &input.when {
+        let active = format!(
+            "var.{} == {}",
+            stack_input_variable_name(&when.input),
+            when.equals
+        );
+        let variable = format!("var.{variable_name}");
+        let valid_type = match input.kind {
+            StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => {
+                format!("can(tostring({variable}))")
+            }
+            StackInputKind::Number | StackInputKind::Integer => {
+                format!("can(tonumber({variable}))")
+            }
+            StackInputKind::Boolean => format!("can(tobool({variable}))"),
+            StackInputKind::StringList => format!("can(tolist({variable}))"),
+        };
+        conditions.push(valid_type);
+        conditions = conditions
+            .into_iter()
+            .map(|condition| {
+                format!("{active} ? (var.{variable_name} == null ? true : try(({condition}), false)) : true")
+            })
+            .collect();
+        if input.required {
+            let present = match input.kind {
+                StackInputKind::String
+                | StackInputKind::Secret
+                | StackInputKind::Enum
+                | StackInputKind::StringList => {
+                    format!("var.{variable_name} == null ? false : length(var.{variable_name}) > 0")
+                }
+                _ => format!("var.{variable_name} != null"),
+            };
+            conditions.push(format!("{active} ? ({present}) : true"));
+        }
+    }
+    for condition in conditions {
         body.push(nested(block(
             "validation",
             [
@@ -4086,7 +4142,16 @@ fn terraform_input_values_source(inputs: &[StackInputDefinition]) -> Option<Stri
     for input in inputs {
         let variable = format!("var.{}", terraform_stack_input_variable_name(input));
         let entry = format!("{} = {variable}", input.id);
-        if input.required || input.default.is_some() {
+        if let Some(when) = &input.when {
+            let active = format!(
+                "var.{} == {}",
+                stack_input_variable_name(&when.input),
+                when.equals
+            );
+            optional_maps.push(format!(
+                "({active}) && {variable} != null ? {{ {entry} }} : {{}}"
+            ));
+        } else if input.required || input.default.is_some() {
             required_entries.push(entry);
         } else {
             optional_maps.push(format!("{variable} == null ? {{}} : {{ {entry} }}"));
@@ -5149,6 +5214,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    false,
                 ))
                 .expect("versions should render"),
             ),
@@ -5353,6 +5419,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             false,
             false,
             false,
+            false,
         ))
         .expect("versions render");
         assert!(versions.contains("example_app ="));
@@ -5371,10 +5438,8 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         assert!(registration_body.contains(
             "management_config = jsondecode(jsonencode(local.deployment_management_config))"
         ));
-        assert!(
-            registration_body
-                .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))")
-        );
+        assert!(registration_body
+            .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
 
         let outputs = render_body(outputs_body(
             TerraformTarget::Aws,
@@ -5402,18 +5467,14 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
     fn product_lifecycle_configures_kubernetes_provider_without_stack_manifests() {
         let module = product_module(false);
 
-        assert!(
-            module
-                .get("versions.tf")
-                .expect("versions should render")
-                .contains("kubernetes = {")
-        );
-        assert!(
-            module
-                .get("providers.tf")
-                .expect("providers should render")
-                .contains("provider \"kubernetes\"")
-        );
+        assert!(module
+            .get("versions.tf")
+            .expect("versions should render")
+            .contains("kubernetes = {"));
+        assert!(module
+            .get("providers.tf")
+            .expect("providers should render")
+            .contains("provider \"kubernetes\""));
     }
 
     #[test]
@@ -5449,11 +5510,8 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
                 .expect("helm should render"),
         );
 
-        assert!(
-            helm.contains(
-                "count = var.helm_install_enabled && var.remote_operator_enabled ? 1 : 0"
-            )
-        );
+        assert!(helm
+            .contains("count = var.helm_install_enabled && var.remote_operator_enabled ? 1 : 0"));
         assert!(helm.contains(
             "\"alien.dev/sync-token-revision\" = tostring(var.remote_operator_sync_token_revision)"
         ));
@@ -5468,18 +5526,14 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         let required_collector = product_module(true);
         let requirement = "remote_operator_collector_token is required while this product chart's Remote Operator log collector is enabled.";
 
-        assert!(
-            !optional_collector
-                .get("helm.tf")
-                .expect("helm should render")
-                .contains(requirement)
-        );
-        assert!(
-            required_collector
-                .get("helm.tf")
-                .expect("helm should render")
-                .contains(requirement)
-        );
+        assert!(!optional_collector
+            .get("helm.tf")
+            .expect("helm should render")
+            .contains(requirement));
+        assert!(required_collector
+            .get("helm.tf")
+            .expect("helm should render")
+            .contains(requirement));
     }
 
     #[test]
@@ -5588,12 +5642,10 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         let module = ModuleFiles {
             files: IndexMap::from([("key.tf".to_string(), "variable \"unterminated".to_string())]),
         };
-        assert!(
-            module
-                .variable_names()
-                .unwrap_err()
-                .message
-                .contains("key.tf")
-        );
+        assert!(module
+            .variable_names()
+            .unwrap_err()
+            .message
+            .contains("key.tf"));
     }
 }
