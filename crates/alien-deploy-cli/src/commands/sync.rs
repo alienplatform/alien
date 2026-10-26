@@ -1829,6 +1829,35 @@ async fn install_pending(
         &site.name,
     )
     .await?;
+    // Helm has installed the Operator even if rollout later fails. Keep the
+    // record now so reports, signed deletion, and rollback remain available.
+    // Save signed originals: rollback verifies them again because the folder
+    // leaves the site.
+    let keep = folder
+        .join(TO_SITE)
+        .join(INSTALLED)
+        .join(format!("{}-{}", manifest.sequence, manifest.release_id));
+    std::fs::create_dir_all(keep.join(airgap::CHART_DIR))
+        .into_alien_error()
+        .context(config_error("saving the installed update"))?;
+    for file in [
+        airgap::MANIFEST_FILE,
+        airgap::SIGNATURE_FILE,
+        airgap::TARGET_FILE,
+        manifest.chart.as_str(),
+    ] {
+        std::fs::copy(work.path().join(file), keep.join(file))
+            .into_alien_error()
+            .context(config_error(format!("saving the installed {file}")))?;
+    }
+    std::fs::write(
+        keep.join("install.json"),
+        serde_json::to_vec_pretty(&record)
+            .into_alien_error()
+            .context(config_error("encoding install.json"))?,
+    )
+    .into_alien_error()
+    .context(config_error("writing install.json"))?;
     let target_path = work.path().join("installed-target.json");
     std::fs::write(
         &target_path,
@@ -1860,40 +1889,12 @@ async fn install_pending(
     )
     .await
     {
-        // Failed first installs have no installed-bundle record yet.
-        // Carry their state and logs back without marking the update installed.
+        // Carry the failed rollout and its logs back; the install record remains
+        // available for a later retry or signed deletion.
         write_report_for_install(folder, site, settings, &record).await?;
         return Err(error);
     }
 
-    // Keep what a rollback needs, as signed: the manifest and its
-    // signature, the target and the chart. A rollback verifies them again
-    // before installing anything, since the folder leaves the site.
-    let keep = folder
-        .join(TO_SITE)
-        .join(INSTALLED)
-        .join(format!("{}-{}", manifest.sequence, manifest.release_id));
-    std::fs::create_dir_all(keep.join(airgap::CHART_DIR))
-        .into_alien_error()
-        .context(config_error("saving the installed update"))?;
-    for file in [
-        airgap::MANIFEST_FILE,
-        airgap::SIGNATURE_FILE,
-        airgap::TARGET_FILE,
-        manifest.chart.as_str(),
-    ] {
-        std::fs::copy(work.path().join(file), keep.join(file))
-            .into_alien_error()
-            .context(config_error(format!("saving the installed {file}")))?;
-    }
-    std::fs::write(
-        keep.join("install.json"),
-        serde_json::to_vec_pretty(&record)
-            .into_alien_error()
-            .context(config_error("encoding install.json"))?,
-    )
-    .into_alien_error()
-    .context(config_error("writing install.json"))?;
     for (_, old) in installed_bundles(folder)?.into_iter().skip(KEEP_INSTALLED) {
         std::fs::remove_dir_all(old)
             .into_alien_error()
@@ -2847,6 +2848,62 @@ mod tests {
     use std::os::unix::fs::MetadataExt as _;
 
     use super::*;
+
+    /// Supply a signed first-install bundle and site arguments for a disposable
+    /// cluster whose workload cannot finish rollout. No successful install is needed.
+    #[tokio::test]
+    #[ignore = "requires ALIEN_SYNC_TEST_ARGS with a signed failing install and explicit context"]
+    async fn failed_first_rollout_keeps_verified_install_for_deletion() {
+        let arguments: Vec<String> = serde_json::from_str(
+            &std::env::var("ALIEN_SYNC_TEST_ARGS").expect("site arguments as JSON"),
+        )
+        .unwrap();
+        let args =
+            SyncArgs::try_parse_from(std::iter::once("sync".to_string()).chain(arguments)).unwrap();
+        assert!(
+            args.kube_context.is_some(),
+            "an explicit disposable context is required"
+        );
+        let (folder, mut site) = open_folder(&args).await.unwrap();
+        assert!(
+            installed_bundles(&folder).unwrap().is_empty(),
+            "first install only"
+        );
+        let mut machine = MachineState::default();
+        let settings = site_side_settings(&args, &mut machine).unwrap().unwrap();
+        let error = install_pending(&folder, &mut site, &settings, &args)
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("rolling out")
+                || message.contains("rollout")
+                || message.contains("required Secrets"),
+            "must reach rollout: {message}"
+        );
+        let installs = installed_bundles(&folder).unwrap();
+        assert_eq!(
+            installs.len(),
+            1,
+            "failed rollout must remain uninstallable"
+        );
+        let record = read_installed(&installs[0].1).unwrap();
+        let verified =
+            airgap::verify_installed(&installs[0].1, args.trusted_key.as_deref().unwrap())
+                .await
+                .unwrap();
+        assert_eq!(record.stack_id, verified.stack_id);
+        assert_eq!(record.release_id, verified.release_id);
+        assert_eq!(verified.deployment_id, site.deployment_id);
+        let reports = by_sequence(&folder.join(FROM_SITE), Some(REPORT_EXTENSION)).unwrap();
+        assert!(
+            !reports.is_empty(),
+            "failed rollout report must be carried back"
+        );
+        let report: SiteReport =
+            serde_json::from_slice(&std::fs::read(&reports[0].1).unwrap()).unwrap();
+        assert_ne!(report.state["status"], "running");
+    }
 
     /// Run with ALIEN_SYNC_TEST_CONTEXT pointing at a disposable Kind cluster.
     #[tokio::test]
