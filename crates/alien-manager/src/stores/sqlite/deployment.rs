@@ -1821,14 +1821,19 @@ impl DeploymentStore for SqliteDeploymentStore {
         }
         // A late retention checkpoint cannot complete a newer erase request,
         // including after an expired setup lease reopens delete-pending.
-        if data.state.status == DeploymentStatus::Retained
-            && stored_deletion_policy == alien_core::DeletionPolicy::Erase
+        if matches!(
+            data.state.status,
+            DeploymentStatus::RetentionRequired | DeploymentStatus::Retained
+        ) && stored_deletion_policy == alien_core::DeletionPolicy::Erase
         {
             return Err(ErrorData::bad_request(
                 "Retention cannot complete an erase request; reload before retrying",
             )
             .into_generic());
         }
+        // A straggler TeardownRequired from expired setup is indistinguishable
+        // from a lease-free pull handoff. Keep erase intent so the next setup
+        // teardown erases; do not fence that reported status on lease ownership.
         // A delete can change policy while a runtime step holds the lease.
         // Save its completed work, but only the stored policy authorizes cleanup.
         if data.state.runtime_metadata.is_some()

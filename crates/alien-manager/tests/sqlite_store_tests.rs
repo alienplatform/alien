@@ -3211,6 +3211,24 @@ async fn erase_expires_stale_setup_leases_and_survives_late_checkpoints() {
         "teardown-failed",
     ] {
         let dep = create_test_deployment(&store, &group, status, Platform::Aws).await;
+        let mut stack = StackState::new(Platform::Aws);
+        let mut resource = alien_core::StackResourceState::new_pending(
+            "storage".to_string(),
+            alien_core::Resource::new(alien_core::Storage::new("data".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        resource.status = alien_core::ResourceStatus::Running;
+        stack.resources.insert("data".into(), resource);
+        db.conn()
+            .lock()
+            .await
+            .execute(
+                "UPDATE deployments SET stack_state = ? WHERE id = ?",
+                (serde_json::to_string(&stack).unwrap(), dep.id.clone()),
+            )
+            .await
+            .unwrap();
         store.set_delete_pending(&subject, &dep.id).await.unwrap();
         db.conn().lock().await.execute(
             "UPDATE deployments SET status = ?, locked_by = 'dead-setup', locked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
@@ -3251,10 +3269,33 @@ async fn erase_expires_stale_setup_leases_and_survives_late_checkpoints() {
         let mut late = test_reconcile_data(&dep.id, "dead-setup", DeploymentStatus::Retained, None);
         late.state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
         late.state.runtime_metadata = Some(RuntimeMetadata::default());
-        assert!(
-            store.reconcile(&subject, late.clone()).await.is_err(),
-            "expired setup session cannot complete retention over erase"
-        );
+        late.state.stack_state = Some(StackState::new(Platform::Aws));
+        for reported_status in [
+            DeploymentStatus::Retained,
+            DeploymentStatus::RetentionRequired,
+        ] {
+            late.state.status = reported_status;
+            let error = store
+                .reconcile(&subject, late.clone())
+                .await
+                .err()
+                .expect("expired setup session cannot report retention over erase");
+            assert_eq!(error.http_status_code, Some(400));
+            let unchanged = store
+                .get_deployment(&subject, &dep.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(unchanged.status, expected_status);
+            assert_eq!(
+                unchanged.runtime_metadata.unwrap().deletion_policy,
+                alien_core::DeletionPolicy::Erase
+            );
+            assert_eq!(
+                serde_json::to_value(unchanged.stack_state).unwrap(),
+                serde_json::to_value(&stack).unwrap()
+            );
+        }
         if status == "retained" {
             late.state.status = DeploymentStatus::TeardownFailed;
             let error = store
