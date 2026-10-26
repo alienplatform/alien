@@ -915,6 +915,12 @@ fn add_stack_input_parameters(
             }
         }
         if let Some(when) = &input.when {
+            if !input.required && input.kind != StackInputKind::StringList {
+                template.conditions.insert(
+                    format!("Has{parameter_name}"),
+                    CfExpression::not(equals_ref(&parameter_name, "")),
+                );
+            }
             let controller = stack_input_parameter_name_for_id(&when.input);
             let active = equals_ref(&controller, &when.equals.to_string());
             template
@@ -1048,6 +1054,15 @@ fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpressio
                     CfExpression::ref_(&parameter)
                 };
                 let value = if input.when.is_some() {
+                    let value = if !input.required && input.kind != StackInputKind::StringList {
+                        CfExpression::if_(
+                            format!("Has{parameter}"),
+                            value,
+                            CfExpression::no_value(),
+                        )
+                    } else {
+                        value
+                    };
                     CfExpression::if_(
                         format!("{parameter}Applies"),
                         value,

@@ -51,7 +51,8 @@ use alien_manager::stores::sqlite::{
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams,
     CreateImportedDeploymentParams, CreateReleaseParams, CreateTokenParams, CredentialResolver,
-    DeploymentStore, ReconcileData, ReleaseStore, TelemetryBackend, TokenStore, TokenType,
+    DeploymentGroupSetup, DeploymentStore, ReconcileData, ReleaseStore, TelemetryBackend,
+    TokenStore, TokenType,
 };
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,14 @@ async fn make_fixture(seeded_stack: Option<Stack>) -> Fixture {
 }
 
 async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stack>) -> Fixture {
+    make_fixture_with_group_inputs(platform, seeded_stack, HashMap::new()).await
+}
+
+async fn make_fixture_with_group_inputs(
+    platform: Platform,
+    seeded_stack: Option<Stack>,
+    input_values: HashMap<String, serde_json::Value>,
+) -> Fixture {
     // Use a temp directory because turso's WAL mode needs a real file path.
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("test.db");
@@ -105,7 +114,10 @@ async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stac
             CreateDeploymentGroupParams {
                 name: "imported-group".to_string(),
                 max_deployments: 100,
-                setup: Default::default(),
+                setup: DeploymentGroupSetup {
+                    input_values,
+                    ..Default::default()
+                },
             },
         )
         .await
@@ -3566,3 +3578,47 @@ mod protocol;
 
 #[path = "stack_import/reservation.rs"]
 mod reservation;
+
+#[tokio::test]
+async fn import_preserves_answers_controlled_by_group_inputs() {
+    for required in [false, true] {
+        let mut stack = stack_with_storage_and_generated_secret("assets");
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id":"endpoint", "kind":"string", "providedBy":["deployer"], "required":required,
+             "label":"Endpoint", "description":"Service endpoint",
+             "when":{"input":"enabled","equals":true}},
+            {"id":"enabled", "kind":"boolean", "providedBy":["developer","deployer"], "required":true,
+             "label":"Enabled", "description":"Enable service"}
+        ])).unwrap();
+        let fixture = make_fixture_with_group_inputs(
+            Platform::Aws,
+            Some(stack),
+            HashMap::from([("enabled".into(), serde_json::json!(true))]),
+        )
+        .await;
+        let mut body = aws_s3_import_request(
+            "conditional-import",
+            "us-east-1",
+            "assets",
+            "example-imports",
+        );
+        body.input_values
+            .insert("endpoint".into(), serde_json::json!("https://example.test"));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::CREATED, "required={required}: {json:#}");
+        let response: StackImportResponse = serde_json::from_value(json).unwrap();
+        let deployment = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &response.deployment_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            deployment.input_values["endpoint"],
+            serde_json::json!("https://example.test")
+        );
+    }
+}

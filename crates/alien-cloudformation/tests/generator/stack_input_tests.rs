@@ -233,6 +233,19 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
     labels.required = false;
     labels.validation = None;
     stack.inputs.push(labels);
+    for (id, kind) in [
+        ("optionalNumber", StackInputKind::Number),
+        ("optionalBoolean", StackInputKind::Boolean),
+    ] {
+        let mut input = stack.inputs[0].clone();
+        input.id = id.into();
+        input.kind = kind;
+        input.required = false;
+        input.default = None;
+        input.validation = None;
+        stack.inputs.push(input);
+    }
+
     let registry = sample_registry();
     let template = generate_cloudformation_template(
         &stack,
@@ -270,6 +283,42 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
             }
         }
         assert_eq!(evaluate_rule(&registered["labels"], &parameters), expected);
+    }
+    for (id, parameter, answer) in [
+        ("optionalNumber", "InputOptionalNumber", "42"),
+        ("optionalBoolean", "InputOptionalBoolean", "false"),
+    ] {
+        for (raw, expected) in [
+            ("", serde_json::Value::Null),
+            (answer, serde_json::json!(answer)),
+        ] {
+            let mut parameters = serde_json::json!({"InputEnabled":"true"});
+            parameters[parameter] = serde_json::json!(raw);
+            for (name, condition) in &template.conditions {
+                if name == &format!("Has{parameter}") || name == &format!("{parameter}Applies") {
+                    parameters[name] =
+                        evaluate_rule(&serde_json::to_value(condition).unwrap(), &parameters);
+                }
+            }
+            let value = evaluate_rule(&registered[id], &parameters);
+            assert_eq!(value, expected, "{id} with {raw:?}");
+            let mut answers = std::collections::HashMap::from([
+                ("enabled".to_string(), serde_json::json!(true)),
+                (
+                    "apiBaseUrl".to_string(),
+                    serde_json::json!("https://example.test"),
+                ),
+            ]);
+            if !value.is_null() {
+                answers.insert(id.to_string(), value);
+            }
+            alien_core::resolve_stack_input_values(
+                &stack.inputs,
+                &answers,
+                alien_core::Platform::Aws,
+            )
+            .unwrap();
+        }
     }
     let rule = template
         .rules

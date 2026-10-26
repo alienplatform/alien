@@ -226,31 +226,6 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
     let stack_inputs = source_stack.inputs.clone();
-    let mut condition_values = req.input_values.clone();
-    if let Some(existing) = &approved_automatic_installation {
-        for (id, value) in &existing.input_values {
-            condition_values
-                .entry(id.clone())
-                .or_insert_with(|| value.clone());
-        }
-    }
-    req.input_values.retain(|id, _| {
-        stack_inputs
-            .iter()
-            .find(|input| input.id == *id)
-            .is_none_or(|input| {
-                input.when.is_none()
-                    || input.applies(&stack_inputs, &condition_values, req.platform)
-            })
-    });
-    // Generated secrets are developer-owned and never setup parameters, so a
-    // setup caller must not be able to set or replace one.
-    if let Err(e) =
-        crate::generated_inputs::reject_generated_input_values(&stack_inputs, &req.input_values)
-    {
-        return e.into_response();
-    }
-
     // A gated resource renders behind its input in the setup template, so its
     // absence from the delivered resource ids IS the deployer's answer,
     // resolved on the declared stack before anything else runs. The answers
@@ -259,20 +234,6 @@ pub async fn stack_import(
     // values, which must not contradict what the template actually created:
     // a live resource sharing a frozen gate would otherwise follow the
     // contradicting value instead of the frozen answer.
-    // A deployer secret lives only in the customer's own secret store; the
-    // import never carries its value.
-    if let Some(input) = source_stack.inputs.iter().find(|input| {
-        alien_core::is_deployer_secret_input(input)
-            && req
-                .input_values
-                .get(&input.id)
-                .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
-    }) {
-        return AlienError::new(ErrorData::BadRequest {
-            reason: alien_core::deployer_secret_value_refusal(&input.label),
-        })
-        .into_response();
-    }
     // Deferred resources cannot answer gates by presence. Recover workspace-managed
     // non-secret inputs from the approved reservation; deployer secrets stay in cloud storage.
     if let Some(existing) = &approved_automatic_installation {
@@ -327,6 +288,37 @@ pub async fn stack_import(
         validation_values.insert(id.clone(), serde_json::Value::Bool(*value));
     }
     validation_values.extend(req.input_values.clone());
+    req.input_values.retain(|id, _| {
+        stack_inputs
+            .iter()
+            .find(|input| input.id == *id)
+            .is_none_or(|input| {
+                input.when.is_none()
+                    || input.applies(&stack_inputs, &validation_values, req.platform)
+            })
+    });
+    // Generated secrets are developer-owned and never setup parameters, so a
+    // setup caller must not be able to set or replace one.
+    if let Err(e) =
+        crate::generated_inputs::reject_generated_input_values(&stack_inputs, &req.input_values)
+    {
+        return e.into_response();
+    }
+
+    // A deployer secret lives only in the customer's own secret store; the
+    // import never carries its value.
+    if let Some(input) = source_stack.inputs.iter().find(|input| {
+        alien_core::is_deployer_secret_input(input)
+            && req
+                .input_values
+                .get(&input.id)
+                .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+    }) {
+        return AlienError::new(ErrorData::BadRequest {
+            reason: alien_core::deployer_secret_value_refusal(&input.label),
+        })
+        .into_response();
+    }
     if let Err(error) =
         alien_core::resolve_stack_input_values(&stack_inputs, &validation_values, req.platform)
     {
