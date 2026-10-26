@@ -898,8 +898,15 @@ fn add_stack_input_parameters(
                 ),
             }));
         }
-        if input.kind == StackInputKind::StringList && input.when.is_none() {
-            add_list_parameter_condition(template, &parameter_name);
+        if input.kind == StackInputKind::StringList {
+            if input.when.is_none() {
+                add_list_parameter_condition(template, &parameter_name);
+            } else {
+                template.conditions.insert(
+                    format!("Has{parameter_name}"),
+                    CfExpression::not(equals_ref(&parameter_name, "")),
+                );
+            }
         }
         if let Some(when) = &input.when {
             let controller = stack_input_parameter_name_for_id(&when.input);
@@ -1019,13 +1026,17 @@ fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpressio
                     if input.when.is_none() {
                         list_parameter_value(&parameter)
                     } else {
-                        CfExpression::object([(
-                            "Fn::Split",
-                            CfExpression::list([
-                                CfExpression::from(","),
-                                CfExpression::ref_(&parameter),
-                            ]),
-                        )])
+                        CfExpression::if_(
+                            format!("Has{parameter}"),
+                            CfExpression::object([(
+                                "Fn::Split",
+                                CfExpression::list([
+                                    CfExpression::from(","),
+                                    CfExpression::ref_(&parameter),
+                                ]),
+                            )]),
+                            CfExpression::list(Vec::<CfExpression>::new()),
+                        )
                     }
                 } else {
                     CfExpression::ref_(&parameter)

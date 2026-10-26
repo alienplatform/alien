@@ -223,6 +223,12 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
         Some(true),
     ));
     stack.inputs.last_mut().unwrap().provided_by = vec![provider];
+    let mut labels = stack.inputs[0].clone();
+    labels.id = "labels".into();
+    labels.kind = StackInputKind::StringList;
+    labels.required = false;
+    labels.validation = None;
+    stack.inputs.push(labels);
     let registry = sample_registry();
     let template = generate_cloudformation_template(
         &stack,
@@ -244,6 +250,23 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
     .unwrap();
     alien_cloudformation::test_utils::cfn_lint(&to_yaml(&template).unwrap())
         .assert_ok("conditional input template");
+    let registered = serde_json::to_value(
+        &template.resources["DeploymentRegistration"].properties["InputValues"],
+    )
+    .unwrap();
+    for (raw, expected) in [
+        ("", serde_json::json!([])),
+        ("one,two", serde_json::json!(["one", "two"])),
+    ] {
+        let mut parameters = serde_json::json!({"InputEnabled":"true", "InputLabels": raw});
+        for (name, condition) in &template.conditions {
+            if name == "HasInputLabels" || name == "InputLabelsApplies" {
+                parameters[name] =
+                    evaluate_rule(&serde_json::to_value(condition).unwrap(), &parameters);
+            }
+        }
+        assert_eq!(evaluate_rule(&registered["labels"], &parameters), expected);
+    }
     let rule = template
         .rules
         .get("InputApiBaseUrlRequired")
@@ -273,6 +296,22 @@ fn evaluate_rule(
 ) -> serde_json::Value {
     if let Some(reference) = expression.get("Ref") {
         return parameters[reference.as_str().unwrap()].clone();
+    }
+    if let Some(values) = expression.get("Fn::If") {
+        let branch = if parameters[values[0].as_str().unwrap()].as_bool().unwrap() {
+            1
+        } else {
+            2
+        };
+        return evaluate_rule(&values[branch], parameters);
+    }
+    if let Some(values) = expression.get("Fn::Split") {
+        let value = evaluate_rule(&values[1], parameters);
+        return serde_json::json!(value
+            .as_str()
+            .unwrap()
+            .split(values[0].as_str().unwrap())
+            .collect::<Vec<_>>());
     }
     if let Some(values) = expression.get("Fn::Equals") {
         return serde_json::json!(

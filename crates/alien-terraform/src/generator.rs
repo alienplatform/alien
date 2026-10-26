@@ -3149,13 +3149,13 @@ fn stack_input_variable_block(input: &StackInputDefinition) -> Block {
         let variable = format!("var.{variable_name}");
         let valid_type = match input.kind {
             StackInputKind::String | StackInputKind::Secret | StackInputKind::Enum => {
-                format!("can(tostring({variable}))")
+                format!("can(tostring({variable})) && jsonencode({variable}) == jsonencode(tostring({variable}))")
             }
             StackInputKind::Number | StackInputKind::Integer => {
-                format!("can(tonumber({variable}))")
+                format!("can(tonumber({variable})) && jsonencode({variable}) == jsonencode(tonumber({variable}))")
             }
-            StackInputKind::Boolean => format!("can(tobool({variable}))"),
-            StackInputKind::StringList => format!("can(tolist({variable}))"),
+            StackInputKind::Boolean => format!("can(tobool({variable})) && jsonencode({variable}) == jsonencode(tobool({variable}))"),
+            StackInputKind::StringList => format!("can(tolist({variable})) && alltrue([for item in tolist({variable}) : item != null && jsonencode(item) == jsonencode(tostring(item))])"),
         };
         conditions.push(valid_type);
         conditions = conditions

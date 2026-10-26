@@ -5768,7 +5768,9 @@ fn secret_tpl() -> String {
       {{- $currentInputs = (index $existing.data "input-values.json" | b64dec) -}}
     {{- end -}}
   {{- end -}}
-  {{- if ne $currentInputs (toJson (include "deployment.inputValues" . | fromJson)) -}}
+  {{- $currentContext := dict "Values" (dict "inputValues" (fromJson $currentInputs)) -}}
+  {{- $normalizedCurrent := include "deployment.inputValues" $currentContext | fromJson | toJson -}}
+  {{- if ne $normalizedCurrent (toJson (include "deployment.inputValues" . | fromJson)) -}}
     {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
   {{- end -}}
 {{- end -}}
@@ -9022,6 +9024,48 @@ infrastructureExistingSecret: customer-bindings
             Some(&format!("{base}inputValues:\n  bucket: snapshots\n")),
         )
         .assert_ok("boolean default activates valid input");
+    }
+
+    #[test]
+    fn helm_upgrade_normalizes_legacy_input_defaults() {
+        let stack = Stack::new("upgrade-inputs".into())
+            .inputs(vec![alien_core::StackInputDefinition::deployer_boolean(
+                "enabled",
+                "Enabled",
+                "Enable feature",
+                Some(true),
+            )])
+            .build();
+        let registry = HelmRegistry::built_in();
+        let mut chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "upgrade-inputs".into(),
+            },
+        )
+        .unwrap();
+        // Supply the installed Secret in place of the live lookup while Helm
+        // executes the generated upgrade guard and the rest of the chart.
+        let secret = chart.files.get_mut("templates/secret.yaml").unwrap();
+        *secret = secret.replace(".Release.IsUpgrade", "true").replace(
+            "lookup \"v1\" \"Secret\" .Release.Namespace (include \"deployment.fullname\" .)",
+            "(dict \"data\" (dict \"input-values.json\" (b64enc \"{}\")))",
+        );
+        let base = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        crate::test_utils::helm_template(&chart.files, Some(base))
+            .assert_ok("legacy omitted defaults survive upgrade");
+        let changed = crate::test_utils::helm_template(
+            &chart.files,
+            Some(&format!("{base}inputValues:\n  enabled: false\n")),
+        );
+        assert!(!changed.is_ok());
+        assert!(
+            changed.stderr.contains("inputValues cannot change"),
+            "{}",
+            changed.stderr
+        );
     }
 
     #[test]

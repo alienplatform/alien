@@ -2674,7 +2674,7 @@ async fn setup_ignores_inactive_generated_secret_values() {
         }))
         .unwrap(),
     );
-    let fixture = make_fixture(Some(stack)).await;
+    let fixture = make_fixture(Some(stack.clone())).await;
     let mut body = aws_s3_import_request(
         "conditional-import",
         "us-east-1",
@@ -2698,6 +2698,34 @@ async fn setup_ignores_inactive_generated_secret_values() {
         .unwrap()
         .unwrap();
     assert!(!deployment.input_values.contains_key("databasePassword"));
+    settle_conditional_import(&fixture, &deployment.id, &stack).await;
+    body.input_values.remove("databasePassword");
+    body.input_values
+        .insert("enabled".into(), serde_json::json!(true));
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    let activated = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), &deployment.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let generated = activated.input_values["databasePassword"].as_str().unwrap();
+    assert_eq!(generated.len(), 48);
+    for enabled in [false, true] {
+        settle_conditional_import(&fixture, &deployment.id, &stack).await;
+        body.input_values
+            .insert("enabled".into(), serde_json::json!(enabled));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::OK, "body = {json:#}");
+        let updated = fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.input_values["databasePassword"], generated);
+    }
     let (status, json) = post_initialize(
         &fixture,
         serde_json::json!({
@@ -2717,6 +2745,52 @@ async fn setup_ignores_inactive_generated_secret_values() {
         .unwrap()
         .unwrap();
     assert!(!deployment.input_values.contains_key("databasePassword"));
+}
+
+async fn settle_conditional_import(fixture: &Fixture, deployment_id: &str, stack: &Stack) {
+    let subject = alien_manager::auth::Subject::system();
+    let deployment = fixture
+        .deployment_store
+        .get_deployment(&subject, deployment_id)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .deployment_store
+        .reconcile(
+            &subject,
+            ReconcileData {
+                deployment_id: deployment.id,
+                session: "conditional-test".into(),
+                execution_claim: None,
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: deployment.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: stack.clone(),
+                    }),
+                    target_release: None,
+                    stack_state: deployment.stack_state,
+                    error: None,
+                    environment_info: deployment.environment_info,
+                    runtime_metadata: deployment.runtime_metadata,
+                    retry_requested: false,
+                    protocol_version: deployment.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+                operations_report: None,
+            },
+        )
+        .await
+        .unwrap();
 }
 
 async fn post_initialize(

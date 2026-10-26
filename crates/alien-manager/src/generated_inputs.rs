@@ -49,20 +49,29 @@ pub fn generate_missing_input_values(
 
 /// For a write that replaces an existing deployment's input values: keeps the
 /// value the deployment already stores for every generated input `values`
-/// does not set. Never generates — a missing stored value means another
-/// control plane owns the secret, and inventing one here would replace it.
+/// does not set. A conditional secret is generated on its first activation.
+/// Other missing values may be owned by an embedding control plane and are
+/// left alone.
 pub fn carry_stored_generated_input_values(
     inputs: &[StackInputDefinition],
     platform: Platform,
     stored: &HashMap<String, serde_json::Value>,
     values: &mut HashMap<String, serde_json::Value>,
 ) {
-    for (input, _) in generated_inputs(inputs, platform) {
+    for (input, generate) in generated_inputs(inputs, platform) {
         if values.contains_key(&input.id) {
             continue;
         }
         if let Some(value) = stored.get(&input.id) {
             values.insert(input.id.clone(), value.clone());
+        } else if input.when.is_some()
+            && !input.applies(inputs, stored, platform)
+            && input.applies(inputs, values, platform)
+        {
+            values.insert(
+                input.id.clone(),
+                serde_json::Value::String(generate_value(generate)),
+            );
         }
     }
 }

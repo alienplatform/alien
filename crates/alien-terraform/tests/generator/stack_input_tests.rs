@@ -246,6 +246,12 @@ fn conditional_inputs_validate_with_terraform_plan_for_provider(provider: StackI
         Some(true),
     ));
     stack.inputs.last_mut().unwrap().provided_by = vec![provider];
+    let mut list = stack.inputs[0].clone();
+    list.id = "labels".into();
+    list.kind = StackInputKind::StringList;
+    list.required = false;
+    list.validation = None;
+    stack.inputs.push(list);
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     assert_terraform_valid(&module, "conditional_inputs");
 
@@ -273,6 +279,31 @@ fn conditional_inputs_validate_with_terraform_plan_for_provider(provider: StackI
         &[("input_enabled", "false"), ("input_api_base_url", "\"\"")],
     );
     disabled.assert_ok("inactive required input accepts empty value");
+    for (enabled, labels, accepted) in [
+        ("false", "[42]", true),
+        ("true", "[42]", false),
+        ("true", "[null]", false),
+        ("true", "[\"label\"]", true),
+    ] {
+        let plan = super::helpers::test_utils::terraform_plan_with_vars(
+            &files,
+            &[
+                ("input_enabled", enabled),
+                ("input_api_base_url", "\"https://example.test\""),
+                ("input_labels", labels),
+            ],
+        );
+        assert_eq!(
+            plan.is_ok(),
+            accepted,
+            "{enabled}/{labels}: {}",
+            plan.stderr
+        );
+        if !accepted {
+            assert!(plan.stderr.contains("input_labels"), "{}", plan.stderr);
+        }
+    }
+
     let enabled = super::helpers::test_utils::terraform_plan_with_vars(
         &files,
         &[("input_enabled", "true"), ("input_api_base_url", "\"\"")],

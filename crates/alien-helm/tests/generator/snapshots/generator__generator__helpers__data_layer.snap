@@ -1189,7 +1189,9 @@ roleRef:
       {{- $currentInputs = (index $existing.data "input-values.json" | b64dec) -}}
     {{- end -}}
   {{- end -}}
-  {{- if ne $currentInputs (toJson (include "deployment.inputValues" . | fromJson)) -}}
+  {{- $currentContext := dict "Values" (dict "inputValues" (fromJson $currentInputs)) -}}
+  {{- $normalizedCurrent := include "deployment.inputValues" $currentContext | fromJson | toJson -}}
+  {{- if ne $normalizedCurrent (toJson (include "deployment.inputValues" . | fromJson)) -}}
     {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
   {{- end -}}
 {{- end -}}
