@@ -676,6 +676,7 @@ fn generate_terraform_module_internal(
         render_body(registration_body(
             target,
             setup_import_format_version,
+            stack_settings.setup_management,
             options.registration.as_ref(),
             &import_depends_on,
             terraform_input_values_expression(&stack_inputs),
@@ -3900,6 +3901,7 @@ fn has_dynamic_gcp_network_settings(network: Option<&NetworkSettings>) -> bool {
 fn registration_body(
     target: TerraformTarget,
     setup_import_format_version: u32,
+    setup_management: alien_core::SetupManagement,
     registration: Option<&TerraformRegistration>,
     depends_on: &[Expression],
     input_values: Expression,
@@ -3912,6 +3914,7 @@ fn registration_body(
     });
     if let Some(registration) = registration {
         let mut body = vec![
+            setup_management_precondition(setup_management),
             attr("token", expr::raw("var.token")),
             attr("name", expr::raw("local.deployment_name")),
             attr("resource_prefix", expr::raw("local.resource_prefix")),
@@ -4025,11 +4028,42 @@ fn registration_body(
         body.push(depends_on_attr);
     }
 
+    body.push(setup_management_precondition(setup_management));
     Body::from(vec![Structure::Block(resource_block(
         "terraform_data",
         "deployment_registration",
         body,
     ))])
+}
+
+/// Compare the merged settings without changing the caller's requested mode.
+/// Only settings inputs are needed, so this can fail before resources exist.
+/// The diagnostic reveals only enum labels, never arbitrary sensitive settings.
+fn setup_management_precondition(mode: alien_core::SetupManagement) -> Structure {
+    let expected = match mode {
+        alien_core::SetupManagement::Manual => "manual",
+        alien_core::SetupManagement::Automatic => "automatic",
+    };
+    nested(block(
+        "lifecycle",
+        [nested(block(
+            "precondition",
+            [
+                attr(
+                    "condition",
+                    expr::raw(format!(
+                        "try(local.deployment_settings.setupManagement, \"manual\") == \"{expected}\""
+                    )),
+                ),
+                attr(
+                    "error_message",
+                    expr::raw(format!(
+                        r#"format("This setup module was built for {expected} setup, but the settings request %s setup. Regenerate the setup from the setup page for the requested setup management.", nonsensitive(try(local.deployment_settings.setupManagement == "manual", true)) ? "manual" : nonsensitive(try(local.deployment_settings.setupManagement == "automatic", false)) ? "automatic" : "invalid")"#
+                    )),
+                ),
+            ],
+        ))],
+    ))
 }
 
 fn terraform_input_values_expression(inputs: &[StackInputDefinition]) -> Expression {
@@ -5327,6 +5361,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         let registration_body = render_body(registration_body(
             TerraformTarget::Aws,
             1,
+            alien_core::SetupManagement::Manual,
             Some(&registration),
             &[],
             Expression::Object(Default::default()),

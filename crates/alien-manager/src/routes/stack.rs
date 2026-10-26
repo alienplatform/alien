@@ -143,6 +143,13 @@ pub async fn stack_import(
             .await
         {
             Ok(Some(existing)) => {
+                if existing.import_source.is_some()
+                    && state.authz.can_update_deployment(&subject, &existing)
+                {
+                    if let Err(error) = validate_reserved_setup_management(&req, &existing) {
+                        return error.into_response();
+                    }
+                }
                 let approved = matches!(
                     req.platform,
                     Platform::Aws | Platform::Gcp | Platform::Azure
@@ -355,6 +362,9 @@ pub async fn stack_import(
                 return ErrorData::bad_request(
                     "Endpoint access cannot change after setup. Create a new deployment to change endpoint access.",
                 ).into_response();
+            }
+            if let Err(error) = validate_reserved_setup_management(&req, &existing) {
+                return error.into_response();
             }
             // A compute update can grow a volume without the setup source
             // learning about it, so its stale lower value keeps the installed
@@ -1749,6 +1759,27 @@ fn validate_gcp_federation_handoff(
     Ok(())
 }
 
+fn validate_reserved_setup_management(
+    req: &StackImportRequest,
+    existing: &DeploymentRecord,
+) -> crate::error::Result<()> {
+    let Some(settings) = &existing.stack_settings else {
+        return Ok(());
+    };
+    if settings.setup_management != req.stack_settings.setup_management {
+        let name = |mode| match mode {
+            alien_core::SetupManagement::Manual => "manual",
+            alien_core::SetupManagement::Automatic => "automatic",
+        };
+        return Err(ErrorData::bad_request(format!(
+            "This setup artifact was built for {} setup, but the deployment was prepared for {} setup. Regenerate the setup from the setup page.",
+            name(req.stack_settings.setup_management),
+            name(settings.setup_management),
+        )));
+    }
+    Ok(())
+}
+
 fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::error::Result<()> {
     let delivered: std::collections::HashSet<&str> = req
         .resources
@@ -1788,7 +1819,11 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
     runtime_owned.sort_unstable();
     if !runtime_owned.is_empty() {
         return Err(ErrorData::bad_request(format!(
-            "Setup registration includes resources that setup does not own: {}",
+            "Setup registration includes resources that setup does not own for {} setup: {}",
+            match req.stack_settings.setup_management {
+                alien_core::SetupManagement::Manual => "manual",
+                alien_core::SetupManagement::Automatic => "automatic",
+            },
             runtime_owned.join(", ")
         )));
     }

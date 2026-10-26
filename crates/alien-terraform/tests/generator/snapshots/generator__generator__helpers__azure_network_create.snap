@@ -708,6 +708,13 @@ resource "terraform_data" "deployment_registration" {
     azurerm_network_security_group.default_network_workload,
     azurerm_subnet_network_security_group_association.default_network_private
   ]
+
+  lifecycle {
+    precondition {
+      condition     = try(local.deployment_settings.setupManagement, "manual") == "manual"
+      error_message = format("This setup module was built for manual setup, but the settings request %s setup. Regenerate the setup from the setup page for the requested setup management.", nonsensitive(try(local.deployment_settings.setupManagement == "manual", true)) ? "manual" : nonsensitive(try(local.deployment_settings.setupManagement == "automatic", false)) ? "automatic" : "invalid")
+    }
+  }
 }
 
 === outputs.tf ===

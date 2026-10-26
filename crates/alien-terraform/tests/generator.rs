@@ -34,5 +34,6 @@ mod generator {
     pub mod k8s_overlay_tests;
     pub mod management_url_tests;
     pub mod secrets_vault_management_tests;
+    pub mod setup_management_tests;
     pub mod stack_input_tests;
 }
