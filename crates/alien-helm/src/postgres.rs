@@ -35,7 +35,7 @@ pub(crate) const HELPERS: &str = r#"
 {{- range $id, $database := .Values.postgres -}}
   {{- if not (hasKey $bindings $id) -}}
     {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) -}}
-    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretRef" (dict "name" $name "key" "password")) "sslMode" "disable") -}}
+    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" $name "key" "password")) "sslMode" "disable") -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -63,7 +63,7 @@ pub(crate) const TEMPLATE: &str = r#"{{- range $id, $database := .Values.postgre
 {{- if and $volume (empty $previousImage) }}
   {{- fail "Postgres data has no recorded image; restore the original alien.dev/postgres-image PVC annotation before installing" }}
 {{- end }}
-{{- if and $previousImage (ne $previousImage $desiredImage) }}
+{{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
   {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
 {{- end }}
 {{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}
@@ -175,19 +175,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ $name }}
-{{- else if hasKey (default dict $.Values.infrastructure) $id }}
-{{- $binding := index $.Values.infrastructure $id }}
-{{- if ne (default "" $binding.service) "external" }}{{ fail "A Postgres infrastructure override must use service: external" }}{{ end }}
-{{- range $field := list "host" "database" "username" }}
-{{- if empty (get $binding $field) }}{{ fail (printf "Postgres binding %s requires %s" $id $field) }}{{ end }}
-{{- end }}
-{{- if not (kindIs "map" $binding.password) }}{{ fail "Postgres passwords must use password.secretRef with an existing Kubernetes Secret name and key" }}{{ end }}
-{{- $reference := required "Postgres password.secretRef is required" $binding.password.secretRef }}
-{{- $secretName := required "Postgres password.secretRef.name is required" $reference.name }}
-{{- $key := required "Postgres password.secretRef.key is required" $reference.key }}
-{{- $secret := lookup "v1" "Secret" $.Release.Namespace $secretName }}
-{{- if not $secret }}{{ fail (printf "Postgres password Secret %s does not exist in namespace %s" $secretName $.Release.Namespace) }}{{ end }}
-{{- if empty (get (default dict $secret.data) $key) }}{{ fail (printf "Postgres password Secret %s has no nonempty key %s" $secretName $key) }}{{ end }}
 {{- end }}
 {{- end }}
 "#;
@@ -217,7 +204,7 @@ infrastructure:
     sslMode: verify-full
 ```
 
-Replace `database` with the resource ID in your stack. The chart checks that the password Secret and key exist before installing. External bindings create no database or volume. Use `sslMode: disable` only when plaintext connections are intended on your cluster's private network.
+Replace `database` with the resource ID in your stack. External bindings are passed through unchanged and create no database or volume. The referenced Secret must be available when workloads start. Use `sslMode: disable` only when plaintext connections are intended on your cluster's private network.
 
 Uninstall removes the database StatefulSet and Service but retains its PVC and credentials Secret together. Back up the data before deleting either retained object. Reinstalling the same release reuses them; deleting only the credentials Secret does not reset the database password. Removing the namespace deletes the retained data too.
 "#;

@@ -8849,6 +8849,10 @@ mod tests {
             .status
             .success());
         assert!(helm(&["uninstall", "database"]).status.success());
+        let digest_refresh = helm(&[
+            "upgrade", "--install", "database", chart_path, "--dry-run=server",
+            "--set", "postgres.database.image.tag=pg17-bookworm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ]);
         let same = helm(&[
             "upgrade",
             "--install",
@@ -8879,10 +8883,65 @@ mod tests {
         assert!(deleted.status.success());
         assert!(same.status.success(), "same image must reuse retained data");
         assert!(
+            digest_refresh.status.success(),
+            "same tag with a new digest must reuse retained data: {}",
+            String::from_utf8_lossy(&digest_refresh.stderr)
+        );
+        assert!(
             !changed.status.success(),
             "different image must not mount retained data"
         );
         assert!(String::from_utf8_lossy(&changed.stderr).contains("image changes require"));
+    }
+
+    #[test]
+    fn postgres_overrides_render_without_cluster_lookups() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        for binding in [
+            serde_json::json!({"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":"existing-password"}),
+            serde_json::json!({"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":{"secretRef":{"name":"existing-credentials","key":"password"}}}),
+            serde_json::json!({"type":"postgres","service":"aurora","clusterEndpoint":"db.example.com","port":5432,"database":"app","username":"app","passwordSecretArn":"arn:aws:secretsmanager:us-east-1:123456789012:secret:database"}),
+            serde_json::json!({"type":"postgres","service":"cloud-sql","host":"db.example.com","port":5432,"database":"app","username":"app","serverCaCertificates":["ca"],"passwordSecretName":"database"}),
+            serde_json::json!({"type":"postgres","service":"flexible-server","host":"db.example.com","port":5432,"database":"app","username":"app","passwordSecretUri":"https://example.vault.azure.net/secrets/database"}),
+        ] {
+            let values =
+                serde_yaml::to_string(&serde_json::json!({"infrastructure":{"database":binding}}))
+                    .unwrap();
+            let rendered =
+                crate::test_utils::helm_template_for_release(&chart.files, Some(&values), "app");
+            rendered.assert_ok("existing Postgres override");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            assert!(docs_by_kind(&docs, "StatefulSet").is_empty());
+            assert!(docs_by_kind(&docs, "PersistentVolumeClaim")
+                .iter()
+                .all(|pvc| !pvc["metadata"]["name"].as_str().unwrap().contains("-pg-")));
+            let binding_secret = docs_by_kind(&docs, "Secret")
+                .into_iter()
+                .find(|secret| secret["stringData"]["external-bindings.json"].is_string())
+                .unwrap();
+            let actual: serde_json::Value = serde_json::from_str(
+                binding_secret["stringData"]["external-bindings.json"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(actual["database"], binding);
+        }
     }
 
     #[test]
@@ -8957,7 +9016,10 @@ mod tests {
             )
             .unwrap();
             assert_eq!(bindings["database"]["host"], format!("{name}.default.svc"));
-            assert_eq!(bindings["database"]["password"]["secretRef"]["name"], name);
+            assert_eq!(
+                bindings["database"]["password"]["secretKeyRef"]["name"],
+                name
+            );
             names.push(name.to_string());
         }
         assert_ne!(

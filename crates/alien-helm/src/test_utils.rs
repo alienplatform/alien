@@ -112,10 +112,7 @@ pub fn helm_template_and_validate_for_release(
         write_file(&rendered_path, &rendered.stdout)?;
         // Charts with internet sandboxes use the admission policy API, which Kubernetes
         // 1.30 made generally available. Other charts keep the 1.28 baseline.
-        let kubernetes_version = if rendered
-            .stdout
-            .contains("kind: ValidatingAdmissionPolicy")
-        {
+        let kubernetes_version = if rendered.stdout.contains("kind: ValidatingAdmissionPolicy") {
             "1.30.0"
         } else {
             "1.28.0"
