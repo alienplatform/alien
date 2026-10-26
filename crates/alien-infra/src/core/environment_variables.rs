@@ -1161,10 +1161,12 @@ mod tests {
                     base_domain: "example.test".into(),
                     route: route.clone(),
                     certificate: KubernetesCertificateMode::TlsSecretRef(KubernetesTlsSecretRef {
-                        secret_name: "site-tls".into(), namespace: None,
+                        secret_name: "site-tls".into(),
+                        namespace: None,
                     }),
                 },
-                "https://login.example.test", "login.example.test",
+                "https://login.example.test",
+                "login.example.test",
             ),
             (
                 KubernetesExposureSettings::Custom {
