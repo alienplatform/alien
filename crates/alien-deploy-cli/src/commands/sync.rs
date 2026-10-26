@@ -893,10 +893,19 @@ async fn send_report(
             .await
             .into_alien_error()
             .context(api_failed(format!("POST {path}")))?;
-        // The final acknowledgement can be lost after the manager removes
-        // the deployment. Accept absence only after all telemetry is acknowledged.
-        if response.status() == reqwest::StatusCode::NOT_FOUND && deleting && !sending {
-            println!("{} was already deleted.", site.name);
+        // Deletion can remove the credential before its acknowledgement arrives.
+        // Accept removal only for the empty marker after all telemetry is acknowledged.
+        if deleting
+            && !sending
+            && matches!(
+                response.status(),
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::NOT_FOUND
+            )
+        {
+            println!(
+                "{} was already removed; all telemetry was acknowledged.",
+                site.name
+            );
             return Ok(());
         }
         let response: StatusReportResponse = read_response(response, &path).await?;
@@ -3344,8 +3353,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_a_fully_acknowledged_deleted_report_accepts_not_found() {
+    async fn only_a_fully_acknowledged_deleted_report_accepts_removed_credentials() {
         for (status, deleted, acknowledged, accepted) in [
+            (401, true, true, true),
+            (401, true, false, false),
+            (401, false, true, false),
+            (401, false, false, false),
             (404, true, true, true),
             (404, true, false, false),
             (404, false, true, false),
@@ -3372,6 +3385,7 @@ mod tests {
                 site.uploaded_through = 4;
                 save_site(dir.path(), &site).unwrap();
             }
+            let original_report = std::fs::read(report_path(dir.path())).unwrap();
             let result = send_reports(dir.path(), &mut site, &access(&server), false).await;
             assert_eq!(
                 result.is_ok(),
@@ -3380,6 +3394,16 @@ mod tests {
             );
             assert_eq!(report_path(dir.path()).exists(), !accepted);
             assert_eq!(site.deleted, accepted);
+            assert_eq!(
+                load_site(dir.path()).unwrap().uploaded_through,
+                if acknowledged { 4 } else { 0 }
+            );
+            if !accepted {
+                assert_eq!(
+                    std::fs::read(report_path(dir.path())).unwrap(),
+                    original_report
+                );
+            }
             request.assert_hits_async(1).await;
         }
     }
