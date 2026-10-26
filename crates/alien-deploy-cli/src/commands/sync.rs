@@ -185,6 +185,10 @@ struct ReportedBatch {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct InstalledBundle {
+    /// Only a completed Running observation makes an install a rollback target.
+    /// Older records are unknown until the site observes their running release.
+    #[serde(default)]
+    rollout_succeeded: bool,
     release_id: String,
     stack_id: String,
     chart: String,
@@ -339,6 +343,66 @@ async fn exchange_online(
     Ok(unsent_reports)
 }
 
+fn rollback_candidate(installed: &[(u64, PathBuf)]) -> Result<&Path> {
+    for (_, path) in installed.iter().skip(1) {
+        if read_installed(path)?.rollout_succeeded {
+            return Ok(path);
+        }
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "rollback".to_string(),
+        message: "There's no earlier successful release to return to".to_string(),
+    }))
+}
+
+fn remember_successful_rollout(folder: &Path, state: &serde_json::Value) -> Result<()> {
+    if state["status"] != "running" {
+        return Ok(());
+    }
+    let Some(release) = state["currentRelease"]["releaseId"].as_str() else {
+        return Ok(());
+    };
+    mark_successful_release(folder, release)
+}
+
+fn mark_successful_release(folder: &Path, release: &str) -> Result<()> {
+    for (_, path) in installed_bundles(folder)? {
+        let mut record = read_installed(&path)?;
+        if record.release_id == release && !record.rollout_succeeded {
+            record.rollout_succeeded = true;
+            std::fs::write(
+                path.join("install.json"),
+                serde_json::to_vec_pretty(&record)
+                    .into_alien_error()
+                    .context(config_error("encoding successful rollout"))?,
+            )
+            .into_alien_error()
+            .context(config_error("recording successful rollout"))?;
+        }
+    }
+    Ok(())
+}
+
+fn prune_installed(folder: &Path) -> Result<()> {
+    let mut successful = 0;
+    for (index, (_, path)) in installed_bundles(folder)?.into_iter().enumerate() {
+        let record = read_installed(&path)?;
+        if record.rollout_succeeded {
+            successful += 1;
+            if successful <= KEEP_INSTALLED {
+                continue;
+            }
+        }
+        // Keep the most recent attempt for status reporting and signed deletion.
+        if index != 0 {
+            std::fs::remove_dir_all(path)
+                .into_alien_error()
+                .context(config_error("pruning old installs"))?;
+        }
+    }
+    Ok(())
+}
+
 pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
     let folder = find_folder(args.folder.as_deref())?;
     let site = load_site(&folder)?;
@@ -350,12 +414,14 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
         })
     })?;
     let installed = installed_bundles(&folder)?;
-    let (_, previous) = installed.get(1).ok_or_else(|| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "rollback".to_string(),
-            message: "There's no earlier installed release to return to".to_string(),
-        })
-    })?;
+    if let Some((_, latest)) = installed.first() {
+        let record = read_installed(latest)?;
+        let namespace = settings.namespace(&record.stack_id);
+        if let Some((status, _)) = read_status(&settings, &record.stack_id, &namespace).await? {
+            remember_successful_rollout(&folder, &status["state"])?;
+        }
+    }
+    let previous = rollback_candidate(&installed)?;
     let record = read_installed(previous)?;
     let namespace = settings.namespace(&record.stack_id);
     let trusted_key = pinned_key(&settings, &record.stack_id, &namespace)
@@ -1755,7 +1821,13 @@ async fn install_pending(
     if verified_target["action"].as_str() == Some("delete") {
         return uninstall_site(folder, site, settings, &manifest, args.dry_run).await;
     }
-    let installed = installed_release(settings, &manifest.stack_id, &namespace).await?;
+    let observation = read_status(settings, &manifest.stack_id, &namespace).await?;
+    if !args.dry_run {
+        if let Some((status, _)) = &observation {
+            remember_successful_rollout(folder, &status["state"])?;
+        }
+    }
+    let installed = observation.and_then(|(status, _)| current_release(&status));
 
     if args.dry_run {
         println!(
@@ -1912,11 +1984,8 @@ async fn install_pending(
         return Err(error);
     }
 
-    for (_, old) in installed_bundles(folder)?.into_iter().skip(KEEP_INSTALLED) {
-        std::fs::remove_dir_all(old)
-            .into_alien_error()
-            .context(config_error("pruning old installs"))?;
-    }
+    mark_successful_release(folder, &manifest.release_id)?;
+    prune_installed(folder)?;
     for (_, path) in &pending {
         std::fs::remove_file(path)
             .into_alien_error()
@@ -1968,6 +2037,7 @@ fn installed_record(
         }));
     }
     Ok(InstalledBundle {
+        rollout_succeeded: false,
         release_id: manifest.release_id.clone(),
         stack_id: manifest.stack_id.clone(),
         chart: manifest.chart.clone(),
@@ -2061,16 +2131,6 @@ async fn current_ack(settings: &SiteSide, stack_id: &str, namespace: &str) -> Re
 }
 
 /// Release the Operator last reported running, from its status Secret.
-async fn installed_release(
-    settings: &SiteSide,
-    stack_id: &str,
-    namespace: &str,
-) -> Result<Option<String>> {
-    Ok(read_status(settings, stack_id, namespace)
-        .await?
-        .and_then(|(status, _)| current_release(&status)))
-}
-
 fn current_release(status: &serde_json::Value) -> Option<String> {
     status["state"]["currentRelease"]["releaseId"]
         .as_str()
@@ -2257,6 +2317,7 @@ async fn write_report_for_install(
     record: &InstalledBundle,
 ) -> Result<()> {
     if let Some(report) = collect_report(site, settings, record).await? {
+        remember_successful_rollout(folder, &report.state)?;
         save_report(folder, &report)?;
     }
     Ok(())
@@ -2897,6 +2958,87 @@ mod tests {
     use std::os::unix::fs::MetadataExt as _;
 
     use super::*;
+
+    #[test]
+    fn rollback_skips_consecutive_failed_rollouts() {
+        let folder = tempfile::tempdir().unwrap();
+        for (sequence, release, succeeded) in [(1, "a", true), (2, "b", false), (3, "c", false)] {
+            let dir = folder
+                .path()
+                .join(TO_SITE)
+                .join(INSTALLED)
+                .join(format!("{sequence}-{release}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("install.json"),
+                serde_json::json!({
+                    "releaseId": release, "stackId":"app", "chart":"chart.tgz", "chartImages":{},
+                    "telemetryAck":null,"inventory":[],"registry":null,"rolloutSucceeded":succeeded
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+        let history = installed_bundles(folder.path()).unwrap();
+        let previous = rollback_candidate(&history).unwrap();
+        assert_eq!(read_installed(previous).unwrap().release_id, "a");
+        assert_eq!(
+            read_installed(&history[0].1).unwrap().release_id,
+            "c",
+            "latest failed attempt remains available for reports and deletion"
+        );
+    }
+
+    #[test]
+    fn rollback_history_uses_observed_success_and_keeps_it_when_pruning() {
+        let folder = tempfile::tempdir().unwrap();
+        for (sequence, release) in [(1, "a"), (2, "b"), (3, "c"), (4, "d")] {
+            let dir = folder
+                .path()
+                .join(TO_SITE)
+                .join(INSTALLED)
+                .join(format!("{sequence}-{release}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            // An older record has no rollout receipt.
+            std::fs::write(
+                dir.join("install.json"),
+                serde_json::json!({
+                    "releaseId":release,"stackId":"app","chart":"chart.tgz","chartImages":{},
+                    "telemetryAck":null,"inventory":[],"registry":null
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+        assert!(rollback_candidate(&installed_bundles(folder.path()).unwrap()).is_err());
+        remember_successful_rollout(
+            folder.path(),
+            &serde_json::json!({
+                "status":"update-failed", "currentRelease":{"releaseId":"b"}
+            }),
+        )
+        .unwrap();
+        assert!(rollback_candidate(&installed_bundles(folder.path()).unwrap()).is_err());
+        for release in ["a", "d"] {
+            remember_successful_rollout(
+                folder.path(),
+                &serde_json::json!({
+                    "status":"running", "currentRelease":{"releaseId":release}
+                }),
+            )
+            .unwrap();
+        }
+        prune_installed(folder.path()).unwrap();
+        let history = installed_bundles(folder.path()).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(read_installed(&history[0].1).unwrap().release_id, "d");
+        assert_eq!(
+            read_installed(rollback_candidate(&history).unwrap())
+                .unwrap()
+                .release_id,
+            "a"
+        );
+    }
 
     /// Supply a signed first-install bundle and site arguments for a disposable
     /// cluster whose workload cannot finish rollout. No successful install is needed.
@@ -3695,6 +3837,7 @@ metadata:
          "replicas": {"desired": 7, "current": 7, "ready": 7, "available": 7, "updated": 7}, "pods": [], "events": []}}, "raw": []
         });
         let record = InstalledBundle {
+            rollout_succeeded: false,
             release_id: "rel_1".into(),
             stack_id: "site".into(),
             chart: "chart.tgz".into(),

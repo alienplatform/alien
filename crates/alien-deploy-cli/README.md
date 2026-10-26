@@ -10,7 +10,7 @@ Deployment CLI for customer admins. Deploys, manages, and tears down Alien appli
 - **`alien-deploy list`** — List all tracked deployments.
 - **`alien-deploy agent`** — Manage the alien-operator background service (install, start, stop, uninstall, status).
 - **`alien-deploy sync`** — Keep an air-gapped Kubernetes deployment up to date through one transfer folder. Online, it sends the site's reports to the manager and downloads the next signed update (only the image layers the site doesn't have). Inside the site, it checks the signature against the trusted key (`--trusted-key` on the first install, remembered after), pushes the images to the site's registry, installs or upgrades the chart, and writes a report with the deployment's state and telemetry. `--dry-run` previews; `--full` includes every layer.
-- **`alien-deploy rollback`** — Return an air-gapped deployment to the release it ran before the last sync.
+- **`alien-deploy rollback`** — Return an air-gapped deployment to an earlier release that completed rollout. Failed attempts remain available for reports and deletion, but are skipped by rollback. Older history without a success record becomes eligible when sync observes that release Running at the site.
 
 ## How It Works
 
