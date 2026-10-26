@@ -270,7 +270,7 @@ pub fn remove_declined_resources(stack: &mut Stack, declined: &[String]) {
     scrub_declined_grants(stack, declined);
 }
 
-/// Drop grants naming a declined resource from every permission profile.
+/// Drop grants naming a declined resource from workload, management and node profiles.
 ///
 /// Not inert: GCP applies every non-`"*"` entry without consulting the desired resources.
 /// Nothing is lost, because the mutations re-derive them whenever the gate is accepted.
@@ -286,6 +286,16 @@ fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
         }
     };
 
+    for entry in stack.resources.values_mut() {
+        if let Some(profile) = entry
+            .config
+            .downcast_mut::<crate::ComputeCluster>()
+            .and_then(|cluster| cluster.node_permissions.as_mut())
+        {
+            scrub(profile);
+        }
+    }
+
     for profile in stack.permissions.profiles.values_mut() {
         scrub(profile);
     }
@@ -299,6 +309,64 @@ fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declining_a_node_target_preserves_empty_profiles_and_unrelated_grants() {
+        let profile = crate::PermissionProfile::new()
+            .resource("data", ["storage/data-read"])
+            .resource("missing", ["storage/data-write"]);
+        let mut stack = Stack::new("declined-grants".into())
+            .add(
+                crate::Storage::new("data".into()).build(),
+                crate::ResourceLifecycle::Frozen,
+            )
+            .add(
+                crate::ComputeCluster::new("compute".into())
+                    .node_permissions(profile.clone())
+                    .build(),
+                crate::ResourceLifecycle::Frozen,
+            )
+            .permission("reader", profile.clone())
+            .build();
+        stack.permissions.management = crate::ManagementPermissions::Extend(profile);
+        let cluster = stack
+            .resources
+            .get_mut("compute")
+            .unwrap()
+            .config
+            .downcast_mut::<crate::ComputeCluster>()
+            .unwrap();
+        cluster.node_permissions_platforms = Some(vec![Platform::Aws]);
+        remove_declined_resources(&mut stack, &["data".into()]);
+        let cluster = stack.resources["compute"]
+            .config
+            .downcast_ref::<crate::ComputeCluster>()
+            .unwrap();
+        let remaining = crate::PermissionProfile::new().resource("missing", ["storage/data-write"]);
+        assert_eq!(cluster.node_permissions.as_ref(), Some(&remaining));
+        assert_eq!(
+            cluster.node_permissions_platforms,
+            Some(vec![Platform::Aws])
+        );
+        assert_eq!(stack.permissions.profiles["reader"], remaining);
+        assert_eq!(
+            stack.permissions.management,
+            crate::ManagementPermissions::Extend(remaining)
+        );
+        remove_declined_resources(&mut stack, &["missing".into()]);
+        let cluster = stack.resources["compute"]
+            .config
+            .downcast_ref::<crate::ComputeCluster>()
+            .unwrap();
+        assert_eq!(
+            cluster.node_permissions,
+            Some(crate::PermissionProfile::new())
+        );
+        assert_eq!(
+            cluster.node_permissions_platforms,
+            Some(vec![Platform::Aws])
+        );
+    }
 
     #[test]
     fn off_platform_gate_needs_neither_a_valid_value_nor_a_default() {

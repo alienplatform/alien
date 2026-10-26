@@ -1638,6 +1638,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn declined_node_targets_leave_no_grants_links_or_dependencies() {
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        for off_platform in [false, true] {
+            for accepted in [false, true] {
+                let mut stack = node_dependency_stack();
+                let mut input = alien_core::StackInputDefinition::deployer_boolean(
+                    "managedObjects",
+                    "Managed objects",
+                    "Create storage",
+                    Some(true),
+                );
+                input.platforms = Some(vec![if off_platform {
+                    Platform::Gcp
+                } else {
+                    Platform::Aws
+                }]);
+                stack.inputs.push(input);
+                stack.resources.get_mut("objects").unwrap().enabled_when =
+                    Some("managedObjects".into());
+                let cluster = stack
+                    .resources
+                    .get_mut("compute")
+                    .unwrap()
+                    .config
+                    .downcast_mut::<ComputeCluster>()
+                    .unwrap();
+                cluster.node_permissions_platforms = Some(vec![Platform::Aws]);
+                // Keep a second target so pruning cannot discard the whole profile.
+                cluster
+                    .node_permissions
+                    .as_mut()
+                    .unwrap()
+                    .0
+                    .insert("other".into(), vec!["storage/data-read".into()]);
+                let other = alien_core::Storage::new("other".into()).build();
+                stack.resources.extend(
+                    Stack::new("other".into())
+                        .add(other, ResourceLifecycle::Frozen)
+                        .build()
+                        .resources,
+                );
+                if !off_platform && !accepted {
+                    alien_core::remove_declined_resources(&mut stack, &["objects".into()]);
+                }
+                let prepared = node_dependency_runner()
+                    .apply_mutations(stack, &StackState::new(Platform::Aws), &config)
+                    .await
+                    .expect("declined node targets must not fail ComputeCluster mutation");
+                let kept = !off_platform && accepted;
+                assert_eq!(prepared.resources.contains_key("objects"), kept);
+                let cluster = prepared.resources["compute"]
+                    .config
+                    .downcast_ref::<ComputeCluster>()
+                    .unwrap();
+                let grants = &cluster.node_permissions.as_ref().unwrap().0;
+                assert_eq!(grants.contains_key("objects"), kept);
+                assert!(grants.contains_key("other"));
+                assert_eq!(
+                    prepared.permissions.profiles["reader"]
+                        .0
+                        .contains_key("objects"),
+                    kept
+                );
+                let app = prepared.resources["app"]
+                    .config
+                    .downcast_ref::<Daemon>()
+                    .unwrap();
+                assert_eq!(app.links.iter().any(|link| link.id == "objects"), kept);
+                assert_eq!(
+                    prepared.resources["compute"]
+                        .dependencies
+                        .iter()
+                        .any(|dependency| dependency.id == "objects"),
+                    kept
+                );
+                assert!(prepared.resources["compute"]
+                    .dependencies
+                    .iter()
+                    .any(|dependency| dependency.id == "other"));
+                let check = PermissionSetsExistCheck
+                    .check(&prepared, Platform::Aws)
+                    .await
+                    .unwrap();
+                assert!(check.success, "{:?}", check.errors);
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn node_platform_selector_projects_one_manifest_before_target_validation() {
         let mut stack = node_dependency_stack();
         stack.supported_platforms = Some(vec![Platform::Aws, Platform::Machines]);
