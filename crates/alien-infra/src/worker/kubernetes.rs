@@ -43,6 +43,9 @@ pub struct KubernetesWorkerController {
     /// Whether the internal command Service has been reconciled for this Worker.
     #[serde(default)]
     pub(crate) commands_enabled: bool,
+    /// Generation returned when the current update was submitted.
+    #[serde(default)]
+    pub(crate) expected_generation: Option<i64>,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
 }
@@ -631,7 +634,7 @@ impl KubernetesWorkerController {
         .await?;
         new_deployment.metadata.resource_version = resource_version;
 
-        deployment_client
+        let updated = deployment_client
             .update_deployment(namespace, deployment_name, &new_deployment)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -639,6 +642,12 @@ impl KubernetesWorkerController {
                 resource_id: Some(config.id.clone()),
             })?;
 
+        self.expected_generation = Some(updated.metadata.generation.ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Updated Deployment has no generation".into(),
+            })
+        })?);
         info!(deployment_name=%deployment_name, "Deployment update submitted, waiting for rollout");
 
         Ok(HandlerAction::Continue {
@@ -691,7 +700,7 @@ impl KubernetesWorkerController {
                 if deployment_rollout_complete(
                     &deployment,
                     desired,
-                    deployment.metadata.generation,
+                    self.expected_generation.or(deployment.metadata.generation),
                 ) {
                     info!(deployment_name=%deployment_name, "Deployment rollout complete");
                     return Ok(HandlerAction::Continue {
@@ -1164,6 +1173,7 @@ impl KubernetesWorkerController {
             worker_id: Some("test-worker".to_string()),
             commands_enabled: false,
             public_endpoint: KubernetesPublicEndpointState::default(),
+            expected_generation: None,
             _internal_stay_count: None,
         }
     }
@@ -1248,6 +1258,59 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn worker_update_waits_for_submitted_generation() {
+        let server = httpmock::MockServer::start_async().await;
+        let mut response = server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+            then.status(200).json_body(serde_json::json!({
+                "metadata":{"generation":2},
+                "spec":{"replicas":1,"selector":{},"template":{}},
+                "status":{"replicas":1,"readyReplicas":1,"updatedReplicas":1,"availableReplicas":1,"observedGeneration":2}
+            }));
+        });
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:1".into(),
+            })
+            .permissions("default".into())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes client")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual client")
+        };
+        *server_url = server.base_url();
+        let mut value = serde_json::to_value(KubernetesWorkerController {
+            deployment_name: Some("worker".into()),
+            namespace: Some("test-ns".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        value["expectedGeneration"] = serde_json::json!(3);
+        let mut controller: KubernetesWorkerController = serde_json::from_value(value).unwrap();
+        assert!(matches!(
+            controller.waiting_for_update(&ctx).await.unwrap(),
+            KubernetesWorkerHandlerAction::Stay { .. }
+        ));
+        response.delete();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+            then.status(200).json_body(serde_json::json!({
+                "metadata":{"generation":3},
+                "spec":{"replicas":1,"selector":{},"template":{}},
+                "status":{"replicas":1,"readyReplicas":1,"updatedReplicas":1,"availableReplicas":1,"observedGeneration":3}
+            }));
+        });
+        assert!(matches!(
+            controller.waiting_for_update(&ctx).await.unwrap(),
+            KubernetesWorkerHandlerAction::Continue { .. }
+        ));
+    }
+
     #[test]
     fn test_kubernetes_function_name() {
         // Test basic functionality
@@ -1301,6 +1364,7 @@ mod tests {
             worker_id: Some("worker".to_string()),
             commands_enabled: true,
             public_endpoint,
+            expected_generation: None,
             _internal_stay_count: None,
         };
 
@@ -1339,6 +1403,7 @@ mod tests {
             worker_id: Some("worker".to_string()),
             commands_enabled: false,
             public_endpoint,
+            expected_generation: None,
             _internal_stay_count: None,
         };
 
