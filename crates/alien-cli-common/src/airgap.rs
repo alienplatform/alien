@@ -395,13 +395,22 @@ pub async fn import_images(
                     "registry returned a different manifest digest",
                 )))
             }
-            Err(OciDistributionError::ServerError { code: 404, .. }) => {}
+            // A registry may hide an absent repository behind an auth response.
+            // Try the authorized push; a real permission failure still propagates.
+            Err(OciDistributionError::ServerError {
+                code: 401 | 403 | 404,
+                ..
+            })
+            | Err(OciDistributionError::UnauthorizedError { .. }) => {}
             Err(OciDistributionError::RegistryError { envelope, .. })
                 if !envelope.errors.is_empty()
                     && envelope.errors.iter().all(|error| {
                         matches!(
                             error.code,
-                            OciErrorCode::ManifestUnknown | OciErrorCode::NameUnknown
+                            OciErrorCode::ManifestUnknown
+                                | OciErrorCode::NameUnknown
+                                | OciErrorCode::Unauthorized
+                                | OciErrorCode::Denied
                         )
                     }) => {}
             Err(error) => {
@@ -1030,7 +1039,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn existing_digest_skips_writes_but_registry_errors_stop_import() {
+    async fn existing_digest_skips_writes_and_missing_repository_can_be_pushed() {
         let registry = MockServer::start_async().await;
         let _ping = registry
             .mock_async(|when, then| {
@@ -1050,7 +1059,7 @@ mod tests {
                 then.status(200).header("Docker-Content-Digest", &digest);
             })
             .await;
-        let writes = registry
+        let mut writes = registry
             .mock_async(|when, then| {
                 when.method(PUT);
                 then.status(201);
@@ -1081,16 +1090,49 @@ mod tests {
         existing.assert_async().await;
         writes.assert_hits_async(0).await;
         existing.delete_async().await;
-        let _denied = registry
+        for (index, status) in [401, 403].into_iter().enumerate() {
+            let mut missing = registry
+                .mock_async(|when, then| {
+                    when.path(&path);
+                    then.status(status);
+                })
+                .await;
+            // Registries may hide nonexistent repositories from read requests but
+            // accept the authorized first push that creates the repository.
+            import_images(layout.path(), &images, &prefix, &access)
+                .await
+                .unwrap();
+            writes.assert_hits_async(index + 1).await;
+            missing.delete_async().await;
+        }
+        let mut unavailable = registry
             .mock_async(|when, then| {
                 when.path(&path);
-                then.status(401);
+                then.status(500);
             })
             .await;
         assert!(import_images(layout.path(), &images, &prefix, &access)
             .await
             .is_err());
-        writes.assert_hits_async(0).await;
+        writes.assert_hits_async(2).await;
+        unavailable.delete_async().await;
+        writes.delete_async().await;
+        let _missing = registry
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD).path(&path);
+                then.status(403);
+            })
+            .await;
+        let denied_write = registry
+            .mock_async(|when, then| {
+                when.method(PUT);
+                then.status(403);
+            })
+            .await;
+        assert!(import_images(layout.path(), &images, &prefix, &access)
+            .await
+            .is_err());
+        denied_write.assert_hits_async(1).await;
     }
 
     #[test]
