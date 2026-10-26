@@ -212,12 +212,58 @@ pub fn parse_binding_from_env<T: for<'de> Deserialize<'de>>(
         })
     })?;
 
-    serde_json::from_str(json_str)
+    let mut value: JsonValue = serde_json::from_str(json_str).into_alien_error().context(
+        ErrorData::BindingJsonParseFailed {
+            binding_name: binding_name.to_string(),
+            reason: "Invalid JSON format".to_string(),
+        },
+    )?;
+    resolve_binding_env_refs(&mut value, env, binding_name)?;
+    serde_json::from_value(value)
         .into_alien_error()
         .context(ErrorData::BindingJsonParseFailed {
             binding_name: binding_name.to_string(),
             reason: "Invalid JSON format".to_string(),
         })
+}
+
+/// Resolve projected Secret values after parsing JSON, preserving their exact bytes.
+/// Values read from the environment are literals, never recursively interpreted.
+pub fn resolve_binding_env_refs(
+    value: &mut JsonValue,
+    env: &HashMap<String, String>,
+    binding_name: &str,
+) -> crate::error::Result<()> {
+    match value {
+        JsonValue::Object(fields) => {
+            if fields.len() == 1 && fields.contains_key("envRef") {
+                let name = fields["envRef"].as_str().ok_or_else(|| {
+                    AlienError::new(ErrorData::BindingConfigInvalid {
+                        binding_name: binding_name.to_string(),
+                        reason: "envRef must name an environment variable".to_string(),
+                    })
+                })?;
+                let secret = env.get(name).ok_or_else(|| {
+                    AlienError::new(ErrorData::BindingEnvVarMissing {
+                        binding_name: binding_name.to_string(),
+                        env_var: name.to_string(),
+                    })
+                })?;
+                *value = JsonValue::String(secret.clone());
+            } else {
+                for field in fields.values_mut() {
+                    resolve_binding_env_refs(field, env, binding_name)?;
+                }
+            }
+        }
+        JsonValue::Array(items) => {
+            for item in items {
+                resolve_binding_env_refs(item, env, binding_name)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -226,6 +272,20 @@ mod tests {
     use crate::bindings::{ArtifactRegistryBinding, BuildBinding, StorageBinding};
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn environment_references_are_resolved_as_literals() {
+        let original = json!({"nested": [{"envRef": "SECRET"}], "literal": "$(SECRET)"});
+        let secret = "{\"envRef\":\"OTHER\"}\n\\";
+        let env = HashMap::from([("SECRET".into(), secret.into())]);
+        let mut value = original.clone();
+        resolve_binding_env_refs(&mut value, &env, "database").unwrap();
+        assert_eq!(value, json!({"nested": [secret], "literal": "$(SECRET)"}));
+        let mut missing = original;
+        assert!(resolve_binding_env_refs(&mut missing, &HashMap::new(), "database").is_err());
+        let mut invalid = json!({"envRef": 7});
+        assert!(resolve_binding_env_refs(&mut invalid, &env, "database").is_err());
+    }
 
     #[test]
     fn test_serialize_storage_binding_as_env_var() {
