@@ -109,10 +109,37 @@ pub struct ExternalPostgresBinding {
     pub username: BindingValue<String>,
     /// Connection password or Kubernetes Secret reference. Kubernetes workloads resolve
     /// the reference through secretKeyRef before the application loads its binding.
+    #[serde(deserialize_with = "deserialize_external_password")]
+    #[cfg_attr(feature = "openapi", schema(value_type = ExternalPasswordInput, inline))]
+    #[cfg_attr(feature = "jsonschema", schemars(with = "ExternalPasswordInput"))]
     pub password: BindingValue<String>,
     /// Explicit TLS policy. Missing legacy configuration defaults to verified TLS.
     #[serde(default)]
     pub ssl_mode: ExternalPostgresSslMode,
+}
+
+// Password references extend the old string contract without accepting numeric,
+// boolean, null, or array passwords through BindingValue's expression fallback.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+enum ExternalPasswordInput {
+    Literal(String),
+    Reference(std::collections::BTreeMap<String, serde_json::Value>),
+}
+
+fn deserialize_external_password<'de, D>(deserializer: D) -> Result<BindingValue<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match ExternalPasswordInput::deserialize(deserializer)? {
+        ExternalPasswordInput::Literal(value) => Ok(BindingValue::Value(value)),
+        ExternalPasswordInput::Reference(reference) => {
+            serde_json::from_value(serde_json::Value::Object(reference.into_iter().collect()))
+                .map_err(serde::de::Error::custom)
+        }
+    }
 }
 
 /// Local embedded Postgres binding.
@@ -196,6 +223,22 @@ impl PostgresBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_password_rejects_non_string_literals() {
+        for password in [
+            serde_json::json!(42),
+            serde_json::json!(false),
+            serde_json::json!(null),
+            serde_json::json!([]),
+        ] {
+            let binding = serde_json::json!({
+                "service": "external", "host": "db.internal", "port": 5432,
+                "database": "app", "username": "app", "password": password
+            });
+            assert!(serde_json::from_value::<PostgresBinding>(binding).is_err());
+        }
+    }
 
     #[test]
     fn local_binding_uses_local_postgres_tag() {
