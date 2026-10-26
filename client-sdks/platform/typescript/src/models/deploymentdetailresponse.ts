@@ -2041,7 +2041,7 @@ export type DeploymentDetailResponse = {
    */
   stackSettings: DeploymentDetailResponseStackSettings;
   /**
-   * State of infrastructure components managed by this deployment
+   * Raw engine state for installers and the CLI to resume, update, and destroy deployments. UIs should read resources[] for resource status and errors.
    */
   stackState?: DeploymentDetailResponseStackState | null | undefined;
   /**

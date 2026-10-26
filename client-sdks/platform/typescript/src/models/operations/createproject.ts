@@ -332,11 +332,11 @@ export type CreateProjectGitRepositoryResponse = {
  */
 export type CreateProjectDeploymentPortalAppearance = {
   /**
-   * Optional project-specific avatar override for the deployment portal.
+   * Optional project-specific avatar override. Must be an absolute HTTPS URL without embedded credentials.
    */
   avatarUrl?: string | null | undefined;
   /**
-   * Optional browser icon override for the deployment portal.
+   * Optional browser icon override. Must be an absolute HTTPS URL without embedded credentials.
    */
   faviconUrl?: string | null | undefined;
   /**
@@ -356,11 +356,11 @@ export type CreateProjectDeploymentPortalAppearance = {
    */
   subtitle?: string | null | undefined;
   /**
-   * Optional support or contact URL.
+   * Optional support or contact URL. Must be an absolute HTTPS URL without embedded credentials.
    */
   supportUrl?: string | null | undefined;
   /**
-   * Optional documentation URL.
+   * Optional documentation URL. Must be an absolute HTTPS URL without embedded credentials.
    */
   docsUrl?: string | null | undefined;
   /**
