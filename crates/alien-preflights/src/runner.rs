@@ -668,7 +668,7 @@ fn without_declined_live_resources(
         })
     })?;
     let mut projected = stack.clone();
-    alien_core::remove_declined_resources(&mut projected, &declined);
+    alien_core::remove_declined_live_resources(&mut projected, &declined);
     Ok(projected)
 }
 

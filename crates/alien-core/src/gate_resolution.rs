@@ -213,10 +213,28 @@ pub fn surviving_frozen_gate_answers(stack: &Stack) -> (GateAnswers, HashSet<Str
     (answers, still_frozen_gating)
 }
 
-/// Take declined gated resources out of `stack` with every link, ordering edge and grant naming
-/// them. The deployment strips and the preflight runner's digest projection share it, so the
-/// installed stack and the target they compare are stripped the same way.
+/// Remove declined resources before mutations, including node grants that must name concrete
+/// resources when the ComputeCluster mutation derives setup-owned node permissions.
 pub fn remove_declined_resources(stack: &mut Stack, declined: &[String]) {
+    if declined.is_empty() {
+        return;
+    }
+    for entry in stack.resources.values_mut() {
+        if let Some(profile) = entry
+            .config
+            .downcast_mut::<crate::ComputeCluster>()
+            .and_then(|cluster| cluster.node_permissions.as_mut())
+        {
+            scrub_declined_profile(profile, declined);
+        }
+    }
+    remove_declined_live_resources(stack, declined);
+}
+
+/// Remove mutable Live declines after mutations, retaining setup-owned node grants just as
+/// derived service-account grants are retained. Later updates compare those Frozen configs
+/// with the accepted render before applying Live declines. The setup digest uses this strip too.
+pub fn remove_declined_live_resources(stack: &mut Stack, declined: &[String]) {
     if declined.is_empty() {
         return;
     }
@@ -270,39 +288,31 @@ pub fn remove_declined_resources(stack: &mut Stack, declined: &[String]) {
     scrub_declined_grants(stack, declined);
 }
 
-/// Drop grants naming a declined resource from workload, management and node profiles.
+/// Drop grants naming a declined resource from workload and management profiles.
 ///
 /// Not inert: GCP applies every non-`"*"` entry without consulting the desired resources.
 /// Nothing is lost, because the mutations re-derive them whenever the gate is accepted.
 fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
-    let scrub = |profile: &mut crate::permissions::PermissionProfile| {
-        for resource_id in declined {
-            if profile.0.shift_remove(resource_id).is_some() {
-                tracing::info!(
-                    resource_id = %resource_id,
-                    "Dropped the grant for a declined resource"
-                );
-            }
-        }
-    };
-
-    for entry in stack.resources.values_mut() {
-        if let Some(profile) = entry
-            .config
-            .downcast_mut::<crate::ComputeCluster>()
-            .and_then(|cluster| cluster.node_permissions.as_mut())
-        {
-            scrub(profile);
-        }
-    }
-
     for profile in stack.permissions.profiles.values_mut() {
-        scrub(profile);
+        scrub_declined_profile(profile, declined);
     }
     match &mut stack.permissions.management {
         crate::permissions::ManagementPermissions::Extend(profile)
-        | crate::permissions::ManagementPermissions::Override(profile) => scrub(profile),
+        | crate::permissions::ManagementPermissions::Override(profile) => {
+            scrub_declined_profile(profile, declined);
+        }
         crate::permissions::ManagementPermissions::Auto => {}
+    }
+}
+
+fn scrub_declined_profile(
+    profile: &mut crate::permissions::PermissionProfile,
+    declined: &[String],
+) {
+    for resource_id in declined {
+        if profile.0.shift_remove(resource_id).is_some() {
+            tracing::info!(resource_id = %resource_id, "Dropped the grant for a declined resource");
+        }
     }
 }
 

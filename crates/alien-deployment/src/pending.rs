@@ -381,7 +381,7 @@ pub fn strip_declined_live_resources(
         platform,
     )
     .map_err(|message| AlienError::new(ErrorData::MissingConfiguration { message }))?;
-    alien_core::remove_declined_resources(&mut stack, &declined);
+    alien_core::remove_declined_live_resources(&mut stack, &declined);
     Ok(stack)
 }
 
