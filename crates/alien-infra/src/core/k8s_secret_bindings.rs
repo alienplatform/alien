@@ -162,29 +162,41 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn existing_bindings_keep_the_published_sdk_environment() {
-        for service in ["redis", "external"] {
-            let input = json!({"service": service, "host": "db.internal", "port": 5432,
-                "database": "app", "username": "app", "price": "$100",
-                "password": {"secretRef": {"name": "credentials", "key": "password"}}});
-            let projected = extract_binding_secrets("database", &input).unwrap();
+    fn typed_bindings_keep_the_legacy_environment_projection() {
+        for (name, field, env, input) in [
+            (
+                "database",
+                "host",
+                "ALIEN_BINDING_DATABASE_HOST",
+                json!({
+                    "type":"postgres", "service":"external", "host":{"secretRef":{"name":"credentials","key":"value"}},
+                    "port":5432, "database":"app", "username":"app", "password":"literal-$100"
+                }),
+            ),
+            (
+                "cache",
+                "dataDir",
+                "ALIEN_BINDING_CACHE_DATADIR",
+                json!({
+                    "type":"kv", "service":"local-kv", "dataDir":{"secretRef":{"name":"credentials","key":"value"}},
+                    "keyPrefix":"literal-$100"
+                }),
+            ),
+        ] {
+            let binding: alien_core::ExternalBinding = serde_json::from_value(input).unwrap();
+            let input = serde_json::to_value(binding).unwrap();
+            let projected = extract_binding_secrets(name, &input).unwrap();
             let mut expected = input;
-            expected["password"] = json!("$(ALIEN_BINDING_DATABASE_PASSWORD)");
+            expected[field] = json!(format!("$({env})"));
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(&projected.resolved_binding_json)
                     .unwrap(),
                 expected
             );
-            // Published SDKs deserialize this password directly as a String.
-            let expanded = projected
-                .resolved_binding_json
-                .replace("$(ALIEN_BINDING_DATABASE_PASSWORD)", "existing-password");
-            #[derive(serde::Deserialize)]
-            struct PublishedBinding {
-                password: String,
-            }
-            let loaded: PublishedBinding = serde_json::from_str(&expanded).unwrap();
-            assert_eq!(loaded.password, "existing-password");
+            assert_eq!(
+                projected.secret_env_vars,
+                vec![(env.to_string(), "credentials".into(), "value".into())]
+            );
         }
     }
 
