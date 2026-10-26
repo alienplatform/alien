@@ -27,7 +27,7 @@ struct OtlpServerState {
     db: Arc<OperatorDb>,
     namespace: Option<String>,
     collector_token: Option<String>,
-    /// Set when air-gapped: authorizes `GET /airgap/telemetry`.
+    /// Set when air-gapped: authorizes telemetry export and final intake sealing.
     airgap_export_token: Option<String>,
 }
 
@@ -64,6 +64,7 @@ pub async fn start_otlp_server(
         .route("/v1/traces", post(handle_traces))
         .route("/internal/logs", post(handle_collector_logs))
         .route("/airgap/telemetry", get(handle_airgap_export))
+        .route("/airgap/telemetry/seal", post(handle_airgap_seal))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .with_state(OtlpServerState {
             db,
@@ -129,6 +130,27 @@ struct AirgapTelemetryPage {
     dropped: u64,
 }
 
+/// Only the site export credential may stop intake for its final drain.
+async fn handle_airgap_seal(State(state): State<OtlpServerState>, headers: HeaderMap) -> Response {
+    let Some(expected) = &state.airgap_export_token else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if presented != Some(expected.as_str()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match state.db.seal_airgap_telemetry().await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            error!(error = %error, "Failed to stop telemetry intake");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 /// Buffered telemetry for `alien-deploy sync` to carry out of an air-gapped
 /// site. Batches stay buffered until a signed bundle acknowledges them.
 async fn handle_airgap_export(
@@ -190,7 +212,10 @@ async fn handle_logs(
 
     if let Err(e) = state.db.store_telemetry("logs", &body).await {
         error!(error = %e, "Failed to store logs");
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err(e
+            .http_status_code
+            .and_then(|code| StatusCode::from_u16(code).ok())
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
     Ok(Json(OtlpResponse { accepted: true }))
@@ -204,7 +229,10 @@ async fn handle_metrics(
 
     if let Err(e) = state.db.store_telemetry("metrics", &body).await {
         error!(error = %e, "Failed to store metrics");
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err(e
+            .http_status_code
+            .and_then(|code| StatusCode::from_u16(code).ok())
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
     Ok(Json(OtlpResponse { accepted: true }))
@@ -218,7 +246,10 @@ async fn handle_traces(
 
     if let Err(e) = state.db.store_telemetry("traces", &body).await {
         error!(error = %e, "Failed to store traces");
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err(e
+            .http_status_code
+            .and_then(|code| StatusCode::from_u16(code).ok())
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
     Ok(Json(OtlpResponse { accepted: true }))
@@ -323,8 +354,153 @@ mod tests {
             serde_json::json!({ "status": "ok" })
         );
 
+        assert_eq!(
+            client
+                .post(format!("http://127.0.0.1:{port}/airgap/telemetry/seal"))
+                .bearer_auth("unrelated-token")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::NOT_FOUND
+        );
         cancel.cancel();
         server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn deletion_export_stops_writes_before_draining_accepted_batches() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let port = free_port();
+        let cancel = CancellationToken::new();
+        let server_cancel = cancel.clone();
+        let server_db = db.clone();
+        let server = tokio::spawn(async move {
+            start_otlp_server(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                port,
+                server_db,
+                None,
+                None,
+                Some("export-secret".into()),
+                None,
+                server_cancel,
+            )
+            .await
+        });
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{port}");
+        for _ in 0..50 {
+            if client.get(format!("{base}/health")).send().await.is_ok() {
+                break;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+        db.store_telemetry("logs", b"first").await.unwrap();
+        let first: serde_json::Value = client
+            .get(format!("{base}/airgap/telemetry"))
+            .bearer_auth("export-secret")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let cursor = first["items"][0]["id"].as_i64().unwrap();
+        assert_eq!(
+            client
+                .post(format!("{base}/airgap/telemetry/seal"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+        // This accepted write arrives after the ordinary export page.
+        assert!(client
+            .post(format!("{base}/v1/logs"))
+            .body("late accepted")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success());
+        assert_eq!(db.telemetry_after(cursor, 100).await.unwrap().len(), 1);
+        let sealed = client
+            .post(format!("{base}/airgap/telemetry/seal"))
+            .bearer_auth("export-secret")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(sealed.status(), reqwest::StatusCode::NO_CONTENT);
+        assert_eq!(
+            client
+                .post(format!("{base}/v1/logs"))
+                .body("after seal")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::SERVICE_UNAVAILABLE
+        );
+        let drained: serde_json::Value = client
+            .get(format!("{base}/airgap/telemetry?after={cursor}"))
+            .bearer_auth("export-secret")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(drained["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(drained["items"][0]["data"].as_str().unwrap())
+                .unwrap(),
+            b"late accepted"
+        );
+        let offset = crate::db::PodLogOffset {
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            ordinal: 1,
+        };
+        assert!(db
+            .store_pod_log_batch("pod", "app", 0, &offset, b"after seal")
+            .await
+            .is_err());
+        assert!(db
+            .get_pod_log_offset("pod", "app", 0)
+            .await
+            .unwrap()
+            .is_none());
+        cancel.cancel();
+        server.await.unwrap().unwrap();
+        drop(db);
+        let reopened = OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        assert!(reopened
+            .store_telemetry("logs", b"after restart")
+            .await
+            .is_err());
+        assert_eq!(reopened.telemetry_after(0, 100).await.unwrap().len(), 2);
+        reopened
+            .record_airgap_target(&crate::db::AirgapReceipt {
+                sequence: 8,
+                target_hash: "new-target".into(),
+                attempt: None,
+            })
+            .await
+            .unwrap();
+        reopened
+            .store_telemetry("logs", b"new installation")
+            .await
+            .unwrap();
+        assert_eq!(reopened.telemetry_after(0, 100).await.unwrap().len(), 3);
     }
 
     #[tokio::test]

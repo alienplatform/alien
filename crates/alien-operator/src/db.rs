@@ -1171,6 +1171,7 @@ impl OperatorDb {
     /// Store telemetry for later push
     pub async fn store_telemetry(&self, telemetry_type: &str, data: &[u8]) -> Result<()> {
         let conn = self.conn.lock().await;
+        Self::ensure_telemetry_writable(&conn).await?;
 
         conn.execute(
             "INSERT INTO telemetry (type, data, created_at) VALUES (?, ?, datetime('now'))",
@@ -1377,6 +1378,7 @@ impl OperatorDb {
         data: &[u8],
     ) -> Result<()> {
         let conn = self.conn.lock().await;
+        Self::ensure_telemetry_writable(&conn).await?;
         conn.execute("BEGIN IMMEDIATE", ())
             .await
             .into_alien_error()

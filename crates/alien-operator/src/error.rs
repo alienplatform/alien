@@ -7,6 +7,16 @@ pub type Result<T> = alien_error::Result<T, ErrorData>;
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The site is draining its final telemetry before uninstall.
+    #[error(
+        code = "TELEMETRY_SEALED",
+        message = "Telemetry intake is stopped for site deletion",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    TelemetrySealed,
+
     #[error(
         code = "INCOMPATIBLE_OPERATOR_STATE",
         message = "Operator state schema version {found_version} is not supported; this operator supports {min_supported_version} through {current_version}. {repair}",

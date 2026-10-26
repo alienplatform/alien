@@ -1777,6 +1777,19 @@ async fn uninstall_site(
     // Keep the snapshot outside from-site until Helm confirms cleanup. It also
     // lets an interrupted uninstall resume after the Operator is gone.
     let snapshot = folder.join("deleting-report.json");
+    let sealed_snapshot = folder.join("deleting-telemetry-sequence.json");
+    let telemetry_sealed = if snapshot.exists() && sealed_snapshot.exists() {
+        let sequence: u64 = serde_json::from_slice(
+            &std::fs::read(&sealed_snapshot)
+                .into_alien_error()
+                .context(config_error("reading final telemetry receipt"))?,
+        )
+        .into_alien_error()
+        .context(config_error("parsing final telemetry receipt"))?;
+        sequence == manifest.sequence
+    } else {
+        false
+    };
     let mut report: SiteReport = if snapshot.exists() {
         serde_json::from_slice(
             &std::fs::read(&snapshot)
@@ -1846,6 +1859,47 @@ async fn uninstall_site(
         ]);
         let deployment = run(get, "checking for the Operator").await?;
         if !deployment.is_empty() {
+            if !telemetry_sealed {
+                let (_, export_token) = read_status(settings, &manifest.stack_id, &namespace)
+                    .await?
+                    .ok_or_else(|| {
+                        AlienError::new(config_error(
+                            "the Operator export credential is unavailable before deletion",
+                        ))
+                    })?;
+                let after = report
+                    .telemetry
+                    .iter()
+                    .map(|batch| batch.id)
+                    .max()
+                    .unwrap_or(site.uploaded_through);
+                // The first snapshot may predate batches accepted while it was written.
+                // Seal both ingestion paths, then drain those batches before stopping.
+                let (remaining, dropped) = export_telemetry(
+                    settings,
+                    &manifest.stack_id,
+                    &namespace,
+                    &export_token,
+                    after,
+                    true,
+                )
+                .await?;
+                report.telemetry.extend(remaining);
+                report.dropped = dropped;
+                std::fs::write(
+                    &snapshot,
+                    serde_json::to_vec(&report)
+                        .into_alien_error()
+                        .context(config_error("encoding final telemetry snapshot"))?,
+                )
+                .into_alien_error()
+                .context(config_error("saving final telemetry snapshot"))?;
+                // Persist the completed drain before stopping. A retry must not
+                // port-forward to an Operator already scaled to zero.
+                std::fs::write(&sealed_snapshot, manifest.sequence.to_string())
+                    .into_alien_error()
+                    .context(config_error("saving final telemetry receipt"))?;
+            }
             let deployment: serde_json::Value = serde_json::from_slice(&deployment)
                 .into_alien_error()
                 .context(config_error("reading the Operator selector"))?;
@@ -2026,6 +2080,11 @@ async fn uninstall_site(
         std::fs::remove_dir_all(installed)
             .into_alien_error()
             .context(config_error("removing deleted install history"))?;
+    }
+    if sealed_snapshot.exists() {
+        std::fs::remove_file(sealed_snapshot)
+            .into_alien_error()
+            .context(config_error("removing final telemetry receipt"))?;
     }
     if snapshot.exists() {
         std::fs::remove_file(snapshot)
@@ -2871,8 +2930,15 @@ async fn collect_report(
         return Ok(None);
     };
     let after = current_ack(settings, &record.stack_id, &namespace).await?;
-    let (telemetry, dropped) =
-        export_telemetry(settings, &record.stack_id, &namespace, &export_token, after).await?;
+    let (telemetry, dropped) = export_telemetry(
+        settings,
+        &record.stack_id,
+        &namespace,
+        &export_token,
+        after,
+        false,
+    )
+    .await?;
     report_from_status(site, record, status, telemetry, dropped).map(Some)
 }
 
@@ -2937,6 +3003,7 @@ async fn export_telemetry(
     namespace: &str,
     token: &str,
     after: i64,
+    seal: bool,
 ) -> Result<(Vec<ReportedBatch>, u64)> {
     let values = release_values(settings, release, namespace)
         .await?
@@ -3004,6 +3071,22 @@ async fn export_telemetry(
     })?;
 
     let client = http()?;
+    if seal {
+        let response = client
+            .post(format!(
+                "http://127.0.0.1:{local_port}/airgap/telemetry/seal"
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .into_alien_error()
+            .context(config_error("stopping telemetry intake before deletion"))?;
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
+            return Err(AlienError::new(config_error(format!(
+                "The Operator could not stop telemetry intake ({}). Upgrade the Operator before retrying deletion.", response.status()
+            ))));
+        }
+    }
     let mut batches = Vec::new();
     let mut read_through = after;
     let dropped = loop {
@@ -3642,34 +3725,35 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
     async fn signed_uninstall_resumes_without_operator_deployment() {
-        let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
-        let namespace = format!("sync-delete-retry-{}", std::process::id());
-        let (folder, mut site) = folder_with_report();
-        site.deployment_id = format!("dep_retry_{}", std::process::id());
-        let snapshot = folder.path().join("deleting-report.json");
-        std::fs::rename(report_path(folder.path()), &snapshot).unwrap();
-        let mut original: SiteReport =
-            serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
-        original.deployment_id = site.deployment_id.clone();
-        std::fs::write(&snapshot, serde_json::to_vec(&original).unwrap()).unwrap();
-        let settings = SiteSide {
-            registry: "registry.example.com/site".into(),
-            registry_credentials: None,
-            insecure_registry: false,
-            namespace: Some(namespace.clone()),
-            values: Vec::new(),
-            kube_context: Some(context.clone()),
-        };
-        let chart = tempfile::tempdir().unwrap();
-        std::fs::create_dir(chart.path().join("templates")).unwrap();
-        std::fs::write(
-            chart.path().join("Chart.yaml"),
-            "apiVersion: v2\nname: app\nversion: 0.1.0\n",
-        )
-        .unwrap();
-        std::fs::write(
-            chart.path().join("templates/runtime.yaml"),
-            r#"
+        for stopped in [false, true] {
+            let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
+            let namespace = format!("sync-delete-retry-{}-{stopped}", std::process::id());
+            let (folder, mut site) = folder_with_report();
+            site.deployment_id = format!("dep_retry_{}_{stopped}", std::process::id());
+            let snapshot = folder.path().join("deleting-report.json");
+            std::fs::rename(report_path(folder.path()), &snapshot).unwrap();
+            let mut original: SiteReport =
+                serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
+            original.deployment_id = site.deployment_id.clone();
+            std::fs::write(&snapshot, serde_json::to_vec(&original).unwrap()).unwrap();
+            let settings = SiteSide {
+                registry: "registry.example.com/site".into(),
+                registry_credentials: None,
+                insecure_registry: false,
+                namespace: Some(namespace.clone()),
+                values: Vec::new(),
+                kube_context: Some(context.clone()),
+            };
+            let chart = tempfile::tempdir().unwrap();
+            std::fs::create_dir(chart.path().join("templates")).unwrap();
+            std::fs::write(
+                chart.path().join("Chart.yaml"),
+                "apiVersion: v2\nname: app\nversion: 0.1.0\n",
+            )
+            .unwrap();
+            std::fs::write(
+                chart.path().join("templates/runtime.yaml"),
+                r#"
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -3691,95 +3775,108 @@ kind: ConfigMap
 metadata:
   name: runtime
 "#,
-        )
-        .unwrap();
-        let mut install = Command::new("helm");
-        install.args(["install", "app"]).arg(chart.path()).args([
-            "--namespace",
-            &namespace,
-            "--create-namespace",
-            "--kube-context",
-            &context,
-            "--set",
-            &format!("management.deploymentId={}", site.deployment_id),
-            "--set",
-            "runtime.cleanup.onUninstall.enabled=true",
-        ]);
-        run(install, "installing test release").await.unwrap();
-        let mut delete = kubectl(Some(&context));
-        delete.args(["delete", "deployment", "app", "--namespace", &namespace]);
-        run(delete, "removing the Operator before retry")
-            .await
+            )
             .unwrap();
-        assert!(release_values(&settings, "app", &namespace)
-            .await
-            .unwrap()
-            .is_some());
+            let mut install = Command::new("helm");
+            install.args(["install", "app"]).arg(chart.path()).args([
+                "--namespace",
+                &namespace,
+                "--create-namespace",
+                "--kube-context",
+                &context,
+                "--set",
+                &format!("management.deploymentId={}", site.deployment_id),
+                "--set",
+                "runtime.cleanup.onUninstall.enabled=true",
+            ]);
+            run(install, "installing test release").await.unwrap();
+            if stopped {
+                // The final drain was saved, then the CLI stopped before uninstall.
+                std::fs::write(folder.path().join("deleting-telemetry-sequence.json"), "2")
+                    .unwrap();
+            } else {
+                let mut delete = kubectl(Some(&context));
+                delete.args(["delete", "deployment", "app", "--namespace", &namespace]);
+                run(delete, "removing the Operator before retry")
+                    .await
+                    .unwrap();
+            }
+            assert!(release_values(&settings, "app", &namespace)
+                .await
+                .unwrap()
+                .is_some());
 
-        let bundle = tempfile::tempdir().unwrap();
-        std::fs::write(
-            bundle.path().join(airgap::TARGET_FILE),
-            br#"{"action":"delete"}"#,
-        )
-        .unwrap();
-        let manifest = BundleManifest {
-            format_version: airgap::FORMAT_VERSION,
-            deployment_id: site.deployment_id.clone(),
-            deployment_name: site.name.clone(),
-            release_id: "delete".into(),
-            sequence: 2,
-            created_at: chrono::Utc::now().to_rfc3339(),
-            stack_id: "app".into(),
-            images: Vec::new(),
-            chart_images: BTreeMap::new(),
-            chart: String::new(),
-            files: airgap::checksums(bundle.path()).await.unwrap(),
-            omitted_blobs: BTreeSet::new(),
-            telemetry_ack: None,
-            deletion_policy: None,
-        };
-        let bytes = serde_json::to_vec(&manifest).unwrap();
-        let key = BundleSigningKey::from_seed([6; 32]);
-        std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
-        std::fs::write(bundle.path().join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
-        std::fs::create_dir_all(folder.path().join(TO_SITE)).unwrap();
-        let pending = folder.path().join(TO_SITE).join("2-delete.bundle");
-        airgap::pack(bundle.path(), &pending).unwrap();
-        let args = SyncArgs::try_parse_from(["sync", "--trusted-key", &key.public_key()]).unwrap();
-        install_pending(folder.path(), &mut site, &settings, &args)
-            .await
+            let bundle = tempfile::tempdir().unwrap();
+            std::fs::write(
+                bundle.path().join(airgap::TARGET_FILE),
+                br#"{"action":"delete"}"#,
+            )
             .unwrap();
+            let manifest = BundleManifest {
+                format_version: airgap::FORMAT_VERSION,
+                deployment_id: site.deployment_id.clone(),
+                deployment_name: site.name.clone(),
+                release_id: "delete".into(),
+                sequence: 2,
+                created_at: chrono::Utc::now().to_rfc3339(),
+                stack_id: "app".into(),
+                images: Vec::new(),
+                chart_images: BTreeMap::new(),
+                chart: String::new(),
+                files: airgap::checksums(bundle.path()).await.unwrap(),
+                omitted_blobs: BTreeSet::new(),
+                telemetry_ack: None,
+                deletion_policy: None,
+            };
+            let bytes = serde_json::to_vec(&manifest).unwrap();
+            let key = BundleSigningKey::from_seed([6; 32]);
+            std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
+            std::fs::write(bundle.path().join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
+            std::fs::create_dir_all(folder.path().join(TO_SITE)).unwrap();
+            let pending = folder.path().join(TO_SITE).join("2-delete.bundle");
+            airgap::pack(bundle.path(), &pending).unwrap();
+            let args =
+                SyncArgs::try_parse_from(["sync", "--trusted-key", &key.public_key()]).unwrap();
+            install_pending(folder.path(), &mut site, &settings, &args)
+                .await
+                .unwrap();
 
-        assert!(release_values(&settings, "app", &namespace)
-            .await
-            .unwrap()
-            .is_none());
-        let mut get = kubectl(Some(&context));
-        get.args([
-            "get",
-            "configmap",
-            "runtime",
-            "--namespace",
-            &namespace,
-            "--ignore-not-found",
-            "-o",
-            "name",
-        ]);
-        assert!(run(get, "checking Helm cleanup").await.unwrap().is_empty());
-        let reports = by_sequence(&folder.path().join(FROM_SITE), Some(REPORT_EXTENSION)).unwrap();
-        assert_eq!(reports.len(), 1);
-        let report: SiteReport =
-            serde_json::from_slice(&std::fs::read(&reports[0].1).unwrap()).unwrap();
-        assert_eq!(report.state["status"], "retained");
-        assert_eq!(
-            serde_json::to_value(&report.telemetry).unwrap(),
-            serde_json::to_value(&original.telemetry).unwrap()
-        );
-        assert!(!snapshot.exists());
-        assert!(!pending.exists());
-        let mut delete = kubectl(Some(&context));
-        delete.args(["delete", "namespace", &namespace]);
-        run(delete, "removing test namespace").await.unwrap();
+            assert!(release_values(&settings, "app", &namespace)
+                .await
+                .unwrap()
+                .is_none());
+            let mut get = kubectl(Some(&context));
+            get.args([
+                "get",
+                "configmap",
+                "runtime",
+                "--namespace",
+                &namespace,
+                "--ignore-not-found",
+                "-o",
+                "name",
+            ]);
+            assert!(run(get, "checking Helm cleanup").await.unwrap().is_empty());
+            let reports =
+                by_sequence(&folder.path().join(FROM_SITE), Some(REPORT_EXTENSION)).unwrap();
+            assert_eq!(reports.len(), 1);
+            let report: SiteReport =
+                serde_json::from_slice(&std::fs::read(&reports[0].1).unwrap()).unwrap();
+            assert_eq!(report.state["status"], "retained");
+            assert_eq!(
+                serde_json::to_value(&report.telemetry).unwrap(),
+                serde_json::to_value(&original.telemetry).unwrap()
+            );
+            assert!(!snapshot.exists());
+            assert!(!folder
+                .path()
+                .join("deleting-telemetry-sequence.json")
+                .exists());
+            assert!(!pending.exists());
+            let mut delete = kubectl(Some(&context));
+            delete.args(["delete", "namespace", &namespace]);
+            run(delete, "removing test namespace").await.unwrap();
+        }
     }
 
     /// Retry a signed deletion after a cleanup hook has removed the Operator.
