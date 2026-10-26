@@ -1763,24 +1763,15 @@ impl DeploymentStore for SqliteDeploymentStore {
             )
             .into_generic());
         }
-        if let Some(installed) = deployment.as_ref() {
-            let policy = installed
+        // A delete can change policy while a runtime step holds the lease.
+        // Save its completed work, but only the stored policy authorizes cleanup.
+        if data.state.runtime_metadata.is_some()
+            || stored_deletion_policy != alien_core::DeletionPolicy::default()
+        {
+            data.state
                 .runtime_metadata
-                .as_ref()
-                .map(|metadata| metadata.deletion_policy)
-                .unwrap_or_default();
-            let reported = data
-                .state
-                .runtime_metadata
-                .as_ref()
-                .map(|metadata| metadata.deletion_policy)
-                .unwrap_or_default();
-            if policy != reported {
-                return Err(ErrorData::bad_request(
-                    "A deployment report cannot change the authorized deletion policy",
-                )
-                .into_generic());
-            }
+                .get_or_insert_default()
+                .deletion_policy = stored_deletion_policy;
         }
         // Pull reports own runtime progress, not setup-owned identity cleanup.
         // Retained/deleted snapshots are final until an explicit delete request

@@ -1536,6 +1536,84 @@ async fn stale_reconcile_preserves_runtime_delete_status_and_latest_stack_state(
 }
 
 #[tokio::test]
+async fn checkpoint_after_mid_step_erase_preserves_new_resource_and_authorized_policy() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group, "mid-step-erase", Platform::Aws).await;
+    let session = "runtime-step";
+    let mut report = test_reconcile_data(&dep.id, session, DeploymentStatus::Running, None);
+    report.state.runtime_metadata = Some(RuntimeMetadata::default());
+    store
+        .reconcile(&test_subject(), report.clone())
+        .await
+        .unwrap();
+    let acquired = store
+        .acquire(
+            &test_subject(),
+            session,
+            &DeploymentFilter {
+                deployment_ids: Some(vec![dep.id.clone()]),
+                statuses: Some(vec!["running".into()]),
+                ..Default::default()
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1);
+    assert_eq!(
+        acquired[0]
+            .deployment
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .deletion_policy,
+        alien_core::DeletionPolicy::Retain
+    );
+    store
+        .set_delete_pending_with_policy(&test_subject(), &dep.id, alien_core::DeletionPolicy::Erase)
+        .await
+        .expect("erase is accepted during the runtime lease");
+
+    let mut stack = StackState::new(Platform::Aws);
+    let mut bucket = alien_core::StackResourceState::new_pending(
+        "storage".into(),
+        alien_core::Resource::new(alien_core::Storage::new("data".into()).build()),
+        None,
+        Vec::new(),
+    );
+    bucket.status = alien_core::ResourceStatus::Running;
+    bucket.lifecycle = Some(alien_core::ResourceLifecycle::Live);
+    bucket.internal_state = Some(serde_json::json!({
+        "type": "AwsStorageController", "_controllerStateVersion": 1,
+        "state": "ready", "bucketName": "mid-step-data"
+    }));
+    stack.resources.insert("data".into(), bucket);
+    let expected_stack = serde_json::to_value(&stack).unwrap();
+    report.state.stack_state = Some(stack);
+    let result = store.reconcile(&test_subject(), report).await;
+    let saved = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&saved.stack_state).unwrap(),
+        expected_stack,
+        "completed cloud work must survive the mid-step policy change: {:?}",
+        result.as_ref().err()
+    );
+    result.expect("checkpoint with the old policy is accepted");
+    assert_eq!(saved.status, "delete-pending");
+    assert_eq!(saved.locked_by.as_deref(), Some(session));
+    assert_eq!(
+        saved.runtime_metadata.unwrap().deletion_policy,
+        alien_core::DeletionPolicy::Erase
+    );
+}
+
+#[tokio::test]
 async fn reconcile_hands_runtime_delete_progress_to_setup_lease() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db);
@@ -2767,37 +2845,29 @@ async fn reconcile_cannot_replace_authorized_deletion_policy() {
         .unwrap();
     let mut report = test_reconcile_data(&dep.id, "actor", DeploymentStatus::Deleting, None);
     report.state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
-    assert!(
+    for metadata in [
+        None,
+        Some(RuntimeMetadata {
+            deletion_policy: alien_core::DeletionPolicy::Retain,
+            ..Default::default()
+        }),
+    ] {
+        report.state.runtime_metadata = metadata;
         store
             .reconcile(&test_subject(), report.clone())
             .await
-            .is_err(),
-        "missing policy is retain and cannot overwrite erase"
-    );
-    assert_eq!(
-        store
+            .expect("report progress is accepted without changing authorized policy");
+        let current = store
             .get_deployment(&test_subject(), &dep.id)
             .await
             .unwrap()
-            .unwrap()
-            .status,
-        "delete-pending"
-    );
-    report.state.runtime_metadata = Some(RuntimeMetadata {
-        deletion_policy: alien_core::DeletionPolicy::Erase,
-        ..Default::default()
-    });
-    store.reconcile(&test_subject(), report).await.unwrap();
-    let current = store
-        .get_deployment(&test_subject(), &dep.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(current.status, "deleting");
-    assert_eq!(
-        current.runtime_metadata.unwrap().deletion_policy,
-        alien_core::DeletionPolicy::Erase
-    );
+            .unwrap();
+        assert_eq!(current.status, "deleting");
+        assert_eq!(
+            current.runtime_metadata.unwrap().deletion_policy,
+            alien_core::DeletionPolicy::Erase
+        );
+    }
 }
 
 #[tokio::test]
