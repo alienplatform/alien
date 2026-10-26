@@ -3348,3 +3348,59 @@ mod retention_handoff_tests {
         );
     }
 }
+
+#[tokio::test]
+async fn deleting_a_protocol_one_gcp_installation_keeps_setup_teardown_routing() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group, "legacy-gcp", Platform::Gcp).await;
+    let mut stack = StackState::with_resource_prefix(Platform::Gcp, "legacy".into());
+    let mut management = alien_core::StackResourceState::new_pending(
+        "management".into(),
+        alien_core::Resource::new(
+            alien_core::RemoteStackManagement::new("management".into()).build(),
+        ),
+        None,
+        vec![],
+    );
+    management.status = alien_core::ResourceStatus::Running;
+    management.lifecycle = Some(ResourceLifecycle::Frozen);
+    management.outputs = Some(alien_core::ResourceOutputs::new(
+        alien_core::RemoteStackManagementOutputs {
+            management_resource_id: "manager@test-project.iam.gserviceaccount.com".into(),
+            access_configuration: "manager@test-project.iam.gserviceaccount.com".into(),
+            legacy_remote_bindings_access: None,
+        },
+    ));
+    stack.resources.insert("management".into(), management);
+    db.conn().lock().await.execute(
+        "UPDATE deployments SET status = 'running', deployment_protocol_version = 1, stack_state = ? WHERE id = ?",
+        [serde_json::to_string(&stack).unwrap(), dep.id.clone()],
+    ).await.unwrap();
+    store
+        .set_delete_pending(&test_subject(), &dep.id)
+        .await
+        .unwrap();
+    let saved = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        saved.deployment_protocol_version,
+        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+    );
+    let state = DeploymentState::builder()
+        .status(DeploymentStatus::DeletePending)
+        .platform(Platform::Gcp)
+        .protocol_version(saved.deployment_protocol_version)
+        .stack_state(saved.stack_state.unwrap())
+        .runtime_metadata(saved.runtime_metadata.unwrap())
+        .retry_requested(false)
+        .build();
+    assert_eq!(
+        alien_deployment::destroy_without_runtime(&state),
+        Some(DeploymentStatus::TeardownRequired)
+    );
+}

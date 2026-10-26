@@ -477,7 +477,22 @@ pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentSt
     // runtime cleanup, its setup-owned resources go straight to setup teardown, which uses
     // the deployer's own credentials.
     let pre_federation_gcp = current.platform == Platform::Gcp
-        && current.protocol_version < alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION;
+        && stack_state.resources.values().any(|resource| {
+            resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| {
+                    outputs.downcast_ref::<alien_core::RemoteStackManagementOutputs>()
+                })
+                .is_some_and(|outputs| {
+                    // Legacy setup stored the impersonated service-account email.
+                    // Federated setup stores a structured access document instead.
+                    outputs.access_configuration == outputs.management_resource_id
+                        && outputs
+                            .access_configuration
+                            .ends_with(".iam.gserviceaccount.com")
+                })
+        });
     let metadata = current.runtime_metadata.as_ref();
     if !pre_federation_gcp
         && metadata?.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
@@ -1635,6 +1650,15 @@ mod tests {
         state.platform = Platform::Gcp;
         state.protocol_version = protocol_version;
         let stack_state = state.stack_state.as_mut().unwrap();
+        if protocol_version < alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION {
+            stack_state.resources.get_mut("management").unwrap().outputs = Some(
+                alien_core::ResourceOutputs::new(alien_core::RemoteStackManagementOutputs {
+                    management_resource_id: "manager@test-project.iam.gserviceaccount.com".into(),
+                    access_configuration: "manager@test-project.iam.gserviceaccount.com".into(),
+                    legacy_remote_bindings_access: None,
+                }),
+            );
+        }
         stack_state.platform = Platform::Gcp;
         stack_state.resources.insert(
             "data".to_string(),
@@ -1656,7 +1680,9 @@ mod tests {
             alien_core::InitialSetupAuthority::DirectSetup,
             alien_core::InitialSetupAuthority::ImportedHandoff,
         ] {
-            let state = installed_gcp(1, authority, ResourceStatus::Pending);
+            let mut state = installed_gcp(1, authority, ResourceStatus::Pending);
+            // Scheduling delete fences old readers, but does not install federation.
+            state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
             assert_eq!(
                 super::destroy_without_runtime(&state),
                 Some(DeploymentStatus::RetentionRequired),
