@@ -255,6 +255,9 @@ persistentStorage:
 ephemeralStorage:
   nodeSelector: {}
 
+# Frozen databases. An infrastructure binding overrides the corresponding database.
+postgres: {}
+
 === values.schema.json ===
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
@@ -572,6 +575,7 @@ ephemeralStorage:
       },
       "additionalProperties": true
     },
+    "postgres": { "type": "object" },
     "infrastructure": { "type": ["object", "null"] },
     "infrastructureExistingSecret": { "type": "string" },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
@@ -2862,9 +2866,159 @@ spec:
 {{- end }}
 
 === templates/_infrastructure.tpl ===
-{{- define "deployment.infrastructure" -}}
-{{- default dict .Values.infrastructure | toJson -}}
+
+{{- define "deployment.postgresName" -}}
+{{- printf "%s-pg-%s" (include "deployment.fullname" .root | trunc 28 | trimSuffix "-") (.id | trunc 20 | trimSuffix "-") -}}-{{ printf "%s/%s/%s" .root.Release.Namespace .root.Release.Name .id | sha256sum | trunc 8 }}
 {{- end -}}
+
+{{- define "deployment.infrastructure" -}}
+{{- $bindings := deepCopy (default dict .Values.infrastructure) -}}
+{{- if not .Values.infrastructureExistingSecret -}}
+{{- range $id, $database := .Values.postgres -}}
+  {{- if not (hasKey $bindings $id) -}}
+    {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) -}}
+    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" $name "key" "password")) "sslMode" "disable") -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $bindings | toJson -}}
+{{- end -}}
+
+=== templates/postgres.yaml ===
+{{- range $id, $database := .Values.postgres }}
+{{- if and (not $.Values.infrastructureExistingSecret) (not (hasKey (default dict $.Values.infrastructure) $id)) }}
+{{- if $database.highAvailability }}{{ fail "In-cluster Postgres is single-instance; supply an external binding for high availability" }}{{ end }}
+{{- if $database.encryptionKey }}{{ fail "In-cluster Postgres uses StorageClass encryption; supply an external binding for an explicit database encryption key" }}{{ end }}
+{{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) }}
+{{- $labels := include "deployment.labels" $ | fromYaml }}
+{{- $_ := set $labels "app.kubernetes.io/name" $name }}
+{{- $installed := lookup "apps/v1" "StatefulSet" $.Release.Namespace $name }}
+{{- $volume := lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $name }}
+{{- $desiredImage := printf "%s:%s" $database.image.repository $database.image.tag }}
+{{- $previousImage := "" }}
+{{- if $volume }}
+  {{- $previousImage = get (default dict $volume.metadata.annotations) "alien.dev/postgres-image" | default "" }}
+{{- end }}
+{{- if and (empty $previousImage) $installed }}
+  {{- $previousImage = (index $installed.spec.template.spec.containers 0).image }}
+{{- end }}
+{{- if and $volume (empty $previousImage) }}
+  {{- fail "Postgres data has no recorded image; restore the original alien.dev/postgres-image PVC annotation before installing" }}
+{{- end }}
+{{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
+  {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
+{{- end }}
+{{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}
+{{- $password := "" }}
+{{- if $existing }}
+  {{- $password = required "Existing Postgres Secret has no password; restore its original password" (index $existing.data "password") }}
+{{- else }}
+  {{- if lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $name }}
+    {{- fail "Postgres data exists but its credentials Secret is missing; restore the original Secret before installing" }}
+  {{- end }}
+  {{- $password = randAlphaNum 48 | b64enc }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- $labels | toYaml | nindent 4 }}
+type: Opaque
+data:
+  password: {{ $password | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/resource-policy: keep
+    alien.dev/postgres-image: {{ $desiredImage | quote }}
+  labels:
+    {{- $labels | toYaml | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if $database.storageClassName }}
+  storageClassName: {{ $database.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $database.storage | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- $labels | toYaml | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: {{ $name }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- $labels | toYaml | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: {{ $name }}
+        {{- $labels | toYaml | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: postgres
+          image: {{ printf "%s:%s" $database.image.repository $database.image.tag | quote }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ $id | quote }}
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, postgres, -d, {{ $id | quote }}]
+            periodSeconds: 5
+          resources:
+            {{- toYaml $database.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}
+{{- end }}
+{{- end }}
 
 === examples/eks.yaml ===
 management:
