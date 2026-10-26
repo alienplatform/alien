@@ -366,6 +366,11 @@ fn generate_helm_chart_internal(
             .or_insert(notes);
     }
 
+    files.insert(
+        "templates/_infrastructure.tpl".into(),
+        infrastructure_helpers_tpl(),
+    );
+
     // Per-resource extra templates contributed by emitters.
     for (path, contents) in &analysis.extra_templates {
         files.insert(format!("templates/{path}"), contents.clone());
@@ -5806,6 +5811,13 @@ data:
     .to_string()
 }
 
+fn infrastructure_helpers_tpl() -> String {
+    r#"{{- define "deployment.infrastructure" -}}
+{{- default dict .Values.infrastructure | toJson -}}
+{{- end -}}
+"#.into()
+}
+
 fn secret_tpl() -> String {
     r#"{{- if .Release.IsUpgrade -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
@@ -5825,7 +5837,7 @@ fn secret_tpl() -> String {
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector .Values.inputValues }}
+{{- if or $createManagementSecret $createEncryptionSecret (ne (include "deployment.infrastructure" .) "{}") $nodeCollector .Values.inputValues }}
 {{- $collectorToken := .Values.logCollector.token -}}
 {{- if and $nodeCollector (empty $collectorToken) -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
@@ -5850,8 +5862,8 @@ stringData:
   {{- if $createEncryptionSecret }}
   encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
   {{- end }}
-  {{- if .Values.infrastructure }}
-  external-bindings.json: {{ toJson .Values.infrastructure | quote }}
+  {{- if ne (include "deployment.infrastructure" .) "{}" }}
+  external-bindings.json: {{ include "deployment.infrastructure" . | quote }}
   {{- end }}
   {{- if $nodeCollector }}
   collector-token: {{ $collectorToken | quote }}
@@ -6734,7 +6746,7 @@ spec:
             {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
-            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
+            {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
             {{- end }}
@@ -6811,7 +6823,7 @@ spec:
               mountPath: /etc/deployment/secrets/encryption-key
               subPath: {{ include "deployment.encryptionSecretKey" . }}
               readOnly: true
-            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
+            {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
             - name: external-bindings
               mountPath: /etc/deployment/secrets/external-bindings.json
               subPath: external-bindings.json
@@ -6855,7 +6867,7 @@ spec:
           secret:
             secretName: {{ include "deployment.encryptionSecretName" . }}
             defaultMode: 384
-        {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
+        {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
         - name: external-bindings
           secret:
             secretName: {{ default (include "deployment.fullname" .) .Values.infrastructureExistingSecret }}
