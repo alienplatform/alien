@@ -652,3 +652,129 @@ async fn a_sandbox_base_is_built_for_its_backend_architecture() {
         );
     }
 }
+
+#[tokio::test]
+async fn container_build_uses_compute_pool_targets() {
+    let src = tempdir().expect("source directory");
+    std::fs::write(
+        src.path().join("Dockerfile"),
+        "FROM scratch\nCOPY marker /marker\n",
+    )
+    .expect("write Dockerfile");
+    std::fs::write(src.path().join("marker"), "built\n").expect("write marker");
+
+    for platform in [
+        PlatformBuildSettings::Aws {
+            managing_account_id: None,
+        },
+        PlatformBuildSettings::Kubernetes {
+            base_platform: None,
+        },
+    ] {
+        for targets in [None, Some(vec![BinaryTarget::LinuxX64])] {
+            let output = tempdir().expect("output directory");
+            let cluster = ComputeCluster::new("pool".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: None,
+                    profile: Some(MachineProfile {
+                        cpu: "1".to_string(),
+                        memory_bytes: 2 * 1024 * 1024 * 1024,
+                        ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                        architecture: Some(Architecture::X86_64),
+                        gpu: None,
+                        data_disk: None,
+                    }),
+                    min_size: 1,
+                    max_size: 1,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                })
+                .build();
+            let container = Container::new("app".to_string())
+                .cpu(alien_core::ResourceSpec {
+                    min: "0.25".to_string(),
+                    desired: "0.25".to_string(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "256Mi".to_string(),
+                    desired: "256Mi".to_string(),
+                })
+                .cluster("pool".to_string())
+                .permissions("execution".to_string())
+                .code(ContainerCode::Source {
+                    src: src.path().display().to_string(),
+                    toolchain: alien_core::ToolchainConfig::Docker {
+                        dockerfile: None,
+                        target: None,
+                        build_args: None,
+                    },
+                })
+                .build();
+            let stack = alien_core::Stack::new("pool-targets".to_string())
+                .permission("execution", PermissionProfile::new())
+                .add(cluster, ResourceLifecycle::Frozen)
+                .add(container, ResourceLifecycle::Live)
+                .build();
+            let settings = BuildSettings {
+                platform: platform.clone(),
+                output_directory: output.path().display().to_string(),
+                targets,
+                cache_url: None,
+                override_base_image: None,
+                debug_mode: false,
+                rebuild: true,
+                pull_base_images: false,
+            };
+
+            build_stack(stack.clone(), &settings)
+                .await
+                .expect("build x86 pool container");
+            let platform_dir = output
+                .path()
+                .join("build")
+                .join(platform.runtime_platform().as_str());
+            let tarball = find_image_tarball(&platform_dir, "app", BinaryTarget::LinuxX64);
+            let image_dir = tarball.parent().expect("image directory");
+            assert!(!image_dir.join("linux-aarch64.oci.tar").exists());
+
+            // Check the actual OCI image configuration, not just the target filename.
+            let extracted = tempdir().expect("extracted image directory");
+            tar::Archive::new(std::fs::File::open(&tarball).expect("open image"))
+                .unpack(extracted.path())
+                .expect("unpack image");
+            let read_json = |path: PathBuf| -> serde_json::Value {
+                serde_json::from_slice(&std::fs::read(path).expect("read OCI JSON"))
+                    .expect("OCI JSON")
+            };
+            let blob_path = |digest: &str| {
+                extracted
+                    .path()
+                    .join("blobs")
+                    .join(digest.replace(':', "/"))
+            };
+            let index = read_json(extracted.path().join("index.json"));
+            let manifest = read_json(blob_path(
+                index["manifests"][0]["digest"]
+                    .as_str()
+                    .expect("manifest digest"),
+            ));
+            let config = read_json(blob_path(
+                manifest["config"]["digest"]
+                    .as_str()
+                    .expect("config digest"),
+            ));
+            assert_eq!(config["architecture"], "amd64");
+            assert_eq!(config["os"], "linux");
+
+            let mismatch = BuildSettings {
+                targets: Some(vec![BinaryTarget::LinuxArm64]),
+                ..settings
+            };
+            let error = build_stack(stack, &mismatch)
+                .await
+                .expect_err("explicit target must match pool");
+            assert!(error.to_string().contains("expected LinuxX64"), "{error}");
+        }
+    }
+}
