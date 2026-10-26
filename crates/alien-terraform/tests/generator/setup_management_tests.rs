@@ -52,6 +52,13 @@ run "matching_overlay" {{
     error_message = "Matching setup management must reach registration unchanged."
   }}
 }}
+run "invalid_overlay" {{
+  command = plan
+  variables {{
+    advanced_settings_overlay_json = jsonencode({{ setupManagement = "unsupported" }})
+  }}
+  expect_failures = [terraform_data.deployment_registration]
+}}
 run "mismatched_overlay" {{
   command = plan
   variables {{
@@ -102,4 +109,96 @@ run "wrong_artifact" {{
         !diagnostic.contains("Error message refers to sensitive values"),
         "{diagnostic}"
     );
+}
+
+#[test]
+fn manual_setup_management_diagnostics_with_native_plan() {
+    assert_setup_management_diagnostics(SetupManagement::Manual, "manual");
+}
+
+#[test]
+fn automatic_setup_management_diagnostics_with_native_plan() {
+    assert_setup_management_diagnostics(SetupManagement::Automatic, "automatic");
+}
+
+fn assert_setup_management_diagnostics(mode: SetupManagement, expected: &str) {
+    let module = render(
+        &Stack::new("setup-management".into()).build(),
+        TerraformTarget::Aws,
+        StackSettings {
+            setup_management: mode,
+            ..Default::default()
+        },
+    );
+    let registration: hcl::Body = hcl::from_str(module.get("registration.tf").unwrap()).unwrap();
+    let resource = registration.blocks().next().unwrap();
+    let lifecycle = hcl::Body::from(
+        resource
+            .body
+            .blocks()
+            .filter(|block| block.identifier.as_str() == "lifecycle")
+            .cloned()
+            .map(hcl::Structure::Block)
+            .collect::<Vec<_>>(),
+    );
+    let lifecycle = hcl::to_string(&lifecycle).unwrap();
+
+    // Execute the generated check with only the built-in provider. Terraform
+    // 1.5 has no provider mocking; full module plans are covered above.
+    for sensitive in [false, true] {
+        let files = [(
+            "main.tf".into(),
+            format!(
+                r#"
+variable "settings" {{
+  type = string
+  sensitive = {sensitive}
+}}
+locals {{ deployment_settings = jsondecode(var.settings) }}
+resource "terraform_data" "deployment_registration" {{
+  input = local.deployment_settings
+  {lifecycle}
+}}
+"#,
+            ),
+        )]
+        .into_iter()
+        .collect();
+        for (settings, requested) in [
+            (r#"{}"#, "manual"),
+            (r#"{"setupManagement":"manual"}"#, "manual"),
+            (r#"{"setupManagement":"automatic"}"#, "automatic"),
+            (r#"{"setupManagement":"unsupported"}"#, "invalid"),
+        ] {
+            let result = test_utils::terraform_plan_with_vars(&files, &[("settings", settings)]);
+            let context = format!("built={expected}, settings={settings}, sensitive={sensitive}");
+            if requested == expected {
+                result.assert_ok(context);
+            } else {
+                assert!(
+                    matches!(result.status, test_utils::LinterStatus::Failed(Some(1))),
+                    "{context}: {result:?}"
+                );
+                let diagnostic = format!("{}\n{}", result.stdout, result.stderr);
+                let normalized = diagnostic.split_whitespace().collect::<Vec<_>>().join(" ");
+                assert!(normalized.contains(&format!(
+                    "This setup module was built for {expected} setup, but the settings request {requested} setup. Regenerate the setup artifact for the requested setup management."
+                )), "{context}: {diagnostic}");
+                assert!(
+                    !diagnostic.contains("Invalid function argument"),
+                    "{context}: {diagnostic}"
+                );
+                assert!(
+                    !diagnostic.contains("Error message refers to sensitive values"),
+                    "{context}: {diagnostic}"
+                );
+                if sensitive {
+                    assert!(
+                        !diagnostic.contains("unsupported"),
+                        "{context}: the diagnostic exposed the invalid sensitive value: {diagnostic}"
+                    );
+                }
+            }
+        }
+    }
 }

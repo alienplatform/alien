@@ -907,6 +907,16 @@ pub enum SetupManagement {
     Automatic,
 }
 
+impl SetupManagement {
+    /// Serialized setup parameter value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Automatic => "automatic",
+        }
+    }
+}
+
 fn is_manual_setup_management(mode: &SetupManagement) -> bool {
     *mode == SetupManagement::Manual
 }

@@ -3019,7 +3019,7 @@ async fn assert_reserved_setup_management(
         if requested_mode != reserved_mode {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body:#}");
             let expected = format!(
-                    "This setup artifact was built for {requested_mode} setup, but the deployment was prepared for {reserved_mode} setup. Regenerate the setup from the setup page."
+                    "This setup artifact was built for {requested_mode} setup, but the deployment was prepared for {reserved_mode} setup. Regenerate the setup artifact for the requested setup management."
                 );
             assert_eq!(body["message"], expected, "{body:#}");
             assert_eq!(installed.status, reserved.status);

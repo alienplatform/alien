@@ -1767,14 +1767,10 @@ fn validate_reserved_setup_management(
         return Ok(());
     };
     if settings.setup_management != req.stack_settings.setup_management {
-        let name = |mode| match mode {
-            alien_core::SetupManagement::Manual => "manual",
-            alien_core::SetupManagement::Automatic => "automatic",
-        };
         return Err(ErrorData::bad_request(format!(
-            "This setup artifact was built for {} setup, but the deployment was prepared for {} setup. Regenerate the setup from the setup page.",
-            name(req.stack_settings.setup_management),
-            name(settings.setup_management),
+            "This setup artifact was built for {} setup, but the deployment was prepared for {} setup. Regenerate the setup artifact for the requested setup management.",
+            req.stack_settings.setup_management.as_str(),
+            settings.setup_management.as_str(),
         )));
     }
     Ok(())
@@ -1820,10 +1816,7 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
     if !runtime_owned.is_empty() {
         return Err(ErrorData::bad_request(format!(
             "Setup registration includes resources that setup does not own for {} setup: {}",
-            match req.stack_settings.setup_management {
-                alien_core::SetupManagement::Manual => "manual",
-                alien_core::SetupManagement::Automatic => "automatic",
-            },
+            req.stack_settings.setup_management.as_str(),
             runtime_owned.join(", ")
         )));
     }

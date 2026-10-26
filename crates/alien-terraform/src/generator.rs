@@ -4039,11 +4039,10 @@ fn registration_body(
 /// Compare the merged settings without changing the caller's requested mode.
 /// Only settings inputs are needed, so this can fail before resources exist.
 /// The diagnostic reveals only enum labels, never arbitrary sensitive settings.
+/// Mark each comparison sensitive before removing that mark: Terraform 1.5
+/// rejects nonsensitive() on a plain value, including a missing-field fallback.
 fn setup_management_precondition(mode: alien_core::SetupManagement) -> Structure {
-    let expected = match mode {
-        alien_core::SetupManagement::Manual => "manual",
-        alien_core::SetupManagement::Automatic => "automatic",
-    };
+    let expected = mode.as_str();
     nested(block(
         "lifecycle",
         [nested(block(
@@ -4058,7 +4057,7 @@ fn setup_management_precondition(mode: alien_core::SetupManagement) -> Structure
                 attr(
                     "error_message",
                     expr::raw(format!(
-                        r#"format("This setup module was built for {expected} setup, but the settings request %s setup. Regenerate the setup from the setup page for the requested setup management.", nonsensitive(try(local.deployment_settings.setupManagement == "manual", true)) ? "manual" : nonsensitive(try(local.deployment_settings.setupManagement == "automatic", false)) ? "automatic" : "invalid")"#
+                        r#"format("This setup module was built for {expected} setup, but the settings request %s setup. Regenerate the setup artifact for the requested setup management.", nonsensitive(sensitive(try(local.deployment_settings.setupManagement == "manual", true))) ? "manual" : nonsensitive(sensitive(try(local.deployment_settings.setupManagement == "automatic", false))) ? "automatic" : "invalid")"#
                     )),
                 ),
             ],
