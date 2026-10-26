@@ -1215,7 +1215,11 @@ impl DeploymentStore for SqliteDeploymentStore {
             deployment.status.as_str(),
             "teardown-required" | "teardown-failed"
         ) && installed_policy == alien_core::DeletionPolicy::Retain;
-        if handoff && installed_policy == policy && !legacy_retained_handoff {
+        if handoff
+            && installed_policy == policy
+            && !legacy_retained_handoff
+            && !(deployment.status == "retained" && policy == alien_core::DeletionPolicy::Erase)
+        {
             return Ok(());
         }
         if matches!(
@@ -1244,8 +1248,13 @@ impl DeploymentStore for SqliteDeploymentStore {
             return Ok(());
         }
 
-        // Patch only the intent and fence concurrent requests. An in-flight step
-        // keeps its lease; reconcile preserves delete status and the recorded policy.
+        // Runtime steps keep their lease and checkpoint against the recorded policy.
+        // Setup cleanup must finish before its authorized policy can change. A
+        // completed setup checkpoint also keeps its lease until explicit release.
+        let requires_setup_release = Self::SETUP_TEARDOWN_STATUSES
+            .contains(&deployment.status.as_str())
+            || deployment.status == "retained";
+        // Patch only the intent and fence concurrent requests.
         // Retained checkpoints remain available for a separate explicit erase.
         let policy_json = match policy {
             alien_core::DeletionPolicy::Retain => "retain",
@@ -1263,25 +1272,44 @@ impl DeploymentStore for SqliteDeploymentStore {
         } else {
             "delete-pending"
         };
-        let sql = Query::update()
-            .table(Deployments::Table)
-            .value(Deployments::Status, next_status)
-            .value(
-                Deployments::RuntimeMetadata,
-                Expr::cust_with_values(
-                    "json_set(COALESCE(runtime_metadata, '{}'), '$.deletionPolicy', ?)",
-                    [policy_json],
-                ),
-            )
-            .value(
-                Deployments::DeploymentProtocolVersion,
-                alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION as i64,
-            )
-            .value(Deployments::NextStepAfter, Option::<String>::None)
-            .and_where(Expr::col(Deployments::Id).eq(id))
-            .and_where(Expr::col(Deployments::Status).eq(deployment.status))
-            .to_string(SqliteQueryBuilder);
+        let sql = {
+            let mut update = Query::update();
+            update
+                .table(Deployments::Table)
+                .value(Deployments::Status, next_status)
+                .value(
+                    Deployments::RuntimeMetadata,
+                    Expr::cust_with_values(
+                        "json_set(COALESCE(runtime_metadata, '{}'), '$.deletionPolicy', ?)",
+                        [policy_json],
+                    ),
+                )
+                .value(
+                    Deployments::DeploymentProtocolVersion,
+                    alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION as i64,
+                )
+                .value(Deployments::NextStepAfter, Option::<String>::None)
+                .and_where(Expr::col(Deployments::Id).eq(id))
+                .and_where(Expr::col(Deployments::Status).eq(deployment.status.clone()));
+            if requires_setup_release {
+                update.and_where(Expr::col(Deployments::LockedBy).is_null());
+            }
+            update.to_string(SqliteQueryBuilder)
+        };
         if self.db.execute_returning_rows_affected(&sql).await? != 1 {
+            if requires_setup_release {
+                let current = self.get_deployment(caller, id).await?;
+                if current.is_some_and(|current| {
+                    current.status == deployment.status && current.locked_by.is_some()
+                }) {
+                    return Err(
+                        AlienError::new(ErrorData::DeploymentSetupCleanupInProgress {
+                            deployment_id: id.to_string(),
+                        })
+                        .into_generic(),
+                    );
+                }
+            }
             return Err(ErrorData::bad_request(
                 "Deployment changed; retry deletion against its current state",
             )

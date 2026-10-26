@@ -41,6 +41,16 @@ pub enum ErrorData {
         locked_by: Option<String>,
     },
 
+    /// A setup cleanup lease prevents changing the deletion policy.
+    #[error(
+        code = "DEPLOYMENT_SETUP_CLEANUP_IN_PROGRESS",
+        message = "Setup cleanup for deployment '{deployment_id}' is in progress; retry deletion after it finishes",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 409
+    )]
+    DeploymentSetupCleanupInProgress { deployment_id: String },
+
     /// Deployment is already in a deletion state
     #[error(
         code = "DEPLOYMENT_ALREADY_DELETING",

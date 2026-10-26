@@ -2811,7 +2811,7 @@ async fn deletion_policy_is_fenced_and_preserves_recovery_metadata() {
         .await
         .execute(
             &format!(
-                "UPDATE deployments SET status = 'retention-required' WHERE id = '{}'",
+                "UPDATE deployments SET status = 'retention-required', locked_by = NULL WHERE id = '{}'",
                 dep.id
             ),
             (),
@@ -3118,6 +3118,13 @@ async fn setup_retention_checkpoint_survives_late_pull_reports_and_reopens_for_e
         .await
         .unwrap();
     assert_eq!(acquired.len(), 1);
+    // A setup owner must finish before a separate erase can change its policy.
+    let erase = store
+        .set_delete_pending_with_policy(&subject, &dep.id, alien_core::DeletionPolicy::Erase)
+        .await;
+    let error = erase.expect_err("erase must wait for setup cleanup");
+    assert_eq!(error.code, "DEPLOYMENT_SETUP_CLEANUP_IN_PROGRESS");
+    assert!(error.retryable);
     let mut cleanup = stale.clone();
     cleanup.session = "setup".into();
     cleanup
@@ -3143,6 +3150,12 @@ async fn setup_retention_checkpoint_survives_late_pull_reports_and_reopens_for_e
     let ignored = store.reconcile(&subject, stale).await.unwrap().record;
     assert_eq!(ignored.status, "retained");
     assert!(ignored.runtime_metadata.unwrap().vault_credentials_revoked);
+    let error = store
+        .set_delete_pending_with_policy(&subject, &dep.id, alien_core::DeletionPolicy::Erase)
+        .await
+        .expect_err("retained still holds the setup lease until release");
+    assert_eq!(error.code, "DEPLOYMENT_SETUP_CLEANUP_IN_PROGRESS");
+    assert!(error.retryable);
     store
         .release(&subject, &dep.id, "setup", None)
         .await
@@ -3182,6 +3195,130 @@ async fn setup_retention_checkpoint_survives_late_pull_reports_and_reopens_for_e
         acquired.len(),
         1,
         "later erase is owned by setup, whose credentials still exist"
+    );
+}
+
+#[tokio::test]
+async fn erase_waits_for_each_setup_cleanup_status_to_release_its_lease() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    for status in ["retention-required", "teardown-required", "teardown-failed"] {
+        let dep = create_test_deployment(&store, &group, status, Platform::Aws).await;
+        store
+            .set_delete_pending(&test_subject(), &dep.id)
+            .await
+            .unwrap();
+        db.conn()
+            .lock()
+            .await
+            .execute(
+                "UPDATE deployments SET status = ? WHERE id = ?",
+                [status, dep.id.as_str()],
+            )
+            .await
+            .unwrap();
+        let acquired = store
+            .acquire(
+                &test_subject(),
+                "setup",
+                &DeploymentFilter {
+                    deployment_ids: Some(vec![dep.id.clone()]),
+                    statuses: Some(vec![status.into()]),
+                    acquire_mode: Some(DeploymentAcquireMode::SetupTeardown),
+                    setup_method: Some("cli".into()),
+                    max_deployment_protocol_version: Some(
+                        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                    ),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired.len(), 1);
+        let error = store
+            .set_delete_pending_with_policy(
+                &test_subject(),
+                &dep.id,
+                alien_core::DeletionPolicy::Erase,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_CLEANUP_IN_PROGRESS");
+        assert!(error.retryable);
+        let saved = store
+            .get_deployment(&test_subject(), &dep.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.status, status);
+        assert_eq!(saved.locked_by.as_deref(), Some("setup"));
+        assert_eq!(
+            saved.runtime_metadata.unwrap().deletion_policy,
+            alien_core::DeletionPolicy::Retain
+        );
+        store
+            .release(&test_subject(), &dep.id, "setup", None)
+            .await
+            .unwrap();
+        store
+            .set_delete_pending_with_policy(
+                &test_subject(),
+                &dep.id,
+                alien_core::DeletionPolicy::Erase,
+            )
+            .await
+            .unwrap();
+        let saved = store
+            .get_deployment(&test_subject(), &dep.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.status, "delete-pending");
+        assert_eq!(
+            saved.runtime_metadata.unwrap().deletion_policy,
+            alien_core::DeletionPolicy::Erase
+        );
+    }
+}
+
+#[tokio::test]
+async fn erase_reopens_retained_inventory_even_if_policy_already_says_erase() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group, "retained-erase", Platform::Aws).await;
+    store
+        .set_delete_pending_with_policy(&test_subject(), &dep.id, alien_core::DeletionPolicy::Erase)
+        .await
+        .unwrap();
+    // A report can reach Retained while normalization preserves the stored erase policy.
+    let mut report = test_reconcile_data(&dep.id, "runtime", DeploymentStatus::Retained, None);
+    report.state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+    let saved = store
+        .reconcile(&test_subject(), report)
+        .await
+        .unwrap()
+        .record;
+    assert_eq!(saved.status, "retained");
+    assert_eq!(
+        saved.runtime_metadata.unwrap().deletion_policy,
+        alien_core::DeletionPolicy::Erase
+    );
+    store
+        .set_delete_pending_with_policy(&test_subject(), &dep.id, alien_core::DeletionPolicy::Erase)
+        .await
+        .unwrap();
+    let reopened = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened.status, "teardown-required");
+    assert_eq!(
+        reopened.runtime_metadata.unwrap().deletion_policy,
+        alien_core::DeletionPolicy::Erase
     );
 }
 
