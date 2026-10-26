@@ -114,7 +114,8 @@ fn runtime_deployment_scope_for_helm(
     // Older charts defaulted this label to the release name even when a custom
     // prefix named and labelled the workloads. Keep using those workload labels;
     // startup still checks this configured prefix against the persisted state.
-    if helm_release == Some(scope.1.as_str()) {
+    // Charts predating the release-name environment variable also supplied it.
+    if helm_release.is_none() || helm_release == Some(scope.1.as_str()) {
         if let Some(prefix) = resource_prefix.filter(|prefix| !prefix.trim().is_empty()) {
             scope.1 = prefix.to_string();
         }
@@ -1276,6 +1277,57 @@ mod tests {
         assert!(error.to_string().contains("does not match"));
     }
 
+    #[tokio::test]
+    async fn old_chart_scope_uses_the_installed_workload_prefix() {
+        let temp = tempfile::tempdir().expect("create test directory");
+        let db = db::OperatorDb::new(
+            &temp.path().to_string_lossy(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .expect("create operator database");
+        let mut deployment = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(alien_core::StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "custom-prefix".to_string(),
+            )),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&deployment)
+            .await
+            .expect("persist state");
+        let scope = runtime_deployment_scope_for_helm(
+            (
+                "alien.dev/deployment".to_string(),
+                "app-release".to_string(),
+            ),
+            Some("custom-prefix"),
+            None,
+        );
+        assert!(validate_runtime_deployment_scope(&db, None, Some(&scope))
+            .await
+            .expect("restart with the installed prefix"));
+        assert_eq!(scope.1, "custom-prefix");
+
+        // A different synced prefix must still be rejected after a restart.
+        deployment.stack_state.as_mut().unwrap().resource_prefix = "other-prefix".to_string();
+        db.set_deployment_state(&deployment)
+            .await
+            .expect("persist changed state");
+        let error = validate_runtime_deployment_scope(&db, None, Some(&scope))
+            .await
+            .expect_err("reject a different synced prefix");
+        assert!(error.to_string().contains("does not match"));
+    }
+
     #[test]
     fn helm_scope_preserves_explicit_values_and_non_helm_installs() {
         for (value, prefix, release, expected) in [
@@ -1283,7 +1335,7 @@ mod tests {
             ("custom", Some("custom"), Some("app"), "custom"),
             ("other", Some("custom"), Some("app"), "other"),
             ("app", None, Some("app"), "app"),
-            ("app", Some("custom"), None, "app"),
+            ("app", Some("custom"), None, "custom"),
             ("app", Some(""), Some("app"), "app"),
         ] {
             let scope = runtime_deployment_scope_for_helm(
