@@ -885,6 +885,23 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 {{- end -}}
 
+{{- /* Keep the immutable cleanup authority when upgrading an existing release. */ -}}
+{{- define "deployment.runtimeLabelValue" -}}
+{{- if .Values.logCollector.scope.deploymentLabelValue -}}
+{{- .Values.logCollector.scope.deploymentLabelValue -}}
+{{- else -}}
+{{- $scopeName := include "deployment.releaseScopedName" (dict "root" . "suffix" "-runtime-scope") -}}
+{{- $existing := lookup "v1" "ConfigMap" .Release.Namespace $scopeName -}}
+{{- if $existing -}}
+{{- required "The existing runtime cleanup scope has no labelValue." (index (default dict $existing.data) "labelValue") -}}
+{{- else if .Release.IsUpgrade -}}
+{{- fail "Cannot discover the existing runtime cleanup scope. Set logCollector.scope.deploymentLabelValue=<current label> to keep this install's scope when rendering an upgrade without cluster lookup (helm template --is-upgrade or GitOps). Read <current label> from the installed runtime-scope ConfigMap data.labelValue." -}}
+{{- else -}}
+{{- include "deployment.serviceAccountPrefix" . -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "deployment.serviceAccountName" -}}
 {{- $prefix := include "deployment.serviceAccountPrefix" .root -}}
 {{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
@@ -1007,7 +1024,7 @@ different namespaces of one cluster from colliding. */ -}}
 
 === templates/serviceaccount.yaml ===
 {{- $runtimeLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
-{{- $runtimeLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $runtimeLabelValue := include "deployment.runtimeLabelValue" . -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -1410,7 +1427,7 @@ spec:
             - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY
               value: {{ default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey | quote }}
             - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE
-              value: {{ default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue | quote }}
+              value: {{ include "deployment.runtimeLabelValue" . | quote }}
             {{- if .Values.logCollector.scope.legacyDeploymentLabelKey }}
             - name: ALIEN_RUNTIME_LEGACY_DEPLOYMENT_LABEL_KEY
               value: {{ .Values.logCollector.scope.legacyDeploymentLabelKey | quote }}
@@ -1462,7 +1479,7 @@ spec:
             - name: OPERATOR_POD_LOG_LABEL_KEY
               value: {{ default .Values.logCollector.scope.deploymentLabelKey $podLabelKey | quote }}
             - name: OPERATOR_POD_LOG_LABEL_VALUE
-              value: {{ default (default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
+              value: {{ default (include "deployment.serviceAccountPrefix" .) $podLabelValue | quote }}
             - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
               value: {{ include "deployment.logCollectorName" . | quote }}
             - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET
@@ -1643,7 +1660,7 @@ subjects:
   {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
 {{- end -}}
 {{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
-{{- $logLabelValue := default (default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
+{{- $logLabelValue := default (include "deployment.serviceAccountPrefix" .) $podLabelValue -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -1836,7 +1853,7 @@ spec:
 {{- $scopeName := include "deployment.releaseScopedName" (dict "root" . "suffix" "-runtime-scope") -}}
 {{- $requestedLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $requestedLegacyLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $requestedLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $requestedLabelValue := include "deployment.runtimeLabelValue" . -}}
 {{- if not (hasSuffix "/deployment" $requestedLabelKey) -}}
   {{- fail "The runtime cleanup deployment label key must end in '/deployment' because runtime ownership labels are domain-qualified." -}}
 {{- end -}}
@@ -1908,7 +1925,7 @@ data:
 {{- $firstSafeRevision := .Release.Revision -}}
 {{- $migrationLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $migrationLegacyLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $migrationLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $migrationLabelValue := include "deployment.runtimeLabelValue" . -}}
 {{- if $existingScope -}}
   {{- $scopeData := default dict $existingScope.data -}}
   {{- $firstSafeRevision = index $scopeData "firstSafeRevision" -}}
@@ -2124,7 +2141,7 @@ spec:
 {{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
 {{- $cleanupLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $legacyCleanupLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $cleanupLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $cleanupLabelValue := include "deployment.runtimeLabelValue" . -}}
 {{- $cleanupResourceLabelKey := printf "%s/resource" (trimSuffix "/deployment" $cleanupLabelKey) -}}
 {{- $legacyCleanupResourceLabelKey := "" -}}
 {{- if $legacyCleanupLabelKey -}}
