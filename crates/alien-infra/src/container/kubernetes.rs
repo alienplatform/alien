@@ -17,9 +17,8 @@ use crate::kubernetes_public_endpoint::{
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    deployment_has_ready_replicas, deployment_initial_replicas_ready, deployment_rollout_complete,
-    emit_kubernetes_workload_heartbeat, label_selector, statefulset_has_ready_replicas,
-    statefulset_initial_replicas_ready, KubernetesWorkload, KubernetesWorkloadDataKind,
+    deployment_has_ready_replicas, deployment_rollout_complete, emit_kubernetes_workload_heartbeat,
+    label_selector, statefulset_has_ready_replicas, KubernetesWorkload, KubernetesWorkloadDataKind,
     KubernetesWorkloadHeartbeatInput, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -113,6 +112,25 @@ const GATEWAY_RESTART_SETTINGS_ENV: &str = "ALIEN_EGRESS_GATEWAY_RESTART_SETTING
 
 fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
+}
+
+fn workload_ready(
+    desired_replicas: i32,
+    ready_replicas: Option<i32>,
+    replicas: Option<i32>,
+    observed_generation: Option<i64>,
+    generation: Option<i64>,
+) -> bool {
+    if desired_replicas == 0 {
+        // Kubernetes omits zero replica counters. Wait for the controller to
+        // observe this generation before accepting the scaled-down workload.
+        return observed_generation.is_some_and(|observed| observed >= generation.unwrap_or(1))
+            && ready_replicas.unwrap_or(0) == 0
+            && replicas.unwrap_or(0) == 0;
+    }
+    replicas.is_some_and(|total| {
+        total > 0 && ready_replicas.unwrap_or(0) >= desired_replicas.min(total)
+    })
 }
 
 fn statefulset_rollout_complete(
@@ -531,7 +549,13 @@ impl KubernetesContainerController {
                         (
                             status.ready_replicas,
                             Some(status.replicas),
-                            statefulset_initial_replicas_ready(&statefulset),
+                            workload_ready(
+                                config.replicas.unwrap_or(1) as i32,
+                                status.ready_replicas,
+                                Some(status.replicas),
+                                status.observed_generation,
+                                statefulset.metadata.generation,
+                            ),
                         )
                     } else {
                         (None, None, false)
@@ -563,7 +587,13 @@ impl KubernetesContainerController {
                         (
                             status.ready_replicas,
                             status.replicas,
-                            deployment_initial_replicas_ready(&deployment),
+                            workload_ready(
+                                config.replicas.unwrap_or(1) as i32,
+                                status.ready_replicas,
+                                status.replicas,
+                                status.observed_generation,
+                                deployment.metadata.generation,
+                            ),
                         )
                     } else {
                         (None, None, false)
@@ -2742,9 +2772,11 @@ mod tests {
     use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
 
     #[tokio::test]
-    async fn initial_workload_waits_for_all_requested_replicas() {
+    async fn initial_workload_accepts_ready_capacity_and_waits_for_unready_pods() {
         for stateful in [false, true] {
-            for ready in [1, 3] {
+            for (ready, total, complete) in
+                [(1, 1, true), (3, 3, true), (1, 3, false), (0, 1, false)]
+            {
                 let server = httpmock::MockServer::start_async().await;
                 let kind = if stateful {
                     "StatefulSet"
@@ -2762,7 +2794,7 @@ mod tests {
                         "apiVersion":"apps/v1", "kind":kind,
                         "metadata":{"name":"web", "generation":1},
                         "spec":{"replicas":3,"selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[]}}},
-                        "status":{"replicas":ready,"readyReplicas":ready,"observedGeneration":1}
+                        "status":{"replicas":total,"readyReplicas":ready,"observedGeneration":1}
                     }));
                 });
                 let mut config = manifest_test_container(&[], stateful);
@@ -2778,8 +2810,8 @@ mod tests {
                     .expect("workload poll");
                 assert_eq!(
                     matches!(action, KubernetesContainerHandlerAction::Continue { .. }),
-                    ready == 3,
-                    "{kind}, ready={ready}"
+                    complete,
+                    "{kind}, ready={ready}, total={total}"
                 );
             }
         }
@@ -2834,10 +2866,7 @@ mod tests {
                 generation: Some(2),
                 ..Default::default()
             },
-            spec: Some(DeploymentSpec {
-                replicas: Some(0),
-                ..Default::default()
-            }),
+
             status: Some(DeploymentStatus {
                 observed_generation: Some(1),
                 ..Default::default()

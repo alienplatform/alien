@@ -16,32 +16,6 @@ use crate::error::{ErrorData, Result};
 
 pub(crate) const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
 
-pub(crate) fn deployment_initial_replicas_ready(deployment: &Deployment) -> bool {
-    let desired = deployment
-        .spec
-        .as_ref()
-        .and_then(|spec| spec.replicas)
-        .unwrap_or(1);
-    deployment_has_ready_replicas(deployment)
-        && deployment
-            .status
-            .as_ref()
-            .is_some_and(|status| status.ready_replicas.unwrap_or(0) >= desired)
-}
-
-pub(crate) fn statefulset_initial_replicas_ready(statefulset: &StatefulSet) -> bool {
-    let desired = statefulset
-        .spec
-        .as_ref()
-        .and_then(|spec| spec.replicas)
-        .unwrap_or(1);
-    statefulset_has_ready_replicas(statefulset)
-        && statefulset
-            .status
-            .as_ref()
-            .is_some_and(|status| status.ready_replicas.unwrap_or(0) >= desired)
-}
-
 /// Kubernetes omits replica counters when their value is zero.
 pub(crate) fn deployment_has_ready_replicas(deployment: &Deployment) -> bool {
     let Some(status) = &deployment.status else {
@@ -59,10 +33,13 @@ pub(crate) fn deployment_has_ready_replicas(deployment: &Deployment) -> bool {
             && ready == 0
             && status.replicas.unwrap_or(0) == 0;
     }
-    // Scale-up and rolling updates can temporarily miss the requested capacity
-    // while existing replicas still serve. Heartbeats report that capacity gap;
-    // rollout completion separately checks the requested generation and count.
+    // Do not report drift while Kubernetes is replacing or scaling replicas.
     ready > 0
+        && (ready >= status.replicas.unwrap_or(0)
+            || status.observed_generation.unwrap_or(0)
+                < deployment.metadata.generation.unwrap_or(1)
+            || status.updated_replicas.unwrap_or(0) < desired
+            || status.replicas.unwrap_or(0) != desired)
 }
 
 pub(crate) fn deployment_rollout_complete(
@@ -85,7 +62,7 @@ pub(crate) fn deployment_rollout_complete(
         && status.updated_replicas.unwrap_or(0) == desired_replicas
         && status.replicas.unwrap_or(0) == desired_replicas
         && status.available_replicas.unwrap_or(0) >= desired_replicas
-        && deployment_has_ready_replicas(deployment)
+        && status.ready_replicas.unwrap_or(0) >= desired_replicas
 }
 
 pub(crate) fn statefulset_has_ready_replicas(statefulset: &StatefulSet) -> bool {
@@ -102,7 +79,13 @@ pub(crate) fn statefulset_has_ready_replicas(statefulset: &StatefulSet) -> bool 
             && status.ready_replicas.unwrap_or(0) == 0
             && status.replicas == 0
     } else {
-        status.ready_replicas.unwrap_or(0) > 0
+        let ready = status.ready_replicas.unwrap_or(0);
+        ready > 0
+            && (ready >= status.replicas
+                || status.observed_generation.unwrap_or(0)
+                    < statefulset.metadata.generation.unwrap_or(1)
+                || status.updated_replicas.unwrap_or(0) < desired
+                || status.replicas != desired)
     }
 }
 
@@ -185,7 +168,27 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     #[test]
-    fn scale_up_with_a_completed_replicaset_keeps_serving() {
+    fn steady_partial_failure_is_unhealthy() {
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "metadata": {"generation": 4},
+            "spec": {"replicas": 3, "selector": {}, "template": {}},
+            "status": {"observedGeneration": 4, "replicas": 3, "readyReplicas": 1,
+                "updatedReplicas": 3, "unavailableReplicas": 2}
+        }))
+        .unwrap();
+        assert!(!deployment_has_ready_replicas(&deployment));
+        let statefulset: StatefulSet = serde_json::from_value(serde_json::json!({
+            "metadata": {"generation": 4},
+            "spec": {"replicas": 3, "selector": {}, "template": {}, "serviceName": "app"},
+            "status": {"observedGeneration": 4, "replicas": 3, "readyReplicas": 1,
+                "updatedReplicas": 3}
+        }))
+        .unwrap();
+        assert!(!statefulset_has_ready_replicas(&statefulset));
+    }
+
+    #[test]
+    fn completed_replicaset_with_partial_readiness_is_unhealthy() {
         // A real scale-up retains NewReplicaSetAvailable while Available is false.
         let deployment: Deployment = serde_json::from_str(
             r#"{
@@ -227,7 +230,7 @@ mod tests {
 }"#,
         )
         .unwrap();
-        assert!(deployment_has_ready_replicas(&deployment));
+        assert!(!deployment_has_ready_replicas(&deployment));
         assert!(!deployment_rollout_complete(&deployment, 4, Some(6)));
     }
 

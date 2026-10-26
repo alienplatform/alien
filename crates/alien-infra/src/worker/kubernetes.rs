@@ -11,10 +11,9 @@ use crate::kubernetes_public_endpoint::{
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    deployment_has_ready_replicas, deployment_initial_replicas_ready, deployment_rollout_complete,
-    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
-    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    deployment_has_ready_replicas, deployment_rollout_complete, emit_kubernetes_workload_heartbeat,
+    label_selector, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -243,7 +242,10 @@ impl KubernetesWorkerController {
             .await
         {
             Ok(deployment) => {
-                if deployment_initial_replicas_ready(&deployment) {
+                if deployment.status.as_ref().is_some_and(|status| {
+                    let total = status.replicas.unwrap_or(0);
+                    total > 0 && status.ready_replicas.unwrap_or(0) == total
+                }) {
                     info!(deployment_name=%deployment_name, namespace=%namespace, "Deployment is ready");
                     return Ok(HandlerAction::Continue {
                         state: ReconcilePublicEndpoint,
@@ -686,8 +688,11 @@ impl KubernetesWorkerController {
                     .as_ref()
                     .and_then(|spec| spec.replicas)
                     .unwrap_or(1);
-                if deployment_rollout_complete(&deployment, desired, deployment.metadata.generation)
-                {
+                if deployment_rollout_complete(
+                    &deployment,
+                    desired,
+                    deployment.metadata.generation,
+                ) {
                     info!(deployment_name=%deployment_name, "Deployment rollout complete");
                     return Ok(HandlerAction::Continue {
                         state: ReconcilePublicEndpointAfterUpdate,
@@ -1170,16 +1175,16 @@ mod tests {
     use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
 
     #[tokio::test]
-    async fn worker_create_waits_for_all_replicas_and_update_has_thirty_minutes() {
-        for ready in [3, 1] {
+    async fn worker_create_accepts_ready_capacity_and_update_waits_through_slow_rollouts() {
+        for (ready, total, complete) in [(3, 3, true), (1, 1, true), (1, 3, false), (0, 1, false)] {
             let server = httpmock::MockServer::start_async().await;
-            server.mock(|when, then| {
+            let mut response = server.mock(|when, then| {
                 when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
                 then.status(200).json_body(serde_json::json!({
                     "apiVersion":"apps/v1", "kind":"Deployment",
                     "metadata":{"name":"worker", "generation":2},
                     "spec":{"replicas":3,"selector":{"matchLabels":{"app":"worker"}},"template":{"spec":{"containers":[]}}},
-                    "status":{"replicas":ready,"readyReplicas":ready,"updatedReplicas":1,"availableReplicas":ready,"observedGeneration":2}
+                    "status":{"replicas":total,"readyReplicas":ready,"updatedReplicas":1,"availableReplicas":ready,"observedGeneration":2}
                 }));
             });
             let config = Worker::new("worker".into())
@@ -1210,24 +1215,36 @@ mod tests {
                 .expect("create poll");
             assert_eq!(
                 matches!(action, KubernetesWorkerHandlerAction::Continue { .. }),
-                ready == 3,
-                "ready={ready}"
+                complete,
+                "ready={ready}, total={total}"
             );
-            let action = controller
-                .waiting_for_update(&ctx)
+            controller.state = KubernetesWorkerState::WaitingForUpdate;
+            // A rollout lasting ten minutes must still poll, then be able to complete.
+            for _ in 0..120 {
+                crate::core::ResourceController::step(&mut controller, &ctx)
+                    .await
+                    .expect("rollout stays within its polling budget");
+                assert_eq!(
+                    crate::core::ResourceController::get_status(&controller),
+                    ResourceStatus::Updating
+                );
+            }
+            response.delete();
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+                then.status(200).json_body(serde_json::json!({
+                    "metadata":{"generation":2},
+                    "spec":{"replicas":3,"selector":{},"template":{}},
+                    "status":{"replicas":3,"readyReplicas":3,"updatedReplicas":3,"availableReplicas":3,"observedGeneration":2}
+                }));
+            });
+            crate::core::ResourceController::step(&mut controller, &ctx)
                 .await
-                .expect("update poll");
-            let KubernetesWorkerHandlerAction::Stay {
-                max_times,
-                suggested_delay,
-            } = action
-            else {
-                panic!("rollout still incomplete")
-            };
-            assert_eq!(
-                max_times.unwrap() as u64 * suggested_delay.unwrap().as_secs(),
-                1800
-            );
+                .expect("slow rollout completes");
+            assert!(matches!(
+                controller.state,
+                KubernetesWorkerState::ReconcilePublicEndpointAfterUpdate
+            ));
         }
     }
 
