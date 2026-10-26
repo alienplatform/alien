@@ -372,3 +372,55 @@ async fn legacy_empty_scope_deploys_but_new_releases_are_rejected() {
         assert_eq!(slots.len(), 1);
     }
 }
+
+#[tokio::test]
+async fn render_and_deployment_still_reject_malformed_input_defaults() {
+    for platforms in [None, Some(vec![])] {
+        let mut input = StackInputDefinition::deployer_boolean(
+            "enabled",
+            "Enabled",
+            "Enable feature",
+            Some(true),
+        );
+        input.platforms = platforms;
+        input.default = Some(alien_core::StackInputDefaultValue::String("oops".into()));
+        let stack = Stack::new("invalid-default".into())
+            .inputs(vec![input])
+            .build();
+        let runner = PreflightRunner::new();
+        let error = runner
+            .run_template_preflights(&stack, Platform::Aws)
+            .await
+            .expect_err("render must validate input defaults even for legacy empty scopes");
+        assert!(
+            format!("{error:?}").contains("default value does not match input kind"),
+            "{error:?}"
+        );
+        let config = DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(Default::default())
+            .allow_frozen_changes(false)
+            .build();
+        let error = runner
+            .run_deployment_time_preflights(
+                stack,
+                &StackState::new(Platform::Machines),
+                &config,
+                &alien_core::ClientConfig::Machines,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect_err("legacy empty-scope compatibility must not relax default validation");
+        assert!(
+            format!("{error:?}").contains("default value does not match input kind"),
+            "{error:?}"
+        );
+    }
+}

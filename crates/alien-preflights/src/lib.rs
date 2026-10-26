@@ -390,9 +390,11 @@ impl PreflightRegistry {
             compile_time::kubernetes_compute::KubernetesComputeCheck,
         ));
 
+        registry.add_compile_time_check(Box::new(compile_time::StackInputsDefinitionCheck));
+
         // Add build-time-only checks. A rule added here applies to new releases; stacks
         // released before it existed keep deploying and updating.
-        registry.add_build_time_check(Box::new(compile_time::StackInputsDefinitionCheck));
+        registry.add_build_time_check(Box::new(compile_time::StackInputPlatformsCheck));
         registry.add_build_time_check(Box::new(compile_time::UniqueEndpointHostLabelsCheck));
         registry.add_build_time_check(Box::new(
             compile_time::MachinesContainerPublicEndpointsCheck,
