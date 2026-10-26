@@ -519,7 +519,7 @@ run();
 * [createWebhookEndpoint](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
 * [getWebhookEndpoint](docs/sdks/webhooks/README.md#getwebhookendpoint)
 * [updateWebhookEndpoint](docs/sdks/webhooks/README.md#updatewebhookendpoint)
-* [deleteWebhookEndpoint](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+* [deleteWebhookEndpoint](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint idempotently. An endpoint that is already absent returns success. Deleting the last workspace endpoint stops capturing new webhook events.
 * [getWebhookSigningSecret](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
 * [rotateWebhookSigningSecret](docs/sdks/webhooks/README.md#rotatewebhooksigningsecret)
 * [listWebhookDeliveries](docs/sdks/webhooks/README.md#listwebhookdeliveries)
@@ -817,7 +817,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`userSyncGitNamespaces`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 - [`userUpdateProfile`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
 - [`webhooksCreateWebhookEndpoint`](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
-- [`webhooksDeleteWebhookEndpoint`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+- [`webhooksDeleteWebhookEndpoint`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint idempotently. An endpoint that is already absent returns success. Deleting the last workspace endpoint stops capturing new webhook events.
 - [`webhooksGetWebhookEndpoint`](docs/sdks/webhooks/README.md#getwebhookendpoint)
 - [`webhooksGetWebhookSigningSecret`](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
 - [`webhooksListWebhookDeliveries`](docs/sdks/webhooks/README.md#listwebhookdeliveries)
@@ -1122,7 +1122,7 @@ To learn about this feature and how to get started, check
 - [`useUserSyncGitNamespacesMutation`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 - [`useUserUpdateProfileMutation`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
 - [`useWebhooksCreateWebhookEndpointMutation`](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
-- [`useWebhooksDeleteWebhookEndpointMutation`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+- [`useWebhooksDeleteWebhookEndpointMutation`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint idempotently. An endpoint that is already absent returns success. Deleting the last workspace endpoint stops capturing new webhook events.
 - [`useWebhooksGetWebhookEndpoint`](docs/sdks/webhooks/README.md#getwebhookendpoint)
 - [`useWebhooksGetWebhookSigningSecret`](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
 - [`useWebhooksListWebhookDeliveries`](docs/sdks/webhooks/README.md#listwebhookdeliveries)
