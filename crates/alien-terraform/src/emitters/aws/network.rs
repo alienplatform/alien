@@ -627,19 +627,6 @@ fn create_topology(
         }
     }
 
-    if ctx.stack.resources().any(|(_, entry)| {
-        entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-            && entry
-                .config
-                .downcast_ref::<alien_core::Postgres>()
-                .is_some()
-    }) {
-        // A retained database keeps only its VPC and private subnets. Workload
-        // ingress, routes and billed NAT gateways still leave during uninstall.
-        fragment.retain_resources(|kind, name| {
-            kind == "aws_vpc" || (kind == "aws_subnet" && name == format!("{label}_private"))
-        });
-    }
     fragment
 }
 
