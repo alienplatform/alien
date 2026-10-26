@@ -92,6 +92,7 @@ use utoipa::OpenApi;
     PublicEndpointTargetSettings,
     CustomDomainConfig,
     CustomCertificateConfig,
+    ManagedCustomCertificateConfig,
     AwsCustomCertificateConfig,
     GcpCustomCertificateConfig,
     AzureCustomCertificateConfig,

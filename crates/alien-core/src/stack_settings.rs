@@ -501,7 +501,7 @@ impl EndpointAccess {
 /// Domain configuration for the stack.
 ///
 /// When `custom_domains` is set, the specified resources use customer-provided
-/// domains and certificates. Otherwise, Alien auto-generates domains.
+/// domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -538,9 +538,13 @@ pub enum PublicEndpointTargetSettings {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct CustomDomainConfig {
-    /// Fully qualified domain name to use.
+    /// Fully qualified domain name for a supplied certificate.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub domain: String,
-    /// Customer-provided certificate reference.
+    /// Hostnames keyed by endpoint name for a managed certificate.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub endpoints: HashMap<String, String>,
+    /// Supplied certificate reference or managed issuance.
     pub certificate: CustomCertificateConfig,
 }
 
@@ -549,6 +553,9 @@ pub struct CustomDomainConfig {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct CustomCertificateConfig {
+    /// Issue and renew a certificate for the configured endpoint hostnames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed: Option<ManagedCustomCertificateConfig>,
     /// AWS ACM certificate ARN
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aws: Option<AwsCustomCertificateConfig>,
@@ -562,6 +569,12 @@ pub struct CustomCertificateConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kubernetes: Option<KubernetesCustomCertificateConfig>,
 }
+
+/// Managed certificate issuance settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedCustomCertificateConfig {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -1074,9 +1087,31 @@ mod failure_domain_tests {
         .expect("stack settings should deserialize");
 
         assert_eq!(
-            serde_json::to_value(settings).expect("stack settings should serialize")
-                ["publicEndpoints"]["loader"]["shares"],
+            serde_json::to_value(settings).expect("stack settings should serialize")["publicEndpoints"]
+                ["loader"]["shares"],
             "https://shares.compute.example.com"
         );
+    }
+
+    #[test]
+    fn custom_domains_preserve_managed_endpoint_names_and_supplied_certificates() {
+        for config in [
+            serde_json::json!({
+                "endpoints": {
+                    "api": "q7.m2x.example.com",
+                    "shares": "*.q7.s9t.example.com",
+                    "webhooks": "*.q7.w3h.example.com"
+                },
+                "certificate": {"managed": {}}
+            }),
+            serde_json::json!({
+                "domain": "app.example.com",
+                "certificate": {"aws": {"certificateArn": "arn:example"}}
+            }),
+        ] {
+            let parsed: CustomDomainConfig = serde_json::from_value(config.clone())
+                .expect("custom domain configuration should deserialize");
+            assert_eq!(serde_json::to_value(parsed).unwrap(), config);
+        }
     }
 }
