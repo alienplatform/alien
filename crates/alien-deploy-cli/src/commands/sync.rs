@@ -40,6 +40,7 @@ use clap::Parser;
 use oci_client::secrets::RegistryAuth;
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncBufReadExt as _, process::Command};
+use uuid::Uuid;
 
 use crate::error::{ErrorData, Result};
 
@@ -424,7 +425,7 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
         &site.name,
     )
     .await?;
-    write_target(
+    let attempt = write_target(
         &settings,
         &record.stack_id,
         &namespace,
@@ -439,6 +440,7 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
         &namespace,
         &record.release_id,
         sequence,
+        &attempt,
     )
     .await
     {
@@ -1885,7 +1887,7 @@ async fn install_pending(
         Some(ack) => ack,
         None => current_ack(settings, &manifest.stack_id, &namespace).await?,
     };
-    write_target(
+    let attempt = write_target(
         settings,
         &manifest.stack_id,
         &namespace,
@@ -1900,6 +1902,7 @@ async fn install_pending(
         &namespace,
         &manifest.release_id,
         manifest.sequence,
+        &attempt,
     )
     .await
     {
@@ -2119,13 +2122,35 @@ fn rollout_finished(
     release_id: &str,
     sequence: u64,
     secrets_checked_after: Option<chrono::DateTime<chrono::Utc>>,
+    attempt: Option<&str>,
 ) -> Result<bool> {
     // A chart restart can leave the preceding target's status in the Secret.
     // Sequence also distinguishes a retry or rollback to the same release.
     if status["sequence"].as_u64() != Some(sequence) {
         return Ok(false);
     }
+    // Older Operators do not export attempt IDs. Preserve their sequence-based
+    // behavior; current Operators acknowledge each explicit site invocation.
+    if let Some(attempt) = attempt {
+        if status.get("attempt").is_some() && status["attempt"].as_str() != Some(attempt) {
+            return Ok(false);
+        }
+    }
     let state = &status["state"];
+    // Upgrading the Operator can leave a legacy failure snapshot without an
+    // attempt marker. Give the new target loop time to acknowledge this retry.
+    if attempt.is_some()
+        && status.get("attempt").is_none()
+        && secrets_checked_after.is_some()
+        && state["status"]
+            .as_str()
+            .is_some_and(|status| status.ends_with("-failed"))
+    {
+        return Ok(false);
+    }
+    if state["retryRequested"].as_bool() == Some(true) {
+        return Ok(false);
+    }
     if state["status"].as_str() == Some("waiting-for-secrets") {
         // A same-bundle retry can read the snapshot from before Secrets were created.
         if let Some(not_before) = secrets_checked_after {
@@ -2167,7 +2192,7 @@ fn rollout_finished(
     {
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: format!(
-                "The rollout of {release_id} failed: {}. `alien-deploy rollback` returns to the previous release.",
+                "The rollout of {release_id} failed: {}. Run sync again to retry the same bundle; `alien-deploy rollback` returns to the previous release.",
                 state["error"]["message"]
                     .as_str()
                     .unwrap_or("see the Operator's logs")
@@ -2183,6 +2208,7 @@ async fn wait_for_rollout(
     namespace: &str,
     release_id: &str,
     sequence: u64,
+    attempt: &str,
 ) -> Result<()> {
     println!("Waiting for {release_id} to roll out");
     let started = std::time::Instant::now();
@@ -2191,7 +2217,13 @@ async fn wait_for_rollout(
         if let Some((status, _)) = read_status(settings, stack_id, namespace).await? {
             let secrets_checked_after =
                 (started.elapsed() < SECRET_STATUS_TIMEOUT).then_some(started_at);
-            if rollout_finished(&status, release_id, sequence, secrets_checked_after)? {
+            if rollout_finished(
+                &status,
+                release_id,
+                sequence,
+                secrets_checked_after,
+                Some(attempt),
+            )? {
                 return Ok(());
             }
         }
@@ -2706,13 +2738,15 @@ async fn write_target(
     target_path: &Path,
     sequence: u64,
     telemetry_ack: i64,
-) -> Result<()> {
+) -> Result<String> {
+    let attempt = Uuid::new_v4().to_string();
     let secret_name = format!("{stack_id}-airgap-target");
     let mut create = kubectl(settings.kube_context.as_deref());
     create
         .args(["create", "secret", "generic", &secret_name, "-n", namespace])
         .arg(format!("--from-file=target.json={}", target_path.display()))
         .arg(format!("--from-literal=sequence={sequence}"))
+        .arg(format!("--from-literal=attempt={attempt}"))
         .arg(format!("--from-literal=telemetry-ack={telemetry_ack}"))
         .args(["--dry-run=client", "-o", "json"]);
     let yaml = run(create, "kubectl create secret").await?;
@@ -2728,7 +2762,8 @@ async fn write_target(
     apply
         .args(["apply", "-n", namespace, "-f"])
         .arg(&apply_path);
-    run(apply, "kubectl apply").await.map(|_| ())
+    run(apply, "kubectl apply").await?;
+    Ok(attempt)
 }
 
 /// Preserve customer ownership even when sync updates a pre-existing Secret.
@@ -3181,6 +3216,36 @@ metadata:
     }
 
     #[test]
+    fn airgap_retry_waits_for_its_attempt_and_retry_transition() {
+        let mut status = serde_json::json!({"sequence": 7, "attempt": "previous", "state": {
+            "status": "update-failed", "targetRelease": {"releaseId": "release"},
+            "error": {"message": "previous attempt failed"}
+        }});
+        assert!(!rollout_finished(&status, "release", 7, None, Some("retry")).unwrap());
+        status["attempt"] = "retry".into();
+        status["state"]["retryRequested"] = true.into();
+        assert!(!rollout_finished(&status, "release", 7, None, Some("retry")).unwrap());
+        status["state"]["retryRequested"] = false.into();
+        assert!(rollout_finished(&status, "release", 7, None, Some("retry")).is_err());
+        status["state"]["status"] = "running".into();
+        status["state"]["currentRelease"] = serde_json::json!({"releaseId": "release"});
+        assert!(rollout_finished(&status, "release", 7, None, Some("retry")).unwrap());
+        assert!(!rollout_finished(&status, "release", 8, None, Some("retry")).unwrap());
+        status.as_object_mut().unwrap().remove("attempt");
+        assert!(rollout_finished(&status, "release", 7, None, Some("retry")).unwrap());
+        status["state"]["status"] = "update-failed".into();
+        assert!(!rollout_finished(
+            &status,
+            "release",
+            7,
+            Some(chrono::Utc::now()),
+            Some("retry")
+        )
+        .unwrap());
+        assert!(rollout_finished(&status, "release", 7, None, Some("retry")).is_err());
+    }
+
+    #[test]
     fn rollout_waits_for_requested_sequence_before_judging_status() {
         let mut status = serde_json::json!({
             "sequence": 10,
@@ -3191,16 +3256,16 @@ metadata:
                 "error": {"message": "previous attempt failed"}
             }
         });
-        assert!(!rollout_finished(&status, "rel_new", 11, None).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 11, None, None).unwrap());
         status["sequence"] = 11.into();
-        assert!(rollout_finished(&status, "rel_new", 11, None).is_err());
+        assert!(rollout_finished(&status, "rel_new", 11, None, None).is_err());
         status["state"]["status"] = "updating".into();
-        assert!(!rollout_finished(&status, "rel_new", 11, None).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 11, None, None).unwrap());
         status["state"]["status"] = "running".into();
-        assert!(!rollout_finished(&status, "rel_new", 11, None).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 11, None, None).unwrap());
         status["state"]["currentRelease"]["releaseId"] = "rel_new".into();
-        assert!(rollout_finished(&status, "rel_new", 11, None).unwrap());
-        assert!(!rollout_finished(&status, "rel_new", 12, None).unwrap());
+        assert!(rollout_finished(&status, "rel_new", 11, None, None).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 12, None, None).unwrap());
     }
 
     #[test]
@@ -3217,8 +3282,8 @@ metadata:
                 ]}
             }
         });
-        assert!(!rollout_finished(&status, "rel_new", 11, None).unwrap());
-        let error = rollout_finished(&status, "rel_new", 10, None)
+        assert!(!rollout_finished(&status, "rel_new", 11, None, None).unwrap());
+        let error = rollout_finished(&status, "rel_new", 10, None, None)
             .unwrap_err()
             .to_string();
         assert!(error.contains("Secret: app-password"));
@@ -3228,10 +3293,10 @@ metadata:
         assert!(!error.contains("optional-secret"));
         assert!(!error.contains("existing-secret"));
         status["state"]["status"] = "provisioning".into();
-        assert!(!rollout_finished(&status, "rel_new", 10, None).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 10, None, None).unwrap());
         status["state"]["status"] = "running".into();
         status["state"]["currentRelease"] = serde_json::json!({"releaseId": "rel_new"});
-        assert!(rollout_finished(&status, "rel_new", 10, None).unwrap());
+        assert!(rollout_finished(&status, "rel_new", 10, None, None).unwrap());
     }
 
     #[test]
@@ -3250,19 +3315,19 @@ metadata:
                 ]}
             }
         });
-        assert!(!rollout_finished(&status, "rel_new", 10, Some(started_at)).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 10, Some(started_at), None).unwrap());
         // Once the bounded freshness wait expires, an unchanged snapshot still
         // produces the actionable error instead of waiting for the rollout timeout.
-        assert!(rollout_finished(&status, "rel_new", 10, None).is_err());
+        assert!(rollout_finished(&status, "rel_new", 10, None, None).is_err());
         status["writtenAt"] = serde_json::Value::Null;
-        assert!(!rollout_finished(&status, "rel_new", 10, Some(started_at)).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 10, Some(started_at), None).unwrap());
         status["writtenAt"] = "2026-01-01T00:01:01Z".into();
-        assert!(rollout_finished(&status, "rel_new", 10, Some(started_at)).is_err());
+        assert!(rollout_finished(&status, "rel_new", 10, Some(started_at), None).is_err());
         status["state"]["status"] = "provisioning".into();
-        assert!(!rollout_finished(&status, "rel_new", 10, Some(started_at)).unwrap());
+        assert!(!rollout_finished(&status, "rel_new", 10, Some(started_at), None).unwrap());
         status["state"]["status"] = "running".into();
         status["state"]["currentRelease"] = serde_json::json!({"releaseId": "rel_new"});
-        assert!(rollout_finished(&status, "rel_new", 10, Some(started_at)).unwrap());
+        assert!(rollout_finished(&status, "rel_new", 10, Some(started_at), None).unwrap());
     }
 
     #[tokio::test]

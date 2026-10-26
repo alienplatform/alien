@@ -8,6 +8,7 @@
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use crate::db::AirgapReceipt;
 use alien_core::sync::TargetDeployment;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_k8s_clients::{
@@ -17,6 +18,7 @@ use alien_k8s_clients::{
 use k8s_openapi::{
     api::core::v1::Secret, apimachinery::pkg::apis::meta::v1::ObjectMeta, ByteString,
 };
+use sha2::{Digest, Sha256};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -28,6 +30,8 @@ use crate::{
 pub const TARGET_KEY: &str = "target.json";
 /// Key holding the bundle sequence (higher wins) in the target Secret.
 pub const SEQUENCE_KEY: &str = "sequence";
+/// A new value identifies an explicit invocation of site sync.
+pub const ATTEMPT_KEY: &str = "attempt";
 /// Key holding the deployment state JSON in the status Secret.
 pub const STATUS_KEY: &str = "status.json";
 /// Key holding the token that authorizes telemetry export, in the status
@@ -111,7 +115,14 @@ async fn apply_pending_target(state: &OperatorState, secret_name: &str) -> Resul
             })
         }
     };
-    let data = secret.data.unwrap_or_default();
+    apply_target_data(state, secret_name, secret.data.unwrap_or_default()).await
+}
+
+async fn apply_target_data(
+    state: &OperatorState,
+    secret_name: &str,
+    data: BTreeMap<String, ByteString>,
+) -> Result<()> {
     // The vendor has received telemetry up to here: free it. Independent of
     // whether this bundle's target is new.
     if let Some(value) = data.get(TELEMETRY_ACK_KEY) {
@@ -143,7 +154,8 @@ async fn apply_pending_target(state: &OperatorState, secret_name: &str) -> Resul
                 message: format!("Secret {secret_name} has no numeric '{SEQUENCE_KEY}'"),
             })
         })?;
-    if state.db.get_airgap_sequence().await?.unwrap_or(0) >= sequence {
+    let saved_sequence = state.db.get_airgap_sequence().await?;
+    if saved_sequence.is_some_and(|saved| saved > sequence) {
         return Ok(());
     }
     let target: TargetDeployment = serde_json::from_slice(
@@ -160,6 +172,70 @@ async fn apply_pending_target(state: &OperatorState, secret_name: &str) -> Resul
     .context(ErrorData::ConfigurationError {
         message: format!("parsing the target in Secret {secret_name}"),
     })?;
+
+    let attempt = data
+        .get(ATTEMPT_KEY)
+        .and_then(|value| std::str::from_utf8(&value.0).ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let receipt = AirgapReceipt {
+        sequence,
+        target_hash: target_hash(&target)?,
+        attempt,
+    };
+    if saved_sequence == Some(sequence) {
+        let previous = state.db.get_airgap_receipt().await?;
+        if let Some(previous) = &previous {
+            if previous.target_hash != receipt.target_hash {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "A different target already used this air-gapped sequence".into(),
+                }));
+            }
+            if previous.attempt == receipt.attempt {
+                return Ok(());
+            }
+        }
+        // Old CLIs have no explicit attempt marker and keep their existing behavior.
+        if receipt.attempt.is_none() {
+            return Ok(());
+        }
+        let Some(current) = state.db.get_deployment_state().await? else {
+            return Ok(());
+        };
+        if previous.is_none() {
+            // Upgrade from an Operator that stored only the sequence. A failed
+            // target retains its full release and config, so compare both before retrying.
+            let stored_config = state.db.get_deployment_config().await?;
+            let stored_release = current
+                .target_release
+                .as_ref()
+                .or(current.current_release.as_ref());
+            if stored_config.is_none() && current.status == alien_core::DeploymentStatus::Running {
+                // Completed legacy targets discarded their config. Keep the old
+                // no-op behavior without trusting an unverifiable replacement.
+                return Ok(());
+            }
+            let matches = match (stored_release, stored_config) {
+                (Some(release), Some(config)) => {
+                    target_hash(&TargetDeployment {
+                        release_info: release.clone(),
+                        config,
+                    })? == receipt.target_hash
+                }
+                _ => false,
+            };
+            if !matches {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "The saved air-gapped target cannot be verified for retry; use a newer signed bundle".into(),
+                }));
+            }
+        }
+        state
+            .db
+            .request_airgap_retry(&current, previous.as_ref(), &receipt)
+            .await?;
+        return Ok(());
+    }
 
     info!(
         sequence,
@@ -194,8 +270,25 @@ async fn apply_pending_target(state: &OperatorState, secret_name: &str) -> Resul
         }
     }
     crate::loops::sync::accept_target(state, &target, false).await?;
-    state.db.set_airgap_sequence(sequence).await?;
+    state.db.record_airgap_target(&receipt).await?;
     Ok(())
+}
+
+fn target_hash(target: &TargetDeployment) -> Result<String> {
+    let mut value =
+        serde_json::to_value(target)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Encoding the air-gapped target".into(),
+            })?;
+    value.sort_all_objects();
+    let bytes =
+        serde_json::to_vec(&value)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Encoding the air-gapped target".into(),
+            })?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 /// Allow one minute per resource, including sequential dependency checks.
@@ -229,8 +322,8 @@ async fn write_status(state: &OperatorState, secret_name: &str, export_token: &s
         super::deployment::refresh_airgap_deployment(state),
     )
     .await;
-    let sequence = state.db.get_airgap_sequence().await?;
-    let Some(mut deployment_state) = state.db.get_deployment_state().await? else {
+    let (deployment_state, sequence, attempt) = state.db.airgap_status_snapshot().await?;
+    let Some(mut deployment_state) = deployment_state else {
         return Ok(());
     };
     if let Err(error) = refresh {
@@ -242,10 +335,10 @@ async fn write_status(state: &OperatorState, secret_name: &str, export_token: &s
             deployment_state.error = Some(error.into_generic());
         }
     }
-    if state.db.get_airgap_sequence().await? != sequence {
-        return Ok(());
+    let mut status = exported_status(&state.db, deployment_state, sequence).await?;
+    if let Some(attempt) = attempt {
+        status["attempt"] = attempt.into();
     }
-    let status = exported_status(&state.db, deployment_state, sequence).await?;
     let bytes =
         serde_json::to_vec(&status)
             .into_alien_error()
@@ -341,6 +434,212 @@ async fn client(state: &OperatorState) -> Result<(KubernetesClient, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{config::OperatorConfig, db::OperatorDb};
+    use alien_core::{
+        DeploymentConfig, DeploymentStatus, EnvironmentVariablesSnapshot, Platform, ReleaseInfo,
+        Stack,
+    };
+    use tokio_util::sync::CancellationToken;
+
+    fn retry_target() -> TargetDeployment {
+        TargetDeployment {
+            release_info: ReleaseInfo {
+                release_id: Some("release".into()),
+                version: None,
+                description: None,
+                stack: Stack::new("site".into()).build(),
+            },
+            config: DeploymentConfig::builder()
+                .stack_settings(Default::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build(),
+        }
+    }
+
+    fn retry_data(
+        target: &TargetDeployment,
+        sequence: u64,
+        attempt: &str,
+    ) -> BTreeMap<String, ByteString> {
+        BTreeMap::from([
+            (
+                TARGET_KEY.into(),
+                ByteString(serde_json::to_vec(target).unwrap()),
+            ),
+            (
+                SEQUENCE_KEY.into(),
+                ByteString(sequence.to_string().into_bytes()),
+            ),
+            (ATTEMPT_KEY.into(), ByteString(attempt.as_bytes().to_vec())),
+        ])
+    }
+
+    async fn retry_state(directory: &tempfile::TempDir) -> OperatorState {
+        let key = "11".repeat(32);
+        OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(directory.path().to_str().unwrap())
+                .encryption_key(&key)
+                .build(),
+            db: Arc::new(
+                OperatorDb::new(directory.path().to_str().unwrap(), &key)
+                    .await
+                    .unwrap(),
+            ),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_failed_target_is_verified_before_retry_and_completed_target_stays_unchanged() {
+        for failed in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let state = retry_state(&directory).await;
+            let target = retry_target();
+            crate::loops::sync::accept_target(&state, &target, false)
+                .await
+                .unwrap();
+            state.db.set_airgap_sequence(7).await.unwrap();
+            let mut deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+            if failed {
+                deployment.status = DeploymentStatus::UpdateFailed;
+            } else {
+                deployment.status = DeploymentStatus::Running;
+                deployment.current_release = deployment.target_release.take();
+                state.db.clear_deployment_config().await.unwrap();
+            }
+            state.db.set_deployment_state(&deployment).await.unwrap();
+            if failed {
+                let mut conflict = target.clone();
+                conflict.config.allow_frozen_changes = true;
+                assert!(
+                    apply_target_data(&state, "target", retry_data(&conflict, 7, "conflict"))
+                        .await
+                        .is_err()
+                );
+                assert!(state.db.get_airgap_receipt().await.unwrap().is_none());
+            }
+            apply_target_data(&state, "target", retry_data(&target, 7, "retry"))
+                .await
+                .unwrap();
+            let (observed, sequence, attempt) = state.db.airgap_status_snapshot().await.unwrap();
+            assert_eq!(observed.unwrap().retry_requested, failed);
+            assert_eq!(sequence, Some(7));
+            assert_eq!(
+                attempt.as_deref(),
+                if failed { Some("retry") } else { None }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_same_bundle_attempt_retries_once_and_rejects_conflicting_targets() {
+        for failure in [
+            DeploymentStatus::PreflightsFailed,
+            DeploymentStatus::InitialSetupFailed,
+            DeploymentStatus::ProvisioningFailed,
+            DeploymentStatus::UpdateFailed,
+            DeploymentStatus::RefreshFailed,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let state = retry_state(&directory).await;
+            let target = retry_target();
+            apply_target_data(&state, "target", retry_data(&target, 7, "first"))
+                .await
+                .unwrap();
+            let mut failed = state.db.get_deployment_state().await.unwrap().unwrap();
+            failed.status = failure;
+            state.db.set_deployment_state(&failed).await.unwrap();
+            apply_target_data(&state, "target", retry_data(&target, 7, "first"))
+                .await
+                .unwrap();
+            assert!(
+                !state
+                    .db
+                    .get_deployment_state()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .retry_requested
+            );
+            apply_target_data(&state, "target", retry_data(&target, 7, "retry"))
+                .await
+                .unwrap();
+            let (requested, sequence, attempt) = state.db.airgap_status_snapshot().await.unwrap();
+            assert!(requested.unwrap().retry_requested);
+            assert_eq!(sequence, Some(7));
+            assert_eq!(attempt.as_deref(), Some("retry"));
+            state.db.set_deployment_state(&failed).await.unwrap();
+            apply_target_data(&state, "target", retry_data(&target, 7, "retry"))
+                .await
+                .unwrap();
+            assert!(
+                !state
+                    .db
+                    .get_deployment_state()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .retry_requested
+            );
+            let mut conflicting = target.clone();
+            conflicting.config.allow_frozen_changes = true;
+            assert!(
+                apply_target_data(&state, "target", retry_data(&conflicting, 7, "conflict"))
+                    .await
+                    .is_err()
+            );
+            apply_target_data(&state, "target", retry_data(&target, 6, "older"))
+                .await
+                .unwrap();
+            assert_eq!(
+                state
+                    .db
+                    .get_airgap_receipt()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .attempt
+                    .as_deref(),
+                Some("retry")
+            );
+            assert!(
+                !state
+                    .db
+                    .get_deployment_state()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .retry_requested
+            );
+            if failure == DeploymentStatus::UpdateFailed {
+                apply_target_data(&state, "target", retry_data(&conflicting, 8, "newer"))
+                    .await
+                    .unwrap();
+                assert_eq!(state.db.get_airgap_sequence().await.unwrap(), Some(8));
+                assert_eq!(
+                    state
+                        .db
+                        .get_deployment_state()
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .status,
+                    DeploymentStatus::Pending
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn exported_status_carries_persisted_heartbeats() {

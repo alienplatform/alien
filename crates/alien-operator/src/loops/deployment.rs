@@ -1470,6 +1470,8 @@ mod tests {
                 id.into(),
                 alien_core::ResourceEntry {
                     config: alien_core::Resource::new(daemon),
+                    display_name: None,
+                    description: None,
                     lifecycle: alien_core::ResourceLifecycle::Live,
                     dependencies: vec![],
                     remote_access: false,

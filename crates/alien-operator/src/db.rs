@@ -22,6 +22,9 @@ use turso::{Builder, Connection, Database, EncryptionOpts};
 use crate::error::{ErrorData, Result};
 use crate::workload_observation::{is_settled, workload_identity};
 
+mod airgap;
+pub(crate) use airgap::AirgapReceipt;
+
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;
 const MAX_QUEUED_POD_LOG_BYTES: i64 = 64 * 1024 * 1024;
