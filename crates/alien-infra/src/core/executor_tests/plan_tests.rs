@@ -1,10 +1,16 @@
 //! Tests for the plan() method that calculates diffs.
 
 use super::helpers::*;
+use crate::container::{KubernetesContainerController, KubernetesContainerState};
 use crate::core::state_utils::StackResourceStateExt;
+use crate::core::{MockPlatformServiceProvider, StackExecutor};
 use crate::error::Result;
 use crate::worker::{TestWorkerController, TestWorkerState};
+use alien_core::{
+    ClientConfig, Container, ContainerCode, KubernetesClientConfig, Resource, StackResourceState,
+};
 use alien_core::{ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Worker};
+use std::sync::Arc;
 
 /// Tests that plan identifies resources to create.
 #[tokio::test]
@@ -427,6 +433,130 @@ async fn test_plan_refresh_failed_with_config_change() -> Result<()> {
         plan.updates.contains_key("func1"),
         "RefreshFailed resource with a new configuration should be updated"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn observation_only_failure_is_not_hidden_as_a_pending_update() -> Result<()> {
+    let old = test_function_with_image("consumer", "image-v1");
+    let original = Stack::new("refresh-recovery".to_owned())
+        .add(old, ResourceLifecycle::Live)
+        .build();
+    let mut state = run_to_synced(&new_executor(&original)?, new_test_state()).await?;
+    let consumer = state.resources.get_mut("consumer").unwrap();
+    let mut controller = consumer
+        .get_internal_controller_typed::<TestWorkerController>()
+        .unwrap();
+    controller.state = TestWorkerState::RefreshFailed;
+    consumer.status = ResourceStatus::RefreshFailed;
+    consumer.set_internal_controller(Some(Box::new(controller)))?;
+
+    let desired = test_function_with_image("consumer", "image-v2");
+    let target = Stack::new("refresh-recovery".to_owned())
+        .add(test_function("dependency"), ResourceLifecycle::Live)
+        .add_with_dependencies(
+            desired.clone(),
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new("worker".into(), "dependency")],
+        )
+        .build();
+    let executor = new_executor(&target)?;
+    assert!(!executor.plan(&state)?.updates.contains_key("consumer"));
+    assert!(
+        !executor
+            .pending_recovery_updates(&state)?
+            .contains("consumer"),
+        "a controller without a corrective update transition must retain its failure"
+    );
+    // The old failure remains visible if there is no corrective target.
+    assert!(new_executor(&original)?
+        .pending_recovery_updates(&state)?
+        .is_empty());
+    Ok(())
+}
+
+#[test]
+fn refresh_failure_waiting_for_a_dependency_is_pending_recovery() -> Result<()> {
+    let config = default_deployment_config();
+    let executor_for = |stack: &Stack| {
+        StackExecutor::builder(
+            stack,
+            ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+                namespace: Some("site".into()),
+                additional_headers: None,
+            })),
+        )
+        .deployment_config(&config)
+        .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+        .build()
+    };
+    let old = Container::new("consumer".into())
+        .cpu(alien_core::ResourceSpec {
+            min: "0.1".into(),
+            desired: "0.1".into(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "128Mi".into(),
+            desired: "128Mi".into(),
+        })
+        .permissions("default".into())
+        .code(ContainerCode::Image {
+            image: "image-v1".into(),
+        })
+        .build();
+    let mut consumer = StackResourceState::new_pending(
+        "container".into(),
+        Resource::new(old.clone()),
+        Some(ResourceLifecycle::Live),
+        vec![],
+    );
+    consumer.status = ResourceStatus::RefreshFailed;
+    consumer.set_internal_controller(Some(Box::new(KubernetesContainerController {
+        state: KubernetesContainerState::RefreshFailed,
+        workload_name: Some("consumer".into()),
+        namespace: Some("site".into()),
+        ..Default::default()
+    })))?;
+    let mut state = alien_core::StackState::new(alien_core::Platform::Kubernetes);
+    state.resources.insert("consumer".into(), consumer);
+    let desired = Container::new("consumer".into())
+        .cpu(alien_core::ResourceSpec {
+            min: "0.1".into(),
+            desired: "0.1".into(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "128Mi".into(),
+            desired: "128Mi".into(),
+        })
+        .permissions("default".into())
+        .code(ContainerCode::Image {
+            image: "image-v2".into(),
+        })
+        .build();
+    let target = Stack::new("refresh-recovery".into())
+        .add(test_function("dependency"), ResourceLifecycle::Live)
+        .add_with_dependencies(
+            desired,
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new("worker".into(), "dependency")],
+        )
+        .build();
+    let executor = executor_for(&target)?;
+    assert!(!executor.plan(&state)?.updates.contains_key("consumer"));
+    assert!(executor
+        .pending_recovery_updates(&state)?
+        .contains("consumer"));
+    let unchanged = Stack::new("refresh-recovery".into())
+        .add(old, ResourceLifecycle::Live)
+        .build();
+    assert!(executor_for(&unchanged)?
+        .pending_recovery_updates(&state)?
+        .is_empty());
+    state.resources.insert(
+        "dependency".into(),
+        create_running_function_state("dependency", "image-v1"),
+    );
+    assert!(executor.plan(&state)?.updates.contains_key("consumer"));
     Ok(())
 }
 

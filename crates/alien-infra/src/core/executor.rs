@@ -1172,10 +1172,12 @@ impl StackExecutor {
             let Some(desired) = self.resources.get(id) else {
                 continue;
             };
-            if current.status == ResourceStatus::UpdateFailed
-                && (desired.resource != current.config
-                    || desired.dependencies != current.dependencies
-                    || self.external_binding_drifted(id, current)?)
+            if matches!(
+                current.status,
+                ResourceStatus::UpdateFailed | ResourceStatus::RefreshFailed
+            ) && (desired.resource != current.config
+                || desired.dependencies != current.dependencies
+                || self.external_binding_drifted(id, current)?)
                 && current
                     .get_internal_controller()?
                     .is_some_and(|mut controller| controller.transition_to_update().is_ok())
