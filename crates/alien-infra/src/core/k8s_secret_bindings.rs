@@ -162,6 +162,33 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn existing_bindings_keep_the_published_sdk_environment() {
+        for service in ["redis", "external"] {
+            let input = json!({"service": service, "host": "db.internal", "port": 5432,
+                "database": "app", "username": "app", "price": "$100",
+                "password": {"secretRef": {"name": "credentials", "key": "password"}}});
+            let projected = extract_binding_secrets("database", &input).unwrap();
+            let mut expected = input;
+            expected["password"] = json!("$(ALIEN_BINDING_DATABASE_PASSWORD)");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&projected.resolved_binding_json)
+                    .unwrap(),
+                expected
+            );
+            // Published SDKs deserialize this password directly as a String.
+            let expanded = projected
+                .resolved_binding_json
+                .replace("$(ALIEN_BINDING_DATABASE_PASSWORD)", "existing-password");
+            #[derive(serde::Deserialize)]
+            struct PublishedBinding {
+                password: String,
+            }
+            let loaded: PublishedBinding = serde_json::from_str(&expanded).unwrap();
+            assert_eq!(loaded.password, "existing-password");
+        }
+    }
+
+    #[test]
     fn test_extract_binding_secrets_basic() {
         let binding = json!({
             "service": "redis",
