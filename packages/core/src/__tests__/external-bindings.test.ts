@@ -165,6 +165,9 @@ describe("StackSettings external bindings", () => {
     { type: "postgres", service: "external", ...postgres, password: null },
     { type: "postgres", service: "external", ...postgres, password: [] },
     { type: "postgres", service: "external", ...postgres, password: {} },
+    { type: "postgres", service: "external", ...postgres, password: { secretKeyRef: { name: "credentials" } } },
+    { type: "postgres", service: "external", ...postgres, password: [{ name: "credentials", key: "password" }] },
+    { type: "postgres", service: "external", ...postgres, password: { secretRef: ["credentials", "password"] } },
     { type: "postgres", service: "external", ...postgres, password: { secretRef: { name: "credentials" } } },
     { type: "postgres", service: "external", ...postgres, password: { secretRef: { key: "password" } } },
     {
