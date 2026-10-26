@@ -27,16 +27,18 @@ export type ExternalAIBindingCredentialStatus = ClosedEnum<
   typeof ExternalAIBindingCredentialStatus
 >;
 
-export const AccessStatus = {
+export const ExternalAIBindingAccessStatus = {
   Verified: "verified",
   Denied: "denied",
 } as const;
-export type AccessStatus = ClosedEnum<typeof AccessStatus>;
+export type ExternalAIBindingAccessStatus = ClosedEnum<
+  typeof ExternalAIBindingAccessStatus
+>;
 
 export type RequiredModelCoverage = {
   publicModelId: string;
   available: boolean | null;
-  accessStatus: AccessStatus | null;
+  accessStatus: ExternalAIBindingAccessStatus | null;
   accessObservedAt: Date | null;
 };
 
@@ -66,8 +68,9 @@ export const ExternalAIBindingCredentialStatus$inboundSchema: z.ZodEnum<
 > = z.enum(ExternalAIBindingCredentialStatus);
 
 /** @internal */
-export const AccessStatus$inboundSchema: z.ZodEnum<typeof AccessStatus> = z
-  .enum(AccessStatus);
+export const ExternalAIBindingAccessStatus$inboundSchema: z.ZodEnum<
+  typeof ExternalAIBindingAccessStatus
+> = z.enum(ExternalAIBindingAccessStatus);
 
 /** @internal */
 export const RequiredModelCoverage$inboundSchema: z.ZodType<
@@ -76,7 +79,7 @@ export const RequiredModelCoverage$inboundSchema: z.ZodType<
 > = z.object({
   publicModelId: z.string(),
   available: z.nullable(z.boolean()),
-  accessStatus: z.nullable(AccessStatus$inboundSchema),
+  accessStatus: z.nullable(ExternalAIBindingAccessStatus$inboundSchema),
   accessObservedAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ),
@@ -126,3 +129,8 @@ export function externalAIBindingFromJSON(
     `Failed to parse 'ExternalAIBinding' from JSON`,
   );
 }
+
+// Published AI binding access status compatibility exports.
+export const AccessStatus = ExternalAIBindingAccessStatus;
+export type AccessStatus = ExternalAIBindingAccessStatus;
+export const AccessStatus$inboundSchema = ExternalAIBindingAccessStatus$inboundSchema;

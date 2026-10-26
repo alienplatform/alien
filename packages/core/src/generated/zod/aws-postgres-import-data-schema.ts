@@ -14,6 +14,7 @@ export const AwsPostgresImportDataSchema = z.object({
 "database": z.string().describe("Default database name."),
 "engineVersion": z.string().describe("Engine version the cluster reports."),
 "instanceIdentifier": z.string().describe("Writer instance identifier within the cluster."),
+"managedPassword": z.optional(z.boolean().describe("True when RDS owns the JSON username/password secret and its rotation.")),
 "passwordSecretArn": z.string().describe("Secrets Manager ARN of the master password (never the password itself)."),
 "securityGroupId": z.string().describe("Dedicated security group admitting 5432 from the stack security group."),
 "subnetGroupName": z.string().describe("DB subnet group spanning the private subnets."),

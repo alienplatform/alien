@@ -29,6 +29,7 @@ impl ResourceImporter for GcpStorageImporter {
             bucket_name: Some(data.bucket_name),
             // Setup owns an imported bucket's lifecycle, and `needs_update` skips Frozen storage.
             lifecycle_revision: None,
+            read_cors_applied: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

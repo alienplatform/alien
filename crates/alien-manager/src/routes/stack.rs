@@ -987,6 +987,29 @@ fn parse_stack_import_request(raw: serde_json::Value) -> crate::error::Result<St
         }));
     }
 
+    // Never allow a new binding format to travel under an older envelope. The
+    // same parser handles initial registration and updates to existing setups.
+    let managed_postgres = raw
+        .get("resources")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|resources| {
+            resources.iter().any(|resource| {
+                resource.get("type").and_then(serde_json::Value::as_str) == Some("postgres")
+                    && resource.pointer("/importData/managedPassword")
+                        == Some(&serde_json::Value::Bool(true))
+            })
+        });
+    if managed_postgres
+        && found_version < alien_core::import::MANAGED_POSTGRES_SETUP_IMPORT_FORMAT_VERSION
+    {
+        return Err(AlienError::new(ErrorData::IncompatibleSetupImport {
+            found_version,
+            min_supported_version: alien_core::import::MANAGED_POSTGRES_SETUP_IMPORT_FORMAT_VERSION,
+            current_version: MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+            repair: "Regenerate the setup package with managed database credential support, and upgrade the manager before applying it.".to_string(),
+        }));
+    }
+
     serde_json::from_value(raw).map_err(|err| {
         AlienError::new(ErrorData::BadRequest {
             reason: format!("Invalid stack import payload: {err}"),
@@ -1224,6 +1247,8 @@ fn deployment_status_string(status: DeploymentStatus) -> String {
         DeploymentStatus::DeleteFailed => "delete-failed",
         DeploymentStatus::TeardownRequired => "teardown-required",
         DeploymentStatus::TeardownFailed => "teardown-failed",
+        DeploymentStatus::RetentionRequired => "retention-required",
+        DeploymentStatus::Retained => "retained",
         DeploymentStatus::Deleted => "deleted",
         DeploymentStatus::Error => "error",
     }
@@ -1823,6 +1848,67 @@ mod setup_update_authorization_tests {
             input_values: HashMap::new(),
             resources: vec![],
         }
+    }
+
+    #[test]
+    fn managed_postgres_import_cannot_use_a_legacy_envelope() {
+        for version in [1, 2, 3] {
+            let mut raw = serde_json::to_value(request()).unwrap();
+            raw["setupImportFormatVersion"] = version.into();
+            raw["resources"] = serde_json::json!([{
+                "id": "db", "type": "postgres",
+                "importData": {"managedPassword": true}
+            }]);
+            let parsed = parse_stack_import_request(raw);
+            if version < 3 {
+                assert!(matches!(
+                    parsed.unwrap_err().error,
+                    Some(ErrorData::IncompatibleSetupImport {
+                        min_supported_version: 3,
+                        ..
+                    })
+                ));
+            } else {
+                assert!(parsed.unwrap().resources[0].import_data["managedPassword"]
+                    .as_bool()
+                    .unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_postgres_import_remains_readable_without_managed_flag() {
+        for managed in [None, Some(false)] {
+            let mut raw = serde_json::to_value(request()).unwrap();
+            raw["resources"] = serde_json::json!([{
+                "id": "db", "type": "postgres", "importData": {}
+            }]);
+            if let Some(flag) = managed {
+                raw["resources"][0]["importData"]["managedPassword"] = flag.into();
+            }
+            assert_eq!(
+                parse_stack_import_request(raw)
+                    .unwrap()
+                    .setup_import_format_version,
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn future_setup_format_is_rejected_before_payload_deserialization() {
+        let error = parse_stack_import_request(serde_json::json!({
+            "setupImportFormatVersion": 4,
+            "resources": "not a valid resource list"
+        }))
+        .unwrap_err();
+        assert!(matches!(
+            error.error,
+            Some(ErrorData::IncompatibleSetupImport {
+                found_version: 4,
+                ..
+            })
+        ));
     }
 
     #[test]

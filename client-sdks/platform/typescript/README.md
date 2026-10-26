@@ -197,6 +197,8 @@ run();
 * [continueAwsVirtualKey](docs/sdks/alien/README.md#continueawsvirtualkey)
 * [listAwsKeySetupCleanup](docs/sdks/alien/README.md#listawskeysetupcleanup)
 * [acceptAwsKeySetup](docs/sdks/alien/README.md#acceptawskeysetup)
+* [acceptTerraformKeySetup](docs/sdks/alien/README.md#acceptterraformkeysetup)
+* [getTerraformKeySetupOperation](docs/sdks/alien/README.md#getterraformkeysetupoperation)
 
 ### [AgentSessions](docs/sdks/agentsessions/README.md)
 
@@ -517,7 +519,7 @@ run();
 * [createWebhookEndpoint](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
 * [getWebhookEndpoint](docs/sdks/webhooks/README.md#getwebhookendpoint)
 * [updateWebhookEndpoint](docs/sdks/webhooks/README.md#updatewebhookendpoint)
-* [deleteWebhookEndpoint](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+* [deleteWebhookEndpoint](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint idempotently. An endpoint that is already absent returns success. Deleting the last workspace endpoint stops capturing new webhook events.
 * [getWebhookSigningSecret](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
 * [rotateWebhookSigningSecret](docs/sdks/webhooks/README.md#rotatewebhooksigningsecret)
 * [listWebhookDeliveries](docs/sdks/webhooks/README.md#listwebhookdeliveries)
@@ -556,6 +558,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 <summary>Available standalone functions</summary>
 
 - [`acceptAwsKeySetup`](docs/sdks/alien/README.md#acceptawskeysetup)
+- [`acceptTerraformKeySetup`](docs/sdks/alien/README.md#acceptterraformkeysetup)
 - [`acceptWorkspaceInvitation`](docs/sdks/alien/README.md#acceptworkspaceinvitation)
 - [`agentSessionsEvents`](docs/sdks/agentsessions/README.md#events) - Incrementally read a session's event log (steps, tool calls, report deltas, approvals, status transitions). Pass the previous response's `latestSeq` as `after` to fetch only new events.
 - [`agentSessionsGet`](docs/sdks/agentsessions/README.md#get) - Retrieve one ai-agent monitor session by id.
@@ -676,6 +679,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`getLogExportDeliveryConfig`](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
 - [`getPendingWorkspaceInvitation`](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
 - [`getProjectLogExport`](docs/sdks/alien/README.md#getprojectlogexport)
+- [`getTerraformKeySetupOperation`](docs/sdks/alien/README.md#getterraformkeysetupoperation)
 - [`getWorkspaceInvitationPreview`](docs/sdks/alien/README.md#getworkspaceinvitationpreview)
 - [`getWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
 - [`incidentsGet`](docs/sdks/incidents/README.md#get) - Get an authorized incident without Slack transport metadata.
@@ -813,7 +817,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`userSyncGitNamespaces`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 - [`userUpdateProfile`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
 - [`webhooksCreateWebhookEndpoint`](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
-- [`webhooksDeleteWebhookEndpoint`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+- [`webhooksDeleteWebhookEndpoint`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint idempotently. An endpoint that is already absent returns success. Deleting the last workspace endpoint stops capturing new webhook events.
 - [`webhooksGetWebhookEndpoint`](docs/sdks/webhooks/README.md#getwebhookendpoint)
 - [`webhooksGetWebhookSigningSecret`](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
 - [`webhooksListWebhookDeliveries`](docs/sdks/webhooks/README.md#listwebhookdeliveries)
@@ -859,6 +863,7 @@ To learn about this feature and how to get started, check
 <summary>Available React hooks</summary>
 
 - [`useAcceptAwsKeySetupMutation`](docs/sdks/alien/README.md#acceptawskeysetup)
+- [`useAcceptTerraformKeySetupMutation`](docs/sdks/alien/README.md#acceptterraformkeysetup)
 - [`useAcceptWorkspaceInvitationMutation`](docs/sdks/alien/README.md#acceptworkspaceinvitation)
 - [`useAgentSessionsEvents`](docs/sdks/agentsessions/README.md#events) - Incrementally read a session's event log (steps, tool calls, report deltas, approvals, status transitions). Pass the previous response's `latestSeq` as `after` to fetch only new events.
 - [`useAgentSessionsGet`](docs/sdks/agentsessions/README.md#get) - Retrieve one ai-agent monitor session by id.
@@ -979,6 +984,7 @@ To learn about this feature and how to get started, check
 - [`useGetLogExportDeliveryConfig`](docs/sdks/alien/README.md#getlogexportdeliveryconfig)
 - [`useGetPendingWorkspaceInvitation`](docs/sdks/alien/README.md#getpendingworkspaceinvitation)
 - [`useGetProjectLogExport`](docs/sdks/alien/README.md#getprojectlogexport)
+- [`useGetTerraformKeySetupOperation`](docs/sdks/alien/README.md#getterraformkeysetupoperation)
 - [`useGetWorkspaceInvitationPreview`](docs/sdks/alien/README.md#getworkspaceinvitationpreview)
 - [`useGetWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
 - [`useIncidentsGet`](docs/sdks/incidents/README.md#get) - Get an authorized incident without Slack transport metadata.
@@ -1116,7 +1122,7 @@ To learn about this feature and how to get started, check
 - [`useUserSyncGitNamespacesMutation`](docs/sdks/user/README.md#syncgitnamespaces) - Sync git namespaces from the provider. For GitHub, this fetches all app installations accessible to the user.
 - [`useUserUpdateProfileMutation`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
 - [`useWebhooksCreateWebhookEndpointMutation`](docs/sdks/webhooks/README.md#createwebhookendpoint) - Create an endpoint. Invalid delivery-service configuration returns 400 with the validation reason.
-- [`useWebhooksDeleteWebhookEndpointMutation`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+- [`useWebhooksDeleteWebhookEndpointMutation`](docs/sdks/webhooks/README.md#deletewebhookendpoint) - Delete an endpoint idempotently. An endpoint that is already absent returns success. Deleting the last workspace endpoint stops capturing new webhook events.
 - [`useWebhooksGetWebhookEndpoint`](docs/sdks/webhooks/README.md#getwebhookendpoint)
 - [`useWebhooksGetWebhookSigningSecret`](docs/sdks/webhooks/README.md#getwebhooksigningsecret)
 - [`useWebhooksListWebhookDeliveries`](docs/sdks/webhooks/README.md#listwebhookdeliveries)

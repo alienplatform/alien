@@ -648,6 +648,11 @@ expression: schemas
         "description": "Writer instance identifier within the cluster.",
         "type": "string"
       },
+      "managedPassword": {
+        "default": false,
+        "description": "True when RDS owns the JSON username/password secret and its rotation.",
+        "type": "boolean"
+      },
       "passwordSecretArn": {
         "description": "Secrets Manager ARN of the master password (never the password itself).",
         "type": "string"
@@ -1210,6 +1215,13 @@ expression: schemas
       },
       "applicationGatewaySubnetName": {
         "description": "Dedicated subnet name for classic Azure Application Gateway ingress.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "containerAppsSubnetName": {
+        "description": "Subnet delegated to `Microsoft.App/environments` for the Container Apps environment. Absent for a BYO-VNet, whose private subnet serves the environment.",
         "type": [
           "string",
           "null"

@@ -46,6 +46,7 @@ impl TfEmitter for AzureKvEmitter {
         fragment.resource_blocks.push(table);
 
         emit_remote_access(ctx, &mut fragment, label, &parent_label)?;
+        fragment.retain_resources(|kind, _| kind == "azurerm_storage_table");
         Ok(fragment)
     }
 

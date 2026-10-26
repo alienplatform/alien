@@ -215,6 +215,16 @@ impl Stack {
                         .expect("resource config is an object")
                         .remove("defaultPolicy");
                 }
+                if entry
+                    .config
+                    .downcast_ref::<crate::AzureStorageAccount>()
+                    .is_some()
+                {
+                    if let Some(settings) = crate::AzureStorageAccount::setup_settings_digest(self)
+                    {
+                        value["azureStorageSettings"] = settings.into();
+                    }
+                }
                 canonicalize_json(&mut value);
                 // Bind setup approval to derived queue settings too. Preserve old digests
                 // for stacks without explicit batching.

@@ -1,13 +1,13 @@
-# PasswordSecretArnSecretRef
+# PasswordSecretArnSecretRef2
 
 Reference to a Kubernetes Secret
 
 ## Example Usage
 
 ```typescript
-import { PasswordSecretArnSecretRef } from "@alienplatform/platform-api/models";
+import { PasswordSecretArnSecretRef2 } from "@alienplatform/platform-api/models";
 
-let value: PasswordSecretArnSecretRef = {
+let value: PasswordSecretArnSecretRef2 = {
   key: "<key>",
   name: "<value>",
 };

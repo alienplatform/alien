@@ -6,7 +6,7 @@
 import { DeleteDeploymentRequest } from "@alienplatform/manager-api/models";
 
 let value: DeleteDeploymentRequest = {
-  action: "cleanup",
+  action: "retain",
 };
 ```
 

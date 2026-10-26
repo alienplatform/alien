@@ -3,6 +3,7 @@
  */
 
 import { acceptAwsKeySetup } from "../funcs/acceptAwsKeySetup.js";
+import { acceptTerraformKeySetup } from "../funcs/acceptTerraformKeySetup.js";
 import { acceptWorkspaceInvitation } from "../funcs/acceptWorkspaceInvitation.js";
 import { cancelDeploymentCredentialRotation } from "../funcs/cancelDeploymentCredentialRotation.js";
 import { claimAwsXksStoreRetirement } from "../funcs/claimAwsXksStoreRetirement.js";
@@ -22,6 +23,7 @@ import { getInstallationDeployment } from "../funcs/getInstallationDeployment.js
 import { getLogExportDeliveryConfig } from "../funcs/getLogExportDeliveryConfig.js";
 import { getPendingWorkspaceInvitation } from "../funcs/getPendingWorkspaceInvitation.js";
 import { getProjectLogExport } from "../funcs/getProjectLogExport.js";
+import { getTerraformKeySetupOperation } from "../funcs/getTerraformKeySetupOperation.js";
 import { getWorkspaceInvitationPreview } from "../funcs/getWorkspaceInvitationPreview.js";
 import { getWorkspaceInviteLink } from "../funcs/getWorkspaceInviteLink.js";
 import { listAwsKeySetupCleanup } from "../funcs/listAwsKeySetupCleanup.js";
@@ -681,6 +683,28 @@ export class Alien extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.AcceptAwsKeySetupResponse | undefined> {
     return unwrapAsync(acceptAwsKeySetup(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async acceptTerraformKeySetup(
+    request?: models.TerraformKeySetupRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<operations.AcceptTerraformKeySetupResponse> {
+    return unwrapAsync(acceptTerraformKeySetup(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getTerraformKeySetupOperation(
+    request: operations.GetTerraformKeySetupOperationRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetTerraformKeySetupOperationResponse> {
+    return unwrapAsync(getTerraformKeySetupOperation(
       this,
       request,
       options,

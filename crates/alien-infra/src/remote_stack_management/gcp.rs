@@ -559,8 +559,6 @@ impl GcpRemoteStackManagementController {
         status = ResourceStatus::Deleting,
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
-
         if !self.federation_setup.delete(ctx).await? {
             return Ok(HandlerAction::Continue {
                 state: DeleteStart,
@@ -568,61 +566,7 @@ impl GcpRemoteStackManagementController {
             });
         }
 
-        // Remove all IAM bindings where our service account is a member
-        if !self.role_bound {
-            info!(config_id = %config.id, "Role was never bound, skipping unbinding");
-        } else if let Some(service_account_email) = &self.service_account_email {
-            let gcp_config = ctx.get_gcp_config()?;
-            let project_id = &gcp_config.project_id;
-            let rm_client = ctx
-                .service_provider
-                .get_gcp_resource_manager_client(gcp_config)?;
-
-            match rm_client
-                .get_project_iam_policy(
-                    project_id.clone(),
-                    Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
-                        requested_policy_version: Some(3),
-                    }),
-                )
-                .await
-            {
-                Ok(mut current_policy) => {
-                    let service_account_member =
-                        format!("serviceAccount:{}", service_account_email);
-
-                    ResourcePermissionsHelper::remove_gcp_project_member_bindings(
-                        &mut current_policy.bindings,
-                        &service_account_member,
-                        None,
-                        None,
-                    );
-
-                    rm_client
-                        .set_project_iam_policy(project_id.clone(), current_policy, None)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to unbind roles from management service account '{}' at project level", service_account_email),
-                            resource_id: Some(config.id.clone()),
-                        })?;
-
-                    info!(
-                        config_id = %config.id,
-                        service_account_email = %service_account_email,
-                        "All role bindings removed for management service account at project level"
-                    );
-                }
-                Err(_) => {
-                    info!(
-                        config_id = %config.id,
-                        service_account_email = %service_account_email,
-                        "Could not retrieve project IAM policy for unbinding, continuing with deletion"
-                    );
-                }
-            }
-
-            self.role_bound = false;
-        }
+        self.revoke_project_access(ctx).await?;
 
         Ok(HandlerAction::Continue {
             state: DeletingRole,
@@ -639,6 +583,7 @@ impl GcpRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.revoke_project_access(ctx).await?;
         ResourcePermissionsHelper::delete_gcp_custom_roles(ctx).await?;
 
         Ok(HandlerAction::Continue {
@@ -656,6 +601,7 @@ impl GcpRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.revoke_project_access(ctx).await?;
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
         if let Some(service_account_email) = &self.service_account_email {
@@ -784,6 +730,74 @@ fn emit_gcp_remote_stack_management_heartbeat(
 
 // Separate impl block for helper methods
 impl GcpRemoteStackManagementController {
+    // Old deletion checkpoints could advance after an IAM read failure. Check
+    // every destructive entry point instead of trusting the old role_bound bit.
+    async fn revoke_project_access(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        // A failed read or write is not proof of revocation. Keep the bound
+        // checkpoint until the exact identity is absent from the project policy.
+        if self.service_account_email.is_some() || self.role_bound {
+            let service_account_email = self.service_account_email.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Bound management identity is missing from its saved checkpoint"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?;
+            let gcp_config = ctx.get_gcp_config()?;
+            let rm_client = ctx
+                .service_provider
+                .get_gcp_resource_manager_client(gcp_config)?;
+            let mut policy = match rm_client
+                .get_project_iam_policy(
+                    gcp_config.project_id.clone(),
+                    Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
+                        requested_policy_version: Some(3),
+                    }),
+                )
+                .await
+            {
+                Ok(policy) => policy,
+                Err(error) if matches!(error.error, Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })) => {
+                    self.role_bound = false;
+                    return Ok(());
+                }
+                Err(error) => return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to read project IAM policy to revoke management identity '{service_account_email}'"),
+                    resource_id: Some(config.id.clone()),
+                })),
+            };
+            let member = format!("serviceAccount:{service_account_email}");
+            if ResourcePermissionsHelper::remove_gcp_project_member_bindings(
+                &mut policy.bindings,
+                &member,
+                None,
+                None,
+            ) {
+                // A fresh read on retry preserves concurrent and conditional grants.
+                // Never overwrite a policy without its concurrency precondition.
+                if policy.etag.as_deref().is_none_or(str::is_empty) {
+                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message:
+                            "Project IAM policy has no etag; cannot safely revoke management access"
+                                .to_string(),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+                rm_client
+                    .set_project_iam_policy(gcp_config.project_id.clone(), policy, None)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to revoke project grants for management identity '{service_account_email}'"),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+            }
+            self.role_bound = false;
+        }
+
+        Ok(())
+    }
+
     /// Resolve the management permission sets from the stack's management profile.
     ///
     /// Returns the individual permission sets (not merged into a single synthetic set),
@@ -1061,6 +1075,330 @@ mod tests {
     use alien_gcp_clients::resource_manager::MockResourceManagerApi;
 
     const PROJECT: &str = "test-project-123";
+
+    struct RevocationModel {
+        policy: IamPolicy,
+        failure: &'static str,
+        reads: usize,
+        writes: usize,
+    }
+
+    fn revocation_error() -> alien_error::AlienError<alien_client_core::ErrorData> {
+        AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+            resource_type: "project policy".to_string(),
+            resource_name: PROJECT.to_string(),
+        })
+    }
+
+    async fn revocation_executor(
+        controller: GcpRemoteStackManagementController,
+        model: Arc<Mutex<RevocationModel>>,
+    ) -> SingleControllerExecutor {
+        let mut rm = MockResourceManagerApi::new();
+        let read = model.clone();
+        rm.expect_get_project_iam_policy()
+            .returning(move |_, options| {
+                assert_eq!(options.unwrap().requested_policy_version, Some(3));
+                let mut model = read.lock().unwrap();
+                model.reads += 1;
+                if model.failure == "missing" {
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceNotFound {
+                            resource_type: "project".to_string(),
+                            resource_name: PROJECT.to_string(),
+                        },
+                    ));
+                }
+                if model.failure == "read" {
+                    model.failure = "";
+                    return Err(revocation_error());
+                }
+                Ok(model.policy.clone())
+            });
+        rm.expect_set_project_iam_policy()
+            .returning(move |_, policy, _| {
+                let mut model = model.lock().unwrap();
+                model.writes += 1;
+                assert_eq!(policy.etag, model.policy.etag);
+                assert_eq!(policy.version, Some(3));
+                if model.failure == "conflict" {
+                    model.failure = "";
+                    model.policy.etag = Some("concurrent-revision".to_string());
+                    model.policy.bindings.push(
+                        Binding::builder()
+                            .role("roles/viewer".to_string())
+                            .members(vec!["user:concurrent@example.com".to_string()])
+                            .build(),
+                    );
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceConflict {
+                            resource_type: "project policy".to_string(),
+                            resource_name: PROJECT.to_string(),
+                            message: "etag changed".to_string(),
+                        },
+                    ));
+                }
+                model.policy = policy;
+                if model.failure == "lost-response" {
+                    model.failure = "";
+                    return Err(AlienError::new(alien_client_core::ErrorData::Timeout {
+                        message: "setIamPolicy response lost".to_string(),
+                    }));
+                }
+                Ok(model.policy.clone())
+            });
+        let rm = Arc::new(rm);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(rm.clone()));
+        // No IAM client is supplied: a failed revocation cannot advance to
+        // custom-role or service-account deletion in this step.
+        SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn revocation_policy(member: &str) -> IamPolicy {
+        IamPolicy::builder()
+            .version(3)
+            .etag("initial-revision".to_string())
+            .bindings(vec![
+                Binding::builder()
+                    .role("roles/viewer".to_string())
+                    .members(vec![
+                        member.to_string(),
+                        "user:other@example.com".to_string(),
+                    ])
+                    .condition(
+                        alien_gcp_clients::iam::Expr::builder()
+                            .expression("resource.name.startsWith('projects/test')".to_string())
+                            .title("customer-condition".to_string())
+                            .build(),
+                    )
+                    .build(),
+                Binding::builder()
+                    .role("roles/editor".to_string())
+                    .members(vec![member.to_string()])
+                    .build(),
+            ])
+            .build()
+    }
+
+    #[tokio::test]
+    async fn management_revocation_recovers_after_denial_conflict_and_lost_response() {
+        for failure in ["read", "conflict", "lost-response"] {
+            let mut controller = ready_management_controller("acme");
+            controller.state = GcpRemoteStackManagementState::DeleteStart;
+            let member = format!(
+                "serviceAccount:{}",
+                controller.service_account_email.as_ref().unwrap()
+            );
+            let policy = revocation_policy(&member);
+            let original_condition = serde_json::to_value(&policy.bindings[0].condition).unwrap();
+            let model = Arc::new(Mutex::new(RevocationModel {
+                policy,
+                failure,
+                reads: 0,
+                writes: 0,
+            }));
+            let mut executor = revocation_executor(controller, model.clone()).await;
+            assert_eq!(
+                executor.step().await.unwrap_err().code,
+                "CLOUD_PLATFORM_ERROR"
+            );
+            let saved = executor
+                .internal_state::<GcpRemoteStackManagementController>()
+                .unwrap();
+            assert!(saved.role_bound);
+            assert!(saved.service_account_email.is_some());
+            let saved = serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+            let mut resumed = revocation_executor(saved, model.clone()).await;
+            resumed.step().await.unwrap();
+            let completed = resumed
+                .internal_state::<GcpRemoteStackManagementController>()
+                .unwrap();
+            assert!(!completed.role_bound);
+            assert!(matches!(
+                completed.state,
+                GcpRemoteStackManagementState::DeletingRole
+            ));
+            let model = model.lock().unwrap();
+            assert_eq!(model.reads, 2);
+            assert_eq!(model.writes, if failure == "conflict" { 2 } else { 1 });
+            assert_eq!(model.policy.bindings[0].members, ["user:other@example.com"]);
+            assert_eq!(
+                serde_json::to_value(&model.policy.bindings[0].condition).unwrap(),
+                original_condition
+            );
+            assert_eq!(
+                model.policy.bindings.len(),
+                if failure == "conflict" { 2 } else { 1 }
+            );
+            if failure == "conflict" {
+                assert_eq!(
+                    model.policy.bindings[1].members,
+                    ["user:concurrent@example.com"]
+                );
+                assert_eq!(model.policy.etag.as_deref(), Some("concurrent-revision"));
+            }
+            assert!(model
+                .policy
+                .bindings
+                .iter()
+                .all(|binding| !binding.members.contains(&member)));
+        }
+    }
+
+    #[tokio::test]
+    async fn management_revocation_checks_legacy_unbound_checkpoint_and_then_is_noop() {
+        let mut controller = ready_management_controller("acme");
+        controller.state = GcpRemoteStackManagementState::DeleteStart;
+        controller.role_bound = false;
+        let member = format!(
+            "serviceAccount:{}",
+            controller.service_account_email.as_ref().unwrap()
+        );
+        let model = Arc::new(Mutex::new(RevocationModel {
+            policy: revocation_policy(&member),
+            failure: "",
+            reads: 0,
+            writes: 0,
+        }));
+        let mut executor = revocation_executor(controller, model.clone()).await;
+        executor.step().await.unwrap();
+        let mut saved: GcpRemoteStackManagementController = serde_json::from_value(
+            serde_json::to_value(
+                executor
+                    .internal_state::<GcpRemoteStackManagementController>()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // A caller may restart delete after the revocation checkpoint.
+        saved.state = GcpRemoteStackManagementState::DeleteStart;
+        let mut resumed = revocation_executor(saved, model.clone()).await;
+        resumed.step().await.unwrap();
+        assert!(matches!(
+            resumed
+                .internal_state::<GcpRemoteStackManagementController>()
+                .unwrap()
+                .state,
+            GcpRemoteStackManagementState::DeletingRole
+        ));
+        let model = model.lock().unwrap();
+        assert_eq!(model.reads, 2);
+        assert_eq!(model.writes, 1);
+        assert_eq!(model.policy.bindings[0].members, ["user:other@example.com"]);
+    }
+
+    #[tokio::test]
+    async fn management_revocation_accepts_an_already_deleted_project() {
+        let mut controller = ready_management_controller("acme");
+        controller.state = GcpRemoteStackManagementState::DeleteStart;
+        let model = Arc::new(Mutex::new(RevocationModel {
+            policy: IamPolicy::default(),
+            failure: "missing",
+            reads: 0,
+            writes: 0,
+        }));
+        let mut executor = revocation_executor(controller, model.clone()).await;
+        executor.step().await.unwrap();
+        let saved = executor
+            .internal_state::<GcpRemoteStackManagementController>()
+            .unwrap();
+        assert!(!saved.role_bound);
+        assert!(matches!(
+            saved.state,
+            GcpRemoteStackManagementState::DeletingRole
+        ));
+        let model = model.lock().unwrap();
+        assert_eq!(model.reads, 1);
+        assert_eq!(model.writes, 0);
+    }
+
+    #[tokio::test]
+    async fn saved_destructive_management_steps_cannot_skip_revocation() {
+        for state in [
+            GcpRemoteStackManagementState::DeletingRole,
+            GcpRemoteStackManagementState::DeletingServiceAccount,
+        ] {
+            let mut controller = ready_management_controller("acme");
+            controller.state = state;
+            controller.role_bound = false;
+            let member = format!(
+                "serviceAccount:{}",
+                controller.service_account_email.as_ref().unwrap()
+            );
+            let policy = revocation_policy(&member);
+            let before = serde_json::to_value(&policy).unwrap();
+            let model = Arc::new(Mutex::new(RevocationModel {
+                policy,
+                failure: "read",
+                reads: 0,
+                writes: 0,
+            }));
+            let saved = serde_json::from_value(serde_json::to_value(&controller).unwrap()).unwrap();
+            let mut executor = revocation_executor(saved, model.clone()).await;
+            assert_eq!(
+                executor.step().await.unwrap_err().code,
+                "CLOUD_PLATFORM_ERROR"
+            );
+            assert!(executor
+                .internal_state::<GcpRemoteStackManagementController>()
+                .unwrap()
+                .service_account_email
+                .is_some());
+            let model = model.lock().unwrap();
+            assert_eq!(model.reads, 1);
+            assert_eq!(model.writes, 0);
+            assert_eq!(serde_json::to_value(&model.policy).unwrap(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn management_revocation_refuses_unverified_identity_or_policy_revision() {
+        for missing_identity in [false, true] {
+            let mut controller = ready_management_controller("acme");
+            controller.state = GcpRemoteStackManagementState::DeleteStart;
+            let member = format!(
+                "serviceAccount:{}",
+                controller.service_account_email.as_ref().unwrap()
+            );
+            let mut policy = revocation_policy(&member);
+            policy.etag = None;
+            if missing_identity {
+                controller.service_account_email = None;
+            }
+            let model = Arc::new(Mutex::new(RevocationModel {
+                policy,
+                failure: "",
+                reads: 0,
+                writes: 0,
+            }));
+            let mut executor = revocation_executor(controller, model.clone()).await;
+            assert_eq!(
+                executor.step().await.unwrap_err().code,
+                "RESOURCE_CONFIG_INVALID"
+            );
+            assert!(
+                executor
+                    .internal_state::<GcpRemoteStackManagementController>()
+                    .unwrap()
+                    .role_bound
+            );
+            let model = model.lock().unwrap();
+            assert_eq!(model.reads, usize::from(!missing_identity));
+            assert_eq!(model.writes, 0);
+            assert!(model.policy.bindings[0].members.contains(&member));
+        }
+    }
 
     /// The custom roles a deployment with `context` creates for `permission_set_ids`,
     /// exactly as the runtime generator names and describes them.

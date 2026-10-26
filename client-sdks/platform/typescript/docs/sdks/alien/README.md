@@ -41,6 +41,8 @@
 * [continueAwsVirtualKey](#continueawsvirtualkey)
 * [listAwsKeySetupCleanup](#listawskeysetupcleanup)
 * [acceptAwsKeySetup](#acceptawskeysetup)
+* [acceptTerraformKeySetup](#acceptterraformkeysetup)
+* [getTerraformKeySetupOperation](#getterraformkeysetupoperation)
 
 ## getWorkspaceInvitationPreview
 
@@ -3858,6 +3860,223 @@ import {
 ### Response
 
 **Promise\<[operations.AcceptAwsKeySetupResponse](../../models/operations/acceptawskeysetupresponse.md)\>**
+
+### Errors
+
+| Error Type                   | Status Code                  | Content Type                 |
+| ---------------------------- | ---------------------------- | ---------------------------- |
+| errors.APIError              | 400, 401, 403, 404, 409, 422 | application/json             |
+| errors.APIError              | 500                          | application/json             |
+| errors.AlienDefaultError     | 4XX, 5XX                     | \*/\*                        |
+
+## acceptTerraformKeySetup
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="acceptTerraformKeySetup" method="post" path="/v1/aws-key-setups/terraform" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.acceptTerraformKeySetup({
+    action: "create",
+    requestId: "5041538d-68c6-4dca-aeba-eb4be5d10249",
+    connectedKeyDeploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    setupRoleArn: "<value>",
+    deletionWindowDays: 898184,
+    target: {
+      operationId: "a1d6cdbc-bfb4-47a2-80eb-bdfbdc5dd5be",
+      deploymentName: "<value>",
+      awsAccountId: "<id>",
+      awsRegion: "<value>",
+      resourcePrefix: "<value>",
+      resourceId: "<id>",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { acceptTerraformKeySetup } from "@alienplatform/platform-api/funcs/acceptTerraformKeySetup.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await acceptTerraformKeySetup(alien, {
+    action: "create",
+    requestId: "5041538d-68c6-4dca-aeba-eb4be5d10249",
+    connectedKeyDeploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    setupRoleArn: "<value>",
+    deletionWindowDays: 898184,
+    target: {
+      operationId: "a1d6cdbc-bfb4-47a2-80eb-bdfbdc5dd5be",
+      deploymentName: "<value>",
+      awsAccountId: "<id>",
+      awsRegion: "<value>",
+      resourcePrefix: "<value>",
+      resourceId: "<id>",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("acceptTerraformKeySetup failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Mutation hook for triggering the API call.
+  useAcceptTerraformKeySetupMutation
+} from "@alienplatform/platform-api/react-query/acceptTerraformKeySetup.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [models.TerraformKeySetupRequest](../../models/terraformkeysetuprequest.md)                                                                                                    | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.AcceptTerraformKeySetupResponse](../../models/operations/acceptterraformkeysetupresponse.md)\>**
+
+### Errors
+
+| Error Type                   | Status Code                  | Content Type                 |
+| ---------------------------- | ---------------------------- | ---------------------------- |
+| errors.APIError              | 400, 401, 403, 404, 409, 422 | application/json             |
+| errors.APIError              | 500                          | application/json             |
+| errors.AlienDefaultError     | 4XX, 5XX                     | \*/\*                        |
+
+## getTerraformKeySetupOperation
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getTerraformKeySetupOperation" method="get" path="/v1/aws-key-setups/terraform/{setupId}/operations/{operationId}" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.getTerraformKeySetupOperation({
+    setupId: "<id>",
+    operationId: "775c2e54-6cfa-455d-8d45-4d8ef396886d",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { getTerraformKeySetupOperation } from "@alienplatform/platform-api/funcs/getTerraformKeySetupOperation.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await getTerraformKeySetupOperation(alien, {
+    setupId: "<id>",
+    operationId: "775c2e54-6cfa-455d-8d45-4d8ef396886d",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("getTerraformKeySetupOperation failed:", res.error);
+  }
+}
+
+run();
+```
+
+### React hooks and utilities
+
+This method can be used in React components through the following hooks and
+associated utilities.
+
+> Check out [this guide][hook-guide] for information about each of the utilities
+> below and how to get started using React hooks.
+
+[hook-guide]: ../../../REACT_QUERY.md
+
+```tsx
+import {
+  // Query hooks for fetching data.
+  useGetTerraformKeySetupOperation,
+  useGetTerraformKeySetupOperationSuspense,
+
+  // Utility for prefetching data during server-side rendering and in React
+  // Server Components that will be immediately available to client components
+  // using the hooks.
+  prefetchGetTerraformKeySetupOperation,
+
+  // Utilities to invalidate the query cache for this query in response to
+  // mutations and other user actions.
+  invalidateGetTerraformKeySetupOperation,
+  invalidateAllGetTerraformKeySetupOperation,
+} from "@alienplatform/platform-api/react-query/getTerraformKeySetupOperation.js";
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetTerraformKeySetupOperationRequest](../../models/operations/getterraformkeysetupoperationrequest.md)                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.GetTerraformKeySetupOperationResponse](../../models/operations/getterraformkeysetupoperationresponse.md)\>**
 
 ### Errors
 

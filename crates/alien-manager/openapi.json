@@ -995,6 +995,9 @@
           },
           "404": {
             "description": "Not found"
+          },
+          "409": {
+            "description": "Setup cleanup lease is active; retry deletion after cleanup finishes or the lease expires"
           }
         }
       }
@@ -8385,6 +8388,8 @@
         "type": "string",
         "enum": [
           "cleanup",
+          "retain",
+          "erase",
           "detach",
           "forget"
         ]
@@ -10742,6 +10747,18 @@
           "status"
         ],
         "properties": {
+          "maxSetupImportFormatVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Newest setup registration format accepted by this manager.",
+            "minimum": 0
+          },
+          "minSetupImportFormatVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Oldest setup registration format accepted by this manager.",
+            "minimum": 0
+          },
           "operationResultContract": {
             "type": "boolean",
             "description": "True when operation result contracts are persisted before commands\nbecome executable."
@@ -15616,6 +15633,29 @@
               }
             ],
             "description": "AWS Aurora Serverless v2 (cluster endpoint + secret ARN)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuroraPostgresBinding",
+                "description": "Aurora-managed JSON credentials. Separate tag makes older readers reject\nthis binding rather than treating the JSON document as a raw password."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "aurora-managed"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Aurora-managed JSON credentials. Separate tag makes older readers reject\nthis binding rather than treating the JSON document as a raw password."
           },
           {
             "allOf": [

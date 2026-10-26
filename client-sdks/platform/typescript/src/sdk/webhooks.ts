@@ -68,7 +68,7 @@ export class Webhooks extends ClientSDK {
   }
 
   /**
-   * Delete an endpoint. Deleting the last workspace endpoint stops capturing new webhook events.
+   * Delete an endpoint idempotently. An endpoint that is already absent returns success. Deleting the last workspace endpoint stops capturing new webhook events.
    */
   async deleteWebhookEndpoint(
     request: operations.DeleteWebhookEndpointRequest,

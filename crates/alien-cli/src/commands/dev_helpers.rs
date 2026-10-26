@@ -1416,6 +1416,8 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
         "delete-pending" => Ok(DeploymentStatus::DeletePending),
         "deleting" => Ok(DeploymentStatus::Deleting),
         "delete-failed" => Ok(DeploymentStatus::DeleteFailed),
+        "retention-required" => Ok(DeploymentStatus::RetentionRequired),
+        "retained" => Ok(DeploymentStatus::Retained),
         "teardown-required" => Ok(DeploymentStatus::TeardownRequired),
         "teardown-failed" => Ok(DeploymentStatus::TeardownFailed),
         "deleted" => Ok(DeploymentStatus::Deleted),

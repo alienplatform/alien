@@ -16,6 +16,9 @@ pub use azure::*;
 mod azure_import;
 pub use azure_import::AzureArtifactRegistryImporter;
 
+mod retention;
+pub use retention::revoke_retained_registry_identities;
+
 #[cfg(feature = "local")]
 mod local;
 #[cfg(feature = "local")]

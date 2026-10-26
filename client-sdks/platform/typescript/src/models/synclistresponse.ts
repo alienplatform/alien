@@ -35,6 +35,8 @@ import {
   SyncListResponseBasePlatform$inboundSchema,
   SyncListResponseCredentialRetryUnion,
   SyncListResponseCredentialRetryUnion$inboundSchema,
+  SyncListResponseDeletionPolicy,
+  SyncListResponseDeletionPolicy$inboundSchema,
   SyncListResponseDeployerSecret,
   SyncListResponseDeployerSecret$inboundSchema,
   SyncListResponseEnvironmentInfoUnion,
@@ -49,17 +51,31 @@ import {
   SyncListResponseStackState$inboundSchema,
   SyncListResponseStatus,
   SyncListResponseStatus$inboundSchema,
-} from "./synclistresponsependingpreparedstackdefaultstringlist.js";
+} from "./synclistresponsependingpreparedstacktypestringlist.js";
 import {
   SyncListResponsePendingPreparedStackUnion,
   SyncListResponsePendingPreparedStackUnion$inboundSchema,
-  SyncListResponsePreparedStackApprovalPlugins,
-  SyncListResponsePreparedStackApprovalPlugins$inboundSchema,
   SyncListResponsePreparedStackCustom,
   SyncListResponsePreparedStackCustom$inboundSchema,
   SyncListResponsePreparedStackInput,
   SyncListResponsePreparedStackInput$inboundSchema,
-} from "./synclistresponsepreparedstackapprovalplugins.js";
+  SyncListResponsePreparedStackPluginsDecision,
+  SyncListResponsePreparedStackPluginsDecision$inboundSchema,
+} from "./synclistresponsepreparedstackpluginsdecision.js";
+
+export type SyncListResponsePreparedStackApprovalPlugins = {
+  /**
+   * Whether matching operations run without approval.
+   */
+  decision: SyncListResponsePreparedStackPluginsDecision;
+  /**
+   * Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard
+   *
+   * @remarks
+   * access request for these operations may cover.
+   */
+  maxRisk?: string | null | undefined;
+};
 
 /**
  * Whether matching operations run without approval.
@@ -1607,6 +1623,13 @@ export type SyncListResponseRuntimeMetadata = {
    */
   credentialRetry?: SyncListResponseCredentialRetryUnion | null | undefined;
   /**
+   * Explicit disposition of durable data when deleting a deployment.
+   *
+   * @remarks
+   * Missing values from older checkpoints always preserve data.
+   */
+  deletionPolicy?: SyncListResponseDeletionPolicy | undefined;
+  /**
    * Whether each vault-native deployer secret is in the customer's secret
    *
    * @remarks
@@ -1678,6 +1701,29 @@ export type SyncListResponseRuntimeMetadata = {
    */
   registryAccessGranted?: boolean | undefined;
   /**
+   * Start of the bounded wait for retained data's expiry controls to disable.
+   *
+   * @remarks
+   * Cleared on confirmation, explicit retry, or returning to normal execution.
+   */
+  retainedDataProtectionStartedAt?: Date | null | undefined;
+  /**
+   * UTC API-confirmation time for the matching data protection digest.
+   *
+   * @remarks
+   * Provider propagation must be qualified separately before final retention.
+   */
+  retainedStorageProtectionConfirmedAt?: Date | null | undefined;
+  /**
+   * Digest of the installed data inventory whose runtime public-access and
+   *
+   * @remarks
+   * expiry configuration was protected before cleanup. The serialized field
+   * name is retained for compatibility. This is not a
+   * receipt for effective expiry propagation or privileged setup teardown.
+   */
+  retainedStorageProtectionHash?: string | null | undefined;
+  /**
    * What a direct setup created for resources it does not own, keyed by resource id. Setup
    *
    * @remarks
@@ -1691,6 +1737,14 @@ export type SyncListResponseRuntimeMetadata = {
     | string
     | null
     | undefined;
+  /**
+   * Credential revocation completed before resource teardown. A delete retry
+   *
+   * @remarks
+   * can use this receipt after the vault or its binding is gone. Secret sync
+   * clears it before a deployment can write runtime credentials again.
+   */
+  vaultCredentialsRevoked?: boolean | undefined;
 };
 
 /**
@@ -2103,6 +2157,29 @@ export type SyncListResponse = {
 };
 
 /** @internal */
+export const SyncListResponsePreparedStackApprovalPlugins$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackApprovalPlugins, unknown> = z.object({
+    decision: SyncListResponsePreparedStackPluginsDecision$inboundSchema,
+    maxRisk: z.nullable(z.string()).optional(),
+  });
+
+export function syncListResponsePreparedStackApprovalPluginsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackApprovalPlugins,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackApprovalPlugins$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackApprovalPlugins' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponsePreparedStackApprovalPluginsEnum$inboundSchema:
   z.ZodEnum<typeof SyncListResponsePreparedStackApprovalPluginsEnum> = z.enum(
     SyncListResponsePreparedStackApprovalPluginsEnum,
@@ -2112,7 +2189,7 @@ export const SyncListResponsePreparedStackApprovalPluginsEnum$inboundSchema:
 export const SyncListResponsePreparedStackPluginsApprovalUnion$inboundSchema:
   z.ZodType<SyncListResponsePreparedStackPluginsApprovalUnion, unknown> = z
     .union([
-      SyncListResponsePreparedStackApprovalPlugins$inboundSchema,
+      z.lazy(() => SyncListResponsePreparedStackApprovalPlugins$inboundSchema),
       SyncListResponsePreparedStackApprovalPluginsEnum$inboundSchema,
     ]);
 
@@ -2232,7 +2309,7 @@ export const SyncListResponsePreparedStackPlugins$inboundSchema: z.ZodType<
   approval: z.record(
     z.string(),
     z.union([
-      SyncListResponsePreparedStackApprovalPlugins$inboundSchema,
+      z.lazy(() => SyncListResponsePreparedStackApprovalPlugins$inboundSchema),
       SyncListResponsePreparedStackApprovalPluginsEnum$inboundSchema,
     ]),
   ).optional(),
@@ -4541,6 +4618,7 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   credentialRetry: z.nullable(
     SyncListResponseCredentialRetryUnion$inboundSchema,
   ).optional(),
+  deletionPolicy: SyncListResponseDeletionPolicy$inboundSchema.optional(),
   deployerSecrets: z.array(SyncListResponseDeployerSecret$inboundSchema)
     .optional(),
   directSetupRevision: z.nullable(z.string()).optional(),
@@ -4566,6 +4644,13 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
+  retainedDataProtectionStartedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  retainedStorageProtectionConfirmedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  retainedStorageProtectionHash: z.nullable(z.string()).optional(),
   setupScaffolding: z.record(
     z.string(),
     z.lazy(() => SyncListResponseSetupScaffolding$inboundSchema),
@@ -4576,6 +4661,7 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  vaultCredentialsRevoked: z.boolean().optional(),
 });
 
 export function syncListResponseRuntimeMetadataFromJSON(

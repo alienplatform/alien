@@ -33,3 +33,6 @@ pub use test::*;
 mod fixtures;
 #[cfg(test)]
 pub use fixtures::*;
+
+mod retention;
+pub use retention::protect_retained_storage;

@@ -30,6 +30,28 @@ export type UserProfileAcquisitionSource = ClosedEnum<
   typeof UserProfileAcquisitionSource
 >;
 
+export const UserProfileAccessStatus = {
+  Pending: "pending",
+  Approved: "approved",
+  Declined: "declined",
+} as const;
+export type UserProfileAccessStatus = ClosedEnum<
+  typeof UserProfileAccessStatus
+>;
+
+export const UserProfileUseCaseTag = {
+  Byoc: "byoc",
+  Byok: "byok",
+  ByoLlm: "byo-llm",
+  ByoBucket: "byo-bucket",
+  SingleTenant: "single-tenant",
+  OnPrem: "on-prem",
+  PrivateNetworks: "private-networks",
+  RemoteOps: "remote-ops",
+  Other: "other",
+} as const;
+export type UserProfileUseCaseTag = ClosedEnum<typeof UserProfileUseCaseTag>;
+
 export type UserProfile = {
   /**
    * Unique user identifier
@@ -67,6 +89,8 @@ export type UserProfile = {
    * Additional acquisition source detail when the source is other.
    */
   acquisitionSourceDetail: string | null;
+  accessStatus: UserProfileAccessStatus;
+  useCaseTags: Array<UserProfileUseCaseTag>;
   /**
    * What the user is hoping to use Alien for.
    */
@@ -87,6 +111,16 @@ export const UserProfileAcquisitionSource$inboundSchema: z.ZodEnum<
 > = z.enum(UserProfileAcquisitionSource);
 
 /** @internal */
+export const UserProfileAccessStatus$inboundSchema: z.ZodEnum<
+  typeof UserProfileAccessStatus
+> = z.enum(UserProfileAccessStatus);
+
+/** @internal */
+export const UserProfileUseCaseTag$inboundSchema: z.ZodEnum<
+  typeof UserProfileUseCaseTag
+> = z.enum(UserProfileUseCaseTag);
+
+/** @internal */
 export const UserProfile$inboundSchema: z.ZodType<UserProfile, unknown> = z
   .object({
     id: z.string(),
@@ -98,6 +132,8 @@ export const UserProfile$inboundSchema: z.ZodType<UserProfile, unknown> = z
     company: z.nullable(z.string()),
     acquisitionSource: z.nullable(UserProfileAcquisitionSource$inboundSchema),
     acquisitionSourceDetail: z.nullable(z.string()),
+    accessStatus: UserProfileAccessStatus$inboundSchema,
+    useCaseTags: z.array(UserProfileUseCaseTag$inboundSchema),
     useCases: z.nullable(z.string()),
     profileSetupCompletedAt: z.nullable(
       z.iso.datetime({ offset: true }).transform(v => new Date(v)),

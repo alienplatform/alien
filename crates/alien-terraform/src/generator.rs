@@ -23,18 +23,18 @@ use crate::{
     target::TerraformTarget,
 };
 use alien_core::{
-    import::{setup_import_format_version_for_platform, EmitContext},
-    ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, Key, KubernetesCertificateMode,
+    ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
     StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
     TelemetryMode, UpdatesMode,
+    import::{EmitContext, setup_import_format_version_for_platform},
 };
-use alien_error::{AlienError, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use hcl::{
+    Identifier,
     expr::Expression,
     structure::{Block, BlockLabel, Body, Structure},
-    Identifier,
 };
 use indexmap::IndexMap;
 use std::collections::HashSet;
@@ -56,6 +56,33 @@ impl ModuleFiles {
         self.files
             .iter()
             .map(|(path, contents)| (path.as_str(), contents.as_str()))
+    }
+
+    /// Discover module inputs across framework and per-resource files.
+    pub fn variable_names(&self) -> Result<Vec<String>> {
+        let mut names = HashSet::new();
+        for (path, contents) in self.iter().filter(|(path, _)| path.ends_with(".tf")) {
+            let body =
+                hcl::parse(contents)
+                    .into_alien_error()
+                    .context(ErrorData::GenericError {
+                        message: format!("Failed to inspect Terraform inputs in '{path}'"),
+                    })?;
+            for block in body
+                .blocks()
+                .filter(|block| block.identifier.as_str() == "variable")
+            {
+                if block.labels.len() != 1 {
+                    return Err(AlienError::new(ErrorData::GenericError {
+                        message: format!("Invalid Terraform variable declaration in '{path}'"),
+                    }));
+                }
+                names.insert(block.labels[0].as_str().to_string());
+            }
+        }
+        let mut names: Vec<_> = names.into_iter().collect();
+        names.sort();
+        Ok(names)
     }
 
     /// Look up a file by relative path (e.g. `"main.tf"` / `"data.tf"`).
@@ -491,6 +518,13 @@ fn generate_terraform_module_internal(
     let deployment_name_default =
         default_deployment_name(options.display_name.as_deref(), stack.id());
 
+    let setup_import_format_version = per_resource.values().fold(
+        setup_import_format_version_for_platform(target.cloud_platform()),
+        |version, fragment| version.max(fragment.minimum_setup_import_format_version),
+    );
+    let has_ephemeral = per_resource
+        .values()
+        .any(|fragment| !fragment.ephemeral_blocks.is_empty());
     let mut files: IndexMap<String, String> = IndexMap::new();
     files.insert(
         "versions.tf".to_string(),
@@ -503,6 +537,20 @@ fn generate_terraform_module_internal(
             include_azapi_provider,
             include_awscc_provider,
             include_google_beta_provider,
+            has_ephemeral,
+            per_resource.values().any(|fragment| {
+                fragment
+                    .moved_blocks
+                    .iter()
+                    .any(|block| block.identifier.as_str() == "removed")
+            }),
+            target == TerraformTarget::Azure
+                && stack.resources().any(|(_, entry)| {
+                    entry
+                        .config
+                        .downcast_ref::<alien_core::Storage>()
+                        .is_some_and(|storage| !storage.lifecycle_rules.is_empty())
+                }),
         ))?,
     );
     files.insert(
@@ -554,6 +602,61 @@ fn generate_terraform_module_internal(
         )?)?,
     );
 
+    // Keep the manifest tied to actual emitted blocks, including extension emitters.
+    // Access policies remain in state so teardown can revoke them independently.
+    let retained_data_addresses: Vec<String> = per_resource
+        .values()
+        .flat_map(|fragment| {
+            fragment
+                .resource_blocks
+                .iter()
+                .map(move |block| (fragment, block))
+        })
+        .filter(|(_, block)| block.identifier.as_str() == "resource")
+        .filter_map(|(fragment, block)| {
+            let kind = block.labels.first()?.as_str();
+            let label = block.labels.get(1)?.as_str();
+            (fragment.is_retained(block)
+                || matches!(
+                    kind,
+                    "aws_s3_bucket"
+                        | "aws_s3_bucket_server_side_encryption_configuration"
+                        | "aws_s3_bucket_ownership_controls"
+                        | "aws_s3_bucket_public_access_block"
+                        | "aws_s3_bucket_versioning"
+                        | "aws_dynamodb_table"
+                        | "aws_ecr_repository"
+                        | "aws_kms_key"
+                ))
+            .then(|| format!("{kind}.{label}"))
+        })
+        .collect();
+    // Every supported cloud package carries the same fail-closed uninstall entry point,
+    // including key-only and access-only packages with an empty data inventory.
+    let has_retention_workflow = matches!(
+        target,
+        TerraformTarget::Aws
+            | TerraformTarget::Eks
+            | TerraformTarget::Gcp
+            | TerraformTarget::Gke
+            | TerraformTarget::Azure
+            | TerraformTarget::Aks
+    );
+    if has_retention_workflow {
+        files.insert(
+            "retained-data.json".into(),
+            serde_json::to_string_pretty(&retained_data_addresses)
+                .into_alien_error()
+                .context(ErrorData::GenericError {
+                    message: "Could not serialize retained resource addresses".into(),
+                })?,
+        );
+        files.insert(
+            "retain-data.py".into(),
+            include_str!("templates/retain-data.py").into(),
+        );
+    }
+
     let resource_inventory = resource_inventory(stack, &per_resource);
     for (resource_id, fragment) in per_resource {
         let body = fragment_to_body(fragment);
@@ -572,6 +675,7 @@ fn generate_terraform_module_internal(
         "registration.tf".to_string(),
         render_body(registration_body(
             target,
+            setup_import_format_version,
             options.registration.as_ref(),
             &import_depends_on,
             terraform_input_values_expression(&stack_inputs),
@@ -596,6 +700,7 @@ fn generate_terraform_module_internal(
         "outputs.tf".to_string(),
         render_body(outputs_body(
             target,
+            setup_import_format_version,
             options.registration.as_ref(),
             &stack_inputs,
             deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?,
@@ -603,10 +708,6 @@ fn generate_terraform_module_internal(
     );
     if let Some(contents) = remote_bindings_permissions_md(stack, target) {
         files.insert("PERMISSIONS.md".to_string(), contents);
-    }
-    let retained_key_detach = retained_key_detach_script(stack, target, &labels);
-    if let Some(contents) = &retained_key_detach {
-        files.insert("detach-retained-keys.sh".to_string(), contents.clone());
     }
     files.insert(
         "README.md".to_string(),
@@ -621,15 +722,78 @@ fn generate_terraform_module_internal(
             product_remote_operator,
             requires_remote_operator_collector_token,
             &stack_inputs,
-            retained_key_detach.is_some(),
             emits_azapi_resource,
             profile,
         ),
     );
 
+    if matches!(target, TerraformTarget::Azure | TerraformTarget::Aks)
+        && stack.resources.values().any(|entry| {
+            entry
+                .config
+                .downcast_ref::<alien_core::AzureStorageAccount>()
+                .is_some()
+        })
+    {
+        if let Some(readme) = files.get_mut("README.md") {
+            readme.push_str(include_str!("templates/azure-shared-storage.md"));
+        }
+    }
+
+    if has_ephemeral {
+        if let Some(readme) = files.get_mut("README.md") {
+            readme.push_str(include_str!("templates/database-credentials.md"));
+        }
+    }
+
+    if has_retention_workflow {
+        if let Some(readme) = files.get_mut("README.md") {
+            readme.push_str(
+                if matches!(target, TerraformTarget::Gcp | TerraformTarget::Gke) {
+                    include_str!("templates/retained-data-gcp.md")
+                } else if matches!(target, TerraformTarget::Azure | TerraformTarget::Aks) {
+                    include_str!("templates/retained-data-azure.md")
+                } else {
+                    include_str!("templates/retained-data.md")
+                },
+            );
+        }
+    }
+
     // Last net: a reference hidden in a raw string escapes the AST rewrite;
     // catch it in the rendered output instead of shipping it.
     crate::gating::scan_rendered_for_unindexed(&files, &gated)?;
+
+    // Inventory entries are literal addresses, never Terraform references. Add
+    // this metadata after the reference audit so a counted address is not
+    // mistaken for an unindexed traversal or rewritten into an instance.
+    if has_retention_workflow {
+        // Persist the installed inventory in the backend before package files can
+        // be overwritten. Removal checks compare against state, not the new plan.
+        files.insert(
+            "retention-inventory.tf".into(),
+            render_body(Body::from(vec![nested(resource_block(
+                "terraform_data",
+                "retention_inventory",
+                [attr(
+                    "input",
+                    expr::object([
+                        ("version", Expression::from(1)),
+                        (
+                            "addresses",
+                            Expression::Array(
+                                retained_data_addresses
+                                    .iter()
+                                    .cloned()
+                                    .map(Expression::String)
+                                    .collect(),
+                            ),
+                        ),
+                    ]),
+                )],
+            ))]))?,
+        );
+    }
 
     let mut module = ModuleFiles { files };
 
@@ -640,61 +804,6 @@ fn generate_terraform_module_internal(
     let _ = format_with_terraform(&mut module);
 
     Ok(module)
-}
-
-fn retained_key_detach_script(
-    stack: &Stack,
-    target: TerraformTarget,
-    labels: &IndexMap<String, String>,
-) -> Option<String> {
-    let mut addresses = Vec::new();
-    for (resource_id, entry) in stack.resources() {
-        if entry.config.resource_type() != Key::RESOURCE_TYPE {
-            continue;
-        }
-        let label = labels.get(resource_id)?;
-        match target.cloud_platform() {
-            alien_core::Platform::Aws => {
-                addresses.push(format!("aws_kms_key.{label}"));
-                addresses.push(format!("aws_kms_key.{label}[0]"));
-            }
-            alien_core::Platform::Gcp => {
-                addresses.push(format!("google_kms_crypto_key.{label}"));
-                addresses.push(format!("google_kms_key_ring.{label}_ring"));
-            }
-            alien_core::Platform::Azure => {
-                addresses.push(format!("azurerm_key_vault_key.{label}"));
-                addresses.push(format!("azurerm_key_vault.{label}"));
-            }
-            _ => {}
-        }
-    }
-    if addresses.is_empty() {
-        return None;
-    }
-
-    let mut script = String::from(
-        "#!/bin/sh\nset -eu\n\n\
-if [ \"${ALIEN_CONFIRM_DETACH_RETAINED_KEYS:-}\" != \"yes\" ]; then\n\
-  echo \"Set ALIEN_CONFIRM_DETACH_RETAINED_KEYS=yes after removing all key consumers and remote access.\" >&2\n\
-  exit 1\n\
-fi\n\n\
-TF_CLI=${TF_CLI:-terraform}\n\
-case \"$TF_CLI\" in\n\
-  terraform|tofu) ;;\n\
-  *) echo \"TF_CLI must be terraform or tofu\" >&2; exit 1 ;;\n\
-esac\n\n\
-detach_if_present() {\n\
-  address=$1\n\
-  if \"$TF_CLI\" state list | grep -F -x -q \"$address\"; then\n\
-    \"$TF_CLI\" state rm \"$address\"\n\
-  fi\n\
-}\n\n",
-    );
-    for address in addresses {
-        script.push_str(&format!("detach_if_present '{address}'\n"));
-    }
-    Some(script)
 }
 
 fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Option<String> {
@@ -1144,6 +1253,9 @@ fn fragment_to_body(fragment: TfFragment) -> Body {
         .chain(fragment.moved_blocks)
         .map(Structure::Block)
         .collect();
+    for ephemeral_block in fragment.ephemeral_blocks {
+        structures.push(Structure::Block(ephemeral_block));
+    }
     for data_block in fragment.data_blocks {
         structures.push(Structure::Block(data_block));
     }
@@ -1259,11 +1371,21 @@ fn apply_aws_network_iam_dependency(
         return;
     }
 
+    // Metadata reads can connect a grant back to the network. Follow those
+    // edges before adding reverse teardown dependencies to avoid a cycle.
     let rendered: Vec<(String, String)> = per_resource
         .values()
-        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .flat_map(|fragment| fragment.resource_blocks.iter().chain(&fragment.data_blocks))
         .filter_map(|resource| {
-            let address = resource_address_text(resource)?;
+            let address = if resource.identifier.as_str() == "data" {
+                format!(
+                    "data.{}.{}",
+                    resource.labels.first()?.as_str(),
+                    resource.labels.get(1)?.as_str()
+                )
+            } else {
+                resource_address_text(resource)?
+            };
             let body = hcl::format::to_string(&resource.body).ok()?;
             Some((address, body))
         })
@@ -1562,9 +1684,20 @@ fn versions_body(
     include_azapi_provider: bool,
     include_awscc_provider: bool,
     include_google_beta_provider: bool,
+    include_ephemeral: bool,
+    include_removed: bool,
+    include_azure_lifecycle: bool,
 ) -> Body {
-    let required_version = if matches!(target, TerraformTarget::Eks) {
+    // Conditional imports need a patched OpenTofu reader (1.11.0 rejects
+    // variables in import.for_each). Keep one minimum for both setup CLIs.
+    let required_version = if include_azure_lifecycle {
+        ">= 1.11.1"
+    } else if include_ephemeral {
+        ">= 1.11.0"
+    } else if matches!(target, TerraformTarget::Eks) {
         ">= 1.9.0"
+    } else if include_removed {
+        ">= 1.7.0"
     } else {
         ">= 1.5.0"
     };
@@ -1639,17 +1772,19 @@ fn versions_body(
 /// `scripts/terraform-provider-mirror.sh` mirrors exactly these for CI, and
 /// `provider_mirror_matches_generator_requirements` keeps the two in sync.
 pub(crate) const PROVIDER_REQUIREMENTS: &[(&str, &str, &str)] = &[
-    ("aws", "hashicorp/aws", ">= 5.0"),
+    ("aws", "hashicorp/aws", ">= 6.70"),
     ("awscc", "hashicorp/awscc", ">= 1.0"),
     ("tls", "hashicorp/tls", ">= 4.0"),
-    ("google", "hashicorp/google", ">= 5.0"),
+    // 7.37 supports the Cloud SQL PSC DNS setting emitted by database extensions;
+    // it also includes grow-only disk planning introduced in 7.4.
+    ("google", "hashicorp/google", ">= 7.37"),
     ("google-beta", "hashicorp/google-beta", ">= 6.0"),
     ("azurerm", "hashicorp/azurerm", ">= 4.75, < 5.0"),
     ("azapi", "Azure/azapi", ">= 2.6, < 3.0"),
     ("time", "hashicorp/time", ">= 0.9"),
     ("kubernetes", "hashicorp/kubernetes", ">= 2.30"),
     ("helm", "hashicorp/helm", ">= 3.0"),
-    ("random", "hashicorp/random", ">= 3.6"),
+    ("random", "hashicorp/random", ">= 3.7.2"),
 ];
 
 /// The `required_providers` entry for a provider in [`PROVIDER_REQUIREMENTS`].
@@ -1971,9 +2106,17 @@ fn variables_body(
         blocks.push(nested(aws_region_variable_block(supported_aws_regions)));
         if needs_gateway_subnets {
             for (name, description) in [
-                ("sandbox_subnet_ids", "Dedicated sandbox connector subnets with only local routes, in at least two availability zones. Required with use-existing."),
-                ("sandbox_gateway_subnet_ids", "Dedicated gateway subnets in at least two zones, with only local routes and the deployment NAT default route. Required with use-existing."),
-            ] { blocks.push(nested(list_variable_block(name, description, Some(vec![])))); }
+                (
+                    "sandbox_subnet_ids",
+                    "Dedicated sandbox connector subnets with only local routes, in at least two availability zones. Required with use-existing.",
+                ),
+                (
+                    "sandbox_gateway_subnet_ids",
+                    "Dedicated gateway subnets in at least two zones, with only local routes and the deployment NAT default route. Required with use-existing.",
+                ),
+            ] {
+                blocks.push(nested(list_variable_block(name, description, Some(vec![]))));
+            }
         }
 
         blocks.push(nested(variable_block(
@@ -2137,6 +2280,21 @@ fn variables_body(
         }
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
+        blocks.push(nested(bool_variable_block(
+            "azure_storage_import_existing_policy",
+            "Import the existing account management policy when upgrading an older installation. Legacy container policy addresses are forgotten without deleting the remote policy. Leave false for a new account.",
+            Some(false),
+        )));
+        blocks.push(nested(bool_variable_block(
+            "azure_storage_live_lifecycle_enabled",
+            "Explicitly activate lifecycle expiry for Live containers, including existing objects. Older packages ignored these declarations. Review all Live lifecycle rules before enabling; setup owns this shared account policy.",
+            Some(false),
+        )));
+        blocks.push(nested(bool_variable_block(
+            "azure_storage_lifecycle_enabled",
+            "Enable declared Blob lifecycle rules. Set false and apply before retaining storage during uninstall.",
+            Some(true),
+        )));
         blocks.push(nested(variable_block(
             "azure_location",
             "Azure location.",
@@ -3326,7 +3484,10 @@ fn kubernetes_provider_body(target: TerraformTarget, for_helm: bool) -> Vec<Stru
                     "base64decode(data.google_container_cluster.target.master_auth[0].cluster_ca_certificate)",
                 ),
             ),
-            attr("token", expr::raw("data.google_client_config.current.access_token")),
+            attr(
+                "token",
+                expr::raw("data.google_client_config.current.access_token"),
+            ),
         ],
         TerraformTarget::Aks => vec![
             attr(
@@ -3347,7 +3508,9 @@ fn kubernetes_provider_body(target: TerraformTarget, for_helm: bool) -> Vec<Stru
             ),
             attr(
                 "client_key",
-                expr::raw("base64decode(data.azurerm_kubernetes_cluster.target.kube_config[0].client_key)"),
+                expr::raw(
+                    "base64decode(data.azurerm_kubernetes_cluster.target.kube_config[0].client_key)",
+                ),
             ),
         ],
         _ => Vec::new(),
@@ -3416,7 +3579,9 @@ fn locals_body(
     ));
     if !setup_only {
         let advanced_settings = if profile == alien_core::SetupConfigurationProfile::Advanced {
-            expr::raw("merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))")
+            expr::raw(
+                "merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))",
+            )
         } else {
             body.extend([
                 attr(
@@ -3734,6 +3899,7 @@ fn has_dynamic_gcp_network_settings(network: Option<&NetworkSettings>) -> bool {
 
 fn registration_body(
     target: TerraformTarget,
+    setup_import_format_version: u32,
     registration: Option<&TerraformRegistration>,
     depends_on: &[Expression],
     input_values: Expression,
@@ -3755,9 +3921,7 @@ fn registration_body(
             ),
             attr(
                 "setup_import_format_version",
-                Expression::Number(hcl::Number::from(i64::from(
-                    setup_import_format_version_for_platform(target.cloud_platform()),
-                ))),
+                Expression::Number(hcl::Number::from(i64::from(setup_import_format_version))),
             ),
             attr(
                 "setup_fingerprint",
@@ -3822,9 +3986,7 @@ fn registration_body(
                 ),
                 (
                     "setup_import_format_version",
-                    Expression::Number(hcl::Number::from(i64::from(
-                        setup_import_format_version_for_platform(target.cloud_platform()),
-                    ))),
+                    Expression::Number(hcl::Number::from(i64::from(setup_import_format_version))),
                 ),
                 (
                     "setup_fingerprint",
@@ -4294,6 +4456,7 @@ fn helm_install_body(
 
 fn outputs_body(
     target: TerraformTarget,
+    setup_import_format_version: u32,
     registration: Option<&TerraformRegistration>,
     stack_inputs: &[StackInputDefinition],
     deployer_secret_outputs: Vec<(String, Expression, String)>,
@@ -4330,9 +4493,7 @@ fn outputs_body(
         ),
         (
             "deployment_setup_import_format_version",
-            Expression::Number(hcl::Number::from(i64::from(
-                setup_import_format_version_for_platform(target.cloud_platform()),
-            ))),
+            Expression::Number(hcl::Number::from(i64::from(setup_import_format_version))),
             "Setup registration payload format version.",
         ),
         (
@@ -4466,7 +4627,9 @@ fn resource_inventory(stack: &Stack, fragments: &IndexMap<String, TfFragment>) -
     {
         return String::new();
     }
-    let mut text = String::from("## Resources\n\nNames and purpose are authored documentation. Setup components below are derived from this module; review their `.tf` files for permissions and deletion policies. Frozen resources are setup-owned; Live resources are runtime-owned.\n\n| Name | ID | Purpose | Lifecycle | Setup components |\n| --- | --- | --- | --- | --- |\n");
+    let mut text = String::from(
+        "## Resources\n\nNames and purpose are authored documentation. Setup components below are derived from this module; review their `.tf` files for permissions and deletion policies. Frozen resources are setup-owned; Live resources are runtime-owned.\n\n| Name | ID | Purpose | Lifecycle | Setup components |\n| --- | --- | --- | --- | --- |\n",
+    );
     for (id, entry) in &stack.resources {
         let components = fragments
             .get(id)
@@ -4531,7 +4694,6 @@ fn readme_md(
     product_remote_operator: bool,
     requires_remote_operator_collector_token: bool,
     stack_inputs: &[StackInputDefinition],
-    has_retained_keys: bool,
     emits_azapi_resource: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> String {
@@ -4650,11 +4812,6 @@ fn readme_md(
         .is_kubernetes()
         .then(|| readme_kubernetes_operations(target))
         .unwrap_or_default();
-    let retained_key_operations = if has_retained_keys {
-        "\n\n## Retained encryption keys\n\nEncryption keys are protected from Terraform deletion. Before destroying this setup, remove remote access and every key consumer, wait for active operations to finish, and run:\n\n```bash\nALIEN_CONFIRM_DETACH_RETAINED_KEYS=yes sh ./detach-retained-keys.sh\nterraform destroy\n```\n\nThe script only removes the listed keys and their provider containers from Terraform state; it does not delete them. It is idempotent and also supports OpenTofu with `TF_CLI=tofu`."
-    } else {
-        ""
-    };
     // The two things an Azure approver stops on — a preview API version and a validation check
     // turned off — documented in the artifact, not only in the source. Keyed off what was
     // emitted, not the platform: an AKS target is `Platform::Azure` but skips sandbox emission
@@ -4698,7 +4855,7 @@ Use your organization's normal backend and approval workflow. A typical local re
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
 - `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.\n\
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.\
-{kubernetes_operations}{retained_key_operations}",
+{kubernetes_operations}",
         display_name = display_name,
         target = target.name(),
         inputs = inputs,
@@ -4706,7 +4863,6 @@ Use your organization's normal backend and approval workflow. A typical local re
         runtime_sandbox_note = runtime_sandbox_note,
         registration_note = registration_note,
         kubernetes_operations = kubernetes_operations,
-        retained_key_operations = retained_key_operations,
         azure_sandbox_note = azure_sandbox_note,
         azure_identity_note = azure_identity_note
     )
@@ -4726,7 +4882,9 @@ fn readme_required_inputs(deployment_name_default: Option<&str>, automatic: bool
         Some(default) => format!(
             "Required:\n\n- `token`: {token}\n- `management_url`: management endpoint this deployment registers with. The generated installation snippet supplies it.\n- `name`: optional deployment name: lowercase letters, numbers, and single hyphens. Defaults to `{default}`."
         ),
-        None => format!("Required:\n\n- `token`: {token}\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens."),
+        None => format!(
+            "Required:\n\n- `token`: {token}\n- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens."
+        ),
     }
 }
 
@@ -4744,7 +4902,9 @@ fn readme_common_inputs(
     if setup_only {
         let lines = [
             Some(resource_prefix),
-            management_url("- `management_url`: management endpoint used to register this deployment. The generated installation snippet supplies the endpoint selected for the deployment target."),
+            management_url(
+                "- `management_url`: management endpoint used to register this deployment. The generated installation snippet supplies the endpoint selected for the deployment target.",
+            ),
         ];
         return format!(
             "Common optional settings:\n\n{}",
@@ -4767,13 +4927,19 @@ fn readme_common_inputs(
     }
     let lines = [
         Some(resource_prefix),
-        management_url("- `management_url`: optional management endpoint used by pull-style runtimes."),
+        management_url(
+            "- `management_url`: optional management endpoint used by pull-style runtimes.",
+        ),
         Some("- `deployment_model`: `push` or `pull`."),
         Some("- `updates_mode`: `auto` or `approval-required`."),
         Some("- `telemetry_mode`: `off`, `auto`, or `approval-required`."),
         Some("- `heartbeats_mode`: `off` or `on`."),
-        Some("- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default."),
-        Some("- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections."),
+        Some(
+            "- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.",
+        ),
+        Some(
+            "- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.",
+        ),
     ];
     format!(
         "Common optional settings:\n\n{}",
@@ -4809,7 +4975,9 @@ fn readme_gcp_inputs(needs_federation: bool) -> String {
     } else {
         ""
     };
-    format!("GCP settings:\n\n- `gcp_project`: target GCP project ID.\n- `gcp_region`: target GCP region.\n- `managing_service_account_email`: management service account metadata.{federation}\n- `gcp_manage_custom_roles`: whether this module creates project custom roles.\n- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.")
+    format!(
+        "GCP settings:\n\n- `gcp_project`: target GCP project ID.\n- `gcp_region`: target GCP region.\n- `managing_service_account_email`: management service account metadata.{federation}\n- `gcp_manage_custom_roles`: whether this module creates project custom roles.\n- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module."
+    )
 }
 
 fn readme_azure_inputs(target: TerraformTarget) -> String {
@@ -4849,9 +5017,15 @@ fn readme_kubernetes_inputs(
     requires_remote_operator_collector_token: bool,
 ) -> String {
     let cluster_name = match target {
-        TerraformTarget::Eks => "\n- `eks_cluster_name`: existing EKS cluster name when `kubernetes_cluster_mode = \"existing\"`.",
-        TerraformTarget::Gke => "\n- `gke_cluster_name`, `gke_cluster_location`: existing GKE cluster when `kubernetes_cluster_mode = \"existing\"`.",
-        TerraformTarget::Aks => "\n- `aks_cluster_name`, `aks_cluster_resource_group_name`: existing AKS cluster when `kubernetes_cluster_mode = \"existing\"`.",
+        TerraformTarget::Eks => {
+            "\n- `eks_cluster_name`: existing EKS cluster name when `kubernetes_cluster_mode = \"existing\"`."
+        }
+        TerraformTarget::Gke => {
+            "\n- `gke_cluster_name`, `gke_cluster_location`: existing GKE cluster when `kubernetes_cluster_mode = \"existing\"`."
+        }
+        TerraformTarget::Aks => {
+            "\n- `aks_cluster_name`, `aks_cluster_resource_group_name`: existing AKS cluster when `kubernetes_cluster_mode = \"existing\"`."
+        }
         _ => "",
     };
     let helm = if has_registration && helm_install.is_some() {
@@ -4887,7 +5061,9 @@ fn readme_kubernetes_operations(target: TerraformTarget) -> String {
             "\n\n## Kubernetes Operations\n\nBefore inspecting the cluster, verify that your AWS CLI points at the target account, not the management account:\n\n```bash\nAWS_PROFILE=<target-profile> aws sts get-caller-identity\nterraform output kubernetes_update_kubeconfig_command\nAWS_PROFILE=<target-profile> aws eks update-kubeconfig --region $(terraform output -raw deployment_region) --name $(terraform output -raw kubernetes_kube_context) --alias $(terraform output -raw kubernetes_kube_context)\nkubectl --context $(terraform output -raw kubernetes_kube_context) -n $(terraform output -raw kubernetes_namespace) get pods,pvc,svc,ingress,events\n```\n\nTreat live `kubectl patch` changes as diagnostics only. Durable fixes belong in the generated package, Helm values, or deployment configuration.",
             readme_kubernetes_destroy_order(),
         ),
-        TerraformTarget::Gke | TerraformTarget::Aks => readme_kubernetes_destroy_order().to_string(),
+        TerraformTarget::Gke | TerraformTarget::Aks => {
+            readme_kubernetes_destroy_order().to_string()
+        }
         _ => String::new(),
     }
 }
@@ -4933,6 +5109,9 @@ mod tests {
                     false,
                     true,
                     true,
+                    false,
+                    false,
+                    false,
                     false,
                     false,
                     false,
@@ -5010,6 +5189,111 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         })
     }
 
+    struct VersionedStorageEmitter;
+
+    impl crate::TfEmitter for VersionedStorageEmitter {
+        fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
+            let mut fragment = crate::emitters::aws::storage::AwsStorageEmitter.emit(ctx)?;
+            let mut overlay = TfFragment::default();
+            overlay.minimum_setup_import_format_version = 3;
+            fragment.extend(overlay);
+            fragment.extend(TfFragment::default());
+            Ok(fragment)
+        }
+
+        fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
+            crate::emitters::aws::storage::AwsStorageEmitter.emit_import_ref(ctx)
+        }
+    }
+
+    #[test]
+    fn extension_reader_requirement_reaches_registration_and_outputs() {
+        let stack = Stack::new("test".to_string())
+            .add(
+                alien_core::Storage::new("assets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        for product in [false, true] {
+            for extended in [false, true] {
+                let mut registry = TfRegistry::built_in();
+                if extended {
+                    registry.register(
+                        alien_core::Storage::RESOURCE_TYPE,
+                        alien_core::Platform::Aws,
+                        VersionedStorageEmitter,
+                    );
+                }
+                let module = generate_terraform_module(
+                    &stack,
+                    TerraformTarget::Aws,
+                    TerraformOptions {
+                        display_name: None,
+                        registry: &registry,
+                        stack_settings: StackSettings::default(),
+                        registration: product.then(product_registration),
+                        helm_install: None,
+                        supported_aws_regions: Vec::new(),
+                    },
+                )
+                .unwrap();
+                let expected = Expression::Number(if extended { 3 } else { 1 }.into());
+                let outputs: Body = hcl::from_str(module.get("outputs.tf").unwrap()).unwrap();
+                let output = outputs
+                    .blocks()
+                    .find(|block| {
+                        block.labels.first().map(|label| label.as_str())
+                            == Some("deployment_setup_import_format_version")
+                    })
+                    .unwrap();
+                assert_eq!(
+                    output
+                        .body
+                        .attributes()
+                        .find(|attr| attr.key.as_str() == "value")
+                        .unwrap()
+                        .expr,
+                    expected
+                );
+                let registration: Body =
+                    hcl::from_str(module.get("registration.tf").unwrap()).unwrap();
+                let resource = registration
+                    .blocks()
+                    .find(|block| block.identifier.as_str() == "resource")
+                    .unwrap();
+                if product {
+                    assert_eq!(
+                        resource
+                            .body
+                            .attributes()
+                            .find(|attr| attr.key.as_str() == "setup_import_format_version")
+                            .unwrap()
+                            .expr,
+                        expected
+                    );
+                } else {
+                    let Expression::Object(values) = &resource
+                        .body
+                        .attributes()
+                        .find(|attr| attr.key.as_str() == "input")
+                        .unwrap()
+                        .expr
+                    else {
+                        panic!("setup input must be an object")
+                    };
+                    let value = values
+                        .iter()
+                        .find(|(key, _)| {
+                            key.to_string().trim_matches('"') == "setup_import_format_version"
+                        })
+                        .unwrap()
+                        .1;
+                    assert_eq!(value, &expected);
+                }
+            }
+        }
+    }
+
     #[test]
     fn registration_uses_configured_provider_identity() {
         let registration = TerraformRegistration {
@@ -5032,6 +5316,9 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             false,
             false,
             false,
+            false,
+            false,
+            false,
         ))
         .expect("versions render");
         assert!(versions.contains("example_app ="));
@@ -5039,6 +5326,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
 
         let registration_body = render_body(registration_body(
             TerraformTarget::Aws,
+            1,
             Some(&registration),
             &[],
             Expression::Object(Default::default()),
@@ -5048,11 +5336,14 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         assert!(registration_body.contains(
             "management_config = jsondecode(jsonencode(local.deployment_management_config))"
         ));
-        assert!(registration_body
-            .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
+        assert!(
+            registration_body
+                .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))")
+        );
 
         let outputs = render_body(outputs_body(
             TerraformTarget::Aws,
+            1,
             Some(&registration),
             &[],
             Vec::new(),
@@ -5076,14 +5367,18 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
     fn product_lifecycle_configures_kubernetes_provider_without_stack_manifests() {
         let module = product_module(false);
 
-        assert!(module
-            .get("versions.tf")
-            .expect("versions should render")
-            .contains("kubernetes = {"));
-        assert!(module
-            .get("providers.tf")
-            .expect("providers should render")
-            .contains("provider \"kubernetes\""));
+        assert!(
+            module
+                .get("versions.tf")
+                .expect("versions should render")
+                .contains("kubernetes = {")
+        );
+        assert!(
+            module
+                .get("providers.tf")
+                .expect("providers should render")
+                .contains("provider \"kubernetes\"")
+        );
     }
 
     #[test]
@@ -5119,8 +5414,11 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
                 .expect("helm should render"),
         );
 
-        assert!(helm
-            .contains("count = var.helm_install_enabled && var.remote_operator_enabled ? 1 : 0"));
+        assert!(
+            helm.contains(
+                "count = var.helm_install_enabled && var.remote_operator_enabled ? 1 : 0"
+            )
+        );
         assert!(helm.contains(
             "\"alien.dev/sync-token-revision\" = tostring(var.remote_operator_sync_token_revision)"
         ));
@@ -5133,17 +5431,20 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
     fn product_collector_token_is_required_only_for_collecting_charts() {
         let optional_collector = product_module(false);
         let required_collector = product_module(true);
-        let requirement =
-            "remote_operator_collector_token is required while this product chart's Remote Operator log collector is enabled.";
+        let requirement = "remote_operator_collector_token is required while this product chart's Remote Operator log collector is enabled.";
 
-        assert!(!optional_collector
-            .get("helm.tf")
-            .expect("helm should render")
-            .contains(requirement));
-        assert!(required_collector
-            .get("helm.tf")
-            .expect("helm should render")
-            .contains(requirement));
+        assert!(
+            !optional_collector
+                .get("helm.tf")
+                .expect("helm should render")
+                .contains(requirement)
+        );
+        assert!(
+            required_collector
+                .get("helm.tf")
+                .expect("helm should render")
+                .contains(requirement)
+        );
     }
 
     #[test]
@@ -5220,5 +5521,44 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
 
         assert!(!block_has_depends_on(custom_role));
         assert!(block_has_depends_on(topic));
+    }
+    #[test]
+    fn module_input_inventory_includes_resource_files_and_ignores_quoted_examples() {
+        let module = ModuleFiles {
+            files: IndexMap::from([
+                (
+                    "variables.tf".to_string(),
+                    "variable \"name\" { type = string }".to_string(),
+                ),
+                (
+                    "key.tf".to_string(),
+                    "variable \"customer_key\" { default = null }".to_string(),
+                ),
+                (
+                    "locals.tf".to_string(),
+                    "locals {\n example = <<EOF\nvariable \"example_only\" {}\nEOF\n}\n"
+                        .to_string(),
+                ),
+                (
+                    "README.md".to_string(),
+                    "variable \"documentation_only\" {}".to_string(),
+                ),
+            ]),
+        };
+        assert_eq!(module.variable_names().unwrap(), ["customer_key", "name"]);
+    }
+
+    #[test]
+    fn malformed_resource_input_files_cannot_be_advertised_as_a_valid_module() {
+        let module = ModuleFiles {
+            files: IndexMap::from([("key.tf".to_string(), "variable \"unterminated".to_string())]),
+        };
+        assert!(
+            module
+                .variable_names()
+                .unwrap_err()
+                .message
+                .contains("key.tf")
+        );
     }
 }

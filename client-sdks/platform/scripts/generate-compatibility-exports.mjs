@@ -3,6 +3,11 @@ import { readFile, readdir, writeFile } from "node:fs/promises";
 // Speakeasy may regroup inline models when optional fields are added. Preserve
 // published deep import paths while using the current generated response parsers.
 const modules = {
+  "deploymentdetailresponsependingpreparedstackdefaultstringlist": "deploymentdetailresponsependingpreparedstacktypestringlist",
+  "deploymentpendingpreparedstackdefaultstringlist": "deploymentpendingpreparedstacktypestringlist",
+  "synclistresponsependingpreparedstackdefaultstringlist": "synclistresponsependingpreparedstacktypestringlist",
+  "deploymentstatependingpreparedstackdefaultstringlist": "deploymentstatependingpreparedstacktypestringlist",
+  "persistimporteddeploymentrequestpendingpreparedstackvalidationunion": "persistimporteddeploymentrequestpendingpreparedstackvalidation",
   "createmanagerresponseproviderawsalb2": "createmanagerresponseprovidergkegatewayenum2",
   "createmanagerresponsedomainsunion2": "createmanagerresponsepublicendpointtargetunion2",
   "deploymentdetailresponsependingpreparedstacktypeunion": "deploymentdetailresponsependingpreparedstacktypeenvenum",
@@ -253,11 +258,11 @@ additionalExports.targetdeploymentvolumerestore = {
 };
 // Retain the previously published paths after shared inline declarations regroup.
 Object.assign(modules, {
-  "deploymentdetailresponsependingpreparedstackdefaultunion": "deploymentdetailresponsependingpreparedstackdefaultstringlist",
+  "deploymentdetailresponsependingpreparedstackdefaultunion": "deploymentdetailresponsependingpreparedstacktypestringlist",
   "deploymentdetailresponsepreparedstackplugins": "deploymentdetailresponsepreparedstackapprovalplugins",
-  "deploymentpendingpreparedstackdefaultunion": "deploymentpendingpreparedstackdefaultstringlist",
+  "deploymentpendingpreparedstackdefaultunion": "deploymentpendingpreparedstacktypestringlist",
   "deploymentpreparedstackplugins": "deploymentpreparedstackapprovalplugins",
-  "synclistresponsependingpreparedstackdefaultunion": "synclistresponsependingpreparedstackdefaultstringlist",
+  "synclistresponsependingpreparedstackdefaultunion": "synclistresponsependingpreparedstacktypestringlist",
   "synclistresponsepreparedstackplugins": "synclistresponsepreparedstackapprovalplugins",
   "persistimporteddeploymentrequestpreparedstackoverridegcpresource": "persistimporteddeploymentrequestpreparedstackoverrideazureresource"
 });
@@ -292,7 +297,7 @@ additionalExports.persistimporteddeploymentrequestpendingpreparedstacksettingscu
 };
 // Stable deployment-state model paths.
 Object.assign(modules, {
-  "deploymentstatependingpreparedstackdefaultunion": "deploymentstatependingpreparedstackdefaultstringlist",
+  "deploymentstatependingpreparedstackdefaultunion": "deploymentstatependingpreparedstacktypestringlist",
   "deploymentstatepreparedstackplugins": "deploymentstatepreparedstackapprovalplugins",
   "targetreleaseoperations": "targetreleaseapprovalpluginsenum",
   "typekv4": "keyprefixsecretref1"
@@ -438,7 +443,171 @@ Object.assign(additionalExports, {
     ]
   }
 });
-const deploymentStatusUrl = new URL("../typescript/src/models/deploymentstatependingpreparedstackdefaultstringlist.ts", import.meta.url);
+// Preserve published paths after the generator regroups inline setup models.
+modules["deploymentdetailresponsepreparedstackapprovalplugins"] = "deploymentdetailresponsepreparedstackpluginsdecision";
+additionalExports["deploymentdetailresponsepreparedstackapprovalplugins"] = {
+  "deploymentdetailresponse": [
+    "DeploymentDetailResponsePreparedStackApprovalPlugins",
+    "DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema",
+    "deploymentDetailResponsePreparedStackApprovalPluginsFromJSON"
+  ]
+};
+modules["deploymentpreparedstackapprovalplugins"] = "deploymentpreparedstackpluginsdecision";
+additionalExports["deploymentpreparedstackapprovalplugins"] = {
+  "deployment": [
+    "DeploymentPreparedStackApprovalPlugins",
+    "DeploymentPreparedStackApprovalPlugins$inboundSchema",
+    "deploymentPreparedStackApprovalPluginsFromJSON"
+  ]
+};
+modules["synclistresponsepreparedstackapprovalplugins"] = "synclistresponsepreparedstackpluginsdecision";
+additionalExports["synclistresponsepreparedstackapprovalplugins"] = {
+  "synclistresponse": [
+    "SyncListResponsePreparedStackApprovalPlugins",
+    "SyncListResponsePreparedStackApprovalPlugins$inboundSchema",
+    "syncListResponsePreparedStackApprovalPluginsFromJSON"
+  ]
+};
+modules["persistimporteddeploymentrequestpreparedstackoverrideazureresource"] = "persistimporteddeploymentrequestpreparedstackoverrideaw";
+additionalExports["persistimporteddeploymentrequestpreparedstackoverrideazureresource"] = {
+  "persistimporteddeploymentrequest": [
+    "PersistImportedDeploymentRequestPreparedStackOverrideAzureResource",
+    "PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$Outbound",
+    "PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$outboundSchema",
+    "persistImportedDeploymentRequestPreparedStackOverrideAzureResourceToJSON"
+  ]
+};
+modules["deploymentstatepreparedstackapprovalplugins"] = "deploymentstatepreparedstackpluginsdecision";
+additionalExports["deploymentstatepreparedstackapprovalplugins"] = {
+  "targetreleaseapprovalplugins": [
+    "DeploymentStatePreparedStackApprovalPlugins",
+    "DeploymentStatePreparedStackApprovalPlugins$Outbound",
+    "DeploymentStatePreparedStackApprovalPlugins$inboundSchema",
+    "DeploymentStatePreparedStackApprovalPlugins$outboundSchema",
+    "deploymentStatePreparedStackApprovalPluginsFromJSON",
+    "deploymentStatePreparedStackApprovalPluginsToJSON"
+  ]
+};
+modules["targetreleaseapprovalpluginsenum"] = "targetreleaseapprovalplugins";
+additionalExports["targetreleaseapprovalpluginsenum"] = {
+  "deploymentstate": [
+    "TargetReleaseApprovalPluginsEnum",
+    "TargetReleaseApprovalPluginsEnum$inboundSchema",
+    "TargetReleaseApprovalPluginsEnum$outboundSchema"
+  ]
+};
+
+// Preserve the published key-binding names after endpoint variants are numbered.
+const keyBindingUrl = new URL("../typescript/src/models/externalbindingecr.ts", import.meta.url);
+const keyBindingMarker = "\n// Published key-binding compatibility exports.\n";
+const keyBindingSource = (await readFile(keyBindingUrl, "utf8")).split(keyBindingMarker)[0];
+await writeFile(keyBindingUrl, `${keyBindingSource}${keyBindingMarker}export type { ClusterEndpointSecretRef1 as ClusterEndpointSecretRef };
+export type { ClusterEndpoint1 as ClusterEndpoint };
+export type { PasswordSecretArnSecretRef1 as PasswordSecretArnSecretRef };
+export type { PasswordSecretArn1 as PasswordSecretArn };
+export { ClusterEndpointSecretRef1$inboundSchema as ClusterEndpointSecretRef$inboundSchema };
+export type { ClusterEndpointSecretRef1$Outbound as ClusterEndpointSecretRef$Outbound };
+export { ClusterEndpointSecretRef1$outboundSchema as ClusterEndpointSecretRef$outboundSchema };
+export { clusterEndpointSecretRef1ToJSON as clusterEndpointSecretRefToJSON };
+export { clusterEndpointSecretRef1FromJSON as clusterEndpointSecretRefFromJSON };
+export { ClusterEndpoint1$inboundSchema as ClusterEndpoint$inboundSchema };
+export type { ClusterEndpoint1$Outbound as ClusterEndpoint$Outbound };
+export { ClusterEndpoint1$outboundSchema as ClusterEndpoint$outboundSchema };
+export { clusterEndpoint1ToJSON as clusterEndpointToJSON };
+export { clusterEndpoint1FromJSON as clusterEndpointFromJSON };
+export { PasswordSecretArnSecretRef1$inboundSchema as PasswordSecretArnSecretRef$inboundSchema };
+export type { PasswordSecretArnSecretRef1$Outbound as PasswordSecretArnSecretRef$Outbound };
+export { PasswordSecretArnSecretRef1$outboundSchema as PasswordSecretArnSecretRef$outboundSchema };
+export { passwordSecretArnSecretRef1ToJSON as passwordSecretArnSecretRefToJSON };
+export { passwordSecretArnSecretRef1FromJSON as passwordSecretArnSecretRefFromJSON };
+export { PasswordSecretArn1$inboundSchema as PasswordSecretArn$inboundSchema };
+export type { PasswordSecretArn1$Outbound as PasswordSecretArn$Outbound };
+export { PasswordSecretArn1$outboundSchema as PasswordSecretArn$outboundSchema };
+export { passwordSecretArn1ToJSON as passwordSecretArnToJSON };
+export { passwordSecretArn1FromJSON as passwordSecretArnFromJSON };
+`);
+modules["keyprefixsecretref1"] = "externalbindingecr";
+additionalExports["keyprefixsecretref1"] = {
+  "externalbindingunion": [
+    "ExternalBindingUnion4",
+    "DataDirSecretRef1",
+    "DataDir1",
+    "KeyPrefixSecretRef2",
+    "KeyPrefix2",
+    "TypeKv5",
+    "ExternalBindingLocalKv",
+    "ConnectionUrlSecretRef",
+    "ConnectionUrl",
+    "DatabaseSecretRef1",
+    "Database1",
+    "DatabaseUnion",
+    "KeyPrefixSecretRef1",
+    "ExternalBindingUnion4$inboundSchema",
+    "ExternalBindingUnion4$Outbound",
+    "ExternalBindingUnion4$outboundSchema",
+    "externalBindingUnion4ToJSON",
+    "externalBindingUnion4FromJSON",
+    "DataDirSecretRef1$inboundSchema",
+    "DataDirSecretRef1$Outbound",
+    "DataDirSecretRef1$outboundSchema",
+    "dataDirSecretRef1ToJSON",
+    "dataDirSecretRef1FromJSON",
+    "DataDir1$inboundSchema",
+    "DataDir1$Outbound",
+    "DataDir1$outboundSchema",
+    "dataDir1ToJSON",
+    "dataDir1FromJSON",
+    "KeyPrefixSecretRef2$inboundSchema",
+    "KeyPrefixSecretRef2$Outbound",
+    "KeyPrefixSecretRef2$outboundSchema",
+    "keyPrefixSecretRef2ToJSON",
+    "keyPrefixSecretRef2FromJSON",
+    "KeyPrefix2$inboundSchema",
+    "KeyPrefix2$Outbound",
+    "KeyPrefix2$outboundSchema",
+    "keyPrefix2ToJSON",
+    "keyPrefix2FromJSON",
+    "TypeKv5$inboundSchema",
+    "TypeKv5$outboundSchema",
+    "ExternalBindingLocalKv$inboundSchema",
+    "ExternalBindingLocalKv$Outbound",
+    "ExternalBindingLocalKv$outboundSchema",
+    "externalBindingLocalKvToJSON",
+    "externalBindingLocalKvFromJSON",
+    "ConnectionUrlSecretRef$inboundSchema",
+    "ConnectionUrlSecretRef$Outbound",
+    "ConnectionUrlSecretRef$outboundSchema",
+    "connectionUrlSecretRefToJSON",
+    "connectionUrlSecretRefFromJSON",
+    "ConnectionUrl$inboundSchema",
+    "ConnectionUrl$Outbound",
+    "ConnectionUrl$outboundSchema",
+    "connectionUrlToJSON",
+    "connectionUrlFromJSON",
+    "DatabaseSecretRef1$inboundSchema",
+    "DatabaseSecretRef1$Outbound",
+    "DatabaseSecretRef1$outboundSchema",
+    "databaseSecretRef1ToJSON",
+    "databaseSecretRef1FromJSON",
+    "Database1$inboundSchema",
+    "Database1$Outbound",
+    "Database1$outboundSchema",
+    "database1ToJSON",
+    "database1FromJSON",
+    "DatabaseUnion$inboundSchema",
+    "DatabaseUnion$Outbound",
+    "DatabaseUnion$outboundSchema",
+    "databaseUnionToJSON",
+    "databaseUnionFromJSON",
+    "KeyPrefixSecretRef1$inboundSchema",
+    "KeyPrefixSecretRef1$Outbound",
+    "KeyPrefixSecretRef1$outboundSchema",
+    "keyPrefixSecretRef1ToJSON",
+    "keyPrefixSecretRef1FromJSON"
+  ]
+};
+
+const deploymentStatusUrl = new URL("../typescript/src/models/deploymentstatependingpreparedstacktypestringlist.ts", import.meta.url);
 const deploymentStatusMarker = "\n// Published deployment-state readiness exports.\n";
 const deploymentStatusSource = (await readFile(deploymentStatusUrl, "utf8")).split(deploymentStatusMarker)[0];
 await writeFile(deploymentStatusUrl, `${deploymentStatusSource}${deploymentStatusMarker}export const DeploymentStateRuntimeMetadataStatus = DeploymentStateDeployerSecretStatus;
@@ -448,7 +617,7 @@ export const DeploymentStateRuntimeMetadataStatus$outboundSchema = DeploymentSta
 `);
 const models = new URL("../typescript/src/models/", import.meta.url);
 // Preserve the published secret-readiness enum after its shared owner changes.
-const readinessUrl = new URL("persistimporteddeploymentrequestpendingpreparedstackvalidationunion.ts", models);
+const readinessUrl = new URL("persistimporteddeploymentrequestpendingpreparedstackvalidation.ts", models);
 const readinessMarker = "\n// Published secret-readiness compatibility exports.\n";
 const readinessSource = (await readFile(readinessUrl, "utf8")).split(readinessMarker)[0];
 await writeFile(readinessUrl, `${readinessSource}${readinessMarker}export const PersistImportedDeploymentRequestRuntimeMetadataStatus = PersistImportedDeploymentRequestDeployerSecretStatus;
@@ -579,6 +748,32 @@ export type { DeploymentPortalAppearanceInput$Outbound as UpdateProjectDeploymen
 export { DeploymentPortalAppearanceInput$outboundSchema as UpdateProjectDeploymentPortalAppearance$outboundSchema } from "./deploymentportalappearanceinput.js";
 export { deploymentPortalAppearanceInputToJSON as updateProjectDeploymentPortalAppearanceToJSON } from "./deploymentportalappearanceinput.js";
 `);
+
+// Preserve the published CloudFormation callback enum when it becomes the only
+// inline action enum and Speakeasy shortens its generated name.
+const cfActionUrl = new URL("../typescript/src/models/operations/acceptawskeysetup.ts", import.meta.url);
+const cfActionMarker = "\n// Published CloudFormation key callback action exports.\n";
+const cfActionSource = (await readFile(cfActionUrl, "utf8")).split(cfActionMarker)[0];
+if (!cfActionSource.includes("export const AcceptAwsKeySetupAction =")) {
+  if (!cfActionSource.includes("export const Action =")) throw new Error("Review the generated CloudFormation key callback action enum before preserving its exports");
+  await writeFile(cfActionUrl, `${cfActionSource}${cfActionMarker}export const AcceptAwsKeySetupAction = Action;
+export type AcceptAwsKeySetupAction = Action;
+export const AcceptAwsKeySetupAction$outboundSchema = Action$outboundSchema;
+`);
+}
+
+// Adding the user-profile access enum gives the existing AI binding enum a
+// qualified name. Preserve the published AI status at root and deep imports.
+const aiAccessUrl = new URL("externalaibinding.ts", models);
+const aiAccessMarker = "\n// Published AI binding access status compatibility exports.\n";
+const aiAccessSource = (await readFile(aiAccessUrl, "utf8")).split(aiAccessMarker)[0];
+if (!aiAccessSource.includes("export const AccessStatus =")) {
+  if (!aiAccessSource.includes("export const ExternalAIBindingAccessStatus =")) throw new Error("Review the generated AI binding access enum before preserving its exports");
+  await writeFile(aiAccessUrl, `${aiAccessSource}${aiAccessMarker}export const AccessStatus = ExternalAIBindingAccessStatus;
+export type AccessStatus = ExternalAIBindingAccessStatus;
+export const AccessStatus$inboundSchema = ExternalAIBindingAccessStatus$inboundSchema;
+`);
+}
 
 // Resource observations are public models even when unrelated SDK drift is scoped out.
 const modelIndexUrl = new URL("index.ts", models);

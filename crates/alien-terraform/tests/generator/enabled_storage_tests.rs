@@ -15,7 +15,7 @@
 
 use super::helpers::{
     assert_terraform_valid, assert_ungated_registration_list_is_a_plain_array, gate_input,
-    normalized, render,
+    linter_files, normalized, render, test_utils,
 };
 use alien_core::{
     AzureResourceGroup, AzureStorageAccount, LifecycleRule, PermissionProfile, ResourceLifecycle,
@@ -423,26 +423,71 @@ fn an_ungated_gcp_storage_stack_is_untouched() {
 }
 
 #[test]
-fn every_azure_storage_block_carries_the_gate() {
+fn azure_container_grants_and_shared_policy_follow_the_declined_container() {
     let module = render(
         &gated_azure_stack(),
         TerraformTarget::Azure,
         StackSettings::default(),
     );
-    let main = &normalized(&module);
-
-    let gated = gated_block_types(main);
-    for block_type in [
-        "azurerm_storage_container",
-        "azurerm_storage_management_policy",
-        "azurerm_role_assignment",
-    ] {
-        assert!(
-            gated.iter().any(|found| found == block_type),
-            "`{block_type}` must be created only when the deployer says yes:\n{main}"
-        );
-    }
     assert_terraform_valid(&module, "gated azure storage stack");
+    let body: hcl::Body = hcl::from_str(module.get("files.tf").unwrap()).unwrap();
+    let mut grant_assertions = String::new();
+    for block in body.blocks() {
+        if block.identifier.as_str() == "resource"
+            && block.labels.first()
+                == Some(&hcl::structure::BlockLabel::String(
+                    "azurerm_role_assignment".to_string(),
+                ))
+        {
+            let hcl::structure::BlockLabel::String(label) = &block.labels[1] else {
+                panic!("resource label")
+            };
+            grant_assertions.push_str(&format!(
+                r#"
+  assert {{
+    condition = length(azurerm_role_assignment.{label}) == (var.input_files_enabled ? 1 : 0)
+    error_message = "Container access grants must be absent when the container is declined."
+  }}
+"#
+            ));
+        }
+    }
+    assert!(
+        !grant_assertions.is_empty(),
+        "fixture must include container grants"
+    );
+    let mut tests = String::from(
+        r#"
+mock_provider "azurerm" {}
+variables {
+  name = "gated-storage"
+  resource_prefix = "gated-test"
+  token = "test-token"
+  azure_subscription_id = "00000000-0000-0000-0000-000000000000"
+  azure_resource_group_name = "example-rg"
+}
+"#,
+    );
+    for enabled in [false, true] {
+        tests.push_str(&format!(r#"
+run "files_{enabled}" {{
+  command = plan
+  variables {{ input_files_enabled = {enabled} }}
+  assert {{
+    condition = length(azurerm_storage_container.files) == ({enabled} ? 1 : 0)
+    error_message = "The declined container must not exist."
+  }}
+  assert {{
+    condition = length(azurerm_storage_management_policy.default_storage_account.rule) == 1 && alltrue([for r in azurerm_storage_management_policy.default_storage_account.rule : r.enabled == {enabled} && toset(r.filters[0].prefix_match) == toset(["gated-test-files/tmp/"])])
+    error_message = "The shared account policy must disable precisely the declined container's scoped rule."
+  }}
+  {grant_assertions}
+}}
+"#));
+    }
+    let mut files = linter_files(&module);
+    files.insert("tests/gate.tftest.hcl".to_string(), tests);
+    test_utils::terraform_test(&files).assert_ok("gated Azure container, grants and shared policy");
 }
 
 /// The Azure payload mixes references to the gated container with references to

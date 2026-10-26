@@ -38,11 +38,9 @@ export class ArtifactRegistry extends ResourceMetadataBuilder {
   }
 
   /**
-   * AWS-only: Configure ECR private image replication to additional regions.
-   * Ensures images pushed in the registry's home region are automatically
-   * available in these destination regions (required when Lambda or other
-   * compute runs in a different region).
-   * @param regions - AWS region codes to replicate to (e.g., ["us-east-2", "eu-west-1"])
+   * Legacy AWS replication setting. Accepted with a warning; account replication is unchanged.
+   * Configure destination regions through the account infrastructure owner.
+   * @deprecated Per-deployment ECR replication is unsupported.
    */
   public replicationRegions(regions: string[]): this {
     this._config.replicationRegions = regions

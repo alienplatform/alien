@@ -1,28 +1,43 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_storage_account_resource_id, get_resource_group_name};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use alien_azure_clients::models::blob::{
+    BlobServiceProperties, CorsRule, CorsRuleAllowedMethodsItem, CorsRules,
+};
 use alien_azure_clients::models::storage::{
     Endpoints, StorageAccount, StorageAccountCreateParameters,
-    StorageAccountPropertiesProvisioningState,
+    StorageAccountPropertiesProvisioningState, StorageAccountPropertiesUpdateParameters,
+    StorageAccountUpdateParameters,
 };
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     AzureStorageAccount, AzureStorageAccountEndpoints, AzureStorageAccountHeartbeatData,
-    AzureStorageAccountOutputs, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
-    StorageHeartbeatStatus,
+    AzureStorageAccountOutputs, HeartbeatBackend, InitialSetupAuthority, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Storage, StorageHeartbeatStatus,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 
+mod lifecycle;
+
 #[controller]
 pub struct AzureStorageAccountController {
+    /// Rule names recorded before a direct-setup policy write; imports cannot adopt rules.
+    #[serde(default)]
+    pub(crate) lifecycle_rule_names: BTreeSet<String>,
+    /// Last shared capability configuration verified by direct setup. Imports remain unconfirmed.
+    #[serde(default)]
+    pub(crate) capabilities_revision: Option<String>,
+    /// Aggregate configuration being applied; changed declarations restart the owning flow.
+    #[serde(default)]
+    pub(crate) pending_capabilities_revision: Option<String>,
     /// The actual Azure storage account name (may differ from config.id).
     pub(crate) account_name: Option<String>,
     /// The Azure resource ID of the storage account.
@@ -47,6 +62,7 @@ impl AzureStorageAccountController {
         status = ResourceStatus::Provisioning,
     )]
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
         let config = ctx.desired_resource_config::<AzureStorageAccount>()?;
         info!(id=%config.id, "Initiating Azure Storage Account creation");
 
@@ -58,7 +74,10 @@ impl AzureStorageAccountController {
         let client = ctx
             .service_provider
             .get_azure_storage_accounts_client(azure_config)?;
-        let params = self.build_storage_account_params(azure_config, ctx);
+        let mut params = self.build_storage_account_params(azure_config, ctx);
+        if let Some(properties) = params.properties.as_mut() {
+            properties.allow_blob_public_access = Some(shared_capabilities(ctx)?.public);
+        }
 
         client
             .create_storage_account(&resource_group_name, &account_name, &params)
@@ -146,7 +165,7 @@ impl AzureStorageAccountController {
                             info!(account_name=%account_name, "Successfully retrieved storage account details");
 
                             Ok(HandlerAction::Continue {
-                                state: ApplyingPermissions,
+                                state: ConfiguringAccount,
                                 suggested_delay: None,
                             })
                         }
@@ -192,6 +211,222 @@ impl AzureStorageAccountController {
         }
     }
 
+    #[handler(state = ConfiguringAccount, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn configuring_account(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        self.capabilities_revision = None;
+        self.pending_capabilities_revision = Some(shared_capabilities(ctx)?.revision());
+        self.set_public_capability(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: ConfiguringBlobService,
+            suggested_delay: Some(Duration::from_secs(10)),
+        })
+    }
+
+    #[handler(state = ConfiguringBlobService, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn configuring_blob_service(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        if self.pending_capabilities_revision.as_deref()
+            != Some(shared_capabilities(ctx)?.revision().as_str())
+        {
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringAccount,
+                suggested_delay: None,
+            });
+        }
+        self.set_shared_blob_properties(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: VerifyingBlobService,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = VerifyingBlobService, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn verifying_blob_service(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        if self.pending_capabilities_revision.as_deref()
+            != Some(shared_capabilities(ctx)?.revision().as_str())
+        {
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringAccount,
+                suggested_delay: None,
+            });
+        }
+        self.verify_shared_capabilities(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: ConfiguringLifecycle,
+            suggested_delay: None,
+        })
+    }
+
+    #[flow_entry(Update, from = [Ready, RefreshFailed])]
+    #[handler(state = UpdateStart, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        self.capabilities_revision = None;
+        self.pending_capabilities_revision = Some(shared_capabilities(ctx)?.revision());
+        self.set_public_capability(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: UpdatingBlobService,
+            suggested_delay: Some(Duration::from_secs(10)),
+        })
+    }
+
+    #[handler(state = UpdatingBlobService, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_blob_service(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        if self.pending_capabilities_revision.as_deref()
+            != Some(shared_capabilities(ctx)?.revision().as_str())
+        {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
+        self.set_shared_blob_properties(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: VerifyingUpdatedBlobService,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = VerifyingUpdatedBlobService, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn verifying_updated_blob_service(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        if self.pending_capabilities_revision.as_deref()
+            != Some(shared_capabilities(ctx)?.revision().as_str())
+        {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
+        self.verify_shared_capabilities(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: UpdatingLifecycle,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = ConfiguringLifecycle, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn configuring_lifecycle(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        if self.pending_capabilities_revision.as_deref()
+            != Some(shared_capabilities(ctx)?.revision().as_str())
+        {
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringAccount,
+                suggested_delay: None,
+            });
+        }
+        if !self.reconcile_lifecycle(ctx).await? {
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringLifecycle,
+                suggested_delay: None,
+            });
+        }
+        Ok(HandlerAction::Continue {
+            state: VerifyingLifecycle,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = VerifyingLifecycle, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn verifying_lifecycle(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        let desired = shared_capabilities(ctx)?;
+        if self.pending_capabilities_revision.as_deref() != Some(desired.revision().as_str()) {
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringAccount,
+                suggested_delay: None,
+            });
+        }
+        self.verify_lifecycle(ctx).await?;
+        self.capabilities_revision = Some(desired.revision());
+        self.pending_capabilities_revision = None;
+        Ok(HandlerAction::Continue {
+            state: ApplyingPermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = UpdatingLifecycle, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_lifecycle(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        if self.pending_capabilities_revision.as_deref()
+            != Some(shared_capabilities(ctx)?.revision().as_str())
+        {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
+        if !self.reconcile_lifecycle(ctx).await? {
+            return Ok(HandlerAction::Continue {
+                state: UpdatingLifecycle,
+                suggested_delay: None,
+            });
+        }
+        Ok(HandlerAction::Continue {
+            state: VerifyingUpdatedLifecycle,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = VerifyingUpdatedLifecycle, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn verifying_updated_lifecycle(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        let desired = shared_capabilities(ctx)?;
+        if self.pending_capabilities_revision.as_deref() != Some(desired.revision().as_str()) {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
+        self.verify_lifecycle(ctx).await?;
+        self.capabilities_revision = Some(desired.revision());
+        self.pending_capabilities_revision = None;
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: None,
+        })
+    }
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup {
+            return Ok(false);
+        }
+        Ok(self.capabilities_revision.as_deref()
+            != Some(shared_capabilities(ctx)?.revision().as_str()))
+    }
+
     #[handler(
         state = ApplyingPermissions,
         on_failure = CreateFailed,
@@ -201,6 +436,16 @@ impl AzureStorageAccountController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        require_direct_setup(ctx)?;
+        // An old checkpoint may enter here without having configured shared settings.
+        if self.capabilities_revision.as_deref()
+            != Some(shared_capabilities(ctx)?.revision().as_str())
+        {
+            return Ok(HandlerAction::Continue {
+                state: ConfiguringAccount,
+                suggested_delay: None,
+            });
+        }
         let config = ctx.desired_resource_config::<AzureStorageAccount>()?;
 
         info!(id = %config.id, "Applying resource-scoped permissions");
@@ -226,6 +471,26 @@ impl AzureStorageAccountController {
         status = ResourceStatus::Running,
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        // A matching declaration revision does not prove that setup-owned settings
+        // still match Azure. Privileged setup must inspect unchanged installations
+        // before it can report success; imported runtime never gains write authority.
+        if ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup {
+            self.capabilities_revision = None;
+            let verification = match self.verify_shared_capabilities(ctx).await {
+                Ok(()) => self.verify_lifecycle(ctx).await,
+                Err(error) => Err(error),
+            };
+            if let Err(error) = verification {
+                if matches!(error.error, Some(ErrorData::ResourceDrift { .. })) {
+                    return Ok(HandlerAction::Continue {
+                        state: UpdateStart,
+                        suggested_delay: None,
+                    });
+                }
+                return Err(error);
+            }
+            self.capabilities_revision = Some(shared_capabilities(ctx)?.revision());
+        }
         let azure_config = ctx.get_azure_config()?;
         let config = ctx.desired_resource_config::<AzureStorageAccount>()?;
 
@@ -402,6 +667,8 @@ impl AzureStorageAccountController {
         state = CreateFailed,
         status = ResourceStatus::ProvisionFailed
     );
+
+    terminal_state!(state = UpdateFailed, status = ResourceStatus::UpdateFailed);
 
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
 
@@ -611,6 +878,9 @@ impl AzureStorageAccountController {
     }
 
     fn clear_state(&mut self) {
+        self.capabilities_revision = None;
+        self.pending_capabilities_revision = None;
+        self.lifecycle_rule_names.clear();
         self.account_name = None;
         self.resource_id = None;
         self.primary_blob_endpoint = None;
@@ -671,15 +941,27 @@ impl AzureStorageAccountController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(account_name: &str) -> Self {
         Self {
-                state: AzureStorageAccountState::Ready,
-                account_name: Some(account_name.to_string()),
-                resource_id: Some(format!("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/mock-rg/providers/Microsoft.Storage/storageAccounts/{}", account_name)),
-                primary_blob_endpoint: Some(format!("https://{}.blob.core.windows.net/", account_name)),
-                primary_file_endpoint: Some(format!("https://{}.file.core.windows.net/", account_name)),
-                primary_queue_endpoint: Some(format!("https://{}.queue.core.windows.net/", account_name)),
-                primary_table_endpoint: Some(format!("https://{}.table.core.windows.net/", account_name)),
-                _internal_stay_count: None,
-            }
+            state: AzureStorageAccountState::Ready,
+            lifecycle_rule_names: BTreeSet::new(),
+            capabilities_revision: None,
+            pending_capabilities_revision: None,
+            account_name: Some(account_name.to_string()),
+            resource_id: Some(format!(
+                "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/mock-rg/providers/Microsoft.Storage/storageAccounts/{}",
+                account_name
+            )),
+            primary_blob_endpoint: Some(format!("https://{}.blob.core.windows.net/", account_name)),
+            primary_file_endpoint: Some(format!("https://{}.file.core.windows.net/", account_name)),
+            primary_queue_endpoint: Some(format!(
+                "https://{}.queue.core.windows.net/",
+                account_name
+            )),
+            primary_table_endpoint: Some(format!(
+                "https://{}.table.core.windows.net/",
+                account_name
+            )),
+            _internal_stay_count: None,
+        }
     }
 }
 
@@ -708,5 +990,1240 @@ pub fn generate_storage_account_name(resource_prefix: &str, id: &str) -> String 
         format!("{}{}", combined, "001"[..3 - combined.len()].to_string())
     } else {
         combined
+    }
+}
+
+#[derive(Debug, Default)]
+struct SharedCapabilities {
+    public: bool,
+    versioning: bool,
+    origins: BTreeSet<String>,
+    lifecycle: BTreeSet<(String, String, u32)>,
+}
+
+impl SharedCapabilities {
+    fn revision(&self) -> String {
+        // BTreeSet makes declaration order and duplicate contributors irrelevant.
+        format!(
+            "{}:{}:{:?}:{:?}",
+            self.public, self.versioning, self.origins, self.lifecycle
+        )
+    }
+
+    fn cors(&self) -> CorsRules {
+        CorsRules {
+            cors_rules: if self.origins.is_empty() {
+                vec![]
+            } else {
+                vec![CorsRule {
+                    allowed_origins: self.origins.iter().cloned().collect(),
+                    allowed_methods: vec![
+                        CorsRuleAllowedMethodsItem::Get,
+                        CorsRuleAllowedMethodsItem::Head,
+                    ],
+                    allowed_headers: vec!["*".into()],
+                    exposed_headers: vec![
+                        "ETag".into(),
+                        "Content-Range".into(),
+                        "Accept-Ranges".into(),
+                    ],
+                    max_age_in_seconds: 3600,
+                }]
+            },
+        }
+    }
+}
+
+fn cloud_error(ctx: &ResourceControllerContext<'_>, operation: &str) -> ErrorData {
+    ErrorData::CloudPlatformError {
+        resource_id: Some(ctx.desired_config.id().to_owned()),
+        message: operation.to_owned(),
+    }
+}
+
+fn require_direct_setup(ctx: &ResourceControllerContext<'_>) -> Result<()> {
+    if ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup {
+        return Err(AlienError::new(ErrorData::SetupRerunRequired {
+            resource_id: ctx.desired_config.id().to_owned(),
+            message: "Shared Azure storage settings require an explicit direct setup run; imported runtime credentials cannot write them".into(),
+        }));
+    }
+    Ok(())
+}
+
+fn shared_capabilities(ctx: &ResourceControllerContext<'_>) -> Result<SharedCapabilities> {
+    let mut result = SharedCapabilities::default();
+    // Deployment gate resolution removes declined resources before the executor.
+    // Do not re-evaluate defaults here: persisted Frozen gate answers may override them.
+    for (_, entry) in ctx.desired_stack.resources() {
+        let Some(storage) = entry.config.downcast_ref::<Storage>() else {
+            continue;
+        };
+        for rule in &storage.lifecycle_rules {
+            result.lifecycle.insert((
+                crate::storage::azure::get_azure_container_name(&ctx.resource_prefix, &storage.id),
+                rule.prefix.clone().unwrap_or_default(),
+                rule.days,
+            ));
+        }
+        result.public |= storage.public_read;
+        result.versioning |= storage.versioning;
+        result
+            .origins
+            .extend(storage.cors_allowed_origins.iter().cloned());
+    }
+    if result.lifecycle.len() > 100 {
+        return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: ctx.desired_config.id().to_owned(),
+            message: "Combined Azure lifecycle declarations exceed 100 rules".into(),
+        }));
+    }
+    if result.origins.iter().any(|origin| {
+        origin.is_empty() || origin.chars().count() > 256 || origin.contains([',', '\r', '\n'])
+    }) {
+        return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: ctx.desired_config.id().to_owned(), message: "Azure CORS origins must be nonempty, at most 256 characters, and contain no commas or line breaks".into(),
+        }));
+    }
+    let cors = result.cors();
+    // Azure's 2 KiB limit covers origins, methods and headers in the rule.
+    let size: usize = cors
+        .cors_rules
+        .iter()
+        .map(|rule| {
+            rule.allowed_origins.join(",").len()
+                + "GET,HEAD*ETag,Content-Range,Accept-Ranges3600".len()
+        })
+        .sum();
+    if size > 2048 {
+        return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: ctx.desired_config.id().to_owned(),
+            message:
+                "Combined Azure CORS settings exceed 2 KiB; reduce the enabled containers' origins"
+                    .into(),
+        }));
+    }
+    Ok(result)
+}
+
+impl AzureStorageAccountController {
+    fn required_account<'a>(&'a self, ctx: &ResourceControllerContext<'_>) -> Result<&'a str> {
+        self.account_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: ctx.desired_config.id().to_owned(),
+                message: "Storage account name is missing".into(),
+            })
+        })
+    }
+
+    async fn set_public_capability(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        require_direct_setup(ctx)?;
+        let desired = shared_capabilities(ctx)?;
+        let account = self.required_account(ctx)?;
+        let group = get_resource_group_name(ctx.state)?;
+        let client = ctx
+            .service_provider
+            .get_azure_storage_accounts_client(ctx.get_azure_config()?)?;
+        let actual = client
+            .get_storage_account_properties(&group, account)
+            .await
+            .context(cloud_error(ctx, "Read account public capability"))?;
+        if actual.properties.and_then(|p| p.allow_blob_public_access) != Some(desired.public) {
+            client
+                .update_storage_account(
+                    &group,
+                    account,
+                    &StorageAccountUpdateParameters {
+                        properties: Some(StorageAccountPropertiesUpdateParameters {
+                            allow_blob_public_access: Some(desired.public),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .context(cloud_error(ctx, "Update account public capability"))?;
+        }
+        Ok(())
+    }
+
+    async fn set_shared_blob_properties(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        require_direct_setup(ctx)?;
+        let desired = shared_capabilities(ctx)?;
+        let account = self.required_account(ctx)?;
+        let group = get_resource_group_name(ctx.state)?;
+        let client = ctx
+            .service_provider
+            .get_azure_blob_container_client(ctx.get_azure_config()?)?;
+        let actual = client
+            .get_blob_service_properties(&group, account)
+            .await
+            .context(cloud_error(ctx, "Read shared blob-service settings"))?;
+        // Preserve soft-delete, restore, change-feed and unrelated service settings.
+        let mut properties = actual.properties.ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceDrift {
+                resource_id: ctx.desired_config.id().to_owned(),
+                message: "Azure returned no blob-service properties".into(),
+            })
+        })?;
+        let cors = desired.cors();
+        let same_cors = serde_json::to_value(&properties.cors)
+            .into_alien_error()
+            .context(cloud_error(ctx, "Encode observed CORS"))?
+            == serde_json::to_value(&cors)
+                .into_alien_error()
+                .context(cloud_error(ctx, "Encode desired CORS"))?;
+        if properties.is_versioning_enabled == Some(desired.versioning) && same_cors {
+            return Ok(());
+        }
+        properties.is_versioning_enabled = Some(desired.versioning);
+        properties.cors = Some(cors);
+        client
+            .set_blob_service_properties(
+                &group,
+                account,
+                &BlobServiceProperties {
+                    properties: Some(properties),
+                    ..Default::default()
+                },
+            )
+            .await
+            .context(cloud_error(ctx, "Set shared blob-service settings"))?;
+        Ok(())
+    }
+
+    async fn verify_shared_capabilities(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        require_direct_setup(ctx)?;
+        let desired = shared_capabilities(ctx)?;
+        let account = self.required_account(ctx)?;
+        let group = get_resource_group_name(ctx.state)?;
+        let accounts = ctx
+            .service_provider
+            .get_azure_storage_accounts_client(ctx.get_azure_config()?)?;
+        let actual = accounts
+            .get_storage_account_properties(&group, account)
+            .await
+            .context(cloud_error(ctx, "Verify shared public capability"))?;
+        let blob = ctx
+            .service_provider
+            .get_azure_blob_container_client(ctx.get_azure_config()?)?;
+        let service = blob
+            .get_blob_service_properties(&group, account)
+            .await
+            .context(cloud_error(ctx, "Verify shared blob-service settings"))?;
+        let verified = if let Some(properties) = service.properties {
+            properties.is_versioning_enabled == Some(desired.versioning)
+                && serde_json::to_value(properties.cors)
+                    .into_alien_error()
+                    .context(cloud_error(ctx, "Encode observed CORS"))?
+                    == serde_json::to_value(desired.cors())
+                        .into_alien_error()
+                        .context(cloud_error(ctx, "Encode desired CORS"))?
+        } else {
+            false
+        };
+        if !verified
+            || actual.properties.and_then(|p| p.allow_blob_public_access) != Some(desired.public)
+        {
+            return Err(AlienError::new(ErrorData::ResourceDrift {
+                resource_id: ctx.desired_config.id().to_owned(), message: "Azure has not confirmed the requested shared public, versioning and CORS settings".into(),
+            }));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod shared_settings_tests {
+    use super::*;
+    use crate::core::{
+        controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
+    };
+    use crate::core::{StackExecutor, StackResourceStateExt};
+    use alien_azure_clients::{
+        blob_containers::MockBlobContainerApi, long_running_operation::OperationResult,
+        storage_accounts::MockStorageAccountsApi,
+    };
+    use alien_core::{
+        DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, ResourceLifecycle,
+        StackSettings, StackState,
+    };
+    use std::sync::{Arc, Mutex};
+
+    fn account(public: bool) -> StorageAccount {
+        serde_json::from_value(serde_json::json!({"location":"eastus","properties":{"allowBlobPublicAccess":public,"provisioningState":"Succeeded"}})).unwrap()
+    }
+
+    #[tokio::test]
+    async fn setup_update_preserves_other_properties_and_recovers_lost_responses() {
+        for lose_account in [false, true] {
+            let public = Arc::new(Mutex::new(false));
+            let service = Arc::new(Mutex::new(
+                serde_json::from_value::<BlobServiceProperties>(serde_json::json!({"properties":{
+                    "isVersioningEnabled":false,"cors":{"corsRules":[]},
+                    "deleteRetentionPolicy":{"enabled":true,"days":17},
+                    "containerDeleteRetentionPolicy":{"enabled":true,"days":11},
+                    "changeFeed":{"enabled":true,"retentionInDays":7}
+                }}))
+                .unwrap(),
+            ));
+            let account_writes = Arc::new(Mutex::new(0));
+            let service_writes = Arc::new(Mutex::new(0));
+            let mut accounts = MockStorageAccountsApi::new();
+            let value = public.clone();
+            accounts
+                .expect_get_storage_account_properties()
+                .returning(move |_, _| Ok(account(*value.lock().unwrap())));
+            let value = public.clone();
+            let writes = account_writes.clone();
+            accounts
+                .expect_update_storage_account()
+                .returning(move |_, _, params| {
+                    let next = params
+                        .properties
+                        .as_ref()
+                        .unwrap()
+                        .allow_blob_public_access
+                        .unwrap();
+                    *value.lock().unwrap() = next;
+                    *writes.lock().unwrap() += 1;
+                    if lose_account {
+                        return Err(AlienError::new(CloudClientErrorData::Timeout {
+                            message: "lost account PATCH response".into(),
+                        }));
+                    }
+                    Ok(OperationResult::Completed(account(next)))
+                });
+            let mut blob = MockBlobContainerApi::new();
+            blob.expect_get_management_policy().returning(|_, _| {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "policy".into(),
+                        resource_name: "default".into(),
+                    },
+                ))
+            });
+            let value = service.clone();
+            blob.expect_get_blob_service_properties()
+                .returning(move |_, _| Ok(value.lock().unwrap().clone()));
+            let value = service.clone();
+            let writes = service_writes.clone();
+            blob.expect_set_blob_service_properties()
+                .returning(move |_, _, params| {
+                    let json = serde_json::to_value(params).unwrap();
+                    assert_eq!(json["properties"]["deleteRetentionPolicy"]["days"], 17);
+                    assert_eq!(
+                        json["properties"]["containerDeleteRetentionPolicy"]["days"],
+                        11
+                    );
+                    assert_eq!(json["properties"]["changeFeed"]["retentionInDays"], 7);
+                    *value.lock().unwrap() = params.clone();
+                    *writes.lock().unwrap() += 1;
+                    Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "lost-response".into(),
+                            resource_name: "blob-service".into(),
+                        },
+                    ))
+                });
+            let mut provider = MockPlatformServiceProvider::new();
+            let accounts = Arc::new(accounts);
+            let blob = Arc::new(blob);
+            provider
+                .expect_get_azure_storage_accounts_client()
+                .returning(move |_| Ok(accounts.clone()));
+            provider
+                .expect_get_azure_blob_container_client()
+                .returning(move |_| Ok(blob.clone()));
+            let provider = Arc::new(provider);
+            let storage = Storage::new("public".into())
+                .public_read(true)
+                .cors_allowed_origins(vec!["https://one.example".into()])
+                .build();
+            let sibling = Storage::new("versioned".into())
+                .versioning(true)
+                .cors_allowed_origins(vec![
+                    "https://two.example".into(),
+                    "https://one.example".into(),
+                ])
+                .build();
+            let config = AzureStorageAccount::new("default-storage-account".into()).build();
+            let mut controller = AzureStorageAccountController::mock_ready("teststorage");
+            controller.state = AzureStorageAccountState::UpdateStart;
+            // A failed mutation resumes its serialized handler, whose read adopts the committed result.
+            for _ in 0..12 {
+                let mut run = SingleControllerExecutor::builder()
+                    .resource(config.clone())
+                    .controller(
+                        serde_json::from_value::<AzureStorageAccountController>(
+                            serde_json::to_value(&controller).unwrap(),
+                        )
+                        .unwrap(),
+                    )
+                    .platform(Platform::Azure)
+                    .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+                    .with_stack_resource(storage.clone(), ResourceLifecycle::Live)
+                    .with_stack_resource(sibling.clone(), ResourceLifecycle::Frozen)
+                    .service_provider(provider.clone())
+                    .with_dependency(
+                        alien_core::AzureResourceGroup::new("default-resource-group".into())
+                            .build(),
+                        crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                            "default-resource-group",
+                        ),
+                    )
+                    .build()
+                    .await
+                    .unwrap();
+                let step = run.step().await;
+                if step.is_ok() {
+                    controller = run
+                        .internal_state::<AzureStorageAccountController>()
+                        .unwrap()
+                        .clone();
+                }
+                if controller.state == AzureStorageAccountState::Ready {
+                    break;
+                }
+            }
+            assert_eq!(controller.state, AzureStorageAccountState::Ready);
+            assert!(controller.capabilities_revision.is_some());
+            assert_eq!(*account_writes.lock().unwrap(), 1);
+            assert_eq!(*service_writes.lock().unwrap(), 1);
+            let json = serde_json::to_value(service.lock().unwrap().clone()).unwrap();
+            assert_eq!(json["properties"]["isVersioningEnabled"], true);
+            assert_eq!(
+                json["properties"]["cors"]["corsRules"][0]["allowedOrigins"],
+                serde_json::json!(["https://one.example", "https://two.example"])
+            );
+            assert_eq!(
+                json["properties"]["cors"]["corsRules"][0]["allowedMethods"],
+                serde_json::json!(["GET", "HEAD"])
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unchanged_legacy_executor_repairs_then_removes_shared_settings() {
+        let service = Arc::new(Mutex::new(serde_json::from_value::<BlobServiceProperties>(serde_json::json!({"properties":{
+            "isVersioningEnabled":false,"cors":{"corsRules":[]},"deleteRetentionPolicy":{"enabled":true,"days":17}
+        }})).unwrap()));
+        let writes = Arc::new(Mutex::new(0));
+        let mut blob = MockBlobContainerApi::new();
+        blob.expect_get_management_policy().returning(|_, _| {
+            Err(AlienError::new(
+                CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "policy".into(),
+                    resource_name: "default".into(),
+                },
+            ))
+        });
+        let value = service.clone();
+        blob.expect_get_blob_service_properties()
+            .returning(move |_, _| Ok(value.lock().unwrap().clone()));
+        let value = service.clone();
+        let observed_writes = writes.clone();
+        blob.expect_set_blob_service_properties()
+            .returning(move |_, _, params| {
+                *value.lock().unwrap() = params.clone();
+                let mut count = observed_writes.lock().unwrap();
+                *count += 1;
+                if *count == 1 {
+                    return Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "lost-response".into(),
+                            resource_name: "blob-service".into(),
+                        },
+                    ));
+                }
+                Ok(params.clone())
+            });
+        let mut accounts = MockStorageAccountsApi::new();
+        accounts
+            .expect_get_storage_account_properties()
+            .returning(|_, _| Ok(account(false)));
+        accounts.expect_update_storage_account().times(0);
+        let mut provider = MockPlatformServiceProvider::new();
+        let accounts = Arc::new(accounts);
+        let blob = Arc::new(blob);
+        provider
+            .expect_get_azure_storage_accounts_client()
+            .returning(move |_| Ok(accounts.clone()));
+        provider
+            .expect_get_azure_blob_container_client()
+            .returning(move |_| Ok(blob.clone()));
+        let provider = Arc::new(provider);
+        let resource = AzureStorageAccount::new("default-storage-account".into()).build();
+        let seed = SingleControllerExecutor::builder()
+            .resource(resource.clone())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AzureStorageAccountController::mock_ready("teststorage"))
+            .platform(Platform::Azure)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .with_stack_resource(
+                Storage::new("data".into())
+                    .versioning(true)
+                    .cors_allowed_origins(vec!["https://example.test".into()])
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .service_provider(provider.clone())
+            .with_dependency(
+                alien_core::AzureResourceGroup::new("default-resource-group".into()).build(),
+                crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                    "default-resource-group",
+                ),
+            )
+            .build()
+            .await
+            .unwrap();
+        let client = seed.with_context(|ctx| ctx.client_config.clone());
+        let mut state = seed.stack_state().clone();
+        let mut desired = seed.with_context(|ctx| ctx.desired_stack.clone());
+        for (id, entry) in &mut desired.resources {
+            if id != &resource.id {
+                entry.lifecycle = ResourceLifecycle::Live;
+            }
+        }
+        for (id, entry) in &mut state.resources {
+            if id != &resource.id {
+                entry.lifecycle = Some(ResourceLifecycle::Live);
+            }
+        }
+        let entry = &desired.resources[&resource.id];
+        let installed = state.resources.get_mut(&resource.id).unwrap();
+        installed.config = entry.config.clone();
+        installed.previous_config = Some(entry.config.clone());
+        installed.dependencies = entry.combined_dependencies();
+        let deployment = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(true)
+            .setup_run(true)
+            .build();
+        for round in 0..3 {
+            let removal = round == 2;
+            if round == 1 {
+                service
+                    .lock()
+                    .unwrap()
+                    .properties
+                    .as_mut()
+                    .unwrap()
+                    .is_versioning_enabled = Some(false);
+            }
+            if removal {
+                desired.resources.shift_remove("data");
+            }
+            let executor = StackExecutor::builder(&desired, client.clone())
+                .deployment_config(&deployment)
+                .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+                .step_out_of_scope_resources(false)
+                .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+                .service_provider(provider.clone())
+                .build()
+                .unwrap();
+            assert_eq!(
+                executor
+                    .plan(&state)
+                    .unwrap()
+                    .updates
+                    .contains_key(&resource.id),
+                round != 1
+            );
+            if round == 1 {
+                // The declaration and persisted receipt are unchanged. Ready must
+                // discover cloud drift and persist an update entry before writes.
+                state = executor.step(state).await.unwrap().next_state;
+                state = serde_json::from_value::<StackState>(serde_json::to_value(&state).unwrap())
+                    .unwrap();
+                let controller = state.resources[&resource.id]
+                    .get_internal_controller_typed::<AzureStorageAccountController>()
+                    .unwrap();
+                assert_eq!(controller.state, AzureStorageAccountState::UpdateStart);
+                assert!(controller.capabilities_revision.is_none());
+                assert_eq!(*writes.lock().unwrap(), 1);
+            }
+            let mut failures = 0;
+            for _ in 0..10 {
+                // Model a persisted final automatic attempt so the committed-but-lost
+                // response exercises UpdateFailed -> explicit retry, not only backoff.
+                if round == 0
+                    && failures == 0
+                    && state.resources[&resource.id].status == ResourceStatus::Updating
+                {
+                    state.resources.get_mut(&resource.id).unwrap().retry_attempt = 9;
+                }
+                state = executor.step(state).await.unwrap().next_state;
+                state = serde_json::from_value::<StackState>(serde_json::to_value(&state).unwrap())
+                    .unwrap();
+                if state.resources[&resource.id].status == ResourceStatus::UpdateFailed {
+                    failures += 1;
+                    assert!(state
+                        .resources
+                        .get_mut(&resource.id)
+                        .unwrap()
+                        .retry_failed()
+                        .unwrap());
+                }
+                if state.resources[&resource.id].status == ResourceStatus::Running {
+                    break;
+                }
+            }
+            assert_eq!(failures, usize::from(round == 0));
+            assert_eq!(
+                state.resources[&resource.id].status,
+                ResourceStatus::Running
+            );
+            assert!(executor.plan(&state).unwrap().updates.is_empty());
+            let before = *writes.lock().unwrap();
+            state = executor.step(state).await.unwrap().next_state;
+            assert_eq!(
+                state.resources[&resource.id].status,
+                ResourceStatus::Running
+            );
+            assert_eq!(
+                *writes.lock().unwrap(),
+                before,
+                "unchanged verified setup must not write"
+            );
+            let json = serde_json::to_value(service.lock().unwrap().clone()).unwrap();
+            assert_eq!(json["properties"]["isVersioningEnabled"], !removal);
+            assert_eq!(
+                service
+                    .lock()
+                    .unwrap()
+                    .properties
+                    .as_ref()
+                    .unwrap()
+                    .cors
+                    .as_ref()
+                    .unwrap()
+                    .cors_rules
+                    .is_empty(),
+                removal
+            );
+            assert_eq!(json["properties"]["deleteRetentionPolicy"]["days"], 17);
+        }
+        assert_eq!(*writes.lock().unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_executor_records_intent_retries_and_disables_removed_expiry() {
+        let policy = Arc::new(Mutex::new(
+            None::<alien_azure_clients::models::storage::ManagementPolicy>,
+        ));
+        let writes = Arc::new(Mutex::new(0));
+        let mut blob = MockBlobContainerApi::new();
+        let value = policy.clone();
+        blob.expect_get_management_policy().returning(move |_, _| {
+            value.lock().unwrap().clone().ok_or_else(|| {
+                AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "policy".into(),
+                    resource_name: "default".into(),
+                })
+            })
+        });
+        let value = policy.clone();
+        let count = writes.clone();
+        blob.expect_set_management_policy()
+            .returning(move |_, _, params| {
+                *value.lock().unwrap() = Some(params.clone());
+                let mut count = count.lock().unwrap();
+                *count += 1;
+                if *count == 1 {
+                    return Err(AlienError::new(CloudClientErrorData::Timeout {
+                        message: "committed lifecycle PUT response lost".into(),
+                    }));
+                }
+                Ok(params.clone())
+            });
+        blob.expect_get_blob_service_properties().returning(|_, _| {
+            Ok(serde_json::from_value(serde_json::json!({"properties":{
+                "isVersioningEnabled":false,"cors":{"corsRules":[]}
+            }}))
+            .unwrap())
+        });
+        blob.expect_set_blob_service_properties().times(0);
+        let mut accounts = MockStorageAccountsApi::new();
+        accounts
+            .expect_get_storage_account_properties()
+            .returning(|_, _| Ok(account(false)));
+        accounts.expect_update_storage_account().times(0);
+        let mut provider = MockPlatformServiceProvider::new();
+        let accounts = Arc::new(accounts);
+        let blob = Arc::new(blob);
+        provider
+            .expect_get_azure_storage_accounts_client()
+            .returning(move |_| Ok(accounts.clone()));
+        provider
+            .expect_get_azure_blob_container_client()
+            .returning(move |_| Ok(blob.clone()));
+        let provider = Arc::new(provider);
+        let resource = AzureStorageAccount::new("default-storage-account".into()).build();
+        let seed = SingleControllerExecutor::builder()
+            .resource(resource.clone())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AzureStorageAccountController::mock_ready("teststorage"))
+            .platform(Platform::Azure)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .with_stack_resource(
+                Storage::new("data".into())
+                    .lifecycle_rules(vec![alien_core::LifecycleRule {
+                        days: 30,
+                        prefix: Some("logs/".into()),
+                    }])
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .service_provider(provider.clone())
+            .with_dependency(
+                alien_core::AzureResourceGroup::new("default-resource-group".into()).build(),
+                crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                    "default-resource-group",
+                ),
+            )
+            .build()
+            .await
+            .unwrap();
+        let client = seed.with_context(|ctx| ctx.client_config.clone());
+        let mut state = seed.stack_state().clone();
+        let mut desired = seed.with_context(|ctx| ctx.desired_stack.clone());
+        for (id, entry) in &mut desired.resources {
+            if id != &resource.id {
+                entry.lifecycle = ResourceLifecycle::Live;
+            }
+        }
+        for (id, entry) in &mut state.resources {
+            if id != &resource.id {
+                entry.lifecycle = Some(ResourceLifecycle::Live);
+            }
+        }
+        let entry = &desired.resources[&resource.id];
+        let installed = state.resources.get_mut(&resource.id).unwrap();
+        installed.config = entry.config.clone();
+        installed.previous_config = Some(entry.config.clone());
+        installed.dependencies = entry.combined_dependencies();
+        let deployment = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(true)
+            .setup_run(true)
+            .build();
+        for round in 0..3 {
+            let removal = round == 2;
+            if round == 1 {
+                // An external writer removed the singleton, with no declaration change.
+                *policy.lock().unwrap() = None;
+            }
+            if removal {
+                // Explicit installer activation after the safe first setup. Removal must disable it.
+                policy
+                    .lock()
+                    .unwrap()
+                    .as_mut()
+                    .unwrap()
+                    .properties
+                    .as_mut()
+                    .unwrap()
+                    .policy
+                    .rules[0]
+                    .enabled = Some(true);
+                desired.resources.shift_remove("data");
+            }
+            let executor = StackExecutor::builder(&desired, client.clone())
+                .deployment_config(&deployment)
+                .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+                .step_out_of_scope_resources(false)
+                .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+                .service_provider(provider.clone())
+                .build()
+                .unwrap();
+            assert_eq!(
+                executor
+                    .plan(&state)
+                    .unwrap()
+                    .updates
+                    .contains_key(&resource.id),
+                round != 1
+            );
+            if round == 1 {
+                state = executor.step(state).await.unwrap().next_state;
+                state = serde_json::from_value::<StackState>(serde_json::to_value(&state).unwrap())
+                    .unwrap();
+                let controller = state.resources[&resource.id]
+                    .get_internal_controller_typed::<AzureStorageAccountController>()
+                    .unwrap();
+                assert_eq!(controller.state, AzureStorageAccountState::UpdateStart);
+                assert!(controller.capabilities_revision.is_none());
+                assert_eq!(*writes.lock().unwrap(), 1);
+            }
+            let mut failures = 0;
+            for _ in 0..16 {
+                // Model a persisted final automatic attempt so the committed-but-lost
+                // response exercises UpdateFailed -> explicit retry, not only backoff.
+                if round == 0
+                    && failures == 0
+                    && state.resources[&resource.id].status == ResourceStatus::Updating
+                {
+                    state.resources.get_mut(&resource.id).unwrap().retry_attempt = 9;
+                }
+                state = executor.step(state).await.unwrap().next_state;
+                state = serde_json::from_value::<StackState>(serde_json::to_value(&state).unwrap())
+                    .unwrap();
+                if state.resources[&resource.id].status == ResourceStatus::UpdateFailed {
+                    failures += 1;
+                    let failed = state.resources[&resource.id]
+                        .get_internal_controller_typed::<AzureStorageAccountController>()
+                        .unwrap();
+                    assert_eq!(failed.account_name.as_deref(), Some("teststorage"));
+                    assert_eq!(failed.lifecycle_rule_names.len(), 1);
+                    assert!(failed.capabilities_revision.is_none());
+                    assert!(state
+                        .resources
+                        .get_mut(&resource.id)
+                        .unwrap()
+                        .retry_failed()
+                        .unwrap());
+                }
+                if state.resources[&resource.id].status == ResourceStatus::Running {
+                    break;
+                }
+            }
+            assert_eq!(failures, usize::from(round == 0));
+            assert_eq!(
+                state.resources[&resource.id].status,
+                ResourceStatus::Running
+            );
+            assert!(executor.plan(&state).unwrap().updates.is_empty());
+            let before = *writes.lock().unwrap();
+            state = executor.step(state).await.unwrap().next_state;
+            assert_eq!(
+                state.resources[&resource.id].status,
+                ResourceStatus::Running
+            );
+            assert_eq!(
+                *writes.lock().unwrap(),
+                before,
+                "unchanged verified setup must not write"
+            );
+            let actual = policy.lock().unwrap();
+            let rules = &actual
+                .as_ref()
+                .unwrap()
+                .properties
+                .as_ref()
+                .unwrap()
+                .policy
+                .rules;
+            assert_eq!(rules.len(), 1);
+            assert_eq!(rules[0].enabled, Some(false));
+            assert_eq!(
+                rules[0]
+                    .definition
+                    .filters
+                    .as_ref()
+                    .unwrap()
+                    .prefix_match
+                    .len(),
+                1
+            );
+            let controller = state.resources[&resource.id]
+                .get_internal_controller_typed::<AzureStorageAccountController>()
+                .unwrap();
+            assert!(controller.lifecycle_rule_names.contains(&rules[0].name));
+        }
+        assert_eq!(*writes.lock().unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn legacy_permission_checkpoint_must_verify_before_ready() {
+        let mut controller = AzureStorageAccountController::mock_ready("teststorage");
+        controller.state = AzureStorageAccountState::ApplyingPermissions;
+        let mut checkpoint = serde_json::to_value(&controller).unwrap();
+        checkpoint
+            .as_object_mut()
+            .unwrap()
+            .remove("capabilitiesRevision");
+        checkpoint
+            .as_object_mut()
+            .unwrap()
+            .remove("lifecycleRuleNames");
+        let mut accounts = MockStorageAccountsApi::new();
+        accounts
+            .expect_get_storage_account_properties()
+            .returning(|_, _| Ok(account(false)));
+        accounts.expect_update_storage_account().times(0);
+        let mut blob = MockBlobContainerApi::new();
+        blob.expect_get_management_policy().returning(|_, _| {
+            Err(AlienError::new(
+                CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "policy".into(),
+                    resource_name: "default".into(),
+                },
+            ))
+        });
+        blob.expect_get_blob_service_properties().returning(|_, _| {
+            Ok(serde_json::from_value(serde_json::json!({
+                "properties":{"isVersioningEnabled":false,"cors":{"corsRules":[]}}
+            }))
+            .unwrap())
+        });
+        blob.expect_set_blob_service_properties().times(0);
+        let mut provider = MockPlatformServiceProvider::new();
+        let accounts = Arc::new(accounts);
+        let blob = Arc::new(blob);
+        let authorization =
+            Arc::new(alien_azure_clients::authorization::MockAuthorizationApi::new());
+        provider
+            .expect_get_azure_storage_accounts_client()
+            .returning(move |_| Ok(accounts.clone()));
+        provider
+            .expect_get_azure_blob_container_client()
+            .returning(move |_| Ok(blob.clone()));
+        provider
+            .expect_get_azure_authorization_client()
+            .returning(move |_| Ok(authorization.clone()));
+        let mut run = SingleControllerExecutor::builder()
+            .resource(AzureStorageAccount::new("default-storage-account".into()).build())
+            .controller(
+                serde_json::from_value::<AzureStorageAccountController>(checkpoint).unwrap(),
+            )
+            .platform(Platform::Azure)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .with_dependency(
+                alien_core::AzureResourceGroup::new("default-resource-group".into()).build(),
+                crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                    "default-resource-group",
+                ),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        run.step().await.unwrap();
+        assert_eq!(
+            run.internal_state::<AzureStorageAccountController>()
+                .unwrap()
+                .state,
+            AzureStorageAccountState::ConfiguringAccount
+        );
+        assert!(run
+            .internal_state::<AzureStorageAccountController>()
+            .unwrap()
+            .capabilities_revision
+            .is_none());
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert!(run
+            .internal_state::<AzureStorageAccountController>()
+            .unwrap()
+            .capabilities_revision
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn failed_blob_configuration_keeps_account_identity_for_explicit_delete() {
+        let mut controller = AzureStorageAccountController::mock_ready("teststorage");
+        controller.state = AzureStorageAccountState::UpdatingBlobService;
+        controller.pending_capabilities_revision = Some(SharedCapabilities::default().revision());
+        let mut blob = MockBlobContainerApi::new();
+        blob.expect_get_management_policy().returning(|_, _| {
+            Err(AlienError::new(
+                CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "policy".into(),
+                    resource_name: "default".into(),
+                },
+            ))
+        });
+        blob.expect_get_blob_service_properties().returning(|_, _| {
+            Ok(serde_json::from_value(serde_json::json!({
+                "properties":{"isVersioningEnabled":true,"cors":{"corsRules":[]}}
+            }))
+            .unwrap())
+        });
+        blob.expect_set_blob_service_properties()
+            .times(1)
+            .returning(|_, _, _| {
+                Err(AlienError::new(CloudClientErrorData::Timeout {
+                    message: "lost committed response".into(),
+                }))
+            });
+        let mut accounts = MockStorageAccountsApi::new();
+        accounts
+            .expect_delete_storage_account()
+            .times(1)
+            .withf(|_, name| name == "teststorage")
+            .returning(|_, _| Ok(()));
+        accounts
+            .expect_get_storage_account_properties()
+            .times(1)
+            .withf(|_, name| name == "teststorage")
+            .returning(|_, _| {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "account".into(),
+                        resource_name: "teststorage".into(),
+                    },
+                ))
+            });
+        let mut provider = MockPlatformServiceProvider::new();
+        let accounts = Arc::new(accounts);
+        let blob = Arc::new(blob);
+        provider
+            .expect_get_azure_storage_accounts_client()
+            .returning(move |_| Ok(accounts.clone()));
+        provider
+            .expect_get_azure_blob_container_client()
+            .returning(move |_| Ok(blob.clone()));
+        let provider = Arc::new(provider);
+        let config = AzureStorageAccount::new("default-storage-account".into()).build();
+        let mut run = SingleControllerExecutor::builder()
+            .resource(config.clone())
+            .controller(controller.clone())
+            .platform(Platform::Azure)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .with_dependency(
+                alien_core::AzureResourceGroup::new("default-resource-group".into()).build(),
+                crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                    "default-resource-group",
+                ),
+            )
+            .service_provider(provider.clone())
+            .build()
+            .await
+            .unwrap();
+        assert!(run.step().await.is_err());
+        controller.transition_to_failure();
+        let controller: AzureStorageAccountController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        assert_eq!(controller.account_name.as_deref(), Some("teststorage"));
+        let mut run = SingleControllerExecutor::builder()
+            .resource(config)
+            .controller(controller)
+            .platform(Platform::Azure)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .with_dependency(
+                alien_core::AzureResourceGroup::new("default-resource-group".into()).build(),
+                crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                    "default-resource-group",
+                ),
+            )
+            .service_provider(provider)
+            .build()
+            .await
+            .unwrap();
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Deleted);
+        assert!(run
+            .internal_state::<AzureStorageAccountController>()
+            .unwrap()
+            .account_name
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn changed_or_missing_pending_aggregate_restarts_before_any_write() {
+        for pending in [None, Some(SharedCapabilities::default().revision())] {
+            for (state, expected) in [
+                (
+                    AzureStorageAccountState::ConfiguringBlobService,
+                    AzureStorageAccountState::ConfiguringAccount,
+                ),
+                (
+                    AzureStorageAccountState::VerifyingBlobService,
+                    AzureStorageAccountState::ConfiguringAccount,
+                ),
+                (
+                    AzureStorageAccountState::UpdatingBlobService,
+                    AzureStorageAccountState::UpdateStart,
+                ),
+                (
+                    AzureStorageAccountState::VerifyingUpdatedBlobService,
+                    AzureStorageAccountState::UpdateStart,
+                ),
+                (
+                    AzureStorageAccountState::ConfiguringLifecycle,
+                    AzureStorageAccountState::ConfiguringAccount,
+                ),
+                (
+                    AzureStorageAccountState::VerifyingLifecycle,
+                    AzureStorageAccountState::ConfiguringAccount,
+                ),
+                (
+                    AzureStorageAccountState::UpdatingLifecycle,
+                    AzureStorageAccountState::UpdateStart,
+                ),
+                (
+                    AzureStorageAccountState::VerifyingUpdatedLifecycle,
+                    AzureStorageAccountState::UpdateStart,
+                ),
+            ] {
+                let mut controller = AzureStorageAccountController::mock_ready("teststorage");
+                controller.state = state;
+                controller.pending_capabilities_revision = pending.clone();
+                let mut run = SingleControllerExecutor::builder()
+                    .resource(AzureStorageAccount::new("default-storage-account".into()).build())
+                    .controller(
+                        serde_json::from_value::<AzureStorageAccountController>(
+                            serde_json::to_value(controller).unwrap(),
+                        )
+                        .unwrap(),
+                    )
+                    .platform(Platform::Azure)
+                    .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+                    .with_stack_resource(
+                        Storage::new("versioned".into()).versioning(true).build(),
+                        ResourceLifecycle::Live,
+                    )
+                    .with_dependency(
+                        alien_core::AzureResourceGroup::new("default-resource-group".into())
+                            .build(),
+                        crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                            "default-resource-group",
+                        ),
+                    )
+                    .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                    .build()
+                    .await
+                    .unwrap();
+                run.step().await.unwrap();
+                assert_eq!(
+                    run.internal_state::<AzureStorageAccountController>()
+                        .unwrap()
+                        .state,
+                    expected
+                );
+                assert!(run
+                    .internal_state::<AzureStorageAccountController>()
+                    .unwrap()
+                    .capabilities_revision
+                    .is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ready_read_denial_preserves_identity_and_imported_runtime_never_reconciles() {
+        for authority in [
+            InitialSetupAuthority::DirectSetup,
+            InitialSetupAuthority::ImportedHandoff,
+        ] {
+            let direct = authority == InitialSetupAuthority::DirectSetup;
+            let mut accounts = MockStorageAccountsApi::new();
+            accounts
+                .expect_get_storage_account_properties()
+                .times(1)
+                .returning(move |_, _| {
+                    if direct {
+                        Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                            resource_type: "account".into(),
+                            resource_name: "teststorage".into(),
+                        }))
+                    } else {
+                        Ok(account(false))
+                    }
+                });
+            accounts.expect_update_storage_account().times(0);
+            let accounts = Arc::new(accounts);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_azure_storage_accounts_client()
+                .returning(move |_| Ok(accounts.clone()));
+            provider.expect_get_azure_blob_container_client().times(0);
+            let mut controller = AzureStorageAccountController::mock_ready("teststorage");
+            controller.capabilities_revision = Some("installed-revision".into());
+            controller.lifecycle_rule_names.insert("owned-rule".into());
+            let mut run = SingleControllerExecutor::builder()
+                .resource(AzureStorageAccount::new("default-storage-account".into()).build())
+                .controller(
+                    serde_json::from_value::<AzureStorageAccountController>(
+                        serde_json::to_value(controller).unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .platform(Platform::Azure)
+                .initial_setup_authority(authority)
+                .service_provider(Arc::new(provider))
+                .with_dependency(
+                    alien_core::AzureResourceGroup::new("default-resource-group".into()).build(),
+                    crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                        "default-resource-group",
+                    ),
+                )
+                .build()
+                .await
+                .unwrap();
+            if direct {
+                assert!(run.step().await.is_err());
+            } else {
+                assert!(!run.needs_update().unwrap());
+                run.step().await.unwrap();
+            }
+            let saved = run
+                .internal_state::<AzureStorageAccountController>()
+                .unwrap();
+            assert_eq!(saved.account_name.as_deref(), Some("teststorage"));
+            assert!(saved.lifecycle_rule_names.contains("owned-rule"));
+            assert_eq!(
+                saved.capabilities_revision.as_deref(),
+                if direct {
+                    None
+                } else {
+                    Some("installed-revision")
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn imported_checkpoints_cannot_write_shared_settings() {
+        for state in [
+            AzureStorageAccountState::CreateStart,
+            AzureStorageAccountState::ConfiguringAccount,
+            AzureStorageAccountState::ConfiguringBlobService,
+            AzureStorageAccountState::VerifyingBlobService,
+            AzureStorageAccountState::ApplyingPermissions,
+            AzureStorageAccountState::UpdateStart,
+            AzureStorageAccountState::UpdatingBlobService,
+            AzureStorageAccountState::VerifyingUpdatedBlobService,
+            AzureStorageAccountState::ConfiguringLifecycle,
+            AzureStorageAccountState::UpdatingLifecycle,
+            AzureStorageAccountState::VerifyingLifecycle,
+            AzureStorageAccountState::VerifyingUpdatedLifecycle,
+        ] {
+            let mut controller = AzureStorageAccountController::mock_ready("teststorage");
+            controller.state = state;
+            let mut run = SingleControllerExecutor::builder()
+                .resource(AzureStorageAccount::new("default-storage-account".into()).build())
+                .controller(controller)
+                .platform(Platform::Azure)
+                .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+                .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+                .with_dependency(
+                    alien_core::AzureResourceGroup::new("default-resource-group".into()).build(),
+                    crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                        "default-resource-group",
+                    ),
+                )
+                .build()
+                .await
+                .unwrap();
+            assert_eq!(run.step().await.unwrap_err().code, "SETUP_RERUN_REQUIRED");
+        }
     }
 }

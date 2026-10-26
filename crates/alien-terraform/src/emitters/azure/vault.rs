@@ -88,6 +88,8 @@ impl TfEmitter for AzureVaultEmitter {
 
         emit_vault_permissions(ctx, label, &mut fragment)?;
 
+        fragment.retain_resources(|kind, _| kind == "azurerm_key_vault");
+        fragment.retain_state(|kind, _| kind == "random_id");
         Ok(fragment)
     }
 

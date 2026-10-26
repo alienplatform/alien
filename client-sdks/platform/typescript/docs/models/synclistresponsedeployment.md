@@ -8,7 +8,7 @@ import { SyncListResponseDeployment } from "@alienplatform/platform-api/models";
 let value: SyncListResponseDeployment = {
   id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   name: "acme-prod",
-  status: "teardown-required",
+  status: "retention-required",
   projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
   platform: "azure",
   deploymentProtocolVersion: 562146,

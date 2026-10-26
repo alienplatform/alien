@@ -162,7 +162,7 @@ async fn creating_a_gcp_backed_kubernetes_deployment_records_the_gcp_protocol() 
     assert_eq!(record.base_platform, Some(Platform::Gcp));
     assert_eq!(
         record.deployment_protocol_version,
-        alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
+        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
     );
 }
 
@@ -173,6 +173,32 @@ async fn cleanup_of_an_unregistered_reservation_removes_it() {
     let (status, created) = create(&fixture, &fixture.dg_token, request()).await;
     assert_eq!(status, StatusCode::CREATED, "{created:#}");
     let id = created["deployment"]["id"].as_str().unwrap().to_string();
+    let legacy = alien_manager::routes::deployments::router()
+        .with_state(fixture.state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/deployments/{id}/delete"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", fixture.admin_token),
+                )
+                .body(Body::from(r#"{"action":"cleanup"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(legacy.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &id)
+            .await
+            .unwrap()
+            .is_some(),
+        "a legacy request must not remove the reservation"
+    );
     let response = alien_manager::routes::deployments::router()
         .with_state(fixture.state.clone())
         .oneshot(
@@ -180,8 +206,11 @@ async fn cleanup_of_an_unregistered_reservation_removes_it() {
                 .method("POST")
                 .uri(format!("/v1/deployments/{id}/delete"))
                 .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {}", fixture.admin_token))
-                .body(Body::from(r#"{"action":"cleanup"}"#))
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", fixture.admin_token),
+                )
+                .body(Body::from(r#"{"action":"retain"}"#))
                 .unwrap(),
         )
         .await
@@ -192,12 +221,14 @@ async fn cleanup_of_an_unregistered_reservation_removes_it() {
     assert_eq!(status, StatusCode::ACCEPTED, "{body:#}");
     assert_eq!(body["cleanupRequired"], false);
     // Left as delete-pending, it would wait for a manager that has no release to clean up with.
-    assert!(fixture
-        .deployment_store
-        .get_deployment(&alien_manager::auth::Subject::system(), &id)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        fixture
+            .deployment_store
+            .get_deployment(&alien_manager::auth::Subject::system(), &id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     // The same name can be reserved again.
     let (status, again) = create(&fixture, &fixture.dg_token, request()).await;
     assert_eq!(status, StatusCode::CREATED, "{again:#}");

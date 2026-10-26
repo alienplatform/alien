@@ -185,7 +185,7 @@ async fn kubernetes_bootstrap_retains_gcp_protocol_and_base_environment() {
     assert_eq!(record.base_platform, Some(Platform::Gcp));
     assert_eq!(
         record.deployment_protocol_version,
-        alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
+        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
     );
 }
 
@@ -254,4 +254,155 @@ async fn helm_bootstrap_refuses_a_release_helm_would_not_accept() {
         .await
         .unwrap();
     assert!(deployments.is_empty(), "{deployments:?}");
+}
+
+#[tokio::test]
+async fn protocol_three_refuses_previous_reader_before_checkpoint_parsing() {
+    let fixture =
+        make_fixture_for_platform(Platform::Gcp, Some(source_stack_without_setup_resources()))
+            .await;
+    let id = protocol_record(&fixture, "controller-checkpoints", 3).await;
+    let token = mint_token(
+        &fixture.token_store,
+        TokenType::Deployment,
+        "ax_dep_",
+        Some(fixture.deployment_group_id.clone()),
+        Some(id.clone()),
+    )
+    .await;
+    for (path, body) in [
+        (
+            "/v1/sync/acquire",
+            serde_json::json!({
+                "session": "previous-reader", "deploymentIds": [id], "limit": 1, "deploymentModel": "push",
+                "maxSupportedDeploymentProtocolVersion": 2
+            }),
+        ),
+        (
+            "/v1/sync",
+            serde_json::json!({
+                "deploymentId": id, "maxSupportedDeploymentProtocolVersion": 2,
+                "currentState": {"protocolVersion": 3, "status": "unknown-to-previous-reader"}
+            }),
+        ),
+    ] {
+        let (status, response) = request(&fixture, path, &token, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{response:#}");
+        assert!(
+            response.to_string().contains("Update the deployment"),
+            "{response:#}"
+        );
+        assert!(!response.to_string().contains("deserialize"));
+    }
+    let stored = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.deployment_protocol_version, 3);
+    assert!(stored.locked_by.is_none());
+    assert_eq!(stored.status, "provisioning");
+}
+
+#[tokio::test]
+async fn pull_protocol_upgrade_without_a_claim_is_persisted_and_acknowledged() {
+    let fixture = make_fixture(Some(source_stack_without_setup_resources())).await;
+    let subject = alien_manager::auth::Subject::system();
+    let record = fixture
+        .deployment_store
+        .create_with_state(
+            &subject,
+            CreateImportedDeploymentParams {
+                name: "pull-protocol".into(),
+                deployment_group_id: fixture.deployment_group_id.clone(),
+                platform: Platform::Aws,
+                deployment_protocol_version: 1,
+                base_platform: None,
+                stack_settings: StackSettings::default(),
+                stack_state: StackState::new(Platform::Aws),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                status: "running".into(),
+                current_release_id: fixture.release_id.clone(),
+                desired_release_id: None,
+                import_source: Some(ImportSourceKind::Terraform),
+                setup_metadata: None,
+                setup_target: "aws".into(),
+                setup_fingerprint: "test".into(),
+                setup_fingerprint_version: 1,
+                deployment_token: None,
+                management_config: None,
+                input_values: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+    let token = mint_token(
+        &fixture.token_store,
+        TokenType::Deployment,
+        "ax_dep_",
+        None,
+        Some(record.id.clone()),
+    )
+    .await;
+    // A fresh local database must hydrate the installed state before proposing
+    // an upgrade; an empty Pending report cannot replace the Running checkpoint.
+    let (status, hydrated) = request(
+        &fixture,
+        "/v1/sync",
+        &token,
+        serde_json::json!({
+            "deploymentId": record.id,
+            "session": "pull-upgrade",
+            "supportsExecutionClaims": true,
+            "maxSupportedDeploymentProtocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            "currentState": {"platform":"aws", "status":"pending", "protocolVersion":alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{hydrated:#}");
+    let mut installed = hydrated["currentState"].clone();
+    assert_eq!(installed["status"], "running");
+    assert_eq!(installed["protocolVersion"], 1);
+    installed["protocolVersion"] =
+        serde_json::json!(alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION);
+    for _ in 0..2 {
+        // The identical second report models a lost acknowledgement. Neither
+        // report has an execution claim or changes controller state.
+        let (status, response) = request(
+            &fixture,
+            "/v1/sync",
+            &token,
+            serde_json::json!({
+                "deploymentId": record.id,
+                "session": "pull-upgrade",
+                "supportsExecutionClaims": true,
+                "maxSupportedDeploymentProtocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                "currentState": installed
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{response:#}");
+        assert_eq!(
+            response["currentState"]["protocolVersion"],
+            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+        );
+        assert_eq!(response["currentState"]["status"], "running");
+        let stored = fixture
+            .deployment_store
+            .get_deployment(&subject, &record.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.deployment_protocol_version,
+            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+        );
+        assert_eq!(stored.status, "running");
+        assert_eq!(
+            serde_json::to_value(&stored.stack_state).unwrap(),
+            serde_json::to_value(&record.stack_state).unwrap()
+        );
+    }
 }

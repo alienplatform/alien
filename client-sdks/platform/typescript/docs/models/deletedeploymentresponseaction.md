@@ -5,11 +5,11 @@
 ```typescript
 import { DeleteDeploymentResponseAction } from "@alienplatform/platform-api/models";
 
-let value: DeleteDeploymentResponseAction = "forget";
+let value: DeleteDeploymentResponseAction = "detach";
 ```
 
 ## Values
 
 ```typescript
-"cleanup" | "detach" | "forget"
+"cleanup" | "retain" | "erase" | "detach" | "forget"
 ```

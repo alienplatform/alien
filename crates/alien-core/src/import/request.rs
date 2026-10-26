@@ -8,8 +8,12 @@ pub const MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
 /// Setup import payload format this binary writes.
 pub const CURRENT_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
 
+/// Managed Aurora credentials require readers that understand the JSON secret binding.
+pub const MANAGED_POSTGRES_SETUP_IMPORT_FORMAT_VERSION: u32 = 3;
+
 /// Latest setup payload this binary can read. GCP federation packages require v2.
-pub const MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 2;
+pub const MAX_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 =
+    MANAGED_POSTGRES_SETUP_IMPORT_FORMAT_VERSION;
 
 pub fn setup_import_format_version_for_platform(platform: Platform) -> u32 {
     if platform == Platform::Gcp {

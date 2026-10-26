@@ -42,3 +42,43 @@ Use `SingleControllerExecutor` for controller tests. Every controller needs: cre
 ## Change Detection for External State
 
 The executor triggers updates by comparing resource configs via `resource_eq()`. Values owned by management after setup should live in management config or controller state, not in Frozen resource config.
+
+## Azure storage lifecycle in direct setup
+
+The shared storage-account controller writes one aggregate policy during explicit
+**direct setup**. Imported Terraform accounts remain setup-owned; runtime
+container controllers only read the shared settings. Use one setup owner per
+account and serialize setup runs: Azure replaces the entire policy on PUT.
+
+Rerunning direct setup also reads Azure when declarations have not changed. It
+repairs drift through the normal saved update phases, preserves rule ownership,
+and fails on denied reads before attempting changes. A matching saved declaration
+revision alone does not establish that cloud settings are still correct.
+
+Direct setup creates new or changed expiry rules **disabled**, for both Live and
+Frozen containers. Older installations ignored some expiry declarations, so an
+upgrade must not suddenly expire existing objects. After setup finishes, open
+**Storage account → Lifecycle management** in Azure, review each generated
+`alien…` rule's exact container/prefix and age, and explicitly enable the rules
+whose existing data may expire. Unchanged rules preserve this choice on the next
+setup run. Changing the prefix or age creates a new disabled rule and disables
+the previous owned rule. Terraform installations instead use their generated
+lifecycle enable variables; do not run direct setup against that policy.
+
+Removing a declaration disables its owned rule. Disabled obsolete rules remain
+in the policy, including when the last declaration is removed; unrelated rules
+are preserved. Once Azure's propagation period has elapsed, an installer can
+remove those obsolete disabled rules in Azure. Setup refuses policies exceeding
+100 total rules or same-named rules without its saved ownership receipt; keep the
+original deployment checkpoints for recovery. Setup never adopts a rule merely
+because its name matches.
+
+A successful policy readback proves configuration, not that background expiry
+has stopped. Azure documents up to 24 hours for a policy change to take effect.
+Do not claim retained data is protected during that propagation window. See
+[Azure lifecycle policy behavior](https://learn.microsoft.com/en-us/azure/storage/blobs/lifecycle-management-policy-faq).
+
+Controller readers must support `ConfiguringLifecycle`, `VerifyingLifecycle`,
+`UpdatingLifecycle`, and `VerifyingUpdatedLifecycle` before setup writes these
+checkpoints. Old checkpoints default `lifecycleRuleNames` to empty and retain
+account identity; imported accounts have no direct-setup rule ownership.

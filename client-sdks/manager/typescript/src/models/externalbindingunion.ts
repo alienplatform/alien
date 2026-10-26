@@ -66,10 +66,10 @@ export type ExternalBindingAi = {
   type: TypeAi;
 };
 
-export const TypePostgres5 = {
+export const TypePostgres6 = {
   Postgres: "postgres",
 } as const;
-export type TypePostgres5 = ClosedEnum<typeof TypePostgres5>;
+export type TypePostgres6 = ClosedEnum<typeof TypePostgres6>;
 
 /**
  * Local embedded Postgres process.
@@ -105,13 +105,13 @@ export type ExternalBindingLocalPostgres = {
    */
   username: BindingValueStringUnion;
   service: "local-postgres";
-  type: TypePostgres5;
+  type: TypePostgres6;
 };
 
-export const TypePostgres4 = {
+export const TypePostgres5 = {
   Postgres: "postgres",
 } as const;
-export type TypePostgres4 = ClosedEnum<typeof TypePostgres4>;
+export type TypePostgres5 = ClosedEnum<typeof TypePostgres5>;
 
 /**
  * Operator-provided / BYO database (Kubernetes, on-prem, or cloud override).
@@ -163,13 +163,13 @@ export type ExternalBindingExternal = {
    */
   username: BindingValueStringUnion;
   service: "external";
-  type: TypePostgres4;
+  type: TypePostgres5;
 };
 
-export const TypePostgres3 = {
+export const TypePostgres4 = {
   Postgres: "postgres",
 } as const;
-export type TypePostgres3 = ClosedEnum<typeof TypePostgres3>;
+export type TypePostgres4 = ClosedEnum<typeof TypePostgres4>;
 
 /**
  * Azure Database for PostgreSQL — Flexible Server (host + secret URI).
@@ -211,13 +211,13 @@ export type ExternalBindingFlexibleServer = {
    */
   username: BindingValueStringUnion;
   service: "flexible-server";
-  type: TypePostgres3;
+  type: TypePostgres4;
 };
 
-export const TypePostgres2 = {
+export const TypePostgres3 = {
   Postgres: "postgres",
 } as const;
-export type TypePostgres2 = ClosedEnum<typeof TypePostgres2>;
+export type TypePostgres3 = ClosedEnum<typeof TypePostgres3>;
 
 /**
  * GCP Cloud SQL (host + secret name).
@@ -266,6 +266,57 @@ export type ExternalBindingCloudSQL = {
    */
   username: BindingValueStringUnion;
   service: "cloud-sql";
+  type: TypePostgres3;
+};
+
+export const TypePostgres2 = {
+  Postgres: "postgres",
+} as const;
+export type TypePostgres2 = ClosedEnum<typeof TypePostgres2>;
+
+/**
+ * Aurora-managed JSON credentials. Separate tag makes older readers reject
+ *
+ * @remarks
+ * this binding rather than treating the JSON document as a raw password.
+ */
+export type ExternalBindingAuroraManaged = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  clusterEndpoint: BindingValueStringUnion;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database: BindingValueStringUnion;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  passwordSecretArn: BindingValueStringUnion;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port: BindingValueU16Union;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username: BindingValueStringUnion;
+  service: "aurora-managed";
   type: TypePostgres2;
 };
 
@@ -322,6 +373,7 @@ export type ExternalBindingAurora = {
  */
 export type ExternalBindingUnion6 =
   | ExternalBindingAurora
+  | ExternalBindingAuroraManaged
   | ExternalBindingCloudSQL
   | ExternalBindingFlexibleServer
   | ExternalBindingExternal
@@ -1031,6 +1083,7 @@ export type ExternalBindingUnion =
   | ExternalBindingKubernetesSecret
   | ExternalBindingLocalVault
   | ExternalBindingAurora
+  | ExternalBindingAuroraManaged
   | ExternalBindingCloudSQL
   | ExternalBindingFlexibleServer
   | ExternalBindingExternal
@@ -1086,11 +1139,11 @@ export function externalBindingAiFromJSON(
 }
 
 /** @internal */
-export const TypePostgres5$inboundSchema: z.ZodEnum<typeof TypePostgres5> = z
-  .enum(TypePostgres5);
+export const TypePostgres6$inboundSchema: z.ZodEnum<typeof TypePostgres6> = z
+  .enum(TypePostgres6);
 /** @internal */
-export const TypePostgres5$outboundSchema: z.ZodEnum<typeof TypePostgres5> =
-  TypePostgres5$inboundSchema;
+export const TypePostgres6$outboundSchema: z.ZodEnum<typeof TypePostgres6> =
+  TypePostgres6$inboundSchema;
 
 /** @internal */
 export const ExternalBindingLocalPostgres$inboundSchema: z.ZodType<
@@ -1103,7 +1156,7 @@ export const ExternalBindingLocalPostgres$inboundSchema: z.ZodType<
   port: BindingValueU16Union$inboundSchema,
   username: BindingValueStringUnion$inboundSchema,
   service: z.literal("local-postgres"),
-  type: TypePostgres5$inboundSchema,
+  type: TypePostgres6$inboundSchema,
 });
 /** @internal */
 export type ExternalBindingLocalPostgres$Outbound = {
@@ -1127,7 +1180,7 @@ export const ExternalBindingLocalPostgres$outboundSchema: z.ZodType<
   port: BindingValueU16Union$outboundSchema,
   username: BindingValueStringUnion$outboundSchema,
   service: z.literal("local-postgres"),
-  type: TypePostgres5$outboundSchema,
+  type: TypePostgres6$outboundSchema,
 });
 
 export function externalBindingLocalPostgresToJSON(
@@ -1150,11 +1203,11 @@ export function externalBindingLocalPostgresFromJSON(
 }
 
 /** @internal */
-export const TypePostgres4$inboundSchema: z.ZodEnum<typeof TypePostgres4> = z
-  .enum(TypePostgres4);
+export const TypePostgres5$inboundSchema: z.ZodEnum<typeof TypePostgres5> = z
+  .enum(TypePostgres5);
 /** @internal */
-export const TypePostgres4$outboundSchema: z.ZodEnum<typeof TypePostgres4> =
-  TypePostgres4$inboundSchema;
+export const TypePostgres5$outboundSchema: z.ZodEnum<typeof TypePostgres5> =
+  TypePostgres5$inboundSchema;
 
 /** @internal */
 export const ExternalBindingExternal$inboundSchema: z.ZodType<
@@ -1168,7 +1221,7 @@ export const ExternalBindingExternal$inboundSchema: z.ZodType<
   sslMode: ExternalPostgresSslMode$inboundSchema.optional(),
   username: BindingValueStringUnion$inboundSchema,
   service: z.literal("external"),
-  type: TypePostgres4$inboundSchema,
+  type: TypePostgres5$inboundSchema,
 });
 /** @internal */
 export type ExternalBindingExternal$Outbound = {
@@ -1194,7 +1247,7 @@ export const ExternalBindingExternal$outboundSchema: z.ZodType<
   sslMode: ExternalPostgresSslMode$outboundSchema.optional(),
   username: BindingValueStringUnion$outboundSchema,
   service: z.literal("external"),
-  type: TypePostgres4$outboundSchema,
+  type: TypePostgres5$outboundSchema,
 });
 
 export function externalBindingExternalToJSON(
@@ -1215,11 +1268,11 @@ export function externalBindingExternalFromJSON(
 }
 
 /** @internal */
-export const TypePostgres3$inboundSchema: z.ZodEnum<typeof TypePostgres3> = z
-  .enum(TypePostgres3);
+export const TypePostgres4$inboundSchema: z.ZodEnum<typeof TypePostgres4> = z
+  .enum(TypePostgres4);
 /** @internal */
-export const TypePostgres3$outboundSchema: z.ZodEnum<typeof TypePostgres3> =
-  TypePostgres3$inboundSchema;
+export const TypePostgres4$outboundSchema: z.ZodEnum<typeof TypePostgres4> =
+  TypePostgres4$inboundSchema;
 
 /** @internal */
 export const ExternalBindingFlexibleServer$inboundSchema: z.ZodType<
@@ -1232,7 +1285,7 @@ export const ExternalBindingFlexibleServer$inboundSchema: z.ZodType<
   port: BindingValueU16Union$inboundSchema,
   username: BindingValueStringUnion$inboundSchema,
   service: z.literal("flexible-server"),
-  type: TypePostgres3$inboundSchema,
+  type: TypePostgres4$inboundSchema,
 });
 /** @internal */
 export type ExternalBindingFlexibleServer$Outbound = {
@@ -1256,7 +1309,7 @@ export const ExternalBindingFlexibleServer$outboundSchema: z.ZodType<
   port: BindingValueU16Union$outboundSchema,
   username: BindingValueStringUnion$outboundSchema,
   service: z.literal("flexible-server"),
-  type: TypePostgres3$outboundSchema,
+  type: TypePostgres4$outboundSchema,
 });
 
 export function externalBindingFlexibleServerToJSON(
@@ -1279,11 +1332,11 @@ export function externalBindingFlexibleServerFromJSON(
 }
 
 /** @internal */
-export const TypePostgres2$inboundSchema: z.ZodEnum<typeof TypePostgres2> = z
-  .enum(TypePostgres2);
+export const TypePostgres3$inboundSchema: z.ZodEnum<typeof TypePostgres3> = z
+  .enum(TypePostgres3);
 /** @internal */
-export const TypePostgres2$outboundSchema: z.ZodEnum<typeof TypePostgres2> =
-  TypePostgres2$inboundSchema;
+export const TypePostgres3$outboundSchema: z.ZodEnum<typeof TypePostgres3> =
+  TypePostgres3$inboundSchema;
 
 /** @internal */
 export const ExternalBindingCloudSQL$inboundSchema: z.ZodType<
@@ -1297,7 +1350,7 @@ export const ExternalBindingCloudSQL$inboundSchema: z.ZodType<
   serverCaCertificates: BindingValueVecStringUnion$inboundSchema,
   username: BindingValueStringUnion$inboundSchema,
   service: z.literal("cloud-sql"),
-  type: TypePostgres2$inboundSchema,
+  type: TypePostgres3$inboundSchema,
 });
 /** @internal */
 export type ExternalBindingCloudSQL$Outbound = {
@@ -1323,7 +1376,7 @@ export const ExternalBindingCloudSQL$outboundSchema: z.ZodType<
   serverCaCertificates: BindingValueVecStringUnion$outboundSchema,
   username: BindingValueStringUnion$outboundSchema,
   service: z.literal("cloud-sql"),
-  type: TypePostgres2$outboundSchema,
+  type: TypePostgres3$outboundSchema,
 });
 
 export function externalBindingCloudSQLToJSON(
@@ -1340,6 +1393,70 @@ export function externalBindingCloudSQLFromJSON(
     jsonString,
     (x) => ExternalBindingCloudSQL$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ExternalBindingCloudSQL' from JSON`,
+  );
+}
+
+/** @internal */
+export const TypePostgres2$inboundSchema: z.ZodEnum<typeof TypePostgres2> = z
+  .enum(TypePostgres2);
+/** @internal */
+export const TypePostgres2$outboundSchema: z.ZodEnum<typeof TypePostgres2> =
+  TypePostgres2$inboundSchema;
+
+/** @internal */
+export const ExternalBindingAuroraManaged$inboundSchema: z.ZodType<
+  ExternalBindingAuroraManaged,
+  unknown
+> = z.object({
+  clusterEndpoint: BindingValueStringUnion$inboundSchema,
+  database: BindingValueStringUnion$inboundSchema,
+  passwordSecretArn: BindingValueStringUnion$inboundSchema,
+  port: BindingValueU16Union$inboundSchema,
+  username: BindingValueStringUnion$inboundSchema,
+  service: z.literal("aurora-managed"),
+  type: TypePostgres2$inboundSchema,
+});
+/** @internal */
+export type ExternalBindingAuroraManaged$Outbound = {
+  clusterEndpoint: BindingValueStringUnion$Outbound;
+  database: BindingValueStringUnion$Outbound;
+  passwordSecretArn: BindingValueStringUnion$Outbound;
+  port: BindingValueU16Union$Outbound;
+  username: BindingValueStringUnion$Outbound;
+  service: "aurora-managed";
+  type: string;
+};
+
+/** @internal */
+export const ExternalBindingAuroraManaged$outboundSchema: z.ZodType<
+  ExternalBindingAuroraManaged$Outbound,
+  ExternalBindingAuroraManaged
+> = z.object({
+  clusterEndpoint: BindingValueStringUnion$outboundSchema,
+  database: BindingValueStringUnion$outboundSchema,
+  passwordSecretArn: BindingValueStringUnion$outboundSchema,
+  port: BindingValueU16Union$outboundSchema,
+  username: BindingValueStringUnion$outboundSchema,
+  service: z.literal("aurora-managed"),
+  type: TypePostgres2$outboundSchema,
+});
+
+export function externalBindingAuroraManagedToJSON(
+  externalBindingAuroraManaged: ExternalBindingAuroraManaged,
+): string {
+  return JSON.stringify(
+    ExternalBindingAuroraManaged$outboundSchema.parse(
+      externalBindingAuroraManaged,
+    ),
+  );
+}
+export function externalBindingAuroraManagedFromJSON(
+  jsonString: string,
+): SafeParseResult<ExternalBindingAuroraManaged, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExternalBindingAuroraManaged$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExternalBindingAuroraManaged' from JSON`,
   );
 }
 
@@ -1411,6 +1528,7 @@ export const ExternalBindingUnion6$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => ExternalBindingAurora$inboundSchema),
+  z.lazy(() => ExternalBindingAuroraManaged$inboundSchema),
   z.lazy(() => ExternalBindingCloudSQL$inboundSchema),
   z.lazy(() => ExternalBindingFlexibleServer$inboundSchema),
   z.lazy(() => ExternalBindingExternal$inboundSchema),
@@ -1419,6 +1537,7 @@ export const ExternalBindingUnion6$inboundSchema: z.ZodType<
 /** @internal */
 export type ExternalBindingUnion6$Outbound =
   | ExternalBindingAurora$Outbound
+  | ExternalBindingAuroraManaged$Outbound
   | ExternalBindingCloudSQL$Outbound
   | ExternalBindingFlexibleServer$Outbound
   | ExternalBindingExternal$Outbound
@@ -1430,6 +1549,7 @@ export const ExternalBindingUnion6$outboundSchema: z.ZodType<
   ExternalBindingUnion6
 > = z.union([
   z.lazy(() => ExternalBindingAurora$outboundSchema),
+  z.lazy(() => ExternalBindingAuroraManaged$outboundSchema),
   z.lazy(() => ExternalBindingCloudSQL$outboundSchema),
   z.lazy(() => ExternalBindingFlexibleServer$outboundSchema),
   z.lazy(() => ExternalBindingExternal$outboundSchema),
@@ -3073,6 +3193,7 @@ export const ExternalBindingUnion$inboundSchema: z.ZodType<
   ]),
   z.union([
     z.lazy(() => ExternalBindingAurora$inboundSchema),
+    z.lazy(() => ExternalBindingAuroraManaged$inboundSchema),
     z.lazy(() => ExternalBindingCloudSQL$inboundSchema),
     z.lazy(() => ExternalBindingFlexibleServer$inboundSchema),
     z.lazy(() => ExternalBindingExternal$inboundSchema),
@@ -3107,6 +3228,7 @@ export type ExternalBindingUnion$Outbound =
   | ExternalBindingKubernetesSecret$Outbound
   | ExternalBindingLocalVault$Outbound
   | ExternalBindingAurora$Outbound
+  | ExternalBindingAuroraManaged$Outbound
   | ExternalBindingCloudSQL$Outbound
   | ExternalBindingFlexibleServer$Outbound
   | ExternalBindingExternal$Outbound
@@ -3154,6 +3276,7 @@ export const ExternalBindingUnion$outboundSchema: z.ZodType<
   ]),
   z.union([
     z.lazy(() => ExternalBindingAurora$outboundSchema),
+    z.lazy(() => ExternalBindingAuroraManaged$outboundSchema),
     z.lazy(() => ExternalBindingCloudSQL$outboundSchema),
     z.lazy(() => ExternalBindingFlexibleServer$outboundSchema),
     z.lazy(() => ExternalBindingExternal$outboundSchema),

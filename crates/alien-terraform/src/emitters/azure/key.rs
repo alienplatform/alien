@@ -160,6 +160,10 @@ impl TfEmitter for AzureKeyEmitter {
 
         emit_remote_access(ctx, label, &mut fragment)?;
         emit_management_access(ctx, label, &mut fragment)?;
+        fragment.retain_resources(|kind, _| {
+            matches!(kind, "azurerm_key_vault" | "azurerm_key_vault_key")
+        });
+        fragment.retain_state(|kind, _| kind == "random_id");
         Ok(fragment)
     }
 

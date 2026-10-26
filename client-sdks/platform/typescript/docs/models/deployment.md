@@ -8,7 +8,7 @@ import { Deployment } from "@alienplatform/platform-api/models";
 let value: Deployment = {
   id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   name: "acme-prod",
-  status: "refresh-failed",
+  status: "update-pending",
   projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
   platform: "aws",
   deploymentProtocolVersion: 447915,

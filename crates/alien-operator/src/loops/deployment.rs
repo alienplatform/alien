@@ -68,6 +68,18 @@ impl DeploymentLoopTransport for OperatorTransport {
             .get_deployment_state()
             .await
             .map_err(|e| e.into_generic())?;
+        if self.operator_config.sync.is_some()
+            && previous
+                .as_ref()
+                .is_some_and(|previous| previous.protocol_version < state.protocol_version)
+        {
+            self.db.request_sync();
+            return Err(AlienError::new(ErrorData::SyncFailed {
+                message: "Waiting for the manager to acknowledge the deployment protocol upgrade"
+                    .to_string(),
+            })
+            .into_generic());
+        }
         let reports_changed = previous
             .as_ref()
             .and_then(|state| state.runtime_metadata.as_ref())

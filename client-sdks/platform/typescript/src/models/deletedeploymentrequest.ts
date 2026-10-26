@@ -7,6 +7,8 @@ import { ClosedEnum } from "../types/enums.js";
 
 export const DeleteDeploymentRequestAction = {
   Cleanup: "cleanup",
+  Retain: "retain",
+  Erase: "erase",
   Detach: "detach",
   Forget: "forget",
 } as const;

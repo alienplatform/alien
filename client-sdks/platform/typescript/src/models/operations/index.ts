@@ -5,6 +5,7 @@
 export * from "./acceptawskeysetup.js";
 export * from "./acceptremoteoperatorimage.js";
 export * from "./acceptremoteoperatorpermissions.js";
+export * from "./acceptterraformkeysetup.js";
 export * from "./acceptworkspaceinvitation.js";
 export * from "./addworkspacemember.js";
 export * from "./applycontainerregistrymanagersnapshot.js";
@@ -139,6 +140,7 @@ export * from "./getrelease.js";
 export * from "./getremoteoperatorprojectsummary.js";
 export * from "./getresourcedeploymentdetailresponse.js";
 export * from "./getsetupregistrationoperation.js";
+export * from "./getterraformkeysetupoperation.js";
 export * from "./getwebhookendpoint.js";
 export * from "./getwebhooksigningsecret.js";
 export * from "./getworkspace.js";

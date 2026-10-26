@@ -340,6 +340,10 @@ pub enum DeploymentsCmd {
         )]
         force: Option<String>,
 
+        /// Permanently erase durable data instead of retaining it
+        #[arg(long, conflicts_with = "force")]
+        erase_data: bool,
+
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
@@ -655,10 +659,15 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             )
             .await
         }
-        DeploymentsCmd::Delete { id, force, yes } => {
+        DeploymentsCmd::Delete {
+            id,
+            force,
+            yes,
+            erase_data,
+        } => {
             let request = match force {
                 Some(confirmed_name) => DeleteRequest::Force { confirmed_name },
-                None => DeleteRequest::Cleanup { yes },
+                None => DeleteRequest::Cleanup { yes, erase_data },
             };
             #[cfg(feature = "platform")]
             if ctx.is_platform() {
@@ -1719,7 +1728,7 @@ fn observed_rollout_state(resource: &ObservedRolloutResource) -> &'static str {
 #[derive(Debug)]
 enum DeleteRequest {
     /// Clean up the deployment's resources, then its record.
-    Cleanup { yes: bool },
+    Cleanup { yes: bool, erase_data: bool },
     /// Drop the record only. `confirmed_name` is what the user typed after `--force`; it must
     /// equal the deployment's name before anything is sent.
     Force { confirmed_name: String },
@@ -1743,7 +1752,7 @@ async fn delete_deployment_task(
     let kept_secrets = kept_deployer_secrets(runtime_metadata.as_ref());
 
     let action = match request {
-        DeleteRequest::Cleanup { yes } => {
+        DeleteRequest::Cleanup { yes, erase_data } => {
             let confirmation_mode = delete_confirmation_mode(yes)?;
             println!(
                 "{}",
@@ -1752,12 +1761,23 @@ async fn delete_deployment_task(
             println!("{} {}", dim_label("ID"), deployment.id);
             println!("{} {}", dim_label("Status"), deployment.status);
             if matches!(confirmation_mode, ConfirmationMode::Prompt)
-                && !prompt_confirm("Are you sure you want to delete this deployment?", false)?
+                && !prompt_confirm(
+                    if erase_data {
+                        "Permanently erase this deployment and its durable data?"
+                    } else {
+                        "Stop this deployment and retain its durable data?"
+                    },
+                    false,
+                )?
             {
                 println!("{}", dim_label("Deletion cancelled."));
                 return Ok(());
             }
-            DeleteDeploymentAction::Cleanup
+            if erase_data {
+                DeleteDeploymentAction::Erase
+            } else {
+                DeleteDeploymentAction::Retain
+            }
         }
         DeleteRequest::Force { confirmed_name } => {
             if confirmed_name != deployment.name {
@@ -1805,7 +1825,9 @@ async fn delete_deployment_task(
     // CloudFormation stack) still has to be deleted, which a fixed message would hide.
     println!("{}", success_line(&format!("{}.", accepted.message)));
     match action {
-        DeleteDeploymentAction::Cleanup => {
+        DeleteDeploymentAction::Cleanup
+        | DeleteDeploymentAction::Retain
+        | DeleteDeploymentAction::Erase => {
             print_kept_deployer_secrets(&kept_secrets);
             println!(
                 "{} {}",
@@ -3678,6 +3700,15 @@ mod tests {
         alien_manager_api::Client,
         Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
     ) {
+        fake_delete_manager_version(false).await
+    }
+
+    async fn fake_delete_manager_version(
+        legacy: bool,
+    ) -> (
+        alien_manager_api::Client,
+        Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) {
         type Bodies = Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
 
         async fn read_deployment() -> Response {
@@ -3685,11 +3716,16 @@ mod tests {
         }
 
         async fn delete_deployment(
-            State(bodies): State<Bodies>,
+            State((bodies, legacy)): State<(Bodies, bool)>,
             Json(body): Json<serde_json::Value>,
         ) -> Response {
             let action = body["action"].clone();
             bodies.lock().expect("bodies lock").push(body);
+            // Released managers accept only cleanup/detach/forget. Unknown enum
+            // actions fail before their destructive store method is invoked.
+            if legacy && !matches!(action.as_str(), Some("cleanup" | "detach" | "forget")) {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "unknown action").into_response();
+            }
             (
                 StatusCode::ACCEPTED,
                 Json(serde_json::json!({
@@ -3708,7 +3744,7 @@ mod tests {
                 "/v1/deployments/dep_1/delete",
                 axum::routing::post(delete_deployment),
             )
-            .with_state(bodies.clone());
+            .with_state((bodies.clone(), legacy));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind loopback");
@@ -3727,7 +3763,7 @@ mod tests {
         args: &[&str],
     ) -> std::result::Result<(String, Option<String>, bool), clap::Error> {
         let parsed = DeploymentsArgs::try_parse_from(["deployments", "delete"].iter().chain(args))?;
-        let DeploymentsCmd::Delete { id, force, yes } = parsed.cmd else {
+        let DeploymentsCmd::Delete { id, force, yes, .. } = parsed.cmd else {
             panic!("expected the delete subcommand");
         };
         Ok((id, force, yes))
@@ -3786,17 +3822,64 @@ mod tests {
         )
         .await
         .expect("force should be accepted");
-        delete_deployment_task(&client, "dep_1", DeleteRequest::Cleanup { yes: true })
-            .await
-            .expect("cleanup should be accepted");
+        delete_deployment_task(
+            &client,
+            "dep_1",
+            DeleteRequest::Cleanup {
+                yes: true,
+                erase_data: false,
+            },
+        )
+        .await
+        .expect("cleanup should be accepted");
 
         assert_eq!(
             *bodies.lock().expect("bodies lock"),
             vec![
                 serde_json::json!({ "action": "forget" }),
-                serde_json::json!({ "action": "cleanup" }),
+                serde_json::json!({ "action": "retain" }),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn old_manager_refuses_retain_without_cleanup_fallback() {
+        let (client, bodies) = fake_delete_manager_version(true).await;
+        delete_deployment_task(
+            &client,
+            "dep_1",
+            DeleteRequest::Cleanup {
+                yes: true,
+                erase_data: false,
+            },
+        )
+        .await
+        .expect_err("old manager must reject explicit retain");
+        assert_eq!(
+            *bodies.lock().unwrap(),
+            vec![serde_json::json!({"action":"retain"})]
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_erase_sends_distinct_action() {
+        let (client, bodies) = fake_delete_manager().await;
+        delete_deployment_task(
+            &client,
+            "dep_1",
+            DeleteRequest::Cleanup {
+                yes: true,
+                erase_data: true,
+            },
+        )
+        .await
+        .expect("explicit erase accepted");
+        assert_eq!(
+            *bodies.lock().unwrap(),
+            vec![serde_json::json!({"action":"erase"})]
+        );
+        parse_delete(&["dep_1", "--force", "example", "--erase-data"])
+            .expect_err("forget and erase cannot be combined");
     }
 
     #[test]

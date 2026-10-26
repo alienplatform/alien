@@ -14,6 +14,8 @@ import {
   DeploymentDetailResponseBasePlatform$inboundSchema,
   DeploymentDetailResponseCredentialRetryUnion,
   DeploymentDetailResponseCredentialRetryUnion$inboundSchema,
+  DeploymentDetailResponseDeletionPolicy,
+  DeploymentDetailResponseDeletionPolicy$inboundSchema,
   DeploymentDetailResponseDeployerSecret,
   DeploymentDetailResponseDeployerSecret$inboundSchema,
   DeploymentDetailResponseEnvironmentInfoUnion,
@@ -28,17 +30,17 @@ import {
   DeploymentDetailResponseStackState$inboundSchema,
   DeploymentDetailResponseStatus,
   DeploymentDetailResponseStatus$inboundSchema,
-} from "./deploymentdetailresponsependingpreparedstackdefaultstringlist.js";
+} from "./deploymentdetailresponsependingpreparedstacktypestringlist.js";
 import {
   DeploymentDetailResponsePendingPreparedStackUnion,
   DeploymentDetailResponsePendingPreparedStackUnion$inboundSchema,
-  DeploymentDetailResponsePreparedStackApprovalPlugins,
-  DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema,
   DeploymentDetailResponsePreparedStackCustom,
   DeploymentDetailResponsePreparedStackCustom$inboundSchema,
   DeploymentDetailResponsePreparedStackInput,
   DeploymentDetailResponsePreparedStackInput$inboundSchema,
-} from "./deploymentdetailresponsepreparedstackapprovalplugins.js";
+  DeploymentDetailResponsePreparedStackPluginsDecision,
+  DeploymentDetailResponsePreparedStackPluginsDecision$inboundSchema,
+} from "./deploymentdetailresponsepreparedstackpluginsdecision.js";
 import {
   DeploymentGroupInfo,
   DeploymentGroupInfo$inboundSchema,
@@ -84,6 +86,20 @@ import {
   ReportedOperation,
   ReportedOperation$inboundSchema,
 } from "./reportedoperation.js";
+
+export type DeploymentDetailResponsePreparedStackApprovalPlugins = {
+  /**
+   * Whether matching operations run without approval.
+   */
+  decision: DeploymentDetailResponsePreparedStackPluginsDecision;
+  /**
+   * Highest risk tier (`read-only`, `mutating`, `destructive`) a wildcard
+   *
+   * @remarks
+   * access request for these operations may cover.
+   */
+  maxRisk?: string | null | undefined;
+};
 
 /**
  * Whether matching operations run without approval.
@@ -1675,6 +1691,13 @@ export type DeploymentDetailResponseRuntimeMetadata = {
     | null
     | undefined;
   /**
+   * Explicit disposition of durable data when deleting a deployment.
+   *
+   * @remarks
+   * Missing values from older checkpoints always preserve data.
+   */
+  deletionPolicy?: DeploymentDetailResponseDeletionPolicy | undefined;
+  /**
    * Whether each vault-native deployer secret is in the customer's secret
    *
    * @remarks
@@ -1756,6 +1779,29 @@ export type DeploymentDetailResponseRuntimeMetadata = {
    */
   registryAccessGranted?: boolean | undefined;
   /**
+   * Start of the bounded wait for retained data's expiry controls to disable.
+   *
+   * @remarks
+   * Cleared on confirmation, explicit retry, or returning to normal execution.
+   */
+  retainedDataProtectionStartedAt?: Date | null | undefined;
+  /**
+   * UTC API-confirmation time for the matching data protection digest.
+   *
+   * @remarks
+   * Provider propagation must be qualified separately before final retention.
+   */
+  retainedStorageProtectionConfirmedAt?: Date | null | undefined;
+  /**
+   * Digest of the installed data inventory whose runtime public-access and
+   *
+   * @remarks
+   * expiry configuration was protected before cleanup. The serialized field
+   * name is retained for compatibility. This is not a
+   * receipt for effective expiry propagation or privileged setup teardown.
+   */
+  retainedStorageProtectionHash?: string | null | undefined;
+  /**
    * What a direct setup created for resources it does not own, keyed by resource id. Setup
    *
    * @remarks
@@ -1769,6 +1815,14 @@ export type DeploymentDetailResponseRuntimeMetadata = {
     | string
     | null
     | undefined;
+  /**
+   * Credential revocation completed before resource teardown. A delete retry
+   *
+   * @remarks
+   * can use this receipt after the vault or its binding is gone. Secret sync
+   * clears it before a deployment can write runtime credentials again.
+   */
+  vaultCredentialsRevoked?: boolean | undefined;
 };
 
 /**
@@ -2101,6 +2155,31 @@ export type DeploymentDetailResponse = {
 };
 
 /** @internal */
+export const DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackApprovalPlugins, unknown> = z
+    .object({
+      decision:
+        DeploymentDetailResponsePreparedStackPluginsDecision$inboundSchema,
+      maxRisk: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackApprovalPluginsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackApprovalPlugins,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackApprovalPlugins' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponsePreparedStackApprovalPluginsEnum$inboundSchema:
   z.ZodEnum<typeof DeploymentDetailResponsePreparedStackApprovalPluginsEnum> = z
     .enum(DeploymentDetailResponsePreparedStackApprovalPluginsEnum);
@@ -2111,7 +2190,9 @@ export const DeploymentDetailResponsePreparedStackPluginsApprovalUnion$inboundSc
     DeploymentDetailResponsePreparedStackPluginsApprovalUnion,
     unknown
   > = z.union([
-    DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema,
+    z.lazy(() =>
+      DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema
+    ),
     DeploymentDetailResponsePreparedStackApprovalPluginsEnum$inboundSchema,
   ]);
 
@@ -2238,7 +2319,9 @@ export const DeploymentDetailResponsePreparedStackPlugins$inboundSchema:
     approval: z.record(
       z.string(),
       z.union([
-        DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema,
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackApprovalPlugins$inboundSchema
+        ),
         DeploymentDetailResponsePreparedStackApprovalPluginsEnum$inboundSchema,
       ]),
     ).optional(),
@@ -4655,6 +4738,8 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
   credentialRetry: z.nullable(
     DeploymentDetailResponseCredentialRetryUnion$inboundSchema,
   ).optional(),
+  deletionPolicy: DeploymentDetailResponseDeletionPolicy$inboundSchema
+    .optional(),
   deployerSecrets: z.array(DeploymentDetailResponseDeployerSecret$inboundSchema)
     .optional(),
   directSetupRevision: z.nullable(z.string()).optional(),
@@ -4680,6 +4765,13 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
+  retainedDataProtectionStartedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  retainedStorageProtectionConfirmedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  retainedStorageProtectionHash: z.nullable(z.string()).optional(),
   setupScaffolding: z.record(
     z.string(),
     z.lazy(() => DeploymentDetailResponseSetupScaffolding$inboundSchema),
@@ -4692,6 +4784,7 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
       z.string(),
     ]),
   ).optional(),
+  vaultCredentialsRevoked: z.boolean().optional(),
 });
 
 export function deploymentDetailResponseRuntimeMetadataFromJSON(

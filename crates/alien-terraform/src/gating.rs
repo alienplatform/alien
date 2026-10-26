@@ -109,6 +109,17 @@ pub(crate) fn gate_fragment(
         enabled::gate(block, Some(input_id))?;
         gated.addresses.insert((provider_type, label));
     }
+    for block in &mut fragment.ephemeral_blocks {
+        let (Some(provider), Some(label)) = (block.labels.first(), block.labels.get(1)) else {
+            continue;
+        };
+        let address = (
+            format!("ephemeral.{}", provider.as_str()),
+            label.as_str().to_string(),
+        );
+        enabled::gate(block, Some(input_id))?;
+        gated.addresses.insert(address);
+    }
     Ok(())
 }
 
@@ -189,6 +200,7 @@ pub(crate) fn rewrite_fragment_references(fragment: &mut TfFragment, gated: &Gat
         .resource_blocks
         .iter_mut()
         .chain(fragment.data_blocks.iter_mut())
+        .chain(fragment.ephemeral_blocks.iter_mut())
     {
         rewrite_block(block, gated);
     }
@@ -209,6 +221,22 @@ pub(crate) fn rewrite_expression(expression: &mut Expression, gated: &GatedAddre
             let Expression::Variable(root) = &traversal.expr else {
                 return;
             };
+            if root.as_str() == "ephemeral" {
+                if let [
+                    TraversalOperator::GetAttr(provider),
+                    TraversalOperator::GetAttr(label),
+                    TraversalOperator::GetAttr(_),
+                    ..,
+                ] = traversal.operators.as_slice()
+                {
+                    if gated.contains(&format!("ephemeral.{provider}"), label.as_str()) {
+                        traversal
+                            .operators
+                            .insert(2, TraversalOperator::Index(Expression::Number(0.into())));
+                    }
+                }
+                return;
+            }
             let [TraversalOperator::GetAttr(label), following, ..] = traversal.operators.as_slice()
             else {
                 // A bare `type.label` whole-resource reference: valid on a

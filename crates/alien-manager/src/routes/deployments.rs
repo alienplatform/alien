@@ -179,7 +179,10 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListDeploymentsQuery
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum DeleteDeploymentAction {
+    /// Legacy ambiguous action; rejected before scheduling deletion.
     Cleanup,
+    Retain,
+    Erase,
     Detach,
     Forget,
 }
@@ -209,6 +212,9 @@ fn cleanup_delete_response(
     cleanup_required: bool,
 ) -> DeleteDeploymentResponse {
     let message = match deployment_status {
+        "retention-required" | "retained" => {
+            "Durable data retained; complete access revocation with the supported setup workflow"
+        }
         "teardown-required" => "Runtime cleanup complete; setup teardown required",
         "teardown-failed" => "Setup teardown failed; retry setup teardown with setup credentials",
         _ if cleanup_required => "Deployment deletion accepted",
@@ -327,7 +333,18 @@ fn record_to_response(
         id: r.id.clone(),
         name: r.name.clone(),
         platform: r.platform.clone(),
-        status: r.status.clone(),
+        // Cached clients must not offer raw setup destroy for legacy retained data.
+        status: if matches!(r.status.as_str(), "teardown-required" | "teardown-failed")
+            && r.runtime_metadata
+                .as_ref()
+                .map(|m| m.deletion_policy)
+                .unwrap_or_default()
+                != alien_core::DeletionPolicy::Erase
+        {
+            "retention-required".to_string()
+        } else {
+            r.status.clone()
+        },
         deployment_group_id: r.deployment_group_id.clone(),
         deployment_protocol_version: r.deployment_protocol_version,
         project_id: "prj_standalone000000000000000000".to_string(),
@@ -1098,6 +1115,7 @@ async fn get_deployment_info(
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Not found"),
+        (status = 409, description = "Setup cleanup lease is active; retry deletion after cleanup finishes or the lease expires"),
     )
 ))]
 async fn delete_deployment(
@@ -1122,19 +1140,36 @@ async fn delete_deployment(
 
     let response = match &req.action {
         DeleteDeploymentAction::Cleanup => {
+            return ErrorData::bad_request(
+                "Update your client and choose retain or erase explicitly",
+            )
+            .into_response();
+        }
+        DeleteDeploymentAction::Retain | DeleteDeploymentAction::Erase => {
+            let policy = if req.action == DeleteDeploymentAction::Erase {
+                alien_core::DeletionPolicy::Erase
+            } else {
+                alien_core::DeletionPolicy::Retain
+            };
             if let Err(e) = state
                 .deployment_store
-                .set_delete_pending(&subject, &id)
+                .set_delete_pending_with_policy(&subject, &id, policy)
                 .await
             {
                 return e.into_response();
             }
-            let cleanup_required = match state.deployment_store.get_deployment(&subject, &id).await
-            {
-                Ok(deployment) => deployment.is_some(),
+            let current = match state.deployment_store.get_deployment(&subject, &id).await {
+                Ok(deployment) => deployment,
                 Err(error) => return error.into_response(),
             };
-            cleanup_delete_response(req.action, &deployment.status, cleanup_required)
+            cleanup_delete_response(
+                req.action,
+                current
+                    .as_ref()
+                    .map(|d| d.status.as_str())
+                    .unwrap_or("deleted"),
+                current.is_some(),
+            )
         }
         DeleteDeploymentAction::Detach | DeleteDeploymentAction::Forget => {
             if let Err(e) = state
@@ -1592,6 +1627,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn legacy_teardown_response_requires_retention_upgrade() {
+        let mut record = deployment_record();
+        record.status = "teardown-required".to_string();
+        record.runtime_metadata = None;
+        assert_eq!(
+            record_to_response(&record, None).status,
+            "retention-required"
+        );
+        record.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            deletion_policy: alien_core::DeletionPolicy::Erase,
+            ..Default::default()
+        });
+        assert_eq!(
+            record_to_response(&record, None).status,
+            "teardown-required"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_cleanup_cannot_schedule_deletion() {
+        let mut store = MockDeploymentStore::new();
+        store
+            .expect_get_deployment()
+            .times(1)
+            .return_once(|_, _| Ok(Some(deployment_record())));
+        // No delete expectation: reaching any mutation fails the test.
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/deployments/deployment-1/delete")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"action":"cleanup"}"#))
+            .unwrap();
+        let (status, body) = send(store, request).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.to_string().contains("choose retain or erase"));
+    }
+
     async fn cleanup_route_response(deployment_remains: bool) -> (StatusCode, serde_json::Value) {
         let deployment = deployment_record();
         let mut deployment_store = MockDeploymentStore::new();
@@ -1604,10 +1678,13 @@ mod tests {
             .in_sequence(&mut sequence)
             .return_once(move |_, _| Ok(Some(initial)));
         deployment_store
-            .expect_set_delete_pending()
+            .expect_set_delete_pending_with_policy()
             .times(1)
             .in_sequence(&mut sequence)
-            .return_once(|_, _| Ok(()));
+            .return_once(|_, _, policy| {
+                assert_eq!(policy, alien_core::DeletionPolicy::Retain);
+                Ok(())
+            });
         deployment_store
             .expect_get_deployment()
             .times(1)
@@ -1619,7 +1696,7 @@ mod tests {
             .uri("/v1/deployments/deployment-1/delete")
             .header(http::header::AUTHORIZATION, "Bearer test-token")
             .header(http::header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"action":"cleanup"}"#))
+            .body(Body::from(r#"{"action":"retain"}"#))
             .expect("request should build");
         send(deployment_store, request).await
     }
@@ -2157,7 +2234,7 @@ mod tests {
         let (status, json) = cleanup_route_response(true).await;
 
         assert_eq!(status, StatusCode::ACCEPTED);
-        assert_eq!(json["action"], "cleanup");
+        assert_eq!(json["action"], "retain");
         assert_eq!(json["cleanupRequired"], true);
         assert_eq!(json["message"], "Deployment deletion accepted");
     }
@@ -2167,7 +2244,7 @@ mod tests {
         let (status, json) = cleanup_route_response(false).await;
 
         assert_eq!(status, StatusCode::ACCEPTED);
-        assert_eq!(json["action"], "cleanup");
+        assert_eq!(json["action"], "retain");
         assert_eq!(json["cleanupRequired"], false);
         assert_eq!(json["message"], "Deployment deleted");
     }

@@ -1,9 +1,12 @@
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
+use crate::{LifecycleRule, ResourceLifecycle, Stack, Storage};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::any::Any;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 /// Represents an Azure Storage Account for blob, file, table, and queue storage.
@@ -21,6 +24,18 @@ pub struct AzureStorageAccount {
 impl AzureStorageAccount {
     /// The resource type identifier for Azure Storage Accounts
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("azure_storage_account");
+
+    /// Fingerprint shared settings derived from all container declarations.
+    /// Setup authorization must include Live contributors to this Frozen parent.
+    /// An empty projection preserves digests from installations without settings.
+    pub fn setup_settings_digest(stack: &Stack) -> Option<String> {
+        let settings = azure_storage_settings(stack);
+        (settings != AzureStorageSettings::default()).then(|| {
+            let encoded = serde_json::to_vec(&settings)
+                .expect("Azure storage settings contain only serializable values");
+            format!("{:x}", Sha256::digest(encoded))
+        })
+    }
 
     /// Returns the storage account's unique identifier.
     pub fn id(&self) -> &str {
@@ -116,13 +131,56 @@ impl ResourceDefinition for AzureStorageAccount {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Settings written by setup to the shared account, including Live contributors.
+/// Compare the derived settings so ordinary Live updates cannot bypass setup.
+#[derive(Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AzureStorageSettings {
+    public: BTreeSet<Option<String>>,
+    versioning: BTreeSet<Option<String>>,
+    cors: BTreeMap<String, BTreeSet<Option<String>>>,
+    expiry: BTreeMap<String, (ResourceLifecycle, Option<String>, Vec<LifecycleRule>)>,
+}
 
-    #[test]
-    fn test_azure_storage_account_creation() {
-        let storage_account = AzureStorageAccount::new("my-storage".to_string()).build();
-        assert_eq!(storage_account.id, "my-storage");
+fn azure_storage_settings(stack: &Stack) -> AzureStorageSettings {
+    let mut settings = AzureStorageSettings::default();
+    for (id, entry) in stack.resources() {
+        let Some(storage) = entry.config.downcast_ref::<Storage>() else {
+            continue;
+        };
+        if storage.public_read {
+            settings.public.insert(entry.enabled_when.clone());
+        }
+        if storage.versioning {
+            settings.versioning.insert(entry.enabled_when.clone());
+        }
+        for origin in &storage.cors_allowed_origins {
+            settings
+                .cors
+                .entry(origin.clone())
+                .or_default()
+                .insert(entry.enabled_when.clone());
+        }
+        if !storage.lifecycle_rules.is_empty() {
+            settings.expiry.insert(
+                id.clone(),
+                (
+                    entry.lifecycle,
+                    entry.enabled_when.clone(),
+                    storage.lifecycle_rules.clone(),
+                ),
+            );
+        }
     }
+    // One unconditional contributor makes conditional contributors irrelevant.
+    for gates in [&mut settings.public, &mut settings.versioning]
+        .into_iter()
+        .chain(settings.cors.values_mut())
+    {
+        if gates.contains(&None) {
+            gates.clear();
+            gates.insert(None);
+        }
+    }
+    settings
 }

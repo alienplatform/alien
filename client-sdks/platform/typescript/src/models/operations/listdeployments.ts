@@ -44,6 +44,8 @@ export const ListDeploymentsStatus = {
   DeleteFailed: "delete-failed",
   TeardownRequired: "teardown-required",
   TeardownFailed: "teardown-failed",
+  RetentionRequired: "retention-required",
+  Retained: "retained",
   Deleted: "deleted",
   Error: "error",
 } as const;

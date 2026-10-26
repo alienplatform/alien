@@ -101,6 +101,7 @@ impl TfEmitter for AzureArtifactRegistryEmitter {
             ));
         }
 
+        fragment.retain_resources(|kind, _| kind == "azurerm_container_registry");
         Ok(fragment)
     }
 

@@ -281,7 +281,7 @@ pub enum SetupDeleteAcquireOutcome {
     Acquired {
         execution_claim: Option<ExecutionClaim>,
     },
-    /// Runtime cleanup already deleted the deployment record.
+    /// No setup cleanup remains: the record was removed or safely retained.
     AlreadyDeleted,
 }
 
@@ -517,6 +517,7 @@ pub async fn acquire_setup_delete_deployment(
     deployment_model: DeploymentModel,
 ) -> Result<SetupDeleteAcquireOutcome, AlienError> {
     let statuses = vec![
+        "retention-required".to_string(),
         "teardown-required".to_string(),
         "teardown-failed".to_string(),
     ];
@@ -557,6 +558,11 @@ pub async fn acquire_setup_delete_deployment(
                         .await
                         .into_sdk_error()
                         .await;
+                    if lookup.as_ref().is_ok_and(|response| {
+                        matches!(response.status.as_str(), "retained" | "deleted")
+                    }) {
+                        return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted);
+                    }
                     if let Err(lookup_error) = lookup {
                         if is_deleted_deployment_lookup(&lookup_error) {
                             return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted);
@@ -605,8 +611,8 @@ pub async fn acquire_setup_delete_deployment(
         };
 
         match deployment.status.as_str() {
-            "teardown-required" | "teardown-failed" => {}
-            "deleted" => return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted),
+            "retention-required" | "teardown-required" | "teardown-failed" => {}
+            "retained" | "deleted" => return Ok(SetupDeleteAcquireOutcome::AlreadyDeleted),
             "delete-failed" => {
                 let failed = alien_error::GenericError {
                     message:
@@ -891,6 +897,37 @@ mod tests {
     use chrono::TimeZone;
     use httpmock::prelude::*;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn setup_delete_acquire_admits_retention_handoff() {
+        let server = MockServer::start_async().await;
+        let acquire = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/sync/acquire")
+                    .body_contains("retention-required");
+                then.status(200).json_body(serde_json::json!({
+                    "deployments": [{"deployment": {"id": "deployment-1", "status": "retention-required"}}],
+                    "notAcquired": []
+                }));
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let outcome = acquire_setup_delete_deployment(
+            &client,
+            &client,
+            "deployment-1",
+            "setup",
+            DeploymentModel::Push,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            SetupDeleteAcquireOutcome::Acquired { .. }
+        ));
+        acquire.assert_async().await;
+    }
 
     #[tokio::test]
     async fn setup_delete_acquire_confirms_a_concurrently_removed_record() {

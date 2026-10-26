@@ -18,6 +18,10 @@ use serde::{Deserialize, Serialize};
 pub enum PostgresBinding {
     /// AWS Aurora Serverless v2 (cluster endpoint + secret ARN).
     Aurora(AuroraPostgresBinding),
+    /// Aurora-managed JSON credentials. Separate tag makes older readers reject
+    /// this binding rather than treating the JSON document as a raw password.
+    #[serde(rename = "aurora-managed")]
+    AuroraManaged(AuroraPostgresBinding),
     /// GCP Cloud SQL (host + secret name).
     #[serde(rename = "cloud-sql")]
     CloudSql(CloudSqlPostgresBinding),

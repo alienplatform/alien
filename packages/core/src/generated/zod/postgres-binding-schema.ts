@@ -15,6 +15,8 @@ import { LocalPostgresBindingSchema } from "./local-postgres-binding-schema.js";
  */
 export const PostgresBindingSchema = z.union([z.lazy(() => AuroraPostgresBindingSchema).and(z.object({
     "service": z.enum(["aurora"])
+    })).describe("AWS Aurora Serverless v2 binding."), z.lazy(() => AuroraPostgresBindingSchema).and(z.object({
+    "service": z.enum(["aurora-managed"])
     })).describe("AWS Aurora Serverless v2 binding."), z.lazy(() => CloudSqlPostgresBindingSchema).and(z.object({
     "service": z.enum(["cloud-sql"])
     })).describe("GCP Cloud SQL binding."), z.lazy(() => FlexibleServerPostgresBindingSchema).and(z.object({

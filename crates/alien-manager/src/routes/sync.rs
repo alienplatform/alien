@@ -466,10 +466,9 @@ async fn acquire(
             return ErrorData::forbidden("Access denied: cannot acquire these deployments")
                 .into_response();
         }
-        if deployments
-            .iter()
-            .any(|deployment| deployment.deployment_protocol_version > supported_protocol)
-        {
+        if deployments.iter().any(|deployment| {
+            deployment.required_deployment_protocol_version() > supported_protocol
+        }) {
             return ErrorData::bad_request(
                 "This deployment requires a newer deployment protocol. Update the deployment CLI or manager before retrying.",
             ).into_response();
@@ -651,8 +650,13 @@ async fn reconcile(
         }
     };
 
-    if deployment_state.protocol_version != deployment.deployment_protocol_version
-        || deployment_state.protocol_version > alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+    if !alien_core::accepts_deployment_protocol_report(
+        deployment.required_deployment_protocol_version(),
+        deployment_state.protocol_version,
+    ) || (deployment.base_platform.unwrap_or(deployment.platform) == alien_core::Platform::Gcp
+        && deployment.deployment_protocol_version
+            < alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
+        && deployment_state.protocol_version != deployment.deployment_protocol_version)
     {
         return ErrorData::bad_request(
             "A deployment report must preserve its registered protocol version. Update the deployment actor or manager before retrying.",
@@ -1127,6 +1131,8 @@ mod tests {
         let mut body = sync_body_with_container_heartbeat(Value::Null);
         body["session"] = json!("operator-session");
         body["supportsExecutionClaims"] = json!(true);
+        body["maxSupportedDeploymentProtocolVersion"] =
+            json!(alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION);
         body["operatorVersion"] = json!("1.2.3");
         body["currentState"] = json!({
             "platform": "kubernetes",
@@ -1642,6 +1648,27 @@ mod tests {
         agent_state.status = DeploymentStatus::Deleting;
 
         assert!(!should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
+    fn returns_setup_owned_cleanup_instead_of_accepting_stale_pull_progress() {
+        let mut reported = uninitialized_state();
+        reported.status = DeploymentStatus::RetentionRequired;
+        for status in [
+            "retention-required",
+            "teardown-required",
+            "teardown-failed",
+            "retained",
+            "deleted",
+        ] {
+            let saved =
+                deployment_record_with_state(status, Some(StackState::new(Platform::Local)));
+            let ignored = should_ignore_agent_state_report(&saved, &reported);
+            assert!(ignored, "setup owns {status}");
+            assert!(should_return_current_state_for_agent_sync(
+                ignored, false, &saved
+            ));
+        }
     }
 
     #[test]
@@ -2327,7 +2354,7 @@ async fn agent_sync(
     let supported_protocol = max_supported_deployment_protocol_version
         .unwrap_or(1)
         .min(alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION);
-    if deployment.deployment_protocol_version > supported_protocol {
+    if deployment.required_deployment_protocol_version() > supported_protocol {
         return ErrorData::bad_request(
             "This deployment requires a newer deployment protocol. Update the deployment actor or manager before retrying.",
         ).into_response();
@@ -2336,9 +2363,21 @@ async fn agent_sync(
         let version = reported
             .get("protocolVersion")
             .and_then(serde_json::Value::as_u64);
-        if version
-            .is_some_and(|version| version != u64::from(deployment.deployment_protocol_version))
-            || (version.is_none() && deployment.deployment_protocol_version > 1)
+        if !version
+            .and_then(|version| u32::try_from(version).ok())
+            .is_some_and(|version| {
+                version <= supported_protocol
+                    && !(deployment.base_platform.unwrap_or(deployment.platform)
+                        == alien_core::Platform::Gcp
+                        && deployment.deployment_protocol_version
+                            < alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
+                        && version != deployment.deployment_protocol_version)
+                    && alien_core::accepts_deployment_protocol_report(
+                        deployment.required_deployment_protocol_version(),
+                        version,
+                    )
+            })
+            && !(version.is_none() && deployment.required_deployment_protocol_version() == 1)
         {
             return ErrorData::bad_request(
                 "A deployment report must preserve its registered protocol version",
@@ -2415,7 +2454,7 @@ async fn agent_sync(
                     ignored_agent_state_report = true;
                     tracing::info!(
                         deployment_id = %req.deployment_id,
-                        "Ignoring empty pull sync state because manager already has deployment state"
+                        "Ignoring pull sync state because manager owns the authoritative checkpoint"
                     );
                 } else {
                     // Stays below the ignore check: restoring metadata here
@@ -2664,14 +2703,21 @@ async fn agent_sync(
         .as_ref()
         .and_then(|value| serde_json::from_value::<DeploymentState>(value.clone()).ok())
         .is_some_and(|state| agent_state_is_uninitialized(&state));
-    let should_return_current_state = should_return_current_state_for_agent_sync(
-        ignored_agent_state_report || unclaimed_initial_state,
-        agent_state_uninitialized,
-        &deployment,
-    );
+    // A new pull actor must observe the persisted protocol before executing new
+    // controller states locally. Also acknowledge retries after a lost response.
+    let should_return_current_state = (supported_protocol
+        >= alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+        && deployment.deployment_protocol_version
+            == alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION)
+        || should_return_current_state_for_agent_sync(
+            ignored_agent_state_report || unclaimed_initial_state,
+            agent_state_uninitialized,
+            &deployment,
+        );
     // Without a claim, the agent's liveness and observations are recorded
     // against the manager's own state, never the agent's report.
     let record_unclaimed_observations = execution_claim.is_none()
+        && !runtime_cleanup_has_finished(&deployment)
         && (unaccepted_target_report
             || (should_return_current_state
                 && (!req.heartbeats.is_empty()
@@ -3100,10 +3146,22 @@ fn preserve_recorded_gate_answers(incoming: &mut DeploymentState, stored: &Deplo
     }
 }
 
+/// Once runtime cleanup hands off, setup owns the remaining identities and
+/// checkpoint. Completed retention/deletion also cannot be revived by reports.
+fn runtime_cleanup_has_finished(deployment: &DeploymentRecord) -> bool {
+    matches!(
+        deployment.status.as_str(),
+        "retention-required" | "retained" | "teardown-required" | "teardown-failed" | "deleted"
+    )
+}
+
 fn should_ignore_agent_state_report(
     deployment: &DeploymentRecord,
     agent_state: &DeploymentState,
 ) -> bool {
+    if runtime_cleanup_has_finished(deployment) {
+        return true;
+    }
     if deployment_is_deleting(deployment) && !agent_state_is_delete_progress(agent_state) {
         return true;
     }
@@ -3170,6 +3228,8 @@ fn agent_state_is_delete_progress(state: &DeploymentState) -> bool {
             | DeploymentStatus::Deleting
             | DeploymentStatus::DeleteFailed
             | DeploymentStatus::TeardownRequired
+            | DeploymentStatus::RetentionRequired
+            | DeploymentStatus::Retained
             | DeploymentStatus::TeardownFailed
             | DeploymentStatus::Deleted
     )

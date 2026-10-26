@@ -38,6 +38,9 @@ pub trait S3Api: Send + Sync + std::fmt::Debug {
     async fn get_bucket_policy(&self, bucket: &str) -> Result<GetBucketPolicyOutput>;
     async fn get_bucket_acl(&self, bucket: &str) -> Result<GetBucketAclOutput>;
     async fn put_bucket_versioning(&self, bucket: &str, status: VersioningStatus) -> Result<()>;
+    /// Replaces browser-read CORS, or deletes it when no origins are supplied.
+    async fn set_bucket_read_cors(&self, bucket: &str, origins: &[String]) -> Result<()>;
+
     async fn put_public_access_block(
         &self,
         bucket: &str,
@@ -716,6 +719,42 @@ impl S3Api for S3Client {
             bucket,
         )
         .await
+    }
+
+    async fn set_bucket_read_cors(&self, bucket: &str, origins: &[String]) -> Result<()> {
+        self.credentials.ensure_fresh().await?;
+        let (method, body, operation) = if origins.is_empty() {
+            (Method::DELETE, String::new(), "DeleteBucketCors")
+        } else {
+            let mut body = String::from(
+                "<CORSConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><CORSRule>",
+            );
+            for origin in origins {
+                body.push_str("<AllowedOrigin>");
+                body.push_str(&Self::escape_xml(origin));
+                body.push_str("</AllowedOrigin>");
+            }
+            body.push_str("<AllowedMethod>GET</AllowedMethod><AllowedMethod>HEAD</AllowedMethod><AllowedHeader>*</AllowedHeader><ExposeHeader>ETag</ExposeHeader><ExposeHeader>Content-Range</ExposeHeader><ExposeHeader>Accept-Ranges</ExposeHeader><MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule></CORSConfiguration>");
+            (Method::PUT, body, "PutBucketCors")
+        };
+        let mut builder = self
+            .client
+            .request(method, self.url(bucket, "?cors"))
+            .host(&self.host(bucket))
+            .content_sha256(&body);
+        if !origins.is_empty() {
+            builder = builder
+                .content_type_xml()
+                .header(
+                    "Content-MD5",
+                    STANDARD.encode(md5::compute(body.as_bytes()).as_ref()),
+                )
+                .body(body);
+        }
+        let result =
+            crate::aws::aws_request_utils::sign_send_no_response_once(builder, &self.sign_config())
+                .await;
+        Self::map_result(result, operation, bucket)
     }
 
     async fn put_bucket_versioning(&self, bucket: &str, status: VersioningStatus) -> Result<()> {

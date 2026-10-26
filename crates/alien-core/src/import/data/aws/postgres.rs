@@ -19,6 +19,9 @@ pub struct AwsPostgresImportData {
     pub security_group_id: String,
     /// Secrets Manager ARN of the master password (never the password itself).
     pub password_secret_arn: String,
+    /// True when RDS owns the JSON username/password secret and its rotation.
+    #[serde(default)]
+    pub managed_password: bool,
     /// Cluster writer endpoint (the binding host).
     pub cluster_endpoint: String,
     /// Default database name.

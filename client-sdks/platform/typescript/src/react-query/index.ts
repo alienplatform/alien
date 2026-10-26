@@ -6,6 +6,7 @@ export { AlienProvider, useAlienContext } from "./_context.js";
 export * from "./_types.js";
 
 export * from "./acceptAwsKeySetup.js";
+export * from "./acceptTerraformKeySetup.js";
 export * from "./acceptWorkspaceInvitation.js";
 export * from "./agentSessionsEvents.js";
 export * from "./agentSessionsGet.js";
@@ -126,6 +127,7 @@ export * from "./getInstallationDeployment.js";
 export * from "./getLogExportDeliveryConfig.js";
 export * from "./getPendingWorkspaceInvitation.js";
 export * from "./getProjectLogExport.js";
+export * from "./getTerraformKeySetupOperation.js";
 export * from "./getWorkspaceInvitationPreview.js";
 export * from "./getWorkspaceInviteLink.js";
 export * from "./incidentsGet.js";

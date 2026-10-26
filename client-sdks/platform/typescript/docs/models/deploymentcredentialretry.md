@@ -9,7 +9,7 @@ import { DeploymentCredentialRetry } from "@alienplatform/platform-api/models";
 
 let value: DeploymentCredentialRetry = {
   startedAt: new Date("2025-04-10T17:19:26.230Z"),
-  status: "teardown-required",
+  status: "teardown-failed",
 };
 ```
 

@@ -1,5 +1,6 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::models::blob::{BlobContainer, BlobServiceProperties};
+use crate::azure::models::storage::ManagementPolicy;
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, IntoAlienError};
@@ -36,6 +37,29 @@ pub trait BlobContainerApi: Send + Sync + std::fmt::Debug {
         resource_group_name: &str,
         storage_account_name: &str,
     ) -> Result<BlobServiceProperties>;
+
+    /// Set shared blob-service properties. The caller owns the account-level configuration.
+    async fn set_blob_service_properties(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+        properties: &BlobServiceProperties,
+    ) -> Result<BlobServiceProperties>;
+
+    /// Read the account's singleton lifecycle policy.
+    async fn get_management_policy(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+    ) -> Result<ManagementPolicy>;
+
+    /// Replace the singleton policy. Callers must aggregate all owned container rules.
+    async fn set_management_policy(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+        policy: &ManagementPolicy,
+    ) -> Result<ManagementPolicy>;
 
     async fn delete_blob_container(
         &self,
@@ -76,6 +100,65 @@ impl AzureBlobContainerClient {
             ),
             token_cache,
         }
+    }
+
+    async fn shared_settings_request<T: serde::de::DeserializeOwned>(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+        endpoint: &str,
+        body: Option<String>,
+    ) -> Result<T> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/{}",
+                self.token_cache.config().subscription_id,
+                resource_group_name, storage_account_name, endpoint,
+            ),
+            Some(vec![("api-version", "2024-01-01".into())]),
+        );
+        let operation = if body.is_some() {
+            "SetStorageSettings"
+        } else {
+            "GetStorageSettings"
+        };
+        let builder = match body {
+            Some(body) => AzureRequestBuilder::new(Method::PUT, url.clone())
+                .content_type_json()
+                .content_length(&body)
+                .body(body),
+            None => AzureRequestBuilder::new(Method::GET, url.clone()).content_length(""),
+        };
+        let request = self
+            .base
+            .sign_request(builder.build()?, &bearer_token)
+            .await?;
+        let response = self
+            .base
+            .execute_request_once(request, operation, storage_account_name)
+            .await?;
+        let status = response.status().as_u16();
+        let response_body =
+            response
+                .text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: format!("Azure {operation}: failed to read response"),
+                })?;
+        serde_json::from_str(&response_body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!("Azure {operation}: invalid response"),
+                url,
+                http_status: status,
+                http_response_text: None,
+                http_request_text: None,
+            })
     }
 }
 
@@ -246,6 +329,60 @@ impl BlobContainerApi for AzureBlobContainerClient {
             })?;
 
         Ok(blob_service_properties)
+    }
+
+    async fn set_blob_service_properties(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+        properties: &BlobServiceProperties,
+    ) -> Result<BlobServiceProperties> {
+        let body = serde_json::to_string(properties)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: "Failed to serialize shared blob-service properties".into(),
+            })?;
+        self.shared_settings_request(
+            resource_group_name,
+            storage_account_name,
+            "blobServices/default",
+            Some(body),
+        )
+        .await
+    }
+
+    async fn get_management_policy(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+    ) -> Result<ManagementPolicy> {
+        self.shared_settings_request(
+            resource_group_name,
+            storage_account_name,
+            "managementPolicies/default",
+            None,
+        )
+        .await
+    }
+
+    async fn set_management_policy(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+        policy: &ManagementPolicy,
+    ) -> Result<ManagementPolicy> {
+        let body = serde_json::to_string(policy).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: "Failed to serialize shared storage lifecycle policy".into(),
+            },
+        )?;
+        self.shared_settings_request(
+            resource_group_name,
+            storage_account_name,
+            "managementPolicies/default",
+            Some(body),
+        )
+        .await
     }
 
     /// Delete a blob container

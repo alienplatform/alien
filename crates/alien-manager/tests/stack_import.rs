@@ -2359,7 +2359,7 @@ async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record() {
         "the declined answer is recorded at import"
     );
 
-    // An old actor's wire shape: runtime metadata present, answer map absent
+    // An actor omitting an additive field: runtime metadata present, answer map absent
     // (serde skips the empty map, exactly like a client that never knew it).
     let mut stripped_metadata = persisted
         .runtime_metadata
@@ -2477,6 +2477,7 @@ async fn a_state_write_back_without_the_answer_map_does_not_erase_the_record() {
         serde_json::json!({
             "deploymentId": persisted.id,
             "currentState": serde_json::to_value(&state_without_map).unwrap(),
+            "maxSupportedDeploymentProtocolVersion": alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
         }),
     )
     .await;

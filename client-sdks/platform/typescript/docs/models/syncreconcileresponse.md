@@ -12,7 +12,7 @@ let value: SyncReconcileResponse = {
   current: {
     platform: "aws",
     protocolVersion: 626709,
-    status: "initial-setup",
+    status: "initial-setup-failed",
   },
 };
 ```

@@ -9,7 +9,7 @@ import { DeploymentDetailResponseCredentialRetry } from "@alienplatform/platform
 
 let value: DeploymentDetailResponseCredentialRetry = {
   startedAt: new Date("2024-08-07T21:34:37.462Z"),
-  status: "waiting-for-machines",
+  status: "waiting-for-secrets",
 };
 ```
 

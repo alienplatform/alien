@@ -4,14 +4,14 @@
 //! the EC2 client shape rather than the JSON DynamoDB one. Only the operations the Aurora
 //! Postgres controller needs are implemented.
 
-use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
+use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
-use alien_client_core::{ErrorData, Result};
+use alien_client_core::{ErrorData, RequestBuilderExt, Result};
 use alien_error::ContextError;
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -41,6 +41,8 @@ pub trait RdsApi: Send + Sync + std::fmt::Debug {
     async fn delete_db_cluster(&self, request: DeleteDbClusterRequest) -> Result<()>;
     async fn describe_db_clusters(&self, identifier: &str) -> Result<Vec<DbCluster>>;
     async fn start_db_cluster(&self, identifier: &str) -> Result<()>;
+    /// Requests promotion of an exact replica; callers must observe the writer before proceeding.
+    async fn failover_db_cluster(&self, identifier: &str, target_instance: &str) -> Result<()>;
     async fn create_db_instance(&self, request: CreateDbInstanceRequest) -> Result<()>;
     async fn delete_db_instance(&self, request: DeleteDbInstanceRequest) -> Result<()>;
     async fn describe_db_instances(&self, cluster_identifier: &str) -> Result<Vec<DbInstance>>;
@@ -101,6 +103,10 @@ pub struct DeleteDbClusterRequest {
 
 #[derive(Debug, Clone)]
 pub struct CreateDbInstanceRequest {
+    /// Explicit placement for a replica in a different availability zone from the writer.
+    pub availability_zone: Option<String>,
+    /// Aurora failover priority (0 is highest, 15 is lowest).
+    pub promotion_tier: Option<u8>,
     /// Customer key for Performance Insights; enables Insights when provided.
     pub performance_insights_kms_key_id: Option<String>,
     pub identifier: String,
@@ -144,6 +150,12 @@ struct DbClusterParameterGroupList {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct DbCluster {
+    /// Actual writer/reader membership, never inferred from instance naming.
+    #[serde(default, rename = "DBClusterMembers")]
+    pub members: DbClusterMembers,
+    /// Zones available to this cluster, as reported by RDS.
+    #[serde(default)]
+    pub availability_zones: AvailabilityZones,
     #[serde(default)]
     pub kms_key_id: Option<String>,
     #[serde(default)]
@@ -164,6 +176,31 @@ pub struct DbCluster {
     pub serverless_v2_scaling_configuration: Option<ServerlessV2ScalingConfiguration>,
 }
 
+/// Members returned by the RDS query protocol.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct DbClusterMembers {
+    #[serde(default, rename = "DBClusterMember")]
+    pub members: Vec<DbClusterMember>,
+}
+
+/// A member's role can change after failover without changing its identifier.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub struct DbClusterMember {
+    #[serde(rename = "DBInstanceIdentifier")]
+    pub identifier: String,
+    /// Missing role data is unknown, not proof this member is safe to remove.
+    pub is_cluster_writer: Option<bool>,
+    pub promotion_tier: Option<u8>,
+}
+
+/// Availability zones in the RDS query protocol.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct AvailabilityZones {
+    #[serde(default, rename = "AvailabilityZone")]
+    pub members: Vec<String>,
+}
+
 /// The cluster's Serverless v2 ACU scaling window, as reported by DescribeDBClusters.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
@@ -175,6 +212,11 @@ pub struct ServerlessV2ScalingConfiguration {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct DbInstance {
+    /// Parent identity checked before adopting an instance after an interrupted create.
+    #[serde(rename = "DBClusterIdentifier")]
+    pub cluster_identifier: Option<String>,
+    pub availability_zone: Option<String>,
+    pub promotion_tier: Option<u8>,
     #[serde(rename = "DBInstanceIdentifier")]
     pub identifier: String,
     #[serde(rename = "DBInstanceStatus")]
@@ -221,6 +263,8 @@ struct DescribeDbInstancesEnvelope {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct DescribeDbInstancesResult {
+    #[serde(default)]
+    marker: Option<String>,
     #[serde(rename = "DBInstances", default)]
     db_instances: DbInstanceList,
 }
@@ -353,6 +397,12 @@ fn create_db_instance_form(r: &CreateDbInstanceRequest) -> HashMap<String, Strin
         "DBInstanceClass".into(),
         SERVERLESS_INSTANCE_CLASS.to_string(),
     );
+    if let Some(zone) = &r.availability_zone {
+        form.insert("AvailabilityZone".into(), zone.clone());
+    }
+    if let Some(tier) = r.promotion_tier {
+        form.insert("PromotionTier".into(), tier.to_string());
+    }
     // Hard constraint: Postgres is never public. Pin it on the instance (the cluster has no such
     // flag) so the guarantee holds regardless of the subnet group, matching GCP (`ipv4Enabled=false`)
     // and Azure (`publicNetworkAccess=Disabled`) rather than relying on the subnet group's default.
@@ -434,8 +484,12 @@ impl RdsClient {
             .content_type_form()
             .content_sha256(&body)
             .body(body);
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        // The controller owns retries and observes the result of an interrupted mutation.
+        // In particular, never replay a failover or create before reading its remote state.
+        let result = builder
+            .sign_aws_request(&self.sign_config())?
+            .send_xml::<T>()
+            .await;
         Self::map_result(result, operation, resource)
     }
 
@@ -457,7 +511,7 @@ impl RdsClient {
             .content_sha256(&body)
             .body(body);
         let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
+            crate::aws::aws_request_utils::sign_send_no_response_once(builder, &self.sign_config())
                 .await;
         Self::map_result(result, operation, resource)
     }
@@ -496,6 +550,12 @@ impl RdsClient {
         // RDS uses both `*NotFound` (for example DBInstanceNotFound) and
         // `*NotFoundFault` (for example DBClusterNotFoundFault) on the wire. Surface either as
         // RemoteResourceNotFound so controller deletion remains idempotent after a partial create.
+        if matches!(status, StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED) {
+            return Some(ErrorData::RemoteAccessDenied {
+                resource_type: "RDS Resource".into(),
+                resource_name: resource.into(),
+            });
+        }
         if let Ok(parsed) = quick_xml::de::from_str::<RdsErrorEnvelope>(body) {
             let code = parsed.error.code.as_str();
             if code.ends_with("NotFound") || code.ends_with("NotFoundFault") {
@@ -513,6 +573,7 @@ impl RdsClient {
                 || code.ends_with("AlreadyExistsFault")
                 || code == "DBParameterGroupAlreadyExists"
                 || code == "InvalidDBParameterGroupState"
+                || code == "InvalidDBInstanceState"
             {
                 return Some(ErrorData::RemoteResourceConflict {
                     resource_type: "RDS Resource".into(),
@@ -685,6 +746,17 @@ impl RdsApi for RdsClient {
             .await
     }
 
+    async fn failover_db_cluster(&self, identifier: &str, target_instance: &str) -> Result<()> {
+        let mut form = base_form("FailoverDBCluster");
+        form.insert("DBClusterIdentifier".into(), identifier.to_string());
+        form.insert(
+            "TargetDBInstanceIdentifier".into(),
+            target_instance.to_string(),
+        );
+        self.send_form_no_body(form, "FailoverDBCluster", identifier)
+            .await
+    }
+
     async fn describe_db_clusters(&self, identifier: &str) -> Result<Vec<DbCluster>> {
         let mut form = base_form("DescribeDBClusters");
         form.insert("DBClusterIdentifier".into(), identifier.to_string());
@@ -713,10 +785,26 @@ impl RdsApi for RdsClient {
             "Filters.Filter.1.Values.Value.1".into(),
             cluster_identifier.to_string(),
         );
-        let envelope: DescribeDbInstancesEnvelope = self
-            .send_form(form, "DescribeDBInstances", cluster_identifier)
-            .await?;
-        Ok(envelope.result.db_instances.members)
+        let mut instances = Vec::new();
+        let mut markers = HashSet::new();
+        loop {
+            let envelope: DescribeDbInstancesEnvelope = self
+                .send_form(form.clone(), "DescribeDBInstances", cluster_identifier)
+                .await?;
+            instances.extend(envelope.result.db_instances.members);
+            match envelope.result.marker.filter(|marker| !marker.is_empty()) {
+                None => return Ok(instances),
+                Some(marker) => {
+                    if !markers.insert(marker.clone()) {
+                        return Err(alien_error::AlienError::new(ErrorData::InvalidInput {
+                            message: "RDS returned a repeated instance pagination marker".into(),
+                            field_name: None,
+                        }));
+                    }
+                    form.insert("Marker".into(), marker);
+                }
+            }
+        }
     }
 }
 
@@ -807,6 +895,8 @@ mod tests {
     #[test]
     fn create_instance_uses_serverless_class_and_is_never_public() {
         let form = create_db_instance_form(&CreateDbInstanceRequest {
+            availability_zone: None,
+            promotion_tier: None,
             performance_insights_kms_key_id: None,
             identifier: "stack-db-1".into(),
             cluster_identifier: "stack-db".into(),

@@ -1,13 +1,13 @@
-# ClusterEndpointSecretRef
+# UsernameSecretRef6
 
 Reference to a Kubernetes Secret
 
 ## Example Usage
 
 ```typescript
-import { ClusterEndpointSecretRef } from "@alienplatform/platform-api/models";
+import { UsernameSecretRef6 } from "@alienplatform/platform-api/models";
 
-let value: ClusterEndpointSecretRef = {
+let value: UsernameSecretRef6 = {
   key: "<key>",
   name: "<value>",
 };

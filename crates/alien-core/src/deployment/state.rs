@@ -56,6 +56,17 @@ pub struct CredentialRetry {
     pub status: DeploymentStatus,
 }
 
+/// Explicit disposition of durable data when deleting a deployment.
+/// Missing values from older checkpoints always preserve data.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum DeletionPolicy {
+    #[default]
+    Retain,
+    Erase,
+}
+
 /// Runtime metadata for deployment
 ///
 /// Stores deployment state that needs to persist across step calls.
@@ -63,6 +74,10 @@ pub struct CredentialRetry {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeMetadata {
+    /// User-authorized data disposition, persisted before deletion starts.
+    #[serde(default)]
+    pub deletion_policy: DeletionPolicy,
+
     /// Bounded credential retry state shared by all deployment drivers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_retry: Option<CredentialRetry>,
@@ -87,6 +102,29 @@ pub struct RuntimeMetadata {
     /// touching unrelated values in the same vault.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub last_synced_secret_names: Vec<String>,
+
+    /// Credential revocation completed before resource teardown. A delete retry
+    /// can use this receipt after the vault or its binding is gone. Secret sync
+    /// clears it before a deployment can write runtime credentials again.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub vault_credentials_revoked: bool,
+
+    /// Digest of the installed data inventory whose runtime public-access and
+    /// expiry configuration was protected before cleanup. The serialized field
+    /// name is retained for compatibility. This is not a
+    /// receipt for effective expiry propagation or privileged setup teardown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_storage_protection_hash: Option<String>,
+
+    /// UTC API-confirmation time for the matching data protection digest.
+    /// Provider propagation must be qualified separately before final retention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_storage_protection_confirmed_at: Option<chrono::DateTime<chrono::Utc>>,
+
+    /// Start of the bounded wait for retained data's expiry controls to disable.
+    /// Cleared on confirmation, explicit retry, or returning to normal execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_data_protection_started_at: Option<chrono::DateTime<chrono::Utc>>,
 
     /// The prepared (mutated) stack from the last successful deployment phase
     /// This is the stack AFTER mutations have been applied (with service accounts, vault, etc.)
@@ -348,33 +386,33 @@ pub type GateAnswers = IndexMap<String, bool>;
 /// Oldest deployment protocol version this binary can read.
 pub const MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 
-/// Deployment protocol version this binary writes.
-/// Bump when making incompatible changes to DeploymentState semantics.
-///
-/// `persisted_gate_answers` on the runtime metadata stays at this version:
-/// the field is additive, an actor unaware of it still cannot flip a frozen
-/// resource (its strip resolves from state presence, so a changed input is
-/// ignored rather than applied), and the sync routes carry a recorded map
-/// through a write-back that drops the field. A bump would hard-refuse every
-/// customer-scheduled pull agent the moment a newer manager writes state.
-pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
+/// Deployment protocol written by actors with resumable protection, CORS and
+/// database update states and retained deletion. Older readers must be fenced
+/// before these states exist.
+pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 4;
 
-/// Latest state protocol this binary can execute. Provider-specific changes
-/// must not force unrelated deployments onto a newer writer protocol.
-pub const MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 2;
+/// Latest state protocol this binary can execute.
+pub const MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 4;
 
 /// GCP federation changes setup ownership and target credential semantics.
 pub const GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION: u32 = 2;
 
 pub fn deployment_protocol_version_for_platform(
-    platform: crate::Platform,
-    base_platform: Option<crate::Platform>,
+    _platform: crate::Platform,
+    _base_platform: Option<crate::Platform>,
 ) -> u32 {
-    if base_platform.unwrap_or(platform) == crate::Platform::Gcp {
-        GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION
-    } else {
-        CURRENT_DEPLOYMENT_PROTOCOL_VERSION
-    }
+    CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+}
+
+/// Accept unchanged reports or the explicit upgrade to this writer protocol.
+/// Never permit downgrade or unknown protocols. Provider setup prerequisites
+/// remain separate from this checkpoint compatibility check.
+pub fn accepts_deployment_protocol_report(registered: u32, reported: u32) -> bool {
+    (MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION..=MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION)
+        .contains(&registered)
+        && (reported == registered
+            || (registered < CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+                && reported == CURRENT_DEPLOYMENT_PROTOCOL_VERSION))
 }
 
 /// Backwards-compatible alias for older call sites.
@@ -453,6 +491,9 @@ mod tests {
             Some("old-hash")
         );
         assert!(metadata.last_synced_secret_names.is_empty());
+        assert!(!metadata.vault_credentials_revoked);
+        assert!(metadata.retained_storage_protection_hash.is_none());
+        assert!(metadata.retained_storage_protection_confirmed_at.is_none());
         assert!(metadata.pending_prepared_stack.is_none());
         assert!(metadata.setup_update_authorization.is_none());
         assert!(metadata.setup_scaffolding.is_empty());
@@ -477,7 +518,10 @@ mod tests {
                 image_arn: None,
             }
         );
-        assert_eq!(serde_json::to_value(&metadata).unwrap(), persisted);
+        assert_eq!(metadata.deletion_policy, DeletionPolicy::Retain);
+        let mut expected = persisted;
+        expected["deletionPolicy"] = serde_json::json!("retain");
+        assert_eq!(serde_json::to_value(&metadata).unwrap(), expected);
         assert!(
             serde_json::to_value(RuntimeMetadata::default()).unwrap()["setupScaffolding"].is_null(),
             "state with no scaffolding serializes as it did before the field existed"

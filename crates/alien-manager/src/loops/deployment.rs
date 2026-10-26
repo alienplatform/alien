@@ -2511,6 +2511,8 @@ mod tests {
             DeploymentStatus::DeleteFailed => "delete-failed",
             DeploymentStatus::TeardownRequired => "teardown-required",
             DeploymentStatus::TeardownFailed => "teardown-failed",
+            DeploymentStatus::RetentionRequired => "retention-required",
+            DeploymentStatus::Retained => "retained",
             DeploymentStatus::Deleted => "deleted",
             DeploymentStatus::Error => "error",
         }
@@ -5065,6 +5067,8 @@ fn parse_status(status: &str) -> DeploymentStatus {
         "delete-failed" => DeploymentStatus::DeleteFailed,
         "teardown-required" => DeploymentStatus::TeardownRequired,
         "teardown-failed" => DeploymentStatus::TeardownFailed,
+        "retention-required" => DeploymentStatus::RetentionRequired,
+        "retained" => DeploymentStatus::Retained,
         "deleted" => DeploymentStatus::Deleted,
         "error" => DeploymentStatus::Error,
         _ => {

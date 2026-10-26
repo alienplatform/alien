@@ -16,6 +16,25 @@ use alien_core::{
 };
 
 #[test]
+fn aws_registry_replication_settings_allow_package_emission() {
+    let mut registry = ArtifactRegistry::new("images".to_string()).build();
+    registry.replication_regions = vec!["us-west-2".to_string()];
+    let stack = Stack::new("app".to_string())
+        .add(registry, ResourceLifecycle::Frozen)
+        .build();
+    let rendered = super::helpers::try_render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "unsupported registry replication",
+    )
+    .expect("legacy replication settings must still render");
+    assert!(!format!("{rendered:?}").contains("ReplicationConfiguration"));
+}
+
+#[test]
 fn aws_artifact_registry_renders_ecr_repository() {
     let stack = Stack::new("acme-ecr".to_string())
         .add(

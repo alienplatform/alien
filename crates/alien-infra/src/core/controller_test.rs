@@ -1358,6 +1358,30 @@ impl SingleControllerExecutorBuilder {
                 // This is a new resource created by the stack processor (like ServiceAccount, infrastructure resources)
                 // Create a mock ready controller for it based on the resource type and platform
                 let mock_controller: Box<dyn ResourceController> = match (new_resource_entry.config.resource_type().0.as_ref(), platform) {
+                    ("network", Platform::Aws) => {
+                        Box::new(crate::network::AwsNetworkController::mock_ready(new_resource_id, 2))
+                    },
+                    ("network", Platform::Gcp) => {
+                        Box::new(crate::network::GcpNetworkController::mock_ready(new_resource_id))
+                    },
+                    ("network", Platform::Azure) => {
+                        Box::new(crate::network::AzureNetworkController::mock_ready(new_resource_id))
+                    },
+                    ("service_activation", Platform::Gcp) => {
+                        Box::new(crate::service_activation::GcpServiceActivationController::mock_ready(new_resource_id))
+                    },
+                    ("service_activation", Platform::Azure) => {
+                        Box::new(crate::service_activation::AzureServiceActivationController::mock_ready(new_resource_id))
+                    },
+                    ("remote-stack-management", Platform::Aws) => {
+                        Box::new(crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(new_resource_id))
+                    },
+                    ("remote-stack-management", Platform::Gcp) => {
+                        Box::new(crate::remote_stack_management::GcpRemoteStackManagementController::mock_ready(new_resource_id))
+                    },
+                    ("remote-stack-management", Platform::Azure) => {
+                        Box::new(crate::remote_stack_management::AzureRemoteStackManagementController::mock_ready(new_resource_id))
+                    },
                     ("service-account", Platform::Aws) => {
                         Box::new(crate::service_account::AwsServiceAccountController::mock_ready(new_resource_id))
                     },
@@ -1375,6 +1399,24 @@ impl SingleControllerExecutorBuilder {
                     },
                     ("azure-storage-account", Platform::Azure) => {
                         Box::new(crate::infra_requirements::AzureStorageAccountController::mock_ready(new_resource_id))
+                    },
+                    ("vault", Platform::Aws) => {
+                        Box::new(crate::vault::AwsVaultController {
+                            state: crate::vault::AwsVaultState::Ready,
+                            account_id: Some("123456789012".to_string()),
+                            region: Some("us-east-1".to_string()),
+                            vault_prefix: Some(new_resource_id.clone()),
+                            ..Default::default()
+                        })
+                    },
+                    ("vault", Platform::Gcp) => {
+                        Box::new(crate::vault::GcpVaultController {
+                            state: crate::vault::GcpVaultState::Ready,
+                            project_id: Some("mock-project".to_string()),
+                            location: Some("us-central1".to_string()),
+                            vault_prefix: Some(new_resource_id.clone()),
+                            ..Default::default()
+                        })
                     },
                     ("vault", Platform::Azure) => {
                         Box::new(crate::vault::AzureVaultController::mock_ready(new_resource_id))

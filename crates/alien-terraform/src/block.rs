@@ -5,9 +5,9 @@
 //! the resource declarations they produce instead of like AST builders.
 
 use hcl::{
+    Identifier,
     expr::Expression,
     structure::{Attribute, Block, BlockLabel, Body, Structure},
-    Identifier,
 };
 
 /// Build a `resource "type" "label" { ... }` block from an iterator of
@@ -60,4 +60,15 @@ pub fn attr(name: &str, value: Expression) -> Structure {
 /// Wrap a nested `Block` as a `Structure` so it can be appended to a body.
 pub fn nested(block: Block) -> Structure {
     Structure::Block(block)
+}
+
+/// Build an ephemeral block whose results cannot enter persistent state.
+pub fn ephemeral_block(
+    provider_type: &str,
+    label: &str,
+    body: impl IntoIterator<Item = Structure>,
+) -> Block {
+    let mut block = resource_block(provider_type, label, body);
+    block.identifier = Identifier::sanitized("ephemeral");
+    block
 }

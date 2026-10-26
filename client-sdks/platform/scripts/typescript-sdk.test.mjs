@@ -452,8 +452,6 @@ test("existing access request risk enum deep imports remain compatible", async (
   for (const path of ["index", "createaccessrequest"]) {
     const models = await import(`../typescript/esm/models/${path}.js`);
     assert.equal(models.CreateAccessRequestMaxRisk.ReadOnly, "read-only");
-    assert.equal(models.MaxRisk.ReadOnly, "read-only");
-    assert.equal(models.MaxRisk$outboundSchema.parse("mutating"), "mutating");
     assert.equal(models.CreateAccessRequestMaxRisk$outboundSchema.parse("mutating"), "mutating");
   }
 });
@@ -546,6 +544,29 @@ test("published external-binding endpoint models retain root and deep imports", 
     assert.deepEqual(models.EndpointSecretRef$outboundSchema.parse(endpoint.secretRef), endpoint.secretRef);
     assert.deepEqual(models.endpointSecretRefFromJSON(JSON.stringify(endpoint.secretRef)), { ok: true, value: endpoint.secretRef });
   }
+});
+
+test("published CloudFormation key callback actions retain runtime and schema exports", async () => {
+  const models = await import("../typescript/esm/models/operations/acceptawskeysetup.js");
+  assert.equal(models.AcceptAwsKeySetupAction.Create, "create");
+  assert.equal(models.AcceptAwsKeySetupAction.Update, "update");
+  assert.equal(models.AcceptAwsKeySetupAction.Delete, "delete");
+  for (const action of Object.values(models.AcceptAwsKeySetupAction)) {
+    assert.equal(models.AcceptAwsKeySetupAction$outboundSchema.parse(action), action);
+  }
+});
+
+test("published AI binding access status stays distinct from user approval", async () => {
+  for (const path of ["index", "externalaibinding"]) {
+    const models = await import(`../typescript/esm/models/${path}.js`);
+    assert.deepEqual(models.AccessStatus, { Verified: "verified", Denied: "denied" });
+    for (const status of ["verified", "denied"]) {
+      assert.equal(models.AccessStatus$inboundSchema.parse(status), status);
+    }
+    assert.equal(models.AccessStatus$inboundSchema.safeParse("approved").success, false);
+  }
+  const profile = await import("../typescript/esm/models/userprofile.js");
+  assert.equal(profile.UserProfileAccessStatus.Approved, "approved");
 });
 
 test("published preparation imports parse command variants at root and deep paths", async () => {

@@ -79,11 +79,22 @@ fn azure_key_package_is_valid_and_retained() {
     assert!(rendered.contains("create_duration = \"60s\""));
     assert!(rendered.contains("Microsoft.KeyVault/vaults/keys/encrypt/action"));
     assert!(rendered.contains("Microsoft.KeyVault/vaults/keys/decrypt/action"));
-    let detach = module
-        .get("detach-retained-keys.sh")
-        .expect("retained Key detach operation");
-    assert!(detach.contains("azurerm_key_vault_key.customer_key"));
-    assert!(detach.contains("azurerm_key_vault.customer_key"));
+    let inventory: Vec<String> =
+        serde_json::from_str(module.get("retained-data.json").unwrap()).unwrap();
+    assert_eq!(
+        inventory
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "azurerm_resource_group.default_resource_group",
+            "azurerm_key_vault.customer_key",
+            "azurerm_key_vault_key.customer_key",
+            "random_id.customer_key_vault_suffix"
+        ]
+        .into_iter()
+        .collect()
+    );
     assert_terraform_valid(&module, "azure_key_package");
 }
 

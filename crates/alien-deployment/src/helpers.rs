@@ -764,6 +764,8 @@ pub async fn sync_secrets_to_vault(
     config: &DeploymentConfig,
     runtime_metadata: &mut alien_core::RuntimeMetadata,
 ) -> Result<bool> {
+    runtime_metadata.vault_credentials_revoked = false;
+
     let desired_secrets = desired_vault_secrets(stack, client_config.platform(), config);
     let sync_hash = secrets_sync_hash(&desired_secrets);
     let desired_secret_names = desired_secrets.keys().cloned().collect::<Vec<_>>();
@@ -1091,13 +1093,12 @@ fn deployer_secret_location_context(
     context
 }
 
-/// Delete only vault keys that this deployment owns before its runtime resources are destroyed.
+/// Revoke command and telemetry credentials before runtime cleanup.
 ///
-/// The vault resource is setup-owned and may outlive runtime cleanup. Its contents are not:
-/// leaving them behind leaks credentials and makes a successful deployment deletion incomplete.
-/// Ownership comes from the persisted sync inventory plus the current config, which also lets
-/// deployments created before the inventory field was introduced clean up their active keys.
-pub async fn delete_deployment_vault_secrets(
+/// User-supplied secrets may decrypt retained application data. Deployment deletion
+/// must preserve them and their name inventory; owning a synced value is not consent
+/// to erase it. Workload identities and grants are removed by resource cleanup.
+pub async fn revoke_deployment_vault_credentials(
     stack: &Stack,
     stack_state: &StackState,
     client_config: &ClientConfig,
@@ -1108,24 +1109,36 @@ pub async fn delete_deployment_vault_secrets(
         return Ok(false);
     }
 
-    // Secrets reach the vault only through its binding, which exists once the vault is
-    // provisioned. A vault that never got that far (a deployment whose setup failed with the
-    // vault still queued) holds nothing to delete, and loading it would fail the deletion.
-    if !secrets_vault_is_addressable(stack_state) {
-        runtime_metadata.last_synced_env_vars_hash = None;
-        runtime_metadata.last_synced_secret_names.clear();
-        return Ok(false);
-    }
-
-    let mut owned_names = runtime_metadata
+    // Preserve the recovery inventory even when the binding is unavailable. A missing
+    // binding alone does not prove that an imported vault or its contents never existed.
+    let mut retained_names = runtime_metadata
         .last_synced_secret_names
         .iter()
         .cloned()
         .chain(desired_vault_secrets(stack, client_config.platform(), config).into_keys())
+        .filter(|name| !runtime_credential_names().contains(&name.as_str()))
         .collect::<Vec<_>>();
-    owned_names.push(ENV_ALIEN_COMMANDS_TOKEN.to_string());
-    owned_names.sort();
-    owned_names.dedup();
+    retained_names.sort();
+    retained_names.dedup();
+    if !secrets_vault_is_addressable(stack_state) {
+        if stack_state
+            .resources
+            .get(SECRETS_VAULT_ID)
+            .is_some_and(|vault| {
+                vault.status != ResourceStatus::Deleted
+                    && (vault.status != ResourceStatus::Pending
+                        || vault.internal_state.is_some()
+                        || vault.outputs.is_some())
+            })
+        {
+            return Err(AlienError::new(ErrorData::SecretSyncFailed {
+                vault_name: SECRETS_VAULT_ID.to_string(),
+                reason: "Cannot revoke deployment credentials: the recorded vault has no binding; restore its binding before retrying deletion".to_string(),
+            }));
+        }
+        // Nothing is addressable yet, so do not claim any credential was revoked.
+        return Ok(false);
+    }
 
     let provider = BindingsProvider::from_stack_state(stack_state, client_config.clone()).context(
         ErrorData::InternalError {
@@ -1140,23 +1153,28 @@ pub async fn delete_deployment_vault_secrets(
             reason: "Failed to load secrets vault for deployment deletion".to_string(),
         })?;
 
-    for name in &owned_names {
+    for name in runtime_credential_names() {
         vault
             .delete_secret(name)
             .await
             .context(ErrorData::SecretSyncFailed {
                 vault_name: "secrets".to_string(),
-                reason: format!("Failed to delete deployment-owned secret '{name}'"),
+                reason: format!("Failed to revoke deployment credential '{name}'"),
             })?;
     }
 
     runtime_metadata.last_synced_env_vars_hash = None;
-    runtime_metadata.last_synced_secret_names.clear();
-    info!(
-        count = owned_names.len(),
-        "Deleted deployment-owned vault secrets"
-    );
+    runtime_metadata.last_synced_secret_names = retained_names;
+    info!("Revoked deployment command and telemetry vault credentials");
     Ok(true)
+}
+
+fn runtime_credential_names() -> [&'static str; 3] {
+    [
+        ENV_ALIEN_COMMANDS_TOKEN,
+        RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET,
+        RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET,
+    ]
 }
 
 /// Whether an error, or any error it wraps, is the cloud refusing access.
@@ -2382,7 +2400,7 @@ mod tests {
             runtime_metadata.last_synced_env_vars_hash.as_deref(),
             Some(expected_hash.as_str())
         );
-        assert!(!delete_deployment_vault_secrets(
+        assert!(!revoke_deployment_vault_credentials(
             &Stack::new("empty".to_string()).build(),
             &stack_state,
             &ClientConfig::Test,
@@ -2391,7 +2409,10 @@ mod tests {
         )
         .await
         .expect("deleting an empty deployment should not require a secrets vault"));
-        assert!(runtime_metadata.last_synced_env_vars_hash.is_none());
+        assert_eq!(
+            runtime_metadata.last_synced_env_vars_hash.as_deref(),
+            Some(expected_hash.as_str())
+        );
     }
 
     #[tokio::test]
@@ -2756,12 +2777,14 @@ mod tests {
         // This is the real pre-inventory upgrade case: the old hash exists, but there is no list
         // of owned names. The reserved token still has to be deleted from the shared vault.
         metadata.last_synced_env_vars_hash = Some("legacy".to_string());
+        metadata.vault_credentials_revoked = true;
         metadata.last_synced_secret_names.clear();
         assert!(
             sync_secrets_to_vault(&stack, &stack_state, &client_config, &first, &mut metadata)
                 .await
                 .expect("first sync")
         );
+        assert!(!metadata.vault_credentials_revoked);
         assert!(vault.get_secret(ENV_ALIEN_COMMANDS_TOKEN).await.is_err());
         assert_eq!(
             vault
@@ -2907,7 +2930,7 @@ mod tests {
             ..RuntimeMetadata::default()
         };
 
-        let deleted = delete_deployment_vault_secrets(
+        let deleted = revoke_deployment_vault_credentials(
             &make_single_function_stack("worker"),
             &stack_state,
             &ClientConfig::Test,
@@ -2921,12 +2944,50 @@ mod tests {
             !deleted,
             "nothing was deleted from a vault that never existed"
         );
-        assert!(metadata.last_synced_env_vars_hash.is_none());
-        assert!(metadata.last_synced_secret_names.is_empty());
+        assert_eq!(
+            metadata.last_synced_env_vars_hash.as_deref(),
+            Some("previous-sync")
+        );
+        assert_eq!(metadata.last_synced_secret_names, vec!["API_TOKEN"]);
     }
 
     #[tokio::test]
-    async fn deployment_deletion_removes_owned_vault_values_and_preserves_unrelated_values() {
+    async fn deployment_deletion_refuses_missing_binding_without_losing_secret_inventory() {
+        let mut state = StackState::new(Platform::Test);
+        let mut vault = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(Vault::new(SECRETS_VAULT_ID.to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        vault.status = ResourceStatus::Running;
+        state.resources.insert(SECRETS_VAULT_ID.to_string(), vault);
+        let mut metadata = RuntimeMetadata {
+            last_synced_env_vars_hash: Some("installed".to_string()),
+            last_synced_secret_names: vec![
+                "DATA_KEY".to_string(),
+                ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+            ],
+            ..RuntimeMetadata::default()
+        };
+        let before = serde_json::to_value(&metadata).unwrap();
+        let state: StackState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let error = revoke_deployment_vault_credentials(
+            &make_single_function_stack("worker"),
+            &state,
+            &ClientConfig::Test,
+            &make_config(make_snapshot(&[], &[])),
+            &mut metadata,
+        )
+        .await
+        .expect_err("an imported vault without a binding cannot claim revocation");
+        assert!(error.to_string().contains("restore its binding"));
+        assert_eq!(serde_json::to_value(metadata).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn deployment_deletion_revokes_runtime_credentials_and_retains_user_secrets() {
         let temp = tempfile::TempDir::new().expect("temp dir");
         let state_dir = temp.path().to_string_lossy().to_string();
         let client_config = ClientConfig::Local {
@@ -2955,6 +3016,7 @@ mod tests {
             ("CURRENT", "current-value"),
             ("REMOVED", "removed-value"),
             (RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET, "monitoring-value"),
+            (RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET, "old-metrics-value"),
             (ENV_ALIEN_COMMANDS_TOKEN, "old-runtime-token"),
             ("UNRELATED", "keep-me"),
         ] {
@@ -2978,7 +3040,17 @@ mod tests {
             ..RuntimeMetadata::default()
         };
 
-        assert!(delete_deployment_vault_secrets(
+        // Simulate a checkpoint retry after the first credential was removed but its
+        // response was lost. A later provider read fails: inventory must remain intact.
+        vault
+            .delete_secret(ENV_ALIEN_COMMANDS_TOKEN)
+            .await
+            .expect("first revocation applied");
+        let file = temp.path().join("secrets.json");
+        let saved = std::fs::read(&file).expect("saved vault contents");
+        std::fs::write(&file, b"invalid json").expect("simulate unreadable provider state");
+        let before = serde_json::to_value(&metadata).unwrap();
+        assert!(revoke_deployment_vault_credentials(
             &make_single_function_stack("worker"),
             &stack_state,
             &client_config,
@@ -2986,14 +3058,22 @@ mod tests {
             &mut metadata,
         )
         .await
-        .expect("delete deployment-owned vault values"));
+        .is_err());
+        assert_eq!(serde_json::to_value(&metadata).unwrap(), before);
+        std::fs::write(&file, saved).expect("provider recovered");
+        metadata = serde_json::from_value(before).expect("reload failed checkpoint");
 
-        for name in [
-            "CURRENT",
-            "REMOVED",
-            RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET,
-            ENV_ALIEN_COMMANDS_TOKEN,
-        ] {
+        assert!(revoke_deployment_vault_credentials(
+            &make_single_function_stack("worker"),
+            &stack_state,
+            &client_config,
+            &config,
+            &mut metadata,
+        )
+        .await
+        .expect("revoke deployment credentials"));
+
+        for name in runtime_credential_names() {
             assert!(
                 vault.get_secret(name).await.is_err(),
                 "{name} should be deleted"
@@ -3007,7 +3087,39 @@ mod tests {
             "keep-me"
         );
         assert!(metadata.last_synced_env_vars_hash.is_none());
-        assert!(metadata.last_synced_secret_names.is_empty());
+        assert_eq!(
+            metadata.last_synced_secret_names,
+            vec!["CURRENT", "REMOVED"]
+        );
+        // Retry from serialized metadata after credentials are already absent. Even if
+        // current config no longer declares the values, keep their recovery inventory.
+        let mut metadata: RuntimeMetadata =
+            serde_json::from_value(serde_json::to_value(&metadata).unwrap()).unwrap();
+        revoke_deployment_vault_credentials(
+            &make_single_function_stack("worker"),
+            &stack_state,
+            &client_config,
+            &make_config(make_snapshot(&[], &[])),
+            &mut metadata,
+        )
+        .await
+        .expect("idempotent credential revocation after reload");
+        assert_eq!(
+            metadata.last_synced_secret_names,
+            vec!["CURRENT", "REMOVED"]
+        );
+        for (name, expected) in [("CURRENT", "current-value"), ("REMOVED", "removed-value")] {
+            assert_eq!(
+                vault.get_secret(name).await.expect("retained user secret"),
+                expected
+            );
+        }
+        for name in runtime_credential_names() {
+            assert!(
+                vault.get_secret(name).await.is_err(),
+                "{name} stays revoked"
+            );
+        }
     }
 
     fn resource_env<'a>(stack: &'a Stack, id: &str) -> &'a HashMap<String, String> {

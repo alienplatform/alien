@@ -385,6 +385,8 @@ fn format_deployment_status(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::DeletePending => "delete pending",
         DeploymentStatus::Deleting => "deleting",
         DeploymentStatus::DeleteFailed => "delete failed",
+        DeploymentStatus::RetentionRequired => "access cleanup required",
+        DeploymentStatus::Retained => "data retained",
         DeploymentStatus::TeardownRequired => "teardown required",
         DeploymentStatus::TeardownFailed => "teardown failed",
         DeploymentStatus::Deleted => "deleted",
