@@ -995,6 +995,9 @@
           },
           "404": {
             "description": "Not found"
+          },
+          "409": {
+            "description": "Setup cleanup lease is active; retry deletion after cleanup finishes or the lease expires"
           }
         }
       }

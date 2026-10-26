@@ -1250,7 +1250,7 @@ impl DeploymentStore for SqliteDeploymentStore {
 
         // Runtime steps keep their lease and checkpoint against the recorded policy.
         // Setup cleanup must finish before its authorized policy can change. A
-        // completed setup checkpoint also keeps its lease until explicit release.
+        // completed setup checkpoint also keeps its lease until release or expiry.
         let requires_setup_release = Self::SETUP_TEARDOWN_STATUSES
             .contains(&deployment.status.as_str())
             || deployment.status == "retained";
@@ -1292,16 +1292,44 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .and_where(Expr::col(Deployments::Id).eq(id))
                 .and_where(Expr::col(Deployments::Status).eq(deployment.status.clone()));
             if requires_setup_release {
-                update.and_where(Expr::col(Deployments::LockedBy).is_null());
+                update
+                    .value(Deployments::LockedBy, Option::<String>::None)
+                    .value(Deployments::LockedAt, Option::<String>::None)
+                    .cond_where(
+                        Cond::any()
+                            .add(Expr::col(Deployments::LockedBy).is_null())
+                            .add(Expr::cust(Self::stale_lock_condition_sql())),
+                    );
             }
             update.to_string(SqliteQueryBuilder)
         };
         if self.db.execute_returning_rows_affected(&sql).await? != 1 {
             if requires_setup_release {
-                let current = self.get_deployment(caller, id).await?;
-                if current.is_some_and(|current| {
-                    current.status == deployment.status && current.locked_by.is_some()
-                }) {
+                let sql = Query::select()
+                    .column(Deployments::Id)
+                    .from(Deployments::Table)
+                    .and_where(Expr::col(Deployments::Id).eq(id))
+                    .and_where(Expr::col(Deployments::Status).eq(deployment.status))
+                    .and_where(Expr::col(Deployments::LockedBy).is_not_null())
+                    .and_where(Expr::cust(Self::stale_lock_condition_sql()).not())
+                    .to_string(SqliteQueryBuilder);
+                let conn = self.db.conn().lock().await;
+                let mut rows =
+                    conn.query(&sql, ())
+                        .await
+                        .into_alien_error()
+                        .context(GenericError {
+                            message: "Failed to check setup cleanup lease".to_string(),
+                        })?;
+                if rows
+                    .next()
+                    .await
+                    .into_alien_error()
+                    .context(GenericError {
+                        message: "Failed to fetch setup cleanup lease".to_string(),
+                    })?
+                    .is_some()
+                {
                     return Err(
                         AlienError::new(ErrorData::DeploymentSetupCleanupInProgress {
                             deployment_id: id.to_string(),
@@ -1788,6 +1816,16 @@ impl DeploymentStore for SqliteDeploymentStore {
         }) {
             return Err(ErrorData::bad_request(
                 "A deployment report cannot downgrade or use an unsupported protocol",
+            )
+            .into_generic());
+        }
+        // A late retention checkpoint cannot complete a newer erase request,
+        // including after an expired setup lease reopens delete-pending.
+        if data.state.status == DeploymentStatus::Retained
+            && stored_deletion_policy == alien_core::DeletionPolicy::Erase
+        {
+            return Err(ErrorData::bad_request(
+                "Retention cannot complete an erase request; reload before retrying",
             )
             .into_generic());
         }

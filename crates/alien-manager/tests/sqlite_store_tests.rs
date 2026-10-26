@@ -3199,6 +3199,87 @@ async fn setup_retention_checkpoint_survives_late_pull_reports_and_reopens_for_e
 }
 
 #[tokio::test]
+async fn erase_expires_stale_setup_leases_and_survives_late_checkpoints() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let subject = test_subject();
+    let group = create_test_group(&store).await;
+    for status in [
+        "retained",
+        "retention-required",
+        "teardown-required",
+        "teardown-failed",
+    ] {
+        let dep = create_test_deployment(&store, &group, status, Platform::Aws).await;
+        store.set_delete_pending(&subject, &dep.id).await.unwrap();
+        db.conn().lock().await.execute(
+            "UPDATE deployments SET status = ?, locked_by = 'dead-setup', locked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            [status, dep.id.as_str()],
+        ).await.unwrap();
+        let error = store
+            .set_delete_pending_with_policy(&subject, &dep.id, alien_core::DeletionPolicy::Erase)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_CLEANUP_IN_PROGRESS");
+        assert_eq!(error.http_status_code, Some(409));
+        assert!(error.retryable);
+        db.conn().lock().await.execute(
+            "UPDATE deployments SET locked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-6 minutes') WHERE id = ?",
+            [dep.id.as_str()],
+        ).await.unwrap();
+        store
+            .set_delete_pending_with_policy(&subject, &dep.id, alien_core::DeletionPolicy::Erase)
+            .await
+            .expect("stale setup lease must not fence erase forever");
+        let saved = store
+            .get_deployment(&subject, &dep.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let expected_status = if status == "retained" {
+            "teardown-required"
+        } else {
+            "delete-pending"
+        };
+        assert_eq!(saved.status, expected_status);
+        assert!(saved.locked_by.is_none());
+        assert!(saved.locked_at.is_none());
+        assert_eq!(
+            saved.runtime_metadata.unwrap().deletion_policy,
+            alien_core::DeletionPolicy::Erase
+        );
+        let mut late = test_reconcile_data(&dep.id, "dead-setup", DeploymentStatus::Retained, None);
+        late.state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+        late.state.runtime_metadata = Some(RuntimeMetadata::default());
+        assert!(
+            store.reconcile(&subject, late.clone()).await.is_err(),
+            "expired setup session cannot complete retention over erase"
+        );
+        if status == "retained" {
+            late.state.status = DeploymentStatus::TeardownFailed;
+            let error = store
+                .reconcile(&subject, late)
+                .await
+                .err()
+                .expect("expired session must lose setup ownership");
+            assert!(error.message.contains("active lease"));
+        }
+        let saved = store
+            .get_deployment(&subject, &dep.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.status, expected_status);
+        assert_eq!(
+            saved.runtime_metadata.unwrap().deletion_policy,
+            alien_core::DeletionPolicy::Erase
+        );
+        assert!(saved.locked_by.is_none());
+        assert!(saved.locked_at.is_none());
+    }
+}
+
+#[tokio::test]
 async fn erase_waits_for_each_setup_cleanup_status_to_release_its_lease() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());
@@ -3293,19 +3374,16 @@ async fn erase_reopens_retained_inventory_even_if_policy_already_says_erase() {
         .set_delete_pending_with_policy(&test_subject(), &dep.id, alien_core::DeletionPolicy::Erase)
         .await
         .unwrap();
-    // A report can reach Retained while normalization preserves the stored erase policy.
-    let mut report = test_reconcile_data(&dep.id, "runtime", DeploymentStatus::Retained, None);
-    report.state.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
-    let saved = store
-        .reconcile(&test_subject(), report)
+    // Older reports could leave this inconsistent state; explicit erase repairs it.
+    db.conn()
+        .lock()
         .await
-        .unwrap()
-        .record;
-    assert_eq!(saved.status, "retained");
-    assert_eq!(
-        saved.runtime_metadata.unwrap().deletion_policy,
-        alien_core::DeletionPolicy::Erase
-    );
+        .execute(
+            "UPDATE deployments SET status = 'retained' WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
     store
         .set_delete_pending_with_policy(&test_subject(), &dep.id, alien_core::DeletionPolicy::Erase)
         .await

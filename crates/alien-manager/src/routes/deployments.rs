@@ -1115,6 +1115,7 @@ async fn get_deployment_info(
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Not found"),
+        (status = 409, description = "Setup cleanup lease is active; retry deletion after cleanup finishes or the lease expires"),
     )
 ))]
 async fn delete_deployment(
