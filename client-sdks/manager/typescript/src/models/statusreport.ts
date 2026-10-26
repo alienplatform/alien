@@ -8,8 +8,17 @@ import {
   ReportedTelemetry$Outbound,
   ReportedTelemetry$outboundSchema,
 } from "./reportedtelemetry.js";
+import {
+  ResourceHeartbeat,
+  ResourceHeartbeat$Outbound,
+  ResourceHeartbeat$outboundSchema,
+} from "./resourceheartbeat.js";
 
 export type StatusReport = {
+  /**
+   * Resource observations captured by the Operator alongside this state.
+   */
+  heartbeats?: Array<ResourceHeartbeat> | undefined;
   /**
    * Deployment state as the environment's Operator last recorded it.
    */
@@ -18,12 +27,18 @@ export type StatusReport = {
    * Telemetry the Operator buffered, as the OTLP batches it received.
    */
   telemetry?: Array<ReportedTelemetry> | undefined;
+  /**
+   * Site clock time when the report was written. Older clients omit it.
+   */
+  writtenAt?: Date | null | undefined;
 };
 
 /** @internal */
 export type StatusReport$Outbound = {
+  heartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   state: { [k: string]: any };
   telemetry?: Array<ReportedTelemetry$Outbound> | undefined;
+  writtenAt?: string | null | undefined;
 };
 
 /** @internal */
@@ -31,8 +46,10 @@ export const StatusReport$outboundSchema: z.ZodType<
   StatusReport$Outbound,
   StatusReport
 > = z.object({
+  heartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   state: z.record(z.string(), z.any()),
   telemetry: z.array(ReportedTelemetry$outboundSchema).optional(),
+  writtenAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
 });
 
 export function statusReportToJSON(statusReport: StatusReport): string {

@@ -29,8 +29,8 @@ const value: models.AiHeartbeatDataAwsBedrock = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -70,8 +70,8 @@ const value: models.AiHeartbeatDataGcpVertex = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -110,8 +110,8 @@ const value: models.AiHeartbeatDataAzureFoundry = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -133,8 +133,8 @@ const value: models.AiHeartbeatDataExternal = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -146,4 +146,3 @@ const value: models.AiHeartbeatDataExternal = {
   backend: "external",
 };
 ```
-

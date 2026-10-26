@@ -12,8 +12,8 @@ let value: ResourceHeartbeatDataAzureContainerAppsEnvironment = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],

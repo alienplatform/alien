@@ -17510,6 +17510,13 @@
           "state"
         ],
         "properties": {
+          "heartbeats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceHeartbeat"
+            },
+            "description": "Resource observations captured by the Operator alongside this state."
+          },
           "state": {
             "type": "object",
             "description": "Deployment state as the environment's Operator last recorded it.",

@@ -33,13 +33,13 @@ const value: models.ResourceHeartbeatDataWorker = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
-      health: "unhealthy",
-      lifecycle: "deleting",
+      health: "unknown",
+      lifecycle: "creating",
       partial: false,
       stale: false,
     },
@@ -68,13 +68,13 @@ const value: models.ResourceHeartbeatDataContainer = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
-      health: "unhealthy",
-      lifecycle: "deleting",
+      health: "unknown",
+      lifecycle: "creating",
       partial: false,
       stale: false,
     },
@@ -110,13 +110,13 @@ const value: models.ResourceHeartbeatDataDaemon = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
-      health: "unhealthy",
-      lifecycle: "deleting",
+      health: "unknown",
+      lifecycle: "creating",
       partial: false,
       stale: false,
     },
@@ -150,8 +150,8 @@ const value: models.ResourceHeartbeatDataComputeCluster = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
@@ -179,13 +179,13 @@ const value: models.ResourceHeartbeatDataKubernetesCluster = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
-      health: "unhealthy",
-      lifecycle: "deleting",
+      health: "unknown",
+      lifecycle: "creating",
       partial: false,
       stale: false,
     },
@@ -237,8 +237,8 @@ const value: models.ResourceHeartbeatDataKv = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
@@ -284,8 +284,8 @@ const value: models.ResourceHeartbeatDataVault = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
@@ -325,8 +325,8 @@ const value: models.ResourceHeartbeatDataServiceAccount = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
@@ -392,8 +392,15 @@ const value: models.ResourceHeartbeatDataArtifactRegistry = {
     repositoryCount: 294854,
     repositoryPrefix: "<value>",
     status: {
-      collectionIssues: [],
-      health: "unknown",
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "not-installed",
+          severity: "error",
+          source: "<value>",
+        },
+      ],
+      health: "healthy",
       lifecycle: "scaling",
       partial: true,
       stale: false,
@@ -416,8 +423,8 @@ const value: models.ResourceHeartbeatDataBuild = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
@@ -506,8 +513,8 @@ const value: models.ResourceHeartbeatDataAzureContainerAppsEnvironment = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
@@ -574,8 +581,8 @@ const value: models.ResourceHeartbeatDataAi = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
@@ -596,14 +603,14 @@ const value: models.ResourceHeartbeatDataAi = {
 const value: models.ResourceHeartbeatDataKey = {
   data: {
     data: {
-      enabled: true,
+      enabled: false,
       keyArn: "<value>",
       keySpec: "<value>",
       keyState: "<value>",
       keyUsage: "<value>",
       status: {
-        health: "healthy",
-        lifecycle: "running",
+        health: "unknown",
+        lifecycle: "deleted",
       },
     },
     provider: "aws-kms",
@@ -631,4 +638,3 @@ const value: models.ResourceHeartbeatDataSandbox = {
   resourceType: "sandbox",
 };
 ```
-

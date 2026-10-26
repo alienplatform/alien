@@ -20,8 +20,15 @@ let value: ArtifactRegistryHeartbeatDataGcpArtifactRegistry = {
   projectId: "<id>",
   repositoryId: "<id>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
     lifecycle: "scaling",
     partial: true,
     stale: false,

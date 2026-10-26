@@ -36,21 +36,21 @@ let value: ReconcileRequest = {
       data: {
         data: {
           data: {
-            enabled: true,
+            enabled: false,
             keyArn: "<value>",
             keySpec: "<value>",
             keyState: "<value>",
             keyUsage: "<value>",
             status: {
-              health: "healthy",
-              lifecycle: "running",
+              health: "unknown",
+              lifecycle: "deleted",
             },
           },
           provider: "aws-kms",
         },
         resourceType: "key",
       },
-      observedAt: new Date("2026-03-29T08:18:22.529Z"),
+      observedAt: new Date("2024-11-09T03:49:51.293Z"),
       raw: [],
       resourceId: "<id>",
       resourceType: "worker",
