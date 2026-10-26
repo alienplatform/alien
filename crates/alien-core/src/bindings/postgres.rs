@@ -126,7 +126,15 @@ pub struct ExternalPostgresBinding {
 #[serde(untagged)]
 enum ExternalPasswordInput {
     Literal(String),
-    Reference(std::collections::BTreeMap<String, serde_json::Value>),
+    Reference(ExternalPasswordSecretRef),
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExternalPasswordSecretRef {
+    secret_ref: super::SecretReference,
 }
 
 fn deserialize_external_password<'de, D>(deserializer: D) -> Result<BindingValue<String>, D::Error>
@@ -135,10 +143,9 @@ where
 {
     match ExternalPasswordInput::deserialize(deserializer)? {
         ExternalPasswordInput::Literal(value) => Ok(BindingValue::Value(value)),
-        ExternalPasswordInput::Reference(reference) => {
-            serde_json::from_value(serde_json::Value::Object(reference.into_iter().collect()))
-                .map_err(serde::de::Error::custom)
-        }
+        ExternalPasswordInput::Reference(reference) => Ok(BindingValue::SecretRef {
+            secret_ref: reference.secret_ref,
+        }),
     }
 }
 
@@ -231,6 +238,11 @@ mod tests {
             serde_json::json!(false),
             serde_json::json!(null),
             serde_json::json!([]),
+            serde_json::json!({}),
+            serde_json::json!({"secretRef": {"name": "credentials"}}),
+            serde_json::json!({"secretRef": {"key": "password"}}),
+            serde_json::json!({"secretRef": {"name": 4, "key": "password"}}),
+            serde_json::json!({"envRef": "PASSWORD"}),
         ] {
             let binding = serde_json::json!({
                 "service": "external", "host": "db.internal", "port": 5432,
