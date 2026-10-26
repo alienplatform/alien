@@ -405,6 +405,23 @@ async fn sync_with_manager(
         if let Ok(alien_error) =
             serde_json::from_str::<alien_error::AlienError<crate::error::ErrorData>>(&error_body)
         {
+            if durable_execution.claim.is_some()
+                && matches!(
+                    alien_error.code.as_str(),
+                    "DEPLOYMENT_LEASE_LOST" | "DEPLOYMENT_UPDATE_CLAIM_LOST"
+                )
+            {
+                // This receipt can no longer authorize a report. A new session
+                // lets the manager expire the abandoned attempt and grant fresh
+                // work; keep the deployment checkpoint and pending observations.
+                let session = format!("pull-operator-{}", Uuid::new_v4());
+                state.db.set_sync_execution(&session, None, None).await?;
+                warn!(
+                    deployment_id = %deployment_id,
+                    error = %alien_error,
+                    "Discarded rejected execution claim; requesting a fresh claim on the next sync"
+                );
+            }
             return Err(alien_error);
         }
 
@@ -643,10 +660,18 @@ fn accept_target_release(
     if matches!(
         deployment_state.status,
         alien_core::DeploymentStatus::Running
+            | alien_core::DeploymentStatus::ProvisioningFailed
             | alien_core::DeploymentStatus::UpdateFailed
             | alien_core::DeploymentStatus::RefreshFailed
     ) {
-        deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
+        deployment_state.status = if deployment_state.status
+            == alien_core::DeploymentStatus::ProvisioningFailed
+            && deployment_state.stack_state.is_none()
+        {
+            alien_core::DeploymentStatus::Pending
+        } else {
+            alien_core::DeploymentStatus::UpdatePending
+        };
         if let Some(metadata) = deployment_state.runtime_metadata.as_mut() {
             metadata.pending_prepared_stack = None;
             metadata.pending_prepared_release_id = None;
@@ -1026,10 +1051,119 @@ mod tests {
         assert_eq!(state.target_release, Some(release.clone()));
 
         // New work also reaches a deployment whose health check failed.
-        state.status = DeploymentStatus::RefreshFailed;
-        state.target_release = None;
+        for status in [
+            DeploymentStatus::RefreshFailed,
+            DeploymentStatus::UpdateFailed,
+        ] {
+            state.status = status;
+            state.target_release = None;
+            accept_target_release(&mut state, release.clone());
+            assert_eq!(state.status, DeploymentStatus::UpdatePending);
+        }
+    }
+
+    #[test]
+    fn corrective_target_without_provisioned_state_restarts_initial_preflights() {
+        let release = ReleaseInfo {
+            release_id: Some("rel_corrected".into()),
+            version: None,
+            description: None,
+            stack: Stack::new("corrected".into()).build(),
+        };
+        let mut state = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::ProvisioningFailed,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: true,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        accept_target_release(&mut state, release.clone());
+        assert_eq!(state.status, DeploymentStatus::Pending);
+        assert_eq!(state.target_release, Some(release.clone()));
+        assert!(!state.retry_requested);
+        state.status = DeploymentStatus::ProvisioningFailed;
+        state.stack_state = Some(alien_core::StackState::new(Platform::Kubernetes));
+        accept_target_release(&mut state, release);
+        assert_eq!(state.status, DeploymentStatus::UpdatePending);
+        assert!(state.stack_state.is_some());
+    }
+
+    #[tokio::test]
+    async fn corrective_target_with_partial_state_and_no_current_release_converges() {
+        let storage = alien_core::Storage::new("files".into()).build();
+        let mut partial = alien_core::StackState::new(Platform::Test);
+        let mut resource = alien_core::StackResourceState::new_pending(
+            "storage".into(),
+            alien_core::Resource::new(storage.clone()),
+            None,
+            vec![],
+        );
+        resource.lifecycle = Some(alien_core::ResourceLifecycle::Live);
+        partial.resources.insert("files".into(), resource);
+        let release = ReleaseInfo {
+            release_id: Some("rel_corrected".into()),
+            version: None,
+            description: None,
+            stack: Stack::new("corrected".into())
+                .add(storage, alien_core::ResourceLifecycle::Live)
+                .build(),
+        };
+        let mut state = DeploymentState {
+            platform: Platform::Test,
+            status: DeploymentStatus::ProvisioningFailed,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(partial),
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata::default()),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
         accept_target_release(&mut state, release.clone());
         assert_eq!(state.status, DeploymentStatus::UpdatePending);
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        for _ in 0..30 {
+            state =
+                alien_deployment::step(state, config.clone(), alien_core::ClientConfig::Test, None)
+                    .await
+                    .expect("corrective deployment step")
+                    .state;
+            if state.status == DeploymentStatus::Running {
+                break;
+            }
+            assert!(
+                !matches!(
+                    state.status,
+                    DeploymentStatus::UpdateFailed | DeploymentStatus::ProvisioningFailed
+                ),
+                "{:?}",
+                state.error
+            );
+        }
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert_eq!(
+            state.current_release.unwrap().release_id,
+            release.release_id
+        );
+        assert_eq!(
+            state.stack_state.unwrap().resources["files"].status,
+            alien_core::ResourceStatus::Running
+        );
     }
 
     #[test]
@@ -1040,30 +1174,35 @@ mod tests {
             description: None,
             stack: Stack::new("corrected".to_string()).build(),
         };
-        let mut metadata = alien_core::RuntimeMetadata::default();
-        metadata.pending_prepared_stack = Some(Stack::new("failed-target".to_string()).build());
-        let mut state = DeploymentState {
-            platform: Platform::Kubernetes,
-            status: DeploymentStatus::UpdateFailed,
-            current_release: None,
-            target_release: None,
-            stack_state: None,
-            error: None,
-            environment_info: None,
-            runtime_metadata: Some(metadata),
-            retry_requested: true,
-            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
-        };
+        for status in [
+            DeploymentStatus::UpdateFailed,
+            DeploymentStatus::ProvisioningFailed,
+        ] {
+            let mut metadata = alien_core::RuntimeMetadata::default();
+            metadata.pending_prepared_stack = Some(Stack::new("failed-target".to_string()).build());
+            let mut state = DeploymentState {
+                platform: Platform::Kubernetes,
+                status,
+                current_release: None,
+                target_release: None,
+                stack_state: Some(alien_core::StackState::new(Platform::Kubernetes)),
+                error: None,
+                environment_info: None,
+                runtime_metadata: Some(metadata),
+                retry_requested: true,
+                protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
 
-        accept_target_release(&mut state, release.clone());
+            accept_target_release(&mut state, release.clone());
 
-        assert_eq!(state.status, DeploymentStatus::UpdatePending);
-        assert_eq!(state.target_release, Some(release));
-        assert!(!state.retry_requested);
-        assert!(state
-            .runtime_metadata
-            .as_ref()
-            .is_some_and(|metadata| metadata.pending_prepared_stack.is_none()));
+            assert_eq!(state.status, DeploymentStatus::UpdatePending);
+            assert_eq!(state.target_release, Some(release.clone()));
+            assert!(!state.retry_requested);
+            assert!(state
+                .runtime_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.pending_prepared_stack.is_none()));
+        }
     }
 
     #[tokio::test]
@@ -1799,6 +1938,136 @@ mod tests {
         .await;
         assert_eq!(body["executionClaim"]["operationId"], "duop_receipt");
         assert_eq!(body["executionClaim"]["attemptId"], "duat_receipt");
+    }
+
+    #[tokio::test]
+    async fn rejected_execution_claim_is_discarded_before_requesting_a_fresh_claim() {
+        type Requests = Arc<Mutex<Vec<Value>>>;
+        async fn serve(
+            State((code, requests)): State<(String, Requests)>,
+            Json(body): Json<Value>,
+        ) -> (axum::http::StatusCode, Json<Value>) {
+            requests.lock().unwrap().push(body.clone());
+            if body
+                .get("executionClaim")
+                .is_some_and(|claim| claim["attemptId"] == "attempt_expired")
+            {
+                return (
+                    axum::http::StatusCode::CONFLICT,
+                    Json(json!({
+                        "code": code, "message": "Execution claim rejected", "retryable": true,
+                        "internal": false, "httpStatusCode": 409
+                    })),
+                );
+            }
+            (
+                axum::http::StatusCode::OK,
+                Json(json!({"executionClaim": {
+                    "operationId": "operation_current", "attemptId": "attempt_fresh"
+                }})),
+            )
+        }
+        for code in [
+            "DEPLOYMENT_LEASE_LOST",
+            "DEPLOYMENT_UPDATE_CLAIM_LOST",
+            "FORBIDDEN",
+            "UNAVAILABLE",
+        ] {
+            let requests: Requests = Arc::new(Mutex::new(Vec::new()));
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let app = Router::new()
+                .route("/v1/sync", post(serve))
+                .with_state((code.to_string(), requests.clone()));
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let directory = tempfile::tempdir().unwrap();
+            let db = OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap();
+            db.set_deployment_id("dep_receipt").await.unwrap();
+            let current: DeploymentState = serde_json::from_value(json!({
+                "platform": "aws", "status": "running", "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+            })).unwrap();
+            db.set_deployment_state(&current).await.unwrap();
+            let claim = alien_core::sync::SyncExecutionClaim {
+                operation_id: "operation_current".into(),
+                attempt_id: "attempt_expired".into(),
+            };
+            let target: alien_core::sync::TargetDeployment = serde_json::from_value(json!({
+                "releaseInfo": {"releaseId": "rel_current", "stack": {"id": "receipt", "resources": {}}},
+                "config": {"deploymentName": "receipt", "environmentVariables": {"variables": [], "hash": "", "createdAt": "2026-01-01T00:00:00Z"}, "externalBindings": {}, "stackSettings": {"deploymentModel": "pull"}, "managerUrl": "https://manager.example.com"}
+            })).unwrap();
+            db.set_sync_execution("session_expired", Some(&claim), Some(&target))
+                .await
+                .unwrap();
+            let state = OperatorState {
+                config: OperatorConfig::builder()
+                    .platform(Platform::Aws)
+                    .operator_permission("diagnostics")
+                    .data_dir(directory.path().to_str().unwrap())
+                    .encryption_key(TEST_ENCRYPTION_KEY)
+                    .build(),
+                db: Arc::new(db),
+                service_provider: None,
+                operations_sync_handler: None,
+                pod_log_collection: false,
+                cancel: CancellationToken::new(),
+            };
+            let client = create_authenticated_client("ax_dep_test").unwrap();
+            let error = sync_with_manager(&state, &client, &url, false, None)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, code);
+            let reopened = OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap();
+            let saved = reopened.get_sync_execution().await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_value(reopened.get_deployment_state().await.unwrap().unwrap())
+                    .unwrap(),
+                serde_json::to_value(&current).unwrap()
+            );
+            if matches!(
+                code,
+                "DEPLOYMENT_LEASE_LOST" | "DEPLOYMENT_UPDATE_CLAIM_LOST"
+            ) {
+                assert!(
+                    saved.claim.is_none(),
+                    "Rejected claim must be discarded: {code}"
+                );
+                assert!(saved.target.is_none());
+                assert_ne!(saved.session, "session_expired");
+                sync_with_manager(&state, &client, &url, false, None)
+                    .await
+                    .unwrap();
+                let requests = requests.lock().unwrap();
+                assert_eq!(requests.len(), 2);
+                assert!(requests[1].get("executionClaim").is_none());
+                assert_eq!(requests[1]["session"], saved.session);
+                drop(requests);
+                assert_eq!(
+                    reopened
+                        .get_sync_execution()
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .claim
+                        .unwrap()
+                        .attempt_id,
+                    "attempt_fresh"
+                );
+            } else {
+                assert_eq!(saved.session, "session_expired");
+                assert_eq!(saved.claim, Some(claim));
+                assert_eq!(
+                    serde_json::to_value(saved.target).unwrap(),
+                    serde_json::to_value(Some(target)).unwrap()
+                );
+            }
+            server.abort();
+        }
     }
 
     #[tokio::test]

@@ -11,8 +11,9 @@ use crate::kubernetes_public_endpoint::{
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+    deployment_has_ready_replicas, deployment_rollout_complete, emit_kubernetes_workload_heartbeat,
+    label_selector, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -42,6 +43,12 @@ pub struct KubernetesWorkerController {
     /// Whether the internal command Service has been reconciled for this Worker.
     #[serde(default)]
     pub(crate) commands_enabled: bool,
+    /// Generation returned when the current update was submitted.
+    #[serde(default)]
+    pub(crate) expected_generation: Option<i64>,
+    /// Whether the previous health check also found zero ready replicas.
+    #[serde(default)]
+    pub(crate) zero_ready_observed: bool,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
 }
@@ -69,6 +76,7 @@ impl KubernetesWorkerController {
             .service_provider
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
+        let mut existing_deployment = None;
         let (legacy_registry_owner_proven, legacy_environment_owner_proven) =
             match deployment_client
                 .get_deployment(&namespace, &function_name)
@@ -93,6 +101,7 @@ impl KubernetesWorkerController {
                         resource_id: Some(config.id.clone()),
                     }));
                     }
+                    existing_deployment = Some(existing.clone());
                     let pod_spec = existing
                         .spec
                         .as_ref()
@@ -186,13 +195,42 @@ impl KubernetesWorkerController {
         )
         .await?;
 
-        let _created_deployment = deployment_client
-            .create_deployment(&namespace, &deployment)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create deployment '{}'.", function_name),
-                resource_id: Some(config.id.clone()),
+        self.expected_generation = None;
+        if let Some(mut existing) = existing_deployment {
+            let spec = existing.spec.as_mut().ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Existing deployment '{function_name}' has no spec"),
+                    resource_id: Some(config.id.clone()),
+                })
             })?;
+            let desired = deployment
+                .spec
+                .as_ref()
+                .expect("generated workload has a spec");
+            spec.template = desired.template.clone();
+            spec.replicas = desired.replicas;
+            let updated = deployment_client
+                .update_deployment(&namespace, &function_name, &existing)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to reconcile adopted deployment '{function_name}'"),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            self.expected_generation = Some(updated.metadata.generation.ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Adopted deployment '{function_name}' has no generation"),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?);
+        } else {
+            deployment_client
+                .create_deployment(&namespace, &deployment)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create deployment '{}'.", function_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
+        }
 
         self.deployment_name = Some(function_name.clone());
         self.namespace = Some(namespace.clone());
@@ -241,22 +279,26 @@ impl KubernetesWorkerController {
             .await
         {
             Ok(deployment) => {
-                if let Some(status) = &deployment.status {
-                    if let (Some(ready_replicas), Some(replicas)) =
-                        (status.ready_replicas, status.replicas)
-                    {
-                        if ready_replicas == replicas && replicas > 0 {
-                            info!(deployment_name=%deployment_name, namespace=%namespace, "Deployment is ready");
-
-                            return Ok(HandlerAction::Continue {
-                                state: ReconcilePublicEndpoint,
-                                suggested_delay: None,
-                            });
-                        } else {
-                            debug!(deployment_name=%deployment_name, ready=%ready_replicas, total=%replicas, "Deployment not yet ready");
-                        }
-                    }
+                let ready = deployment.status.as_ref().is_some_and(|status| {
+                    let total = status.replicas.unwrap_or(0);
+                    total > 0
+                        && status.ready_replicas.unwrap_or(0) == total
+                        && self.expected_generation.is_none_or(|expected| {
+                            deployment.metadata.generation == Some(expected)
+                                && status
+                                    .observed_generation
+                                    .is_some_and(|observed| observed >= expected)
+                                && status.updated_replicas.unwrap_or(0) == total
+                        })
+                });
+                if ready {
+                    info!(deployment_name=%deployment_name, namespace=%namespace, "Deployment is ready");
+                    return Ok(HandlerAction::Continue {
+                        state: ReconcilePublicEndpoint,
+                        suggested_delay: None,
+                    });
                 }
+                debug!(deployment_name=%deployment_name, "Deployment not yet ready");
             }
             Err(e)
                 if matches!(
@@ -393,20 +435,27 @@ impl KubernetesWorkerController {
                 }
             }
 
-            if let Some(status) = deployment.status.clone() {
-                if let (Some(ready_replicas), Some(replicas)) =
-                    (status.ready_replicas, status.replicas)
-                {
-                    if ready_replicas < replicas {
-                        return Err(AlienError::new(ErrorData::ResourceDrift {
-                            resource_id: config.id.clone(),
-                            message: format!(
-                                "Deployment has {} ready replicas out of {} total",
-                                ready_replicas, replicas
-                            ),
-                        }));
-                    }
-                }
+            let healthy = deployment_has_ready_replicas(&deployment);
+            let zero_ready = deployment
+                .status
+                .as_ref()
+                .and_then(|status| status.ready_replicas)
+                .unwrap_or(0)
+                == 0;
+            let previous_zero = self.zero_ready_observed;
+            self.zero_ready_observed = !healthy && zero_ready;
+            if !healthy && zero_ready && !previous_zero {
+                // Confirm zero readiness after a possible transient pod restart.
+                return Ok(HandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(Duration::from_secs(5)),
+                });
+            }
+            if !healthy {
+                return Err(AlienError::new(ErrorData::ResourceDrift {
+                    resource_id: config.id.clone(),
+                    message: "Deployment does not have the requested ready replicas".into(),
+                }));
             }
 
             reconcile_ready_command_service(
@@ -522,6 +571,7 @@ impl KubernetesWorkerController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        self.zero_ready_observed = false;
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Worker>()?;
 
@@ -644,7 +694,7 @@ impl KubernetesWorkerController {
         .await?;
         new_deployment.metadata.resource_version = resource_version;
 
-        deployment_client
+        let updated = deployment_client
             .update_deployment(namespace, deployment_name, &new_deployment)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -652,6 +702,12 @@ impl KubernetesWorkerController {
                 resource_id: Some(config.id.clone()),
             })?;
 
+        self.expected_generation = Some(updated.metadata.generation.ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Updated Deployment has no generation".into(),
+            })
+        })?);
         info!(deployment_name=%deployment_name, "Deployment update submitted, waiting for rollout");
 
         Ok(HandlerAction::Continue {
@@ -696,21 +752,23 @@ impl KubernetesWorkerController {
             .await
         {
             Ok(deployment) => {
-                if let Some(status) = &deployment.status {
-                    if let (Some(ready_replicas), Some(replicas)) =
-                        (status.ready_replicas, status.replicas)
-                    {
-                        if ready_replicas >= replicas && replicas > 0 {
-                            info!(deployment_name=%deployment_name, "Deployment rollout complete");
-                            return Ok(HandlerAction::Continue {
-                                state: ReconcilePublicEndpointAfterUpdate,
-                                suggested_delay: None,
-                            });
-                        } else {
-                            debug!(deployment_name=%deployment_name, ready=%ready_replicas, total=%replicas, "Deployment rollout in progress");
-                        }
-                    }
+                let desired = deployment
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.replicas)
+                    .unwrap_or(1);
+                if deployment_rollout_complete(
+                    &deployment,
+                    desired,
+                    self.expected_generation.or(deployment.metadata.generation),
+                ) {
+                    info!(deployment_name=%deployment_name, "Deployment rollout complete");
+                    return Ok(HandlerAction::Continue {
+                        state: ReconcilePublicEndpointAfterUpdate,
+                        suggested_delay: None,
+                    });
                 }
+                debug!(deployment_name=%deployment_name, "Deployment rollout in progress");
             }
             Err(e) => {
                 return Err(e.context(ErrorData::CloudPlatformError {
@@ -724,7 +782,7 @@ impl KubernetesWorkerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: Some(60),
+            max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -1175,6 +1233,8 @@ impl KubernetesWorkerController {
             worker_id: Some("test-worker".to_string()),
             commands_enabled: false,
             public_endpoint: KubernetesPublicEndpointState::default(),
+            expected_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         }
     }
@@ -1183,6 +1243,286 @@ impl KubernetesWorkerController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+
+    #[tokio::test]
+    async fn adopted_workload_accepts_ready_created_replicas() {
+        let server = httpmock::MockServer::start_async().await;
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:corrected".into(),
+            })
+            .permissions("default".into())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes client")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual client")
+        };
+        *server_url = server.base_url();
+        let mut controller = KubernetesWorkerController {
+            deployment_name: Some("worker".into()),
+            namespace: Some("test-ns".into()),
+            expected_generation: Some(2),
+            ..Default::default()
+        };
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+            then.status(200).json_body(serde_json::json!({
+                "metadata":{"name":"worker","generation":2},
+                "spec":{"replicas":3,"selector":{},"template":{}},
+                "status":{"replicas":1,"readyReplicas":1,"availableReplicas":1,"updatedReplicas":1,"observedGeneration":2}
+            }));
+        });
+        assert!(matches!(
+            controller
+                .waiting_for_deployment(&ctx)
+                .await
+                .expect("read adopted workload"),
+            KubernetesWorkerHandlerAction::Continue { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_retry_converges_existing_worker_to_corrective_release() {
+        let server = httpmock::MockServer::start_async().await;
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:corrected".into(),
+            })
+            .permissions("default".into())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+        let mut ctx = harness.ctx();
+        let mut deployment_config = ctx.deployment_config.clone();
+        deployment_config.deployment_token = Some("test-token".into());
+        ctx.deployment_config = &deployment_config;
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes client")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual client")
+        };
+        *server_url = server.base_url();
+        let name = kubernetes_resource_name(ctx.resource_prefix, ctx.desired_config.id());
+        let mut labels = worker_labels(&name);
+        labels.extend(kubernetes_cleanup_resource_labels(&ctx, "worker"));
+        let old = serde_json::json!({
+            "metadata":{"name":name,"resourceVersion":"17","generation":1,"labels":labels},
+            "spec":{"replicas":1,"selector":{"matchLabels":{"app":name}},"template":{"spec":{"containers":[{"name":"worker","image":"example.test/worker:broken"}]}}},
+            "status":{"replicas":1,"readyReplicas":1,"observedGeneration":1}
+        });
+        let path = format!("/apis/apps/v1/namespaces/test-ns/deployments/{name}");
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path(&path);
+            then.status(200).json_body(old.clone());
+        });
+        server.mock(|when, then| { when.method(httpmock::Method::POST).path("/apis/apps/v1/namespaces/test-ns/deployments"); then.status(409).json_body(serde_json::json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"AlreadyExists","code":409})); });
+        server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/api/v1/namespaces/test-ns/secrets");
+            then.status(201)
+                .json_body(serde_json::json!({"metadata":{"name":"worker-registry"}}));
+        });
+        let mut updated = old.clone();
+        updated["metadata"]["generation"] = 2.into();
+        let write = server.mock(|when, then| {
+            when.method(httpmock::Method::PUT).path(&path).json_body_partial(serde_json::json!({
+                "metadata":{"resourceVersion":"17"},"spec":{"template":{"spec":{"containers":[{"name":WORKER_CONTAINER_NAME,"image":"example.test/worker:corrected"}]}}}
+            }).to_string());
+            then.status(200).json_body(updated);
+        });
+        server.mock(|when, then| { when.method(httpmock::Method::GET); then.status(404).json_body(serde_json::json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404})); });
+        let mut controller = KubernetesWorkerController::default();
+        controller.create_start(&ctx).await.expect("retry create");
+        assert_eq!(write.hits(), 1, "adoption must apply the corrective image");
+        assert!(
+            matches!(
+                controller
+                    .waiting_for_deployment(&ctx)
+                    .await
+                    .expect("wait for new generation"),
+                KubernetesWorkerHandlerAction::Stay { .. }
+            ),
+            "old ready pods cannot complete the corrective release"
+        );
+    }
+
+    #[tokio::test]
+    async fn single_replica_restart_requires_a_second_unhealthy_observation() {
+        let server = httpmock::MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+            then.status(200).json_body(serde_json::json!({
+                "metadata":{"name":"worker","generation":1},
+                "spec":{"replicas":1,"selector":{},"template":{"spec":{"containers":[]}}},
+                "status":{"replicas":1,"updatedReplicas":1,"observedGeneration":1}
+            }));
+        });
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:1".into(),
+            })
+            .permissions("default".into())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes client")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual client")
+        };
+        *server_url = server.base_url();
+        let mut controller = KubernetesWorkerController {
+            deployment_name: Some("worker".into()),
+            namespace: Some("test-ns".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            controller
+                .ready(&ctx)
+                .await
+                .expect("first zero may be a restart"),
+            KubernetesWorkerHandlerAction::Stay { .. }
+        ));
+        let error = controller
+            .ready(&ctx)
+            .await
+            .expect_err("persistent zero is drift");
+        assert_eq!(error.code, "RESOURCE_DRIFT");
+    }
+
+    #[tokio::test]
+    async fn worker_create_accepts_ready_capacity_and_update_waits_through_slow_rollouts() {
+        for (ready, total, complete) in [(3, 3, true), (1, 1, true), (1, 3, false), (0, 1, false)] {
+            let server = httpmock::MockServer::start_async().await;
+            let mut response = server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion":"apps/v1", "kind":"Deployment",
+                    "metadata":{"name":"worker", "generation":2},
+                    "spec":{"replicas":3,"selector":{"matchLabels":{"app":"worker"}},"template":{"spec":{"containers":[]}}},
+                    "status":{"replicas":total,"readyReplicas":ready,"updatedReplicas":1,"availableReplicas":ready,"observedGeneration":2}
+                }));
+            });
+            let config = Worker::new("worker".into())
+                .code(WorkerCode::Image {
+                    image: "example.test/worker:1".into(),
+                })
+                .permissions("default".into())
+                .build();
+            let harness =
+                KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+            let mut ctx = harness.ctx();
+            let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+                panic!("Kubernetes client")
+            };
+            let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut()
+            else {
+                panic!("manual client")
+            };
+            *server_url = server.base_url();
+            let mut controller = KubernetesWorkerController {
+                deployment_name: Some("worker".into()),
+                namespace: Some("test-ns".into()),
+                ..Default::default()
+            };
+            let action = controller
+                .waiting_for_deployment(&ctx)
+                .await
+                .expect("create poll");
+            assert_eq!(
+                matches!(action, KubernetesWorkerHandlerAction::Continue { .. }),
+                complete,
+                "ready={ready}, total={total}"
+            );
+            controller.state = KubernetesWorkerState::WaitingForUpdate;
+            // A rollout lasting ten minutes must still poll, then be able to complete.
+            for _ in 0..120 {
+                crate::core::ResourceController::step(&mut controller, &ctx)
+                    .await
+                    .expect("rollout stays within its polling budget");
+                assert_eq!(
+                    crate::core::ResourceController::get_status(&controller),
+                    ResourceStatus::Updating
+                );
+            }
+            response.delete();
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+                then.status(200).json_body(serde_json::json!({
+                    "metadata":{"generation":2},
+                    "spec":{"replicas":3,"selector":{},"template":{}},
+                    "status":{"replicas":3,"readyReplicas":3,"updatedReplicas":3,"availableReplicas":3,"observedGeneration":2}
+                }));
+            });
+            crate::core::ResourceController::step(&mut controller, &ctx)
+                .await
+                .expect("slow rollout completes");
+            assert!(matches!(
+                controller.state,
+                KubernetesWorkerState::ReconcilePublicEndpointAfterUpdate
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn worker_update_waits_for_submitted_generation() {
+        let server = httpmock::MockServer::start_async().await;
+        let mut response = server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+            then.status(200).json_body(serde_json::json!({
+                "metadata":{"generation":2},
+                "spec":{"replicas":1,"selector":{},"template":{}},
+                "status":{"replicas":1,"readyReplicas":1,"updatedReplicas":1,"availableReplicas":1,"observedGeneration":2}
+            }));
+        });
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:1".into(),
+            })
+            .permissions("default".into())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes client")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual client")
+        };
+        *server_url = server.base_url();
+        let mut value = serde_json::to_value(KubernetesWorkerController {
+            deployment_name: Some("worker".into()),
+            namespace: Some("test-ns".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        value["expectedGeneration"] = serde_json::json!(3);
+        let mut controller: KubernetesWorkerController = serde_json::from_value(value).unwrap();
+        assert!(matches!(
+            controller.waiting_for_update(&ctx).await.unwrap(),
+            KubernetesWorkerHandlerAction::Stay { .. }
+        ));
+        response.delete();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+            then.status(200).json_body(serde_json::json!({
+                "metadata":{"generation":3},
+                "spec":{"replicas":1,"selector":{},"template":{}},
+                "status":{"replicas":1,"readyReplicas":1,"updatedReplicas":1,"availableReplicas":1,"observedGeneration":3}
+            }));
+        });
+        assert!(matches!(
+            controller.waiting_for_update(&ctx).await.unwrap(),
+            KubernetesWorkerHandlerAction::Continue { .. }
+        ));
+    }
 
     #[test]
     fn test_kubernetes_function_name() {
@@ -1237,6 +1577,8 @@ mod tests {
             worker_id: Some("worker".to_string()),
             commands_enabled: true,
             public_endpoint,
+            expected_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         };
 
@@ -1275,6 +1617,8 @@ mod tests {
             worker_id: Some("worker".to_string()),
             commands_enabled: false,
             public_endpoint,
+            expected_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         };
 

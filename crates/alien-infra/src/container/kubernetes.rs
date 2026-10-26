@@ -17,8 +17,9 @@ use crate::kubernetes_public_endpoint::{
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+    deployment_has_ready_replicas, deployment_rollout_complete, emit_kubernetes_workload_heartbeat,
+    label_selector, statefulset_has_ready_replicas, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -47,24 +48,6 @@ use crate::core::applicable_secret_environment_variables;
 // especially when the registry endpoint is a remote proxy. Treat that as a
 // legitimate provisioning phase; terminal pull failures still surface through
 // workload heartbeats and events.
-const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
-
-fn workload_ready(
-    desired_replicas: i32,
-    ready_replicas: Option<i32>,
-    replicas: Option<i32>,
-    observed_generation: Option<i64>,
-    generation: Option<i64>,
-) -> bool {
-    if desired_replicas == 0 {
-        // Kubernetes omits zero replica counters. Wait for the controller to
-        // observe this generation before accepting the scaled-down workload.
-        return observed_generation.is_some_and(|observed| observed >= generation.unwrap_or(1))
-            && ready_replicas.unwrap_or(0) == 0
-            && replicas.unwrap_or(0) == 0;
-    }
-    matches!((ready_replicas, replicas), (Some(ready), Some(total)) if total > 0 && ready >= desired_replicas.min(total))
-}
 
 async fn create_registry_pull_secret(
     secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
@@ -131,26 +114,23 @@ fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
 }
 
-fn deployment_rollout_complete(
-    deployment: &Deployment,
+fn workload_ready(
     desired_replicas: i32,
-    expected_generation: Option<i64>,
+    ready_replicas: Option<i32>,
+    replicas: Option<i32>,
+    observed_generation: Option<i64>,
+    generation: Option<i64>,
 ) -> bool {
-    let (Some(generation), Some(status)) = (deployment.metadata.generation, &deployment.status)
-    else {
-        return false;
-    };
-
-    // Ready replicas can still belong to the old ReplicaSet after an update.
-    Some(generation) == expected_generation
-        && status
-            .observed_generation
-            .is_some_and(|observed| observed >= generation)
-        // Kubernetes omits replica counters when a Deployment is scaled to
-        // zero. An observed generation is enough to complete that rollout.
-        && status.updated_replicas.unwrap_or(0) == desired_replicas
-        && status.replicas.unwrap_or(0) == desired_replicas
-        && status.available_replicas.unwrap_or(0) >= desired_replicas
+    if desired_replicas == 0 {
+        // Kubernetes omits zero replica counters. Wait for the controller to
+        // observe this generation before accepting the scaled-down workload.
+        return observed_generation.is_some_and(|observed| observed >= generation.unwrap_or(1))
+            && ready_replicas.unwrap_or(0) == 0
+            && replicas.unwrap_or(0) == 0;
+    }
+    replicas.is_some_and(|total| {
+        total > 0 && ready_replicas.unwrap_or(0) >= desired_replicas.min(total)
+    })
 }
 
 fn statefulset_rollout_complete(
@@ -200,6 +180,9 @@ pub struct KubernetesContainerController {
     pub(crate) service_ports: Vec<u16>,
     /// The container ID (for binding construction)
     pub(crate) container_id: Option<String>,
+    /// Whether the previous health check also found zero ready replicas.
+    #[serde(default)]
+    pub(crate) zero_ready_observed: bool,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
     /// Tracks the env-Secret checksum so `needs_update` can detect secret
@@ -397,6 +380,7 @@ impl KubernetesContainerController {
         self.reconcile_internal_service(config, &container_name, &namespace, ctx)
             .await?;
 
+        self.update_generation = None;
         self.is_stateful = config.stateful;
         self.workload_name = Some(container_name.clone());
 
@@ -450,6 +434,38 @@ impl KubernetesContainerController {
                             resource_id: Some(config.id.clone()),
                         }));
                     }
+                    let mut adopted = existing;
+                    let spec = adopted.spec.as_mut().ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!("Existing statefulset '{container_name}' has no spec"),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?;
+                    let desired = statefulset
+                        .spec
+                        .as_ref()
+                        .expect("generated workload has a spec");
+                    // Keep immutable identity and storage fields while converging the failed create.
+                    spec.template = desired.template.clone();
+                    spec.replicas = desired.replicas;
+                    let updated = deployment_client
+                        .update_statefulset(&namespace, &container_name, &adopted)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to reconcile adopted statefulset '{container_name}'"
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                    self.update_generation =
+                        Some(updated.metadata.generation.ok_or_else(|| {
+                            AlienError::new(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Adopted statefulset '{container_name}' has no generation"
+                                ),
+                                resource_id: Some(config.id.clone()),
+                            })
+                        })?);
                     info!(statefulset_name=%container_name, namespace=%namespace, "Adopting existing Kubernetes StatefulSet");
                 }
                 Err(err) => {
@@ -509,6 +525,38 @@ impl KubernetesContainerController {
                             resource_id: Some(config.id.clone()),
                         }));
                     }
+                    let mut adopted = existing;
+                    let spec = adopted.spec.as_mut().ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!("Existing deployment '{container_name}' has no spec"),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?;
+                    let desired = deployment
+                        .spec
+                        .as_ref()
+                        .expect("generated workload has a spec");
+                    // Keep immutable identity and storage fields while converging the failed create.
+                    spec.template = desired.template.clone();
+                    spec.replicas = desired.replicas;
+                    let updated = deployment_client
+                        .update_deployment(&namespace, &container_name, &adopted)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to reconcile adopted deployment '{container_name}'"
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                    self.update_generation =
+                        Some(updated.metadata.generation.ok_or_else(|| {
+                            AlienError::new(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Adopted deployment '{container_name}' has no generation"
+                                ),
+                                resource_id: Some(config.id.clone()),
+                            })
+                        })?);
                     info!(deployment_name=%container_name, namespace=%namespace, "Adopting existing Kubernetes Deployment");
                 }
                 Err(err) => {
@@ -559,21 +607,37 @@ impl KubernetesContainerController {
             .await?;
 
         // Check workload status (different API for Deployment vs StatefulSet)
-        let (ready_replicas, replicas, observed_generation, generation) = if self.is_stateful {
+        let (ready_replicas, replicas, healthy) = if self.is_stateful {
             match deployment_client
                 .get_statefulset(namespace, workload_name)
                 .await
             {
                 Ok(statefulset) => {
+                    self.replace_obsolete_unready_pod(&statefulset, config, namespace, ctx)
+                        .await?;
+
                     if let Some(status) = &statefulset.status {
                         (
                             status.ready_replicas,
                             Some(status.replicas),
-                            status.observed_generation,
-                            statefulset.metadata.generation,
+                            workload_ready(
+                                config.replicas.unwrap_or(1) as i32,
+                                status.ready_replicas,
+                                Some(status.replicas),
+                                status.observed_generation,
+                                statefulset.metadata.generation,
+                            ) && self.update_generation.is_none_or(|expected| {
+                                // All existing replicas must use the adopted template. Keep the
+                                // create readiness rule for replicas the cluster could start.
+                                statefulset.metadata.generation == Some(expected)
+                                    && status
+                                        .observed_generation
+                                        .is_some_and(|observed| observed >= expected)
+                                    && status.updated_replicas.unwrap_or(0) == status.replicas
+                            }),
                         )
                     } else {
-                        (None, None, None, None)
+                        (None, None, false)
                     }
                 }
                 Err(e)
@@ -583,7 +647,7 @@ impl KubernetesContainerController {
                     ) =>
                 {
                     debug!(workload_name=%workload_name, "StatefulSet not yet available, continuing to wait");
-                    (None, None, None, None)
+                    (None, None, false)
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -602,11 +666,25 @@ impl KubernetesContainerController {
                         (
                             status.ready_replicas,
                             status.replicas,
-                            status.observed_generation,
-                            deployment.metadata.generation,
+                            workload_ready(
+                                config.replicas.unwrap_or(1) as i32,
+                                status.ready_replicas,
+                                status.replicas,
+                                status.observed_generation,
+                                deployment.metadata.generation,
+                            ) && self.update_generation.is_none_or(|expected| {
+                                // All existing replicas must use the adopted template. Keep the
+                                // create readiness rule for replicas the cluster could start.
+                                deployment.metadata.generation == Some(expected)
+                                    && status
+                                        .observed_generation
+                                        .is_some_and(|observed| observed >= expected)
+                                    && status.updated_replicas.unwrap_or(0)
+                                        == status.replicas.unwrap_or(0)
+                            }),
                         )
                     } else {
-                        (None, None, None, None)
+                        (None, None, false)
                     }
                 }
                 Err(e)
@@ -616,7 +694,7 @@ impl KubernetesContainerController {
                     ) =>
                 {
                     debug!(workload_name=%workload_name, "Deployment not yet available, continuing to wait");
-                    (None, None, None, None)
+                    (None, None, false)
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -627,14 +705,7 @@ impl KubernetesContainerController {
             }
         };
 
-        // Check if ready
-        if workload_ready(
-            config.replicas.unwrap_or(1) as i32,
-            ready_replicas,
-            replicas,
-            observed_generation,
-            generation,
-        ) {
+        if healthy {
             let workload_type = if self.is_stateful {
                 "StatefulSet"
             } else {
@@ -828,16 +899,35 @@ impl KubernetesContainerController {
                 }
             }
 
-            if let (Some(ready_replicas), Some(replicas)) = (ready_replicas, replicas) {
-                if ready_replicas < replicas {
-                    return Err(AlienError::new(ErrorData::ResourceDrift {
-                        resource_id: config.id.clone(),
-                        message: format!(
-                            "Container workload has {} ready replicas out of {} total",
-                            ready_replicas, replicas
-                        ),
-                    }));
+            let healthy = match &workload {
+                KubernetesWorkload::Deployment(deployment) => {
+                    deployment_has_ready_replicas(deployment)
                 }
+                KubernetesWorkload::StatefulSet(statefulset) => {
+                    statefulset_has_ready_replicas(statefulset)
+                }
+                KubernetesWorkload::DaemonSet(_) => false,
+            };
+            let zero_ready = ready_replicas.unwrap_or(0) == 0;
+            let previous_zero = self.zero_ready_observed;
+            self.zero_ready_observed = !healthy && zero_ready;
+            if !healthy && zero_ready && !previous_zero {
+                // One zero-ready read can be a pod restart. Confirm it on the
+                // next check before turning a running workload into a failure.
+                return Ok(HandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(Duration::from_secs(5)),
+                });
+            }
+            if !healthy {
+                return Err(AlienError::new(ErrorData::ResourceDrift {
+                    resource_id: config.id.clone(),
+                    message: format!(
+                        "Container workload has {} ready replicas out of {} observed",
+                        ready_replicas.unwrap_or(0),
+                        replicas.unwrap_or(0)
+                    ),
+                }));
             }
 
             let labels = self.build_labels(workload_name);
@@ -997,6 +1087,7 @@ impl KubernetesContainerController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        self.zero_ready_observed = false;
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
         // A refresh started from Ready (gateway configuration, linked binding drift) can come
@@ -2040,6 +2131,7 @@ mod output_tests {
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         };
 
@@ -2107,6 +2199,7 @@ mod output_tests {
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         };
 
@@ -2173,6 +2266,7 @@ impl KubernetesContainerController {
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         }
     }
@@ -2727,6 +2821,104 @@ impl KubernetesContainerController {
         labels
     }
 
+    async fn replace_obsolete_unready_pod(
+        &self,
+        statefulset: &StatefulSet,
+        config: &Container,
+        namespace: &str,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let (Some(expected), Some(status), Some(uid), Some(name)) = (
+            self.update_generation,
+            statefulset.status.as_ref(),
+            statefulset.metadata.uid.as_deref(),
+            statefulset.metadata.name.as_deref(),
+        ) else {
+            return Ok(());
+        };
+        let Some(revision) = status.update_revision.as_deref() else {
+            return Ok(());
+        };
+        if statefulset.metadata.generation != Some(expected)
+            || status.observed_generation.unwrap_or(0) < expected
+            || !self.is_managed_workload(
+                ctx,
+                statefulset.metadata.labels.as_ref(),
+                name,
+                &config.id,
+            )
+        {
+            return Ok(());
+        }
+        let client = ctx
+            .service_provider
+            .get_kubernetes_pod_client(ctx.get_kubernetes_config()?)
+            .await?;
+        let pods = client
+            .list_pods(
+                namespace,
+                Some(label_selector(&self.workload_labels(
+                    ctx,
+                    &config.id,
+                    self.build_labels(name),
+                ))),
+                None,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to inspect pods for adopted statefulset '{name}'"),
+                resource_id: Some(config.id.clone()),
+            })?;
+        for pod in pods.items {
+            let owned = pod
+                .metadata
+                .owner_references
+                .as_ref()
+                .is_some_and(|owners| {
+                    owners.iter().any(|owner| {
+                        owner.controller == Some(true)
+                            && owner.kind == "StatefulSet"
+                            && owner.uid == uid
+                    })
+                });
+            let obsolete = pod
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get("controller-revision-hash"))
+                .is_some_and(|current| current != revision);
+            let ready = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.conditions.as_ref())
+                .is_some_and(|conditions| {
+                    conditions
+                        .iter()
+                        .any(|condition| condition.type_ == "Ready" && condition.status == "True")
+                });
+            if !owned || !obsolete || ready || pod.metadata.deletion_timestamp.is_some() {
+                continue;
+            }
+            let (Some(pod_name), Some(pod_uid)) =
+                (pod.metadata.name.as_deref(), pod.metadata.uid.as_deref())
+            else {
+                continue;
+            };
+            // OrderedReady can wait forever for the old broken revision. Use normal deletion,
+            // one pod per poll, and keep the StatefulSet and its persistent volumes.
+            match client.delete_pod_if_uid(namespace, pod_name, pod_uid).await {
+                Ok(()) => {},
+                Err(error) if matches!(error.error, Some(CloudClientErrorData::RemoteResourceNotFound { .. } | CloudClientErrorData::RemoteResourceConflict { .. })) => {},
+                Err(error) => return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to replace obsolete pod '{pod_name}' for adopted statefulset '{name}'"),
+                    resource_id: Some(config.id.clone()),
+                })),
+            }
+            break;
+        }
+        Ok(())
+    }
+
     fn is_managed_workload(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -2779,6 +2971,272 @@ impl KubernetesContainerController {
 mod tests {
     use super::*;
     use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
+
+    #[tokio::test]
+    async fn adopted_workload_accepts_ready_created_replicas() {
+        for stateful in [false, true] {
+            let server = httpmock::MockServer::start_async().await;
+            let mut config = manifest_test_container(&[], stateful);
+            config.replicas = Some(3);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+            let mut ctx = harness.ctx();
+            point_at(&mut ctx, &server);
+            let mut controller = manifest_test_controller();
+            controller.is_stateful = stateful;
+            controller.update_generation = Some(2);
+            let collection = if stateful {
+                "statefulsets"
+            } else {
+                "deployments"
+            };
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path(format!("/apis/apps/v1/namespaces/test-ns/{collection}/web"));
+                then.status(200).json_body(serde_json::json!({
+                    "metadata":{"name":"web","generation":2},
+                    "spec":{"replicas":3,"selector":{},"template":{}},
+                    "status":{"replicas":1,"readyReplicas":1,"availableReplicas":1,"updatedReplicas":1,"observedGeneration":2,"currentRevision":"old","updateRevision":"new"}
+                }));
+            });
+            assert!(
+                matches!(
+                    controller
+                        .waiting_for_workload(&ctx)
+                        .await
+                        .expect("read adopted workload"),
+                    KubernetesContainerHandlerAction::Continue { .. }
+                ),
+                "all created replicas run the new template, stateful={stateful}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn adopted_statefulset_replaces_only_its_obsolete_unready_pod() {
+        for (owner, revision, ready, deletes) in [
+            ("workload-uid", "old", false, 1),
+            ("another-workload", "old", false, 0),
+            ("workload-uid", "new", false, 0),
+            ("workload-uid", "old", true, 0),
+        ] {
+            let server = httpmock::MockServer::start_async().await;
+            let config = manifest_test_container(&[], true);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+            let mut ctx = harness.ctx();
+            point_at(&mut ctx, &server);
+            let mut controller = manifest_test_controller();
+            controller.is_stateful = true;
+            controller.update_generation = Some(2);
+            let labels = controller.workload_labels(&ctx, "web", controller.build_labels("web"));
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/statefulsets/web");
+                then.status(200).json_body(serde_json::json!({
+                    "metadata":{"name":"web","uid":"workload-uid","generation":2,"labels":labels},
+                    "spec":{"replicas":1,"serviceName":"web","selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[]}}},
+                    "status":{"replicas":1,"observedGeneration":2,"currentRevision":"old","updateRevision":"new"}
+                }));
+            });
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path("/api/v1/namespaces/test-ns/pods");
+                then.status(200).json_body(serde_json::json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":[{
+                    "metadata":{"name":"web-0","uid":"old-pod-uid","labels":{"controller-revision-hash":revision},"ownerReferences":[{"apiVersion":"apps/v1","kind":"StatefulSet","name":"web","uid":owner,"controller":true}]},
+                    "spec":{"containers":[{"name":"web","image":"example.test/web:broken"}]},
+                    "status":{"conditions":[{"type":"Ready","status":if ready {"True"} else {"False"}}]}
+                }]}));
+            });
+            let deletion = server.mock(|when, then| {
+                when.method(httpmock::Method::DELETE).path("/api/v1/namespaces/test-ns/pods/web-0")
+                    .json_body(serde_json::json!({"apiVersion":"v1","kind":"DeleteOptions","preconditions":{"uid":"old-pod-uid"}}));
+                then.status(200).json_body(serde_json::json!({"kind":"Status","apiVersion":"v1","status":"Success"}));
+            });
+            assert!(matches!(
+                controller
+                    .waiting_for_workload(&ctx)
+                    .await
+                    .expect("wait for corrected workload"),
+                KubernetesContainerHandlerAction::Stay { .. }
+            ));
+            assert_eq!(
+                deletion.hits(),
+                deletes,
+                "owner={owner}, revision={revision}, ready={ready}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_retry_converges_existing_workload_to_corrective_release() {
+        for stateful in [false, true] {
+            let server = httpmock::MockServer::start_async().await;
+            let config = manifest_test_container(&[("RELEASE", "corrected")], stateful);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let mut ctx = harness.ctx();
+            point_at(&mut ctx, &server);
+            let mut deployment_config = ctx.deployment_config.clone();
+            deployment_config.deployment_token = Some("test-token".into());
+            ctx.deployment_config = &deployment_config;
+            server.mock(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/api/v1/namespaces/test-ns/secrets");
+                then.status(201)
+                    .json_body(serde_json::json!({"metadata":{"name":"web-registry"}}));
+            });
+            let mut controller = KubernetesContainerController::default();
+            let name = kubernetes_resource_name(ctx.resource_prefix, &config.id);
+            let collection = if stateful {
+                "statefulsets"
+            } else {
+                "deployments"
+            };
+            let path = format!("/apis/apps/v1/namespaces/test-ns/{collection}/{name}");
+            let labels = controller.workload_labels(&ctx, "web", controller.build_labels(&name));
+            let old = serde_json::json!({
+                "metadata":{"name":name,"resourceVersion":"17","generation":1,"labels":labels},
+                "spec":{"replicas":1,"serviceName":"retained-service","selector":{"matchLabels":{"app":name}},
+                    "template":{"spec":{"containers":[{"name":"web","image":"registry.example.com/web:broken"}]}},
+                    "volumeClaimTemplates":[{"metadata":{"name":"data"},"spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"1Gi"}}}}]},
+                "status":{"replicas":1,"readyReplicas":1,"observedGeneration":1}
+            });
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path(&path);
+                then.status(200).json_body(old.clone());
+            });
+            server.mock(|when, then| {
+                when.method(httpmock::Method::POST).path(format!("/apis/apps/v1/namespaces/test-ns/{collection}"));
+                then.status(409).json_body(serde_json::json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"AlreadyExists","code":409}));
+            });
+            let mut updated = old.clone();
+            updated["metadata"]["generation"] = 2.into();
+            let write = server.mock(|when, then| {
+                when.method(httpmock::Method::PUT).path(&path)
+                    .json_body_partial(serde_json::json!({
+                        "metadata":{"resourceVersion":"17"},
+                        "spec":{"template":{"spec":{"containers":[{"name":"web","image":"registry.example.com/web:1"}]}}}
+                    }).to_string());
+                then.status(200).json_body(updated);
+            });
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET);
+                then.status(404).json_body(serde_json::json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}));
+            });
+            assert!(matches!(
+                controller.create_start(&ctx).await.expect("retry create"),
+                KubernetesContainerHandlerAction::Continue { .. }
+            ));
+            assert_eq!(
+                write.hits(),
+                1,
+                "adoption must apply the corrective image, stateful={stateful}"
+            );
+            assert!(
+                matches!(
+                    controller
+                        .waiting_for_workload(&ctx)
+                        .await
+                        .expect("wait for new generation"),
+                    KubernetesContainerHandlerAction::Stay { .. }
+                ),
+                "old ready pods cannot complete the corrective release"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn single_replica_restart_requires_a_second_unhealthy_observation() {
+        for stateful in [false, true] {
+            let server = httpmock::MockServer::start_async().await;
+            let kind = if stateful {
+                "StatefulSet"
+            } else {
+                "Deployment"
+            };
+            let collection = if stateful {
+                "statefulsets"
+            } else {
+                "deployments"
+            };
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path(format!("/apis/apps/v1/namespaces/test-ns/{collection}/web"));
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion":"apps/v1", "kind":kind,
+                    "metadata":{"name":"web", "generation":1},
+                    "spec":{"replicas":1,"selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[]}}},
+                    "status":{"replicas":1,"updatedReplicas":1,"observedGeneration":1}
+                }));
+            });
+            let config = manifest_test_container(&[], stateful);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+            let mut ctx = harness.ctx();
+            point_at(&mut ctx, &server);
+            let mut controller = manifest_test_controller();
+            controller.is_stateful = stateful;
+            assert!(matches!(
+                controller
+                    .ready(&ctx)
+                    .await
+                    .expect("first zero may be a restart"),
+                KubernetesContainerHandlerAction::Stay { .. }
+            ));
+            let error = controller
+                .ready(&ctx)
+                .await
+                .expect_err("persistent zero is drift");
+            assert_eq!(error.code, "RESOURCE_DRIFT");
+        }
+    }
+
+    #[test]
+    fn zero_replica_workload_waits_for_the_controller_to_observe_its_generation() {
+        assert!(!workload_ready(0, None, None, None, Some(2)));
+        assert!(!workload_ready(0, None, None, Some(1), Some(2)));
+        assert!(workload_ready(0, None, None, Some(2), Some(2)));
+        assert!(!workload_ready(0, Some(1), Some(1), Some(2), Some(2)));
+    }
+
+    #[tokio::test]
+    async fn initial_workload_accepts_ready_capacity_and_waits_for_unready_pods() {
+        for stateful in [false, true] {
+            for (ready, total, complete) in
+                [(1, 1, true), (3, 3, true), (1, 3, false), (0, 1, false)]
+            {
+                let server = httpmock::MockServer::start_async().await;
+                let kind = if stateful {
+                    "StatefulSet"
+                } else {
+                    "Deployment"
+                };
+                let collection = if stateful {
+                    "statefulsets"
+                } else {
+                    "deployments"
+                };
+                server.mock(|when, then| {
+                    when.method(httpmock::Method::GET).path(format!("/apis/apps/v1/namespaces/test-ns/{collection}/web"));
+                    then.status(200).json_body(serde_json::json!({
+                        "apiVersion":"apps/v1", "kind":kind,
+                        "metadata":{"name":"web", "generation":1},
+                        "spec":{"replicas":3,"selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[]}}},
+                        "status":{"replicas":total,"readyReplicas":ready,"observedGeneration":1}
+                    }));
+                });
+                let mut config = manifest_test_container(&[], stateful);
+                config.replicas = Some(3);
+                let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+                let mut ctx = harness.ctx();
+                point_at(&mut ctx, &server);
+                let mut controller = manifest_test_controller();
+                controller.is_stateful = stateful;
+                let action = controller
+                    .waiting_for_workload(&ctx)
+                    .await
+                    .expect("workload poll");
+                assert_eq!(
+                    matches!(action, KubernetesContainerHandlerAction::Continue { .. }),
+                    complete,
+                    "{kind}, ready={ready}, total={total}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn deployment_update_waits_for_the_new_revision_to_be_available() {
@@ -2872,15 +3330,6 @@ mod tests {
         statefulset.metadata.generation = Some(1);
         statefulset.status.as_mut().unwrap().observed_generation = Some(1);
         assert!(!statefulset_rollout_complete(&statefulset, 1, Some(2)));
-    }
-
-    #[test]
-    fn zero_replica_workload_waits_for_the_controller_to_observe_its_generation() {
-        assert!(!workload_ready(0, None, None, None, Some(1)));
-        assert!(!workload_ready(0, None, None, Some(1), Some(2)));
-        assert!(!workload_ready(0, Some(1), Some(1), Some(2), Some(2)));
-        assert!(workload_ready(0, None, None, Some(2), Some(2)));
-        assert!(workload_ready(1, Some(1), Some(1), Some(2), Some(2)));
     }
 
     #[test]
@@ -3039,6 +3488,7 @@ mod tests {
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            zero_ready_observed: false,
             _internal_stay_count: None,
         };
         let harness =

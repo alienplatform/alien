@@ -744,6 +744,7 @@ async fn delete_failed_storage_with_a_changed_config_is_not_replaced() -> Result
     Ok(())
 }
 
+#[cfg(feature = "kubernetes")]
 fn capacity_group(max_size: u32) -> alien_core::CapacityGroup {
     alien_core::CapacityGroup {
         group_id: "general".to_string(),
@@ -775,6 +776,7 @@ fn failed_create(
 
 /// Daemons and compute clusters are created again in place instead of replaced: a create
 /// that failed late may already run replicas or instances, which a delete would stop.
+#[cfg(feature = "kubernetes")]
 #[tokio::test]
 async fn failed_daemon_and_compute_cluster_creates_are_created_again_not_replaced() -> Result<()> {
     let daemon = |image: &str| {

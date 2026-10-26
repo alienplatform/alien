@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 use turso::{Builder, Connection, Database, EncryptionOpts};
 
 use crate::error::{ErrorData, Result};
+use crate::workload_observation::{is_settled, workload_identity};
 
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;
@@ -306,7 +307,10 @@ impl OperatorDb {
     /// Get the current deployment state
     pub async fn get_deployment_state(&self) -> Result<Option<DeploymentState>> {
         let conn = self.conn.lock().await;
+        Self::get_deployment_state_locked(&conn).await
+    }
 
+    async fn get_deployment_state_locked(conn: &Connection) -> Result<Option<DeploymentState>> {
         let mut rows = conn
             .query("SELECT value FROM state WHERE key = 'deployment_state'", ())
             .await
@@ -448,11 +452,24 @@ impl OperatorDb {
             .context(ErrorData::DatabaseError {
                 message: "Failed to read observed deployment state value".to_string(),
             })?;
-        let stored: serde_json::Value = serde_json::from_str(&original)
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to parse observed deployment state".to_string(),
-            })?;
+        let stored: DeploymentState = match serde_json::from_str(&original) {
+            Ok(state) => state,
+            Err(error) => {
+                let deployment_id = Self::get_deployment_id_locked(conn).await;
+                tracing::warn!(
+                    ?deployment_id, %error,
+                    "Skipping checkpoint replacement: stored deployment state is unreadable"
+                );
+                return Ok(false);
+            }
+        };
+        let stored =
+            serde_json::to_value(stored)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to normalize observed deployment state".to_string(),
+                })?;
+        // Read older checkpoints through the same defaults as the expected state.
         // Object key order is not state: resource HashMaps can reorder on read-back.
         if stored != expected {
             return Ok(false);
@@ -506,44 +523,22 @@ impl OperatorDb {
         }
     }
 
-    /// Set the latest non-empty resource heartbeat snapshot emitted by deployment steps.
+    /// Merge step observations, preserving newer readings only for current resources.
     pub async fn set_pending_heartbeats(&self, heartbeats: &[ResourceHeartbeat]) -> Result<()> {
         let conn = self.conn.lock().await;
-
-        let json = serde_json::to_string(heartbeats)
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to serialize pending_heartbeats".to_string(),
-            })?;
-
-        conn.execute(
-            "INSERT INTO state (key, value, updated_at) VALUES ('pending_heartbeats', ?, datetime('now'))
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-            (json,),
-        )
-        .await
-        .into_alien_error()
-        .context(ErrorData::DatabaseError {
-            message: "Failed to set pending_heartbeats".to_string(),
-        })?;
-
-        Ok(())
+        let state = Self::get_deployment_state_locked(&conn).await?;
+        Self::merge_pending_heartbeats_locked(&conn, heartbeats.iter(), state.as_ref()).await
     }
 
-    /// Merge passive workload readings only while the deployment state used to
-    /// collect them is still current. The connection lock also protects the
-    /// read/merge/write against deployment-step heartbeat writes.
+    /// Merge passive readings for unchanged workloads in the installed release.
+    /// Maintenance checkpoints may change health metadata while collection runs.
+    /// The connection lock protects the state check and heartbeat read/merge/write.
     pub async fn merge_pending_heartbeats_if_state_matches(
         &self,
         expected_state: &DeploymentState,
         heartbeats: &[ResourceHeartbeat],
     ) -> Result<bool> {
         let conn = self.conn.lock().await;
-        let expected_json = serde_json::to_string(expected_state)
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to serialize expected deployment_state".to_string(),
-            })?;
         let mut state_rows = conn
             .query("SELECT value FROM state WHERE key = 'deployment_state'", ())
             .await
@@ -567,10 +562,66 @@ impl OperatorDb {
                 None => None,
             };
         drop(state_rows);
-        if current_json.as_deref() != Some(expected_json.as_str()) {
+        let Some(current_json) = current_json else {
+            return Ok(false);
+        };
+        let current: DeploymentState = match serde_json::from_str(&current_json) {
+            Ok(state) => state,
+            Err(error) => {
+                let deployment_id = Self::get_deployment_id_locked(&conn).await;
+                tracing::warn!(?deployment_id, %error, "Skipping heartbeat merge: stored deployment state is unreadable");
+                return Ok(false);
+            }
+        };
+        if !is_settled(expected_state)
+            || !is_settled(&current)
+            || current.current_release != expected_state.current_release
+        {
+            return Ok(false);
+        }
+        let (Some(expected_stack), Some(current_stack)) =
+            (&expected_state.stack_state, &current.stack_state)
+        else {
+            return Ok(false);
+        };
+        if expected_stack.resource_prefix != current_stack.resource_prefix {
+            return Ok(false);
+        }
+        let heartbeats: Vec<_> = heartbeats
+            .iter()
+            .filter(|heartbeat| {
+                let (Some(expected), Some(current)) = (
+                    expected_stack.resources.get(&heartbeat.resource_id),
+                    current_stack.resources.get(&heartbeat.resource_id),
+                ) else {
+                    return false;
+                };
+                workload_identity(expected).is_some()
+                    && workload_identity(expected) == workload_identity(current)
+                    && expected.config == current.config
+                    && expected
+                        .internal_state
+                        .as_ref()
+                        .and_then(|state| state.get("updateGeneration"))
+                        == current
+                            .internal_state
+                            .as_ref()
+                            .and_then(|state| state.get("updateGeneration"))
+            })
+            .collect();
+        if heartbeats.is_empty() {
             return Ok(false);
         }
 
+        Self::merge_pending_heartbeats_locked(&conn, heartbeats.into_iter(), None).await?;
+        Ok(true)
+    }
+
+    async fn merge_pending_heartbeats_locked<'a>(
+        conn: &Connection,
+        heartbeats: impl Iterator<Item = &'a ResourceHeartbeat>,
+        current_state: Option<&DeploymentState>,
+    ) -> Result<()> {
         let mut pending_rows = conn
             .query(
                 "SELECT value FROM state WHERE key = 'pending_heartbeats'",
@@ -603,12 +654,30 @@ impl OperatorDb {
                 None => Vec::new(),
             };
         drop(pending_rows);
-        merged.retain(|old| {
-            !heartbeats.iter().any(|new| {
-                old.resource_id == new.resource_id && old.resource_type == new.resource_type
-            })
-        });
-        merged.extend_from_slice(heartbeats);
+        for heartbeat in heartbeats {
+            if let Some(old) = merged.iter_mut().find(|old| {
+                old.resource_id == heartbeat.resource_id
+                    && old.resource_type == heartbeat.resource_type
+            }) {
+                if heartbeat.observed_at > old.observed_at {
+                    *old = heartbeat.clone();
+                }
+            } else {
+                merged.push(heartbeat.clone());
+            }
+        }
+        if let Some(state) = current_state {
+            // Step batches can be partial; absence from a batch is not removal.
+            merged.retain(|heartbeat| {
+                state
+                    .stack_state
+                    .as_ref()
+                    .and_then(|stack| stack.resources.get(&heartbeat.resource_id))
+                    .is_some_and(|resource| {
+                        resource.resource_type == heartbeat.resource_type.as_ref()
+                    })
+            });
+        }
         let json = serde_json::to_string(&merged).into_alien_error().context(
             ErrorData::DatabaseError {
                 message: "Failed to serialize merged pending_heartbeats".to_string(),
@@ -624,7 +693,7 @@ impl OperatorDb {
         .context(ErrorData::DatabaseError {
             message: "Failed to save merged pending_heartbeats".to_string(),
         })?;
-        Ok(true)
+        Ok(())
     }
 
     /// Get the latest observed inventory snapshots emitted by deployment steps.
@@ -1448,7 +1517,10 @@ impl OperatorDb {
     /// Get deployment ID from initialization
     pub async fn get_deployment_id(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().await;
+        Self::get_deployment_id_locked(&conn).await
+    }
 
+    async fn get_deployment_id_locked(conn: &Connection) -> Result<Option<String>> {
         let mut rows = conn
             .query("SELECT value FROM state WHERE key = 'deployment_id'", ())
             .await
@@ -2177,7 +2249,11 @@ impl OperatorDb {
 #[cfg(test)]
 mod tests {
     use super::{OperatorDb, PodLogOffset};
-    use alien_core::sync::{SyncExecutionClaim, TargetDeployment};
+    use alien_core::{
+        sync::{SyncExecutionClaim, TargetDeployment},
+        Container, ContainerCode, Platform, ResourceSpec, ResourceStatus, StackResourceState,
+        StackState,
+    };
 
     const TEST_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -2201,6 +2277,310 @@ mod tests {
             retry_requested: false,
             protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         }
+    }
+
+    fn heartbeat_state() -> alien_core::DeploymentState {
+        let mut state = settled_state(None);
+        state.platform = Platform::Kubernetes;
+        let mut stack = StackState::with_resource_prefix(Platform::Kubernetes, "site".to_string());
+        for id in ["web", "worker"] {
+            let container = Container::new(id.to_string())
+                .code(ContainerCode::Image {
+                    image: "example:latest".to_string(),
+                })
+                .permissions("container".to_string())
+                .cpu(ResourceSpec {
+                    min: "100m".to_string(),
+                    desired: "100m".to_string(),
+                })
+                .memory(ResourceSpec {
+                    min: "128Mi".to_string(),
+                    desired: "128Mi".to_string(),
+                })
+                .build();
+            let mut resource = StackResourceState::new_pending(
+                "container".to_string(),
+                alien_core::Resource::new(container),
+                None,
+                vec![],
+            );
+            resource.status = ResourceStatus::Running;
+            resource.internal_state = Some(serde_json::json!({
+                "type": "KubernetesContainerController", "namespace": "site",
+                "workloadName": id, "isStateful": false
+            }));
+            stack.resources.insert(id.to_string(), resource);
+        }
+        state.stack_state = Some(stack);
+        state
+    }
+
+    fn container_heartbeat(id: &str) -> alien_core::ResourceHeartbeat {
+        serde_json::from_value(serde_json::json!({
+            "deploymentId": "dep_1", "resourceId": id, "resourceType": "container",
+            "controllerPlatform": "kubernetes", "backend": "kubernetes", "observedAt": "2026-01-01T00:00:00Z",
+            "data": {"resourceType": "container", "data": {"backend": "kubernetes", "namespace": "site", "name": id,
+            "workloadKind": "deployment", "status": {"health": "healthy", "lifecycle": "running", "stale": false, "partial": false, "collectionIssues": []},
+            "replicas": {"desired": 7, "current": 7, "ready": 7, "available": 7, "updated": 7}, "pods": [], "events": []}}, "raw": []
+        })).unwrap()
+    }
+
+    #[tokio::test]
+    async fn maintenance_heartbeats_prune_removed_resources() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let mut state = heartbeat_state();
+        db.set_deployment_state(&state).await.unwrap();
+        let web = container_heartbeat("web");
+        let worker = container_heartbeat("worker");
+        db.set_pending_heartbeats(&[web.clone(), worker.clone()])
+            .await
+            .unwrap();
+
+        db.set_pending_heartbeats(&[worker.clone()]).await.unwrap();
+        assert_eq!(
+            db.get_pending_heartbeats().await.unwrap(),
+            vec![web.clone(), worker.clone()]
+        );
+
+        // A release removes web; the next step only observes worker.
+        state.stack_state.as_mut().unwrap().resources.remove("web");
+        db.set_deployment_state(&state).await.unwrap();
+        db.set_pending_heartbeats(&[worker.clone()]).await.unwrap();
+        assert_eq!(
+            db.get_pending_heartbeats().await.unwrap(),
+            vec![worker.clone()]
+        );
+
+        // An old collector cannot put the removed resource back.
+        db.set_pending_heartbeats(&[web]).await.unwrap();
+        assert_eq!(db.get_pending_heartbeats().await.unwrap(), vec![worker]);
+        state.stack_state.as_mut().unwrap().resources.clear();
+        db.set_deployment_state(&state).await.unwrap();
+        db.set_pending_heartbeats(&[]).await.unwrap();
+        assert!(db.get_pending_heartbeats().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn maintenance_heartbeats_preserve_newer_passive_observations() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(
+            &temp.path().to_string_lossy(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .unwrap();
+        db.set_deployment_state(&heartbeat_state()).await.unwrap();
+        let mut recent = container_heartbeat("web");
+        recent.observed_at = chrono::Utc::now();
+        let mut stale = recent.clone();
+        stale.observed_at -= chrono::Duration::seconds(10);
+        db.set_pending_heartbeats(&[recent.clone()]).await.unwrap();
+        db.set_pending_heartbeats(&[stale, container_heartbeat("worker")])
+            .await
+            .unwrap();
+        let pending = db.get_pending_heartbeats().await.unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(
+            pending
+                .iter()
+                .find(|h| h.resource_id == "web")
+                .unwrap()
+                .observed_at,
+            recent.observed_at
+        );
+    }
+
+    #[tokio::test]
+    async fn passive_heartbeats_survive_repeated_maintenance_checkpoints() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let mut state = heartbeat_state();
+        db.set_deployment_state(&state).await.unwrap();
+        let mut accepted = 0;
+        // Twenty collection intervals (ten minutes), with a checkpoint between
+        // every snapshot and merge. No timing or scheduler luck is involved.
+        for tick in 0..20 {
+            let snapshot = db.get_deployment_state().await.unwrap().unwrap();
+            state.target_release = if tick % 2 == 0 {
+                state.current_release.clone()
+            } else {
+                None
+            };
+            state
+                .stack_state
+                .as_mut()
+                .unwrap()
+                .resources
+                .get_mut("worker")
+                .unwrap()
+                .retry_attempt = tick;
+            db.set_deployment_state(&state).await.unwrap();
+            let mut heartbeat = container_heartbeat("web");
+            heartbeat.observed_at += chrono::Duration::seconds(i64::from(tick) * 30);
+            if db
+                .merge_pending_heartbeats_if_state_matches(&snapshot, &[heartbeat.clone()])
+                .await
+                .unwrap()
+            {
+                accepted += 1;
+                assert_eq!(db.get_pending_heartbeats().await.unwrap(), vec![heartbeat]);
+            }
+        }
+        assert_eq!(
+            accepted, 20,
+            "maintenance must not starve passive heartbeats"
+        );
+    }
+
+    #[tokio::test]
+    async fn passive_heartbeats_ignore_serialized_object_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let state = heartbeat_state();
+        // A JSON value orders object keys differently from the state struct.
+        let json = serde_json::to_string(&serde_json::to_value(&state).unwrap()).unwrap();
+        db.conn.lock().await.execute("INSERT INTO state (key, value, updated_at) VALUES ('deployment_state', ?, datetime('now'))", (json,)).await.unwrap();
+        let snapshot = db.get_deployment_state().await.unwrap().unwrap();
+        let heartbeat = container_heartbeat("web");
+        assert!(db
+            .merge_pending_heartbeats_if_state_matches(&snapshot, &[heartbeat.clone()])
+            .await
+            .unwrap());
+        assert_eq!(db.get_pending_heartbeats().await.unwrap(), vec![heartbeat]);
+    }
+
+    #[tokio::test]
+    async fn passive_heartbeats_reject_replaced_releases_and_workloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let original = heartbeat_state();
+        let web = container_heartbeat("web");
+        let worker = container_heartbeat("worker");
+        for change in [
+            "target",
+            "release",
+            "deleting",
+            "prefix",
+            "missing",
+            "name",
+            "namespace",
+            "kind",
+            "platform",
+            "updating",
+            "generation",
+            "config",
+        ] {
+            let mut current = original.clone();
+            match change {
+                "target" => current.target_release = settled_state(Some("rel_new")).target_release,
+                "release" => {
+                    current.current_release.as_mut().unwrap().release_id =
+                        Some("rel_new".to_string())
+                }
+                "deleting" => current.status = alien_core::DeploymentStatus::Deleting,
+                "prefix" => {
+                    current.stack_state.as_mut().unwrap().resource_prefix = "other".to_string()
+                }
+                "missing" => {
+                    current
+                        .stack_state
+                        .as_mut()
+                        .unwrap()
+                        .resources
+                        .remove("web");
+                }
+                _ => {
+                    let resource = current
+                        .stack_state
+                        .as_mut()
+                        .unwrap()
+                        .resources
+                        .get_mut("web")
+                        .unwrap();
+                    match change {
+                        "name" => {
+                            resource.internal_state.as_mut().unwrap()["workloadName"] =
+                                "replacement".into()
+                        }
+                        "namespace" => {
+                            resource.internal_state.as_mut().unwrap()["namespace"] = "other".into()
+                        }
+                        "kind" => {
+                            resource.internal_state.as_mut().unwrap()["isStateful"] = true.into()
+                        }
+                        "platform" => {
+                            resource.controller_platform = Some(alien_core::Platform::Aws)
+                        }
+                        "config" => {
+                            let mut config = serde_json::to_value(&resource.config).unwrap();
+                            config["code"]["image"] = "example:v2".into();
+                            resource.config = serde_json::from_value(config).unwrap();
+                        }
+                        "generation" => {
+                            resource.internal_state.as_mut().unwrap()["updateGeneration"] = 2.into()
+                        }
+                        "updating" => resource.status = alien_core::ResourceStatus::Updating,
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            db.set_deployment_state(&current).await.unwrap();
+            db.conn
+                .lock()
+                .await
+                .execute("DELETE FROM state WHERE key = 'pending_heartbeats'", ())
+                .await
+                .unwrap();
+            let merged = db
+                .merge_pending_heartbeats_if_state_matches(
+                    &original,
+                    &[web.clone(), worker.clone()],
+                )
+                .await
+                .unwrap();
+            let pending = db.get_pending_heartbeats().await.unwrap();
+            if matches!(change, "target" | "release" | "deleting" | "prefix") {
+                assert!(!merged, "{change}");
+                assert!(pending.is_empty(), "{change}");
+            } else {
+                assert!(merged, "unchanged worker must still report: {change}");
+                assert_eq!(pending, vec![worker.clone()], "{change}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn passive_heartbeats_keep_newer_step_observations() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let snapshot = heartbeat_state();
+        db.set_deployment_state(&snapshot).await.unwrap();
+        let old = container_heartbeat("web");
+        let mut latest = old.clone();
+        latest.observed_at += chrono::Duration::seconds(10);
+        let worker = container_heartbeat("worker");
+        db.set_pending_heartbeats(&[latest.clone(), worker.clone()])
+            .await
+            .unwrap();
+        assert!(db
+            .merge_pending_heartbeats_if_state_matches(&snapshot, &[old])
+            .await
+            .unwrap());
+        assert_eq!(
+            db.get_pending_heartbeats().await.unwrap(),
+            vec![latest, worker]
+        );
     }
 
     fn empty_config() -> alien_core::DeploymentConfig {
@@ -2617,6 +2997,93 @@ mod tests {
         assert!(
             wal_bytes < 8 * 1024 * 1024,
             "WAL grew to {wal_bytes} bytes; checkpoints are not restarting it"
+        );
+    }
+    #[tokio::test]
+    async fn unreadable_checkpoint_does_not_replace_state_or_merge_heartbeats() {
+        let log = tempfile::NamedTempFile::new().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(log.reopen().unwrap()))
+            .finish();
+        let _subscriber = tracing::subscriber::set_default(subscriber);
+        let directory = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_unreadable").await.unwrap();
+        let expected = heartbeat_state();
+        for saved in [
+            "not-json",
+            r#"{"platform":"kubernetes","status":"future-status"}"#,
+        ] {
+            db.conn.lock().await.execute(
+                "INSERT OR REPLACE INTO state (key, value, updated_at) VALUES ('deployment_state', ?, datetime('now'))", (saved,),
+            ).await.unwrap();
+            assert!(!db
+                .compare_and_set_deployment_state(&expected, &expected)
+                .await
+                .unwrap());
+            assert!(!db
+                .merge_pending_heartbeats_if_state_matches(&expected, &[container_heartbeat("web")])
+                .await
+                .unwrap());
+            assert!(db.get_pending_heartbeats().await.unwrap().is_empty());
+        }
+        let logs = std::fs::read_to_string(log.path()).unwrap();
+        for operation in [
+            "Skipping checkpoint replacement",
+            "Skipping heartbeat merge",
+        ] {
+            let entries: Vec<_> = logs
+                .lines()
+                .filter(|line| line.contains(operation))
+                .collect();
+            assert_eq!(entries.len(), 2);
+            assert!(entries
+                .iter()
+                .all(|line| line.contains("dep_unreadable") && line.contains("error=")));
+            assert!(entries[0].contains("expected ident"));
+            assert!(entries[1].contains("unknown variant"));
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_state_defaults_do_not_prevent_checkpointing() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        // Older checkpoints predate the default retained-data policy.
+        let legacy = serde_json::json!({
+            "platform": "kubernetes", "status": "provisioning-failed",
+            "runtimeMetadata": {},
+            "protocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+        });
+        db.conn.lock().await.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('deployment_state', ?, datetime('now'))",
+            (legacy.to_string(),),
+        ).await.unwrap();
+        let expected = db.get_deployment_state().await.unwrap().unwrap();
+        let mut retry = expected.clone();
+        retry.retry_requested = true;
+        assert!(db
+            .compare_and_set_deployment_state(&expected, &retry)
+            .await
+            .unwrap());
+        assert!(
+            !db.compare_and_set_deployment_state(&expected, &expected)
+                .await
+                .unwrap(),
+            "a genuinely changed checkpoint must still reject a stale writer"
+        );
+        assert!(
+            db.get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .retry_requested
         );
     }
 }

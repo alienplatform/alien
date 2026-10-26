@@ -167,11 +167,27 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     // Release auto-builds and library callers can construct BuildSettings directly instead of
     // going through the CLI planner. Enforce the platform's architecture contract here so every
     // path fails before doing build work or writing artifacts.
-    plan::resolve_targets_for_stack_platform(
+    let default_targets = if settings.targets.is_none()
+        && settings.platform.base_platform().is_some()
+        && plan::exact_compute_architecture(&stack)?.is_none()
+    {
+        Some(settings.get_targets())
+    } else {
+        None
+    };
+    let targets = plan::resolve_targets_for_stack_platform(
         &stack,
         settings.platform.runtime_platform(),
-        settings.targets.as_deref(),
+        settings.targets.as_deref().or(default_targets.as_deref()),
     )?;
+    let mut resolved_settings = settings.clone();
+    if matches!(
+        settings.platform.runtime_platform(),
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Machines
+    ) {
+        resolved_settings.targets = Some(targets);
+    }
+    let settings = &resolved_settings;
 
     // Run preflights (compile-time checks only)
     let preflight_runner = PreflightRunner::new();
@@ -4647,6 +4663,41 @@ mod tests {
         let serialized = serde_json::to_string(&error).expect("error should serialize");
         assert!(serialized.contains("MACHINES_UNSUPPORTED_RESOURCE"));
         assert!(!output.path().join("build").join("machines").exists());
+    }
+
+    #[tokio::test]
+    async fn aws_build_accepts_nested_virtualization_x64_target() {
+        let output = tempdir().unwrap();
+        let cluster = alien_core::ComputeCluster::new("runtime".into())
+            .capacity_group(alien_core::CapacityGroup {
+                group_id: "pool".into(),
+                instance_type: None,
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: Some(true),
+            })
+            .build();
+        let stack = Stack::new("nested-virtualization".into())
+            .add(cluster, alien_core::ResourceLifecycle::Frozen)
+            .build();
+        let settings = BuildSettings {
+            output_directory: output.path().display().to_string(),
+            platform: PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            targets: Some(vec![BinaryTarget::LinuxX64]),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+        let built = build_stack(stack, &settings)
+            .await
+            .expect("release target must build");
+        assert!(built.resources.contains_key("runtime"));
     }
 
     #[tokio::test]

@@ -248,7 +248,9 @@ pub fn resolve_targets_for_stack_platform(
     Ok(resolved)
 }
 
-fn exact_compute_architecture(stack: &Stack) -> crate::error::Result<Option<Architecture>> {
+pub(crate) fn exact_compute_architecture(
+    stack: &Stack,
+) -> crate::error::Result<Option<Architecture>> {
     let mut architectures = stack
         .resources()
         .filter_map(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>())
@@ -273,12 +275,43 @@ fn resolved_compute_architecture(
     stack: &Stack,
     platform: Platform,
 ) -> crate::error::Result<Architecture> {
+    let requires_catalog_architecture = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>())
+        .flat_map(|cluster| &cluster.capacity_groups)
+        .any(|group| {
+            group.nested_virtualization == Some(true)
+                || group
+                    .profile
+                    .as_ref()
+                    .is_some_and(|profile| profile.gpu.is_some())
+        });
+    if exact_compute_architecture(stack)?.is_none() && !requires_catalog_architecture {
+        return instance_catalog::default_architecture(platform).ok_or_else(|| {
+            AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+                message: format!("managed cloud {platform} has no default compute architecture"),
+            })
+        });
+    }
     let mut architectures = stack
         .resources()
         .filter_map(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>())
         .flat_map(|cluster| cluster.capacity_groups.iter())
         .map(|group| {
-            instance_catalog::select_instance_type(platform, &capacity_group_requirements(group))
+            let mut requirements = capacity_group_requirements(group);
+            // Nested virtualization and GPU models can restrict the architecture
+            // even when the pool leaves it unspecified.
+            if requirements.architecture.is_none()
+                && (requirements.nested_virt || requirements.gpu.is_some())
+            {
+                for architecture in [Architecture::Arm64, Architecture::X86_64] {
+                    requirements.architecture = Some(architecture);
+                    if instance_catalog::select_instance_type(platform, &requirements).is_ok() {
+                        break;
+                    }
+                }
+            }
+            instance_catalog::select_instance_type(platform, &requirements)
                 .map_err(|message| {
                     AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
                         message: format!(
@@ -499,6 +532,101 @@ mod tests {
         let groups = plan_runner_groups_for_stack(&[Aws], &stack).expect("plan should build");
 
         assert_eq!(groups[0].name, "linux-x64");
+    }
+
+    #[test]
+    fn unconstrained_pool_build_target_does_not_depend_on_machine_sizing() {
+        let cluster = ComputeCluster::new("runtime".into())
+            .capacity_group(CapacityGroup {
+                group_id: "pool".into(),
+                instance_type: None,
+                profile: Some(MachineProfile {
+                    cpu: "100000".into(),
+                    memory_bytes: 1024,
+                    ephemeral_storage_bytes: 0,
+                    architecture: None,
+                    gpu: None,
+                    data_disk: None,
+                }),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+            })
+            .build();
+        let stack = stack_with(cluster);
+        for (platform, target) in [
+            (Aws, BinaryTarget::LinuxArm64),
+            (Gcp, BinaryTarget::LinuxX64),
+            (Azure, BinaryTarget::LinuxX64),
+        ] {
+            assert_eq!(
+                resolve_targets_for_stack_platform(&stack, platform, None).unwrap(),
+                vec![target]
+            );
+        }
+    }
+
+    #[test]
+    fn aws_nested_virtualization_selects_x64_without_explicit_architecture() {
+        let stack = stack_with(
+            ComputeCluster::new("runtime".into())
+                .capacity_group(CapacityGroup {
+                    group_id: "pool".into(),
+                    instance_type: None,
+                    profile: None,
+                    min_size: 1,
+                    max_size: 1,
+                    scale_policy: None,
+                    nested_virtualization: Some(true),
+                })
+                .build(),
+        );
+        assert_eq!(
+            resolve_targets_for_stack_platform(&stack, Aws, Some(&[BinaryTarget::LinuxX64]))
+                .unwrap(),
+            vec![BinaryTarget::LinuxX64]
+        );
+        let groups = plan_runner_groups_for_stack(&[Aws], &stack).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].name, "linux-x64");
+        assert_eq!(groups[0].runner, "ubuntu-24.04");
+    }
+
+    #[test]
+    fn aws_gpu_pool_selects_its_supported_architecture() {
+        let stack = stack_with(
+            ComputeCluster::new("runtime".into())
+                .capacity_group(CapacityGroup {
+                    group_id: "gpu".into(),
+                    instance_type: None,
+                    profile: Some(MachineProfile {
+                        cpu: "1".into(),
+                        memory_bytes: 1024 * 1024 * 1024,
+                        ephemeral_storage_bytes: 0,
+                        architecture: None,
+                        gpu: Some(alien_core::GpuSpec {
+                            gpu_type: "nvidia-t4".into(),
+                            count: 1,
+                        }),
+                        data_disk: None,
+                    }),
+                    min_size: 1,
+                    max_size: 1,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                })
+                .build(),
+        );
+        assert_eq!(
+            resolve_targets_for_stack_platform(&stack, Aws, Some(&[BinaryTarget::LinuxX64]))
+                .unwrap(),
+            vec![BinaryTarget::LinuxX64]
+        );
+        assert_eq!(
+            plan_runner_groups_for_stack(&[Aws], &stack).unwrap()[0].name,
+            "linux-x64"
+        );
     }
 
     #[test]

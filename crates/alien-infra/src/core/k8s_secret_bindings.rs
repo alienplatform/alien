@@ -162,6 +162,48 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn typed_bindings_keep_the_legacy_environment_projection() {
+        for (name, field, env, literal_field, input) in [
+            (
+                "database",
+                "host",
+                "ALIEN_BINDING_DATABASE_HOST",
+                "password",
+                json!({
+                    "type":"postgres", "service":"external", "host":{"secretRef":{"name":"credentials","key":"value"}},
+                    "port":5432, "database":"app", "username":"app", "password":"literal-$100-$(VAR)"
+                }),
+            ),
+            (
+                "cache",
+                "dataDir",
+                "ALIEN_BINDING_CACHE_DATADIR",
+                "keyPrefix",
+                json!({
+                    "type":"kv", "service":"local-kv", "dataDir":{"secretRef":{"name":"credentials","key":"value"}},
+                    "keyPrefix":"literal-$100-$(VAR)"
+                }),
+            ),
+        ] {
+            let binding: alien_core::ExternalBinding = serde_json::from_value(input).unwrap();
+            let input = serde_json::to_value(binding).unwrap();
+            let projected = extract_binding_secrets(name, &input).unwrap();
+            let mut expected = input;
+            expected[field] = json!(format!("$({env})"));
+            expected[literal_field] = json!("literal-$100-$$(VAR)");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&projected.resolved_binding_json)
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(
+                projected.secret_env_vars,
+                vec![(env.to_string(), "credentials".into(), "value".into())]
+            );
+        }
+    }
+
+    #[test]
     fn test_extract_binding_secrets_basic() {
         let binding = json!({
             "service": "redis",

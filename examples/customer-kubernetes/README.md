@@ -120,6 +120,8 @@ alien release
 
 This builds the container for Linux (the first build takes several minutes) and pushes the image into your manager, which stores it and records the release. You don't need a registry of your own.
 
+If your stack declares compute pool CPU architectures, the build uses those targets automatically. An explicit `--targets` value must match the pools; conflicting architectures fail before building images.
+
 ### 5. Onboard two customers
 
 Each customer gets an access token that your control plane will send to their copy of the service. Make one per customer, then onboard them:

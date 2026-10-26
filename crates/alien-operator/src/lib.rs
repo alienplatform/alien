@@ -31,6 +31,7 @@ pub mod otlp_server;
 pub mod pod_logs;
 pub mod readiness_server;
 pub mod self_update;
+mod workload_observation;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
 pub use config::{OperatorConfig, SyncConfig};
@@ -74,7 +75,11 @@ fn runtime_deployment_scope_from_env() -> error::Result<Option<(String, String)>
     let value = std::env::var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE");
     match (key, value) {
         (Ok(key), Ok(value)) if !key.trim().is_empty() && !value.trim().is_empty() => {
-            Ok(Some((key, value)))
+            Ok(Some(runtime_deployment_scope_for_helm(
+                (key, value),
+                optional_scope_env("OPERATOR_RESOURCE_PREFIX")?.as_deref(),
+                optional_scope_env("OPERATOR_HELM_RELEASE")?.as_deref(),
+            )))
         }
         (Err(std::env::VarError::NotPresent), Err(std::env::VarError::NotPresent)) => Ok(None),
         (Err(std::env::VarError::NotUnicode(_)), _)
@@ -87,6 +92,35 @@ fn runtime_deployment_scope_from_env() -> error::Result<Option<(String, String)>
             message: "ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY and ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE must be set together and non-empty".to_string(),
         })),
     }
+}
+
+fn optional_scope_env(name: &str) -> error::Result<Option<String>> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err(AlienError::new(error::ErrorData::ConfigurationError {
+                message: format!("{name} must be valid UTF-8"),
+            }))
+        }
+    }
+}
+
+fn runtime_deployment_scope_for_helm(
+    mut scope: (String, String),
+    resource_prefix: Option<&str>,
+    helm_release: Option<&str>,
+) -> (String, String) {
+    // Older charts defaulted this label to the release name even when a custom
+    // prefix named and labelled the workloads. Keep using those workload labels;
+    // startup still checks this configured prefix against the persisted state.
+    // Charts predating the release-name environment variable also supplied it.
+    if helm_release.is_none() || helm_release == Some(scope.1.as_str()) {
+        if let Some(prefix) = resource_prefix.filter(|prefix| !prefix.trim().is_empty()) {
+            scope.1 = prefix.to_string();
+        }
+    }
+    scope
 }
 
 fn readiness_server_port_from_env() -> error::Result<Option<u16>> {
@@ -1190,6 +1224,130 @@ mod tests {
             .await
             .expect_err("an empty database must not initialize the Helm marker");
         assert!(error.to_string().contains("deployment ID is durable"));
+    }
+
+    #[tokio::test]
+    async fn helm_release_scope_uses_the_installed_workload_prefix() {
+        let temp = tempfile::tempdir().expect("create test directory");
+        let db = db::OperatorDb::new(
+            &temp.path().to_string_lossy(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .expect("create operator database");
+        let mut deployment = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(alien_core::StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "custom-prefix".to_string(),
+            )),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&deployment)
+            .await
+            .expect("persist state");
+        let scope = runtime_deployment_scope_for_helm(
+            (
+                "alien.dev/deployment".to_string(),
+                "app-release".to_string(),
+            ),
+            Some("custom-prefix"),
+            Some("app-release"),
+        );
+        assert!(validate_runtime_deployment_scope(&db, None, Some(&scope))
+            .await
+            .expect("restart with the installed prefix"));
+        assert_eq!(scope.1, "custom-prefix");
+
+        // A different synced prefix must still be rejected after a restart.
+        deployment.stack_state.as_mut().unwrap().resource_prefix = "other-prefix".to_string();
+        db.set_deployment_state(&deployment)
+            .await
+            .expect("persist changed state");
+        let error = validate_runtime_deployment_scope(&db, None, Some(&scope))
+            .await
+            .expect_err("reject a different synced prefix");
+        assert!(error.to_string().contains("does not match"));
+    }
+
+    #[tokio::test]
+    async fn old_chart_scope_uses_the_installed_workload_prefix() {
+        let temp = tempfile::tempdir().expect("create test directory");
+        let db = db::OperatorDb::new(
+            &temp.path().to_string_lossy(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .expect("create operator database");
+        let mut deployment = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(alien_core::StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "custom-prefix".to_string(),
+            )),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&deployment)
+            .await
+            .expect("persist state");
+        let scope = runtime_deployment_scope_for_helm(
+            (
+                "alien.dev/deployment".to_string(),
+                "app-release".to_string(),
+            ),
+            Some("custom-prefix"),
+            None,
+        );
+        assert!(validate_runtime_deployment_scope(&db, None, Some(&scope))
+            .await
+            .expect("restart with the installed prefix"));
+        assert_eq!(scope.1, "custom-prefix");
+
+        // A different synced prefix must still be rejected after a restart.
+        deployment.stack_state.as_mut().unwrap().resource_prefix = "other-prefix".to_string();
+        db.set_deployment_state(&deployment)
+            .await
+            .expect("persist changed state");
+        let error = validate_runtime_deployment_scope(&db, None, Some(&scope))
+            .await
+            .expect_err("reject a different synced prefix");
+        assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn helm_scope_preserves_explicit_values_and_non_helm_installs() {
+        for (value, prefix, release, expected) in [
+            ("app", Some("app"), Some("app"), "app"),
+            ("custom", Some("custom"), Some("app"), "custom"),
+            ("other", Some("custom"), Some("app"), "other"),
+            ("app", None, Some("app"), "app"),
+            ("app", Some("custom"), None, "custom"),
+            ("app", Some(""), Some("app"), "app"),
+        ] {
+            let scope = runtime_deployment_scope_for_helm(
+                ("example.test/deployment".to_string(), value.to_string()),
+                prefix,
+                release,
+            );
+            assert_eq!(
+                scope,
+                ("example.test/deployment".to_string(), expected.to_string())
+            );
+        }
     }
 
     #[tokio::test]
