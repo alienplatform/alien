@@ -253,7 +253,7 @@ pub fn generate_product_terraform_module_with_profile(
 fn generate_terraform_module_internal(
     stack: &Stack,
     target: TerraformTarget,
-    options: TerraformOptions<'_>,
+    mut options: TerraformOptions<'_>,
     product_remote_operator: bool,
     requires_remote_operator_collector_token: bool,
     profile: alien_core::SetupConfigurationProfile,
@@ -262,6 +262,7 @@ fn generate_terraform_module_internal(
     alien_core::remove_off_platform_gated_resources(
         &mut platform_stack,
         target.deployment_platform(),
+        options.stack_settings.compute.as_mut(),
     );
     let stack = &platform_stack;
     let labels = resource_labels(stack)?;

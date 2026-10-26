@@ -57,3 +57,78 @@ async fn setup_preparation_only_derives_resources_for_an_available_gate() {
         }
     }
 }
+
+#[tokio::test]
+async fn render_preparation_removes_only_excluded_container_selections() {
+    let mut input = StackInputDefinition::deployer_boolean(
+        "enabled",
+        "Enabled",
+        "Create the container",
+        Some(true),
+    );
+    input.platforms = Some(vec![Platform::Gcp]);
+    let stack = Stack::new("scoped-gate".into())
+        .inputs(vec![input])
+        .add_enabled_when(
+            alien_core::Container::new("api".into())
+                .code(alien_core::ContainerCode::Image {
+                    image: "example.com/api:latest".into(),
+                })
+                .permissions("execution".into())
+                .cpu(alien_core::ResourceSpec {
+                    min: "1".into(),
+                    desired: "1".into(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "1Gi".into(),
+                    desired: "1Gi".into(),
+                })
+                .build(),
+            ResourceLifecycle::Live,
+            "enabled",
+        )
+        .add_enabled_when(
+            Storage::new("data".into()).build(),
+            ResourceLifecycle::Frozen,
+            "enabled",
+        )
+        .build();
+    let mut config = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(Default::default())
+        .allow_frozen_changes(false)
+        .build();
+    let selections: alien_core::ComputeSettings = serde_json::from_value(serde_json::json!({
+        "containers": { "api": {} }
+    }))
+    .unwrap();
+    config.stack_settings.compute = Some(selections.clone());
+    let runner = PreflightRunner::new();
+    let state = StackState::new(Platform::Aws);
+    let prepared = runner
+        .apply_mutations(stack.clone(), &state, &config)
+        .await
+        .expect("excluded container selection must not prevent rendering");
+    assert!(prepared.resources.is_empty());
+
+    for invalid in ["missing", "data"] {
+        let mut compute = selections.clone();
+        compute
+            .containers
+            .insert(invalid.into(), Default::default());
+        config.stack_settings.compute = Some(compute);
+        let error = runner
+            .apply_mutations(stack.clone(), &state, &config)
+            .await
+            .expect_err("unknown and non-container selections must still fail");
+        assert!(
+            format!("{error:?}").contains("CONTAINER_RESOURCE_SELECTION_INVALID"),
+            "{error:?}"
+        );
+    }
+}

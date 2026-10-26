@@ -71,8 +71,13 @@ pub fn gate_is_off_platform(
 }
 
 /// Remove resources whose gate input is unavailable on this platform, including their links
-/// and grants. Unlike a mutable live decline, these resources can never be enabled here.
-pub fn remove_off_platform_gated_resources(stack: &mut Stack, platform: Platform) {
+/// and grants, plus any supplied container allocations. Unlike a mutable live decline,
+/// these resources can never be enabled here.
+pub fn remove_off_platform_gated_resources(
+    stack: &mut Stack,
+    platform: Platform,
+    compute: Option<&mut crate::ComputeSettings>,
+) {
     let declined = stack
         .resources()
         .filter_map(|(id, entry)| {
@@ -80,6 +85,17 @@ pub fn remove_off_platform_gated_resources(stack: &mut Stack, platform: Platform
             gate_is_off_platform(&stack.inputs, input_id, platform).then(|| id.clone())
         })
         .collect::<Vec<_>>();
+    if let Some(compute) = compute {
+        for id in &declined {
+            if stack
+                .resources
+                .get(id)
+                .is_some_and(|entry| entry.config.downcast_ref::<crate::Container>().is_some())
+            {
+                compute.containers.remove(id);
+            }
+        }
+    }
     remove_declined_resources(stack, &declined);
 }
 

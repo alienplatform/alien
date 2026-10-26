@@ -269,13 +269,14 @@ pub fn generate_cloudformation_template(
 /// Generate a distinct template with the requested configuration surface.
 pub fn generate_cloudformation_template_with_profile(
     stack: &Stack,
-    options: CloudFormationOptions<'_>,
+    mut options: CloudFormationOptions<'_>,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<CfTemplate> {
     let mut platform_stack = stack.clone();
     alien_core::remove_off_platform_gated_resources(
         &mut platform_stack,
         options.target.deployment_platform(),
+        options.stack_settings.compute.as_mut(),
     );
     let stack = &platform_stack;
     validate_stack_for_cloudformation(stack)?;

@@ -293,7 +293,7 @@ pub fn strip_frozen_declines_with_compute_settings(
         })
         .map(|(id, _)| id.clone())
         .collect();
-    alien_core::remove_off_platform_gated_resources(&mut stack, platform);
+    alien_core::remove_off_platform_gated_resources(&mut stack, platform, None);
     let stack = strip_declined_frozen_resources(stack, answers);
     let stack = strip_frozen_dominated_live_resources(stack, answers, still_frozen_gating);
     if let Some(compute) = compute {

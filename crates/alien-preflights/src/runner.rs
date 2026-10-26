@@ -33,7 +33,7 @@ impl PreflightRunner {
     ) -> Result<PreflightSummary> {
         info!("Running compile-time checks for platform {:?}", platform);
         let mut platform_stack = stack.clone();
-        alien_core::remove_off_platform_gated_resources(&mut platform_stack, platform);
+        alien_core::remove_off_platform_gated_resources(&mut platform_stack, platform, None);
         let stack = &platform_stack;
 
         let checks = self.registry.get_compile_time_checks(stack, platform);
@@ -213,7 +213,13 @@ impl PreflightRunner {
         );
 
         let mut current_stack = stack;
-        alien_core::remove_off_platform_gated_resources(&mut current_stack, stack_state.platform);
+        let mut effective_config = config.clone();
+        alien_core::remove_off_platform_gated_resources(
+            &mut current_stack,
+            stack_state.platform,
+            effective_config.stack_settings.compute.as_mut(),
+        );
+        let config = &effective_config;
 
         for mutation in self.registry.get_all_mutations() {
             if !mutation.should_run(&current_stack, stack_state, config) {
@@ -287,7 +293,7 @@ impl PreflightRunner {
         );
 
         let mut platform_stack = stack.clone();
-        alien_core::remove_off_platform_gated_resources(&mut platform_stack, platform);
+        alien_core::remove_off_platform_gated_resources(&mut platform_stack, platform, None);
         let stack = &platform_stack;
         let checks = self.registry.get_template_checks(stack, platform);
         let mut results = Vec::new();
@@ -435,11 +441,14 @@ impl PreflightRunner {
                 });
             }
         }
-        let config = &effective_config;
-
         let platform = stack_state.platform;
         let mut stack = stack;
-        alien_core::remove_off_platform_gated_resources(&mut stack, platform);
+        alien_core::remove_off_platform_gated_resources(
+            &mut stack,
+            platform,
+            effective_config.stack_settings.compute.as_mut(),
+        );
+        let config = &effective_config;
         info!(
             "Running deployment-time preflights for platform {:?}",
             platform

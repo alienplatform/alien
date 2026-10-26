@@ -236,14 +236,18 @@ pub fn generate_product_helm_chart_with_image_identity(
 
 fn generate_helm_chart_internal(
     stack: &Stack,
-    options: HelmOptions<'_>,
+    mut options: HelmOptions<'_>,
     remote_operator: Option<(
         ProductOperatorManifestOptions<'_>,
         Option<OperatorImageIdentityOptions<'_>>,
     )>,
 ) -> Result<HelmChart> {
     let mut platform_stack = stack.clone();
-    alien_core::remove_off_platform_gated_resources(&mut platform_stack, Platform::Kubernetes);
+    alien_core::remove_off_platform_gated_resources(
+        &mut platform_stack,
+        Platform::Kubernetes,
+        options.stack_settings.compute.as_mut(),
+    );
     let stack = &platform_stack;
     let chart_name = sanitize_chart_name(&options.chart_name);
     let analysis = ChartAnalysis::from_stack(stack, options.registry)?;
