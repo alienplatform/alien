@@ -520,28 +520,10 @@ impl OperatorDb {
         }
     }
 
-    /// Set the latest non-empty resource heartbeat snapshot emitted by deployment steps.
+    /// Merge deployment-step observations without replacing newer passive readings.
     pub async fn set_pending_heartbeats(&self, heartbeats: &[ResourceHeartbeat]) -> Result<()> {
         let conn = self.conn.lock().await;
-
-        let json = serde_json::to_string(heartbeats)
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to serialize pending_heartbeats".to_string(),
-            })?;
-
-        conn.execute(
-            "INSERT INTO state (key, value, updated_at) VALUES ('pending_heartbeats', ?, datetime('now'))
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-            (json,),
-        )
-        .await
-        .into_alien_error()
-        .context(ErrorData::DatabaseError {
-            message: "Failed to set pending_heartbeats".to_string(),
-        })?;
-
-        Ok(())
+        Self::merge_pending_heartbeats_locked(&conn, heartbeats.iter()).await
     }
 
     /// Merge passive readings for unchanged workloads in the installed release.
@@ -627,6 +609,14 @@ impl OperatorDb {
             return Ok(false);
         }
 
+        Self::merge_pending_heartbeats_locked(&conn, heartbeats.into_iter()).await?;
+        Ok(true)
+    }
+
+    async fn merge_pending_heartbeats_locked<'a>(
+        conn: &Connection,
+        heartbeats: impl Iterator<Item = &'a ResourceHeartbeat>,
+    ) -> Result<()> {
         let mut pending_rows = conn
             .query(
                 "SELECT value FROM state WHERE key = 'pending_heartbeats'",
@@ -686,7 +676,7 @@ impl OperatorDb {
         .context(ErrorData::DatabaseError {
             message: "Failed to save merged pending_heartbeats".to_string(),
         })?;
-        Ok(true)
+        Ok(())
     }
 
     /// Get the latest observed inventory snapshots emitted by deployment steps.
@@ -2319,6 +2309,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn maintenance_heartbeats_preserve_newer_passive_observations() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(
+            &temp.path().to_string_lossy(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .unwrap();
+        let mut recent = container_heartbeat("web");
+        recent.observed_at = chrono::Utc::now();
+        let mut stale = recent.clone();
+        stale.observed_at -= chrono::Duration::seconds(10);
+        db.set_pending_heartbeats(&[recent.clone()]).await.unwrap();
+        db.set_pending_heartbeats(&[stale, container_heartbeat("other")])
+            .await
+            .unwrap();
+        let pending = db.get_pending_heartbeats().await.unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(
+            pending
+                .iter()
+                .find(|h| h.resource_id == "web")
+                .unwrap()
+                .observed_at,
+            recent.observed_at
+        );
+    }
+
+    #[tokio::test]
     async fn passive_heartbeats_survive_repeated_maintenance_checkpoints() {
         let dir = tempfile::tempdir().unwrap();
         let db = OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
@@ -2459,7 +2478,12 @@ mod tests {
                 }
             }
             db.set_deployment_state(&current).await.unwrap();
-            db.set_pending_heartbeats(&[]).await.unwrap();
+            db.conn
+                .lock()
+                .await
+                .execute("DELETE FROM state WHERE key = 'pending_heartbeats'", ())
+                .await
+                .unwrap();
             let merged = db
                 .merge_pending_heartbeats_if_state_matches(
                     &original,
