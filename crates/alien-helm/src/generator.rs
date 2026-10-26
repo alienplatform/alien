@@ -384,7 +384,7 @@ fn generate_helm_chart_internal(
     let mut readme = readme_md(&chart_name);
     if has_remote_operator {
         readme.push_str(
-            "\n## Runtime cleanup and Helm history\n\nRuntime cleanup uses the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set `runtime.cleanup.onUninstall.helmHistoryBackend=configmap`. The SQL and memory backends are unsupported because the chart cannot verify and prune unsafe rollback history.\n\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Install or upgrade the chart once with it disabled, then enable it in a second upgrade with `remoteOperator.bootstrapIdentity=true`; this proves that Helm uses a supported Kubernetes history backend before any durable identity is created. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Protected upgrades use the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set both `runtime.cleanup.onUninstall.helmHistoryBackend=configmap` and `remoteOperator.helmHistoryBackend=configmap`. Before identity creation, a credential-free one-shot Job mounts the exact pending Helm record from that backend and verifies a render-specific proof, so stale records cannot authorize an upgrade. The SQL and memory storage backends are rejected because the chart cannot verify or prune their rollback history. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
+            "\n## Runtime cleanup and Helm history\n\nRuntime cleanup and Pod log collection default to the deployment resource prefix (`serviceAccountPrefix`). Existing installations keep an immutable cleanup scope. If an older installation used a different scope, keep its original `logCollector.scope.deploymentLabelValue` during upgrades; changing it is refused. Use `logCollector.scope.podLabelKey` and `podLabelValue` to select existing workload logs independently. An older mismatched cleanup scope does not remove those workloads; they require separately scoped cleanup.\n\nRuntime cleanup uses the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set `runtime.cleanup.onUninstall.helmHistoryBackend=configmap`. The SQL and memory backends are unsupported because the chart cannot verify and prune unsafe rollback history.\n\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Install or upgrade the chart once with it disabled, then enable it in a second upgrade with `remoteOperator.bootstrapIdentity=true`; this proves that Helm uses a supported Kubernetes history backend before any durable identity is created. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Protected upgrades use the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set both `runtime.cleanup.onUninstall.helmHistoryBackend=configmap` and `remoteOperator.helmHistoryBackend=configmap`. Before identity creation, a credential-free one-shot Job mounts the exact pending Helm record from that backend and verifies a render-specific proof, so stale records cannot authorize an upgrade. The SQL and memory storage backends are rejected because the chart cannot verify or prune their rollback history. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
         );
     }
     files.insert("README.md".to_string(), readme);
@@ -2114,7 +2114,7 @@ fn generate_operator_manifest_inner(
         {
             (
                 "{{ .Values.logCollector.scope.deploymentLabelKey }}".to_string(),
-                "{{ default (include \"deployment.fullname\" .) .Values.logCollector.scope.deploymentLabelValue | regexQuoteMeta }}".to_string(),
+                "{{ default (include \"deployment.serviceAccountPrefix\" .) .Values.logCollector.scope.deploymentLabelValue | regexQuoteMeta }}".to_string(),
             )
         } else {
             (
@@ -3208,7 +3208,7 @@ fn operator_deployment_doc(
         yaml.push_str("            - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY\n");
         yaml.push_str("              value: {{ default \"alien.dev/deployment\" .Values.logCollector.scope.deploymentLabelKey | quote }}\n");
         yaml.push_str("            - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE\n");
-        yaml.push_str("              value: {{ default (include \"deployment.fullname\" .) .Values.logCollector.scope.deploymentLabelValue | quote }}\n");
+        yaml.push_str("              value: {{ default (include \"deployment.serviceAccountPrefix\" .) .Values.logCollector.scope.deploymentLabelValue | quote }}\n");
     }
     if supports_readiness {
         append_env_value(&mut yaml, "OPERATOR_READINESS_PORT", "8081");
@@ -3236,7 +3236,7 @@ fn operator_deployment_doc(
             yaml.push_str("              value: {{ default .Values.logCollector.scope.deploymentLabelKey $podLabelKey | quote }}\n");
             yaml.push_str("            - name: OPERATOR_POD_LOG_LABEL_VALUE\n");
             let default_scope = if integrated_product_chart {
-                "include \"deployment.fullname\" .".to_string()
+                "include \"deployment.serviceAccountPrefix\" .".to_string()
             } else {
                 format!("tpl {} .", helm_string(operator_name))
             };
@@ -5465,7 +5465,7 @@ different namespaces of one cluster from colliding. */ -}}
 
 fn serviceaccount_tpl() -> String {
     r#"{{- $runtimeLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
-{{- $runtimeLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $runtimeLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -5760,7 +5760,7 @@ fn runtime_cleanup_scope_tpl() -> String {
     r#"{{- $scopeName := include "deployment.releaseScopedName" (dict "root" . "suffix" "-runtime-scope") -}}
 {{- $requestedLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $requestedLegacyLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $requestedLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $requestedLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
 {{- if not (hasSuffix "/deployment" $requestedLabelKey) -}}
   {{- fail "The runtime cleanup deployment label key must end in '/deployment' because runtime ownership labels are domain-qualified." -}}
 {{- end -}}
@@ -5835,7 +5835,7 @@ fn runtime_cleanup_history_prune_tpl() -> String {
 {{- $firstSafeRevision := .Release.Revision -}}
 {{- $migrationLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $migrationLegacyLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $migrationLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $migrationLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
 {{- if $existingScope -}}
   {{- $scopeData := default dict $existingScope.data -}}
   {{- $firstSafeRevision = index $scopeData "firstSafeRevision" -}}
@@ -6054,7 +6054,7 @@ fn cleanup_job_tpl() -> String {
     r#"{{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
 {{- $cleanupLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $legacyCleanupLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $cleanupLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $cleanupLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
 {{- $cleanupResourceLabelKey := printf "%s/resource" (trimSuffix "/deployment" $cleanupLabelKey) -}}
 {{- $legacyCleanupResourceLabelKey := "" -}}
 {{- if $legacyCleanupLabelKey -}}
@@ -6568,7 +6568,7 @@ spec:
             - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY
               value: {{ default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey | quote }}
             - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE
-              value: {{ default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue | quote }}
+              value: {{ default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue | quote }}
             {{- if .Values.logCollector.scope.legacyDeploymentLabelKey }}
             - name: ALIEN_RUNTIME_LEGACY_DEPLOYMENT_LABEL_KEY
               value: {{ .Values.logCollector.scope.legacyDeploymentLabelKey | quote }}
@@ -6620,7 +6620,7 @@ spec:
             - name: OPERATOR_POD_LOG_LABEL_KEY
               value: {{ default .Values.logCollector.scope.deploymentLabelKey $podLabelKey | quote }}
             - name: OPERATOR_POD_LOG_LABEL_VALUE
-              value: {{ default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
+              value: {{ default (default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
             - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
               value: {{ include "deployment.logCollectorName" . | quote }}
             - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET
@@ -6844,7 +6844,7 @@ fn whitelabeled_log_collector_configmap_tpl() -> String {
   {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
 {{- end -}}
 {{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
-{{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
+{{- $logLabelValue := default (default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10491,6 +10491,44 @@ remoteOperator:
             );
         }
         assert!(checks.contains("does not match the immutable prepared identity-record contract"));
+    }
+
+    #[test]
+    fn prepared_prefix_matches_runtime_log_and_cleanup_scopes() {
+        let chart = sample_product_chart();
+        for (extra, expected) in [
+            ("", "prepared001"),
+            ("    deploymentLabelValue: explicit001\n", "explicit001"),
+        ] {
+            let values = format!(
+                "serviceAccountPrefix: prepared001\nlogCollector:\n  enabled: true\n  mode: podApi\n  scope:\n    deploymentLabelKey: alien.dev/deployment\n{extra}"
+            );
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(&values));
+            rendered.assert_ok("prepared deployment scopes");
+            let documents = parse_manifest_docs(&rendered.stdout);
+            let runtime = docs_by_kind(&documents, "Deployment")
+                .into_iter()
+                .find(|doc| operator_env_value(doc, "OPERATOR_RESOURCE_PREFIX").is_some())
+                .expect("runtime Deployment");
+            assert_eq!(
+                operator_env_value(&runtime, "OPERATOR_RESOURCE_PREFIX"),
+                Some("prepared001")
+            );
+            assert_eq!(
+                operator_env_value(&runtime, "ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE"),
+                Some(expected)
+            );
+            assert_eq!(
+                operator_env_value(&runtime, "OPERATOR_POD_LOG_LABEL_VALUE"),
+                Some(expected)
+            );
+            let scope = docs_by_kind(&documents, "ConfigMap")
+                .into_iter()
+                .find(|doc| doc["metadata"]["labels"]["alien.dev/runtime-cleanup-scope"] == "v2")
+                .expect("immutable cleanup scope");
+            assert_eq!(scope["data"]["labelValue"], expected);
+            assert_eq!(scope["immutable"], true);
+        }
     }
 
     #[test]

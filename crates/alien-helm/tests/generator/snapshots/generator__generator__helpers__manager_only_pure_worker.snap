@@ -1013,7 +1013,7 @@ different namespaces of one cluster from colliding. */ -}}
 
 === templates/serviceaccount.yaml ===
 {{- $runtimeLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
-{{- $runtimeLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $runtimeLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -1416,7 +1416,7 @@ spec:
             - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY
               value: {{ default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey | quote }}
             - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE
-              value: {{ default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue | quote }}
+              value: {{ default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue | quote }}
             {{- if .Values.logCollector.scope.legacyDeploymentLabelKey }}
             - name: ALIEN_RUNTIME_LEGACY_DEPLOYMENT_LABEL_KEY
               value: {{ .Values.logCollector.scope.legacyDeploymentLabelKey | quote }}
@@ -1468,7 +1468,7 @@ spec:
             - name: OPERATOR_POD_LOG_LABEL_KEY
               value: {{ default .Values.logCollector.scope.deploymentLabelKey $podLabelKey | quote }}
             - name: OPERATOR_POD_LOG_LABEL_VALUE
-              value: {{ default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
+              value: {{ default (default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
             - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
               value: {{ include "deployment.logCollectorName" . | quote }}
             - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET
@@ -1649,7 +1649,7 @@ subjects:
   {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
 {{- end -}}
 {{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
-{{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
+{{- $logLabelValue := default (default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -1842,7 +1842,7 @@ spec:
 {{- $scopeName := include "deployment.releaseScopedName" (dict "root" . "suffix" "-runtime-scope") -}}
 {{- $requestedLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $requestedLegacyLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $requestedLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $requestedLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
 {{- if not (hasSuffix "/deployment" $requestedLabelKey) -}}
   {{- fail "The runtime cleanup deployment label key must end in '/deployment' because runtime ownership labels are domain-qualified." -}}
 {{- end -}}
@@ -1914,7 +1914,7 @@ data:
 {{- $firstSafeRevision := .Release.Revision -}}
 {{- $migrationLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $migrationLegacyLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $migrationLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $migrationLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
 {{- if $existingScope -}}
   {{- $scopeData := default dict $existingScope.data -}}
   {{- $firstSafeRevision = index $scopeData "firstSafeRevision" -}}
@@ -2130,7 +2130,7 @@ spec:
 {{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
 {{- $cleanupLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $legacyCleanupLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $cleanupLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $cleanupLabelValue := default (include "deployment.serviceAccountPrefix" .) .Values.logCollector.scope.deploymentLabelValue -}}
 {{- $cleanupResourceLabelKey := printf "%s/resource" (trimSuffix "/deployment" $cleanupLabelKey) -}}
 {{- $legacyCleanupResourceLabelKey := "" -}}
 {{- if $legacyCleanupLabelKey -}}
