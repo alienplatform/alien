@@ -24,6 +24,7 @@ pub trait PodApi: Send + Sync + std::fmt::Debug {
     ) -> Result<List<Pod>>;
     async fn update_pod(&self, namespace: &str, name: &str, pod: &Pod) -> Result<Pod>;
     async fn delete_pod(&self, namespace: &str, name: &str) -> Result<()>;
+    async fn delete_pod_if_uid(&self, namespace: &str, name: &str, uid: &str) -> Result<()>;
 }
 
 impl KubernetesClient {
@@ -125,6 +126,29 @@ impl KubernetesClient {
         sign_send_json(builder, &self.auth_config()).await
     }
 
+    /// Delete the observed pod without deleting a replacement with the same name.
+    pub async fn delete_pod_if_uid(&self, namespace: &str, name: &str, uid: &str) -> Result<()> {
+        let url = format!(
+            "{}/api/v1/namespaces/{}/pods/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            urlencoding::encode(name)
+        );
+        let builder = self
+            .client()
+            .request(Method::DELETE, &url)
+            .header("Content-Type", "application/json")
+            .body(
+                serde_json::json!({
+                    "apiVersion": "v1",
+                    "kind": "DeleteOptions",
+                    "preconditions": { "uid": uid }
+                })
+                .to_string(),
+            );
+        sign_send_no_response(builder, &self.auth_config()).await
+    }
+
     /// Delete a pod in the specified namespace
     pub async fn delete_pod(&self, namespace: &str, name: &str) -> Result<()> {
         let url = format!(
@@ -161,6 +185,10 @@ impl PodApi for KubernetesClient {
 
     async fn update_pod(&self, namespace: &str, name: &str, pod: &Pod) -> Result<Pod> {
         self.update_pod(namespace, name, pod).await
+    }
+
+    async fn delete_pod_if_uid(&self, namespace: &str, name: &str, uid: &str) -> Result<()> {
+        self.delete_pod_if_uid(namespace, name, uid).await
     }
 
     async fn delete_pod(&self, namespace: &str, name: &str) -> Result<()> {
