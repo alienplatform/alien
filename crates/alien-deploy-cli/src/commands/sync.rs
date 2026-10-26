@@ -1350,27 +1350,41 @@ async fn uninstall_site(
         )));
     }
     if values.is_some() {
-        // Stop reconciliation before the chart removes its runtime resources.
-        let mut stop = kubectl(settings.kube_context.as_deref());
-        stop.args([
-            "scale",
+        // A previous cleanup hook may have removed the Operator before failing.
+        let mut get = kubectl(settings.kube_context.as_deref());
+        get.args([
+            "get",
             "deployment",
             &manifest.stack_id,
             "--namespace",
             &namespace,
-            "--replicas=0",
+            "--ignore-not-found",
+            "-o",
+            "name",
         ]);
-        run(stop, "stopping the Operator").await?;
-        let mut wait = kubectl(settings.kube_context.as_deref());
-        wait.args([
-            "rollout",
-            "status",
-            &format!("deployment/{}", manifest.stack_id),
-            "--namespace",
-            &namespace,
-            "--timeout=120s",
-        ]);
-        run(wait, "waiting for the Operator to stop").await?;
+        if !run(get, "checking for the Operator").await?.is_empty() {
+            // Stop reconciliation before the chart removes its runtime resources.
+            let mut stop = kubectl(settings.kube_context.as_deref());
+            stop.args([
+                "scale",
+                "deployment",
+                &manifest.stack_id,
+                "--namespace",
+                &namespace,
+                "--replicas=0",
+            ]);
+            run(stop, "stopping the Operator").await?;
+            let mut wait = kubectl(settings.kube_context.as_deref());
+            wait.args([
+                "rollout",
+                "status",
+                &format!("deployment/{}", manifest.stack_id),
+                "--namespace",
+                &namespace,
+                "--timeout=120s",
+            ]);
+            run(wait, "waiting for the Operator to stop").await?;
+        }
     }
     let mut command = Command::new("helm");
     command.args([
@@ -2903,6 +2917,147 @@ mod tests {
         let report: SiteReport =
             serde_json::from_slice(&std::fs::read(&reports[0].1).unwrap()).unwrap();
         assert_ne!(report.state["status"], "running");
+    }
+
+    /// Retry a signed deletion after a cleanup hook has removed the Operator.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
+    async fn signed_uninstall_resumes_without_operator_deployment() {
+        let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("sync-delete-retry-{}", std::process::id());
+        let (folder, mut site) = folder_with_report();
+        let snapshot = folder.path().join("deleting-report.json");
+        std::fs::rename(report_path(folder.path()), &snapshot).unwrap();
+        let original: SiteReport =
+            serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
+        let settings = SiteSide {
+            registry: "registry.example.com/site".into(),
+            registry_credentials: None,
+            insecure_registry: false,
+            namespace: Some(namespace.clone()),
+            values: Vec::new(),
+            kube_context: Some(context.clone()),
+        };
+        let chart = tempfile::tempdir().unwrap();
+        std::fs::create_dir(chart.path().join("templates")).unwrap();
+        std::fs::write(
+            chart.path().join("Chart.yaml"),
+            "apiVersion: v2\nname: app\nversion: 0.1.0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            chart.path().join("templates/runtime.yaml"),
+            r#"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app: app}
+  template:
+    metadata:
+      labels: {app: app}
+    spec:
+      containers:
+        - name: operator
+          image: registry.k8s.io/pause:3.10
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: runtime
+"#,
+        )
+        .unwrap();
+        let mut install = Command::new("helm");
+        install.args(["install", "app"]).arg(chart.path()).args([
+            "--namespace",
+            &namespace,
+            "--create-namespace",
+            "--kube-context",
+            &context,
+            "--set",
+            "management.deploymentId=dep_1",
+            "--set",
+            "runtime.cleanup.onUninstall.enabled=true",
+        ]);
+        run(install, "installing test release").await.unwrap();
+        let mut delete = kubectl(Some(&context));
+        delete.args(["delete", "deployment", "app", "--namespace", &namespace]);
+        run(delete, "removing the Operator before retry")
+            .await
+            .unwrap();
+        assert!(release_values(&settings, "app", &namespace)
+            .await
+            .unwrap()
+            .is_some());
+
+        let bundle = tempfile::tempdir().unwrap();
+        std::fs::write(
+            bundle.path().join(airgap::TARGET_FILE),
+            br#"{"action":"delete"}"#,
+        )
+        .unwrap();
+        let manifest = BundleManifest {
+            format_version: airgap::FORMAT_VERSION,
+            deployment_id: site.deployment_id.clone(),
+            deployment_name: site.name.clone(),
+            release_id: "delete".into(),
+            sequence: 2,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            stack_id: "app".into(),
+            images: Vec::new(),
+            chart_images: BTreeMap::new(),
+            chart: String::new(),
+            files: airgap::checksums(bundle.path()).await.unwrap(),
+            omitted_blobs: BTreeSet::new(),
+            telemetry_ack: None,
+        };
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        let key = BundleSigningKey::from_seed([6; 32]);
+        std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
+        std::fs::write(bundle.path().join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
+        std::fs::create_dir_all(folder.path().join(TO_SITE)).unwrap();
+        let pending = folder.path().join(TO_SITE).join("2-delete.bundle");
+        airgap::pack(bundle.path(), &pending).unwrap();
+        let args = SyncArgs::try_parse_from(["sync", "--trusted-key", &key.public_key()]).unwrap();
+        install_pending(folder.path(), &mut site, &settings, &args)
+            .await
+            .unwrap();
+
+        assert!(release_values(&settings, "app", &namespace)
+            .await
+            .unwrap()
+            .is_none());
+        let mut get = kubectl(Some(&context));
+        get.args([
+            "get",
+            "configmap",
+            "runtime",
+            "--namespace",
+            &namespace,
+            "--ignore-not-found",
+            "-o",
+            "name",
+        ]);
+        assert!(run(get, "checking Helm cleanup").await.unwrap().is_empty());
+        let reports = by_sequence(&folder.path().join(FROM_SITE), Some(REPORT_EXTENSION)).unwrap();
+        assert_eq!(reports.len(), 1);
+        let report: SiteReport =
+            serde_json::from_slice(&std::fs::read(&reports[0].1).unwrap()).unwrap();
+        assert_eq!(report.state["status"], "deleted");
+        assert_eq!(
+            serde_json::to_value(&report.telemetry).unwrap(),
+            serde_json::to_value(&original.telemetry).unwrap()
+        );
+        assert!(!snapshot.exists());
+        assert!(!pending.exists());
+        let mut delete = kubectl(Some(&context));
+        delete.args(["delete", "namespace", &namespace]);
+        run(delete, "removing test namespace").await.unwrap();
     }
 
     /// Run with ALIEN_SYNC_TEST_CONTEXT pointing at a disposable Kind cluster.
