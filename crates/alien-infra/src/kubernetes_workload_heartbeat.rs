@@ -24,18 +24,30 @@ pub(crate) fn deployment_has_ready_replicas(deployment: &Deployment) -> bool {
         .as_ref()
         .and_then(|spec| spec.replicas)
         .unwrap_or(1);
-    status.observed_generation.unwrap_or(0) >= deployment.metadata.generation.unwrap_or(1)
-        && if desired == 0 {
-            status.ready_replicas.unwrap_or(0) == 0 && status.replicas.unwrap_or(0) == 0
-        } else {
-            status.ready_replicas.unwrap_or(0) >= desired
-        }
-        && status.unavailable_replicas.unwrap_or(0) == 0
-        && (desired == 0
-            || !status
-                .conditions
-                .as_deref()
-                .unwrap_or_default()
+    let ready = status.ready_replicas.unwrap_or(0);
+    if desired == 0 {
+        return status.observed_generation.unwrap_or(0)
+            >= deployment.metadata.generation.unwrap_or(1)
+            && ready == 0
+            && status.replicas.unwrap_or(0) == 0;
+    }
+    if ready == 0 {
+        return false;
+    }
+    let conditions = status.conditions.as_deref().unwrap_or_default();
+    // Health refresh can race a rollout or an autoscaler. Serving replicas remain
+    // useful while the Deployment controller catches up; rollout completion below
+    // still requires the requested generation and every desired replica.
+    let progressing = status.observed_generation.unwrap_or(0)
+        < deployment.metadata.generation.unwrap_or(1)
+        || conditions.iter().any(|condition| {
+            condition.type_ == "Progressing"
+                && condition.status == "True"
+                && condition.reason.as_deref() == Some("ReplicaSetUpdated")
+        });
+    progressing
+        || (ready >= desired
+            && !conditions
                 .iter()
                 .any(|condition| condition.type_ == "Available" && condition.status == "False"))
 }
@@ -159,6 +171,40 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     #[test]
+    fn serving_replicas_remain_healthy_during_rollout_and_scale_up() {
+        let mut deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "metadata": {"generation": 4},
+            "spec": {"replicas": 2, "selector": {}, "template": {}},
+            "status": {"observedGeneration": 3, "replicas": 2, "readyReplicas": 2,
+                "availableReplicas": 2, "updatedReplicas": 2,
+                "conditions": [{"type": "Available", "status": "True"},
+                    {"type": "Progressing", "status": "True", "reason": "ReplicaSetUpdated"}]}
+        }))
+        .unwrap();
+        assert!(deployment_has_ready_replicas(&deployment));
+        assert!(!deployment_rollout_complete(&deployment, 2, Some(4)));
+        let status = deployment.status.as_mut().unwrap();
+        status.observed_generation = Some(4);
+        status.replicas = Some(3);
+        status.updated_replicas = Some(1);
+        status.unavailable_replicas = Some(1);
+        assert!(deployment_has_ready_replicas(&deployment));
+        assert!(!deployment_rollout_complete(&deployment, 2, Some(4)));
+        deployment.spec.as_mut().unwrap().replicas = Some(4);
+        deployment
+            .status
+            .as_mut()
+            .unwrap()
+            .conditions
+            .as_mut()
+            .unwrap()[0]
+            .status = "False".into();
+        assert!(deployment_has_ready_replicas(&deployment));
+        deployment.status.as_mut().unwrap().ready_replicas = None;
+        assert!(!deployment_has_ready_replicas(&deployment));
+    }
+
+    #[test]
     fn omitted_zero_ready_replicas_are_unhealthy_and_recover() {
         let mut deployment = Deployment {
             metadata: ObjectMeta {
@@ -196,7 +242,7 @@ mod tests {
             .status = "True".into();
         assert!(deployment_has_ready_replicas(&deployment));
         deployment.status.as_mut().unwrap().observed_generation = Some(2);
-        assert!(!deployment_has_ready_replicas(&deployment));
+        assert!(deployment_has_ready_replicas(&deployment));
         deployment.status = None;
         assert!(!deployment_has_ready_replicas(&deployment));
     }
