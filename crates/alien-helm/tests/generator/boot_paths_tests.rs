@@ -191,7 +191,13 @@ fn unconditional_deployer_default_keeps_existing_chart() {
     let stack = Stack::new("default-inputs".into())
         .inputs(vec![input])
         .build();
-    let chart = render(&stack, StackSettings::default());
-    super::helpers::snapshot_chart("unconditional_deployer_default", &chart);
+    let mut chart = render(&stack, StackSettings::default());
     super::helpers::assert_helm_valid(&chart, "unconditional deployer default");
+    // Workspace feature unification can enable serde_json/preserve_order. JSON object
+    // key order does not affect the schema; keep the template snapshots byte-for-byte.
+    let schema = chart.files.get_mut("values.schema.json").unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(schema).unwrap();
+    value.sort_all_objects();
+    *schema = serde_json::to_string_pretty(&value).unwrap();
+    super::helpers::snapshot_chart("unconditional_deployer_default", &chart);
 }
