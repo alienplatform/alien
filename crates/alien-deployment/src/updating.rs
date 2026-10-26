@@ -142,7 +142,27 @@ pub async fn handle_update_pending(
                     })
                     .map(|(id, _)| id.clone())
                     .collect();
-                alien_core::remove_declined_resources(&mut installed, &declined);
+                // Match the two preparation phases: only setup-time declines remove node grants.
+                let frozen_inputs =
+                    crate::pending::frozen_gating_inputs(&installed, current.platform);
+                let setup_declines: Vec<_> = declined
+                    .iter()
+                    .filter(|id| {
+                        let entry = &installed.resources[*id];
+                        entry.enabled_when.as_deref().is_some_and(|input| {
+                            alien_core::frozen_gate_of(entry).is_some()
+                                || frozen_inputs.contains(input)
+                                || alien_core::gate_is_off_platform(
+                                    &installed.inputs,
+                                    input,
+                                    current.platform,
+                                )
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                alien_core::remove_declined_resources(&mut installed, &setup_declines);
+                alien_core::remove_declined_live_resources(&mut installed, &declined);
                 Cow::Owned(installed)
             })
         });

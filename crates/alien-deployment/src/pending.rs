@@ -381,7 +381,7 @@ pub fn strip_declined_live_resources(
         platform,
     )
     .map_err(|message| AlienError::new(ErrorData::MissingConfiguration { message }))?;
-    alien_core::remove_declined_resources(&mut stack, &declined);
+    alien_core::remove_declined_live_resources(&mut stack, &declined);
     Ok(stack)
 }
 
@@ -1113,6 +1113,54 @@ mod tests {
             execution.0.contains_key("store"),
             "an accepted resource must keep its grant"
         );
+    }
+
+    #[test]
+    fn frozen_decline_removes_node_grants_before_setup_mutations() {
+        for accepted in [false, true] {
+            let stack = Stack::new("gated-node-storage".into())
+                .inputs(vec![StackInputDefinition::deployer_boolean(
+                    "managedBucket",
+                    "Managed bucket",
+                    "Create storage",
+                    Some(true),
+                )])
+                .add_enabled_when(
+                    alien_core::Storage::new("data".into()).build(),
+                    ResourceLifecycle::Frozen,
+                    "managedBucket",
+                )
+                .add(
+                    alien_core::ComputeCluster::new("compute".into())
+                        .node_permissions(
+                            alien_core::PermissionProfile::new()
+                                .resource("data", ["storage/data-read"]),
+                        )
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let prepared = strip_frozen_declines(
+                stack,
+                &alien_core::GateAnswers::from([("managedBucket".into(), accepted)]),
+                &std::collections::HashSet::from(["managedBucket".into()]),
+                alien_core::Platform::Aws,
+            );
+            assert_eq!(prepared.resources.contains_key("data"), accepted);
+            let cluster = prepared.resources["compute"]
+                .config
+                .downcast_ref::<alien_core::ComputeCluster>()
+                .unwrap();
+            assert_eq!(
+                cluster
+                    .node_permissions
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .contains_key("data"),
+                accepted
+            );
+        }
     }
 
     /// Only the declined id is scrubbed; an unrelated link on the same resource stays.
