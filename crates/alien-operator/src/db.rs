@@ -449,11 +449,15 @@ impl OperatorDb {
             .context(ErrorData::DatabaseError {
                 message: "Failed to read observed deployment state value".to_string(),
             })?;
-        let stored: DeploymentState = serde_json::from_str(&original).into_alien_error().context(
-            ErrorData::DatabaseError {
-                message: "Failed to parse observed deployment state".to_string(),
-            },
-        )?;
+        let stored: DeploymentState = match serde_json::from_str(&original) {
+            Ok(state) => state,
+            Err(_) => {
+                tracing::warn!(
+                    "Skipping checkpoint replacement: stored deployment state is unreadable"
+                );
+                return Ok(false);
+            }
+        };
         let stored =
             serde_json::to_value(stored)
                 .into_alien_error()
@@ -573,11 +577,13 @@ impl OperatorDb {
         let Some(current_json) = current_json else {
             return Ok(false);
         };
-        let current: DeploymentState = serde_json::from_str(&current_json)
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to parse deployment_state for heartbeat merge".to_string(),
-            })?;
+        let current: DeploymentState = match serde_json::from_str(&current_json) {
+            Ok(state) => state,
+            Err(_) => {
+                tracing::warn!("Skipping heartbeat merge: stored deployment state is unreadable");
+                return Ok(false);
+            }
+        };
         if !is_settled(expected_state)
             || !is_settled(&current)
             || current.current_release != expected_state.current_release
@@ -2907,6 +2913,32 @@ mod tests {
             "WAL grew to {wal_bytes} bytes; checkpoints are not restarting it"
         );
     }
+    #[tokio::test]
+    async fn unreadable_checkpoint_does_not_replace_state_or_merge_heartbeats() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        let expected = heartbeat_state();
+        for saved in [
+            "not-json",
+            r#"{"platform":"kubernetes","status":"future-status"}"#,
+        ] {
+            db.conn.lock().await.execute(
+                "INSERT OR REPLACE INTO state (key, value, updated_at) VALUES ('deployment_state', ?, datetime('now'))", (saved,),
+            ).await.unwrap();
+            assert!(!db
+                .compare_and_set_deployment_state(&expected, &expected)
+                .await
+                .unwrap());
+            assert!(!db
+                .merge_pending_heartbeats_if_state_matches(&expected, &[container_heartbeat("web")])
+                .await
+                .unwrap());
+            assert!(db.get_pending_heartbeats().await.unwrap().is_empty());
+        }
+    }
+
     #[tokio::test]
     async fn legacy_state_defaults_do_not_prevent_checkpointing() {
         let directory = tempfile::tempdir().unwrap();
