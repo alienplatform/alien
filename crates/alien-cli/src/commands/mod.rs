@@ -11,6 +11,8 @@ pub mod deploy;
 mod deployment_move;
 pub mod deployments;
 pub mod destroy;
+#[cfg(feature = "platform")]
+pub mod domains;
 pub mod dev_helpers;
 mod event_display;
 #[cfg(feature = "platform")]
@@ -61,6 +63,8 @@ pub use debug::{debug_task, debug_task_dev, DebugArgs};
 pub use deploy::{deploy_task, validate_deploy_config, DeployArgs};
 pub use deployments::{deployments_task, DeploymentsArgs};
 pub use destroy::{destroy_task, DestroyArgs};
+#[cfg(feature = "platform")]
+pub use domains::{domains_task, DomainsArgs};
 pub use dev_helpers::{
     build_and_post_release_simple, build_dev_status, build_embedded_dev_manager,
     create_initial_deployment, destroy_local_deployment, ensure_server_running,
