@@ -647,7 +647,10 @@ fn accept_target_release(
             | alien_core::DeploymentStatus::UpdateFailed
             | alien_core::DeploymentStatus::RefreshFailed
     ) {
-        deployment_state.status = if deployment_state.stack_state.is_none() {
+        deployment_state.status = if deployment_state.status
+            == alien_core::DeploymentStatus::ProvisioningFailed
+            && deployment_state.stack_state.is_none()
+        {
             alien_core::DeploymentStatus::Pending
         } else {
             alien_core::DeploymentStatus::UpdatePending
@@ -1017,7 +1020,7 @@ mod tests {
             status: DeploymentStatus::Running,
             current_release: Some(release.clone()),
             target_release: None,
-            stack_state: Some(alien_core::StackState::new(Platform::Kubernetes)),
+            stack_state: None,
             error: None,
             environment_info: None,
             runtime_metadata: None,
@@ -1031,10 +1034,15 @@ mod tests {
         assert_eq!(state.target_release, Some(release.clone()));
 
         // New work also reaches a deployment whose health check failed.
-        state.status = DeploymentStatus::RefreshFailed;
-        state.target_release = None;
-        accept_target_release(&mut state, release.clone());
-        assert_eq!(state.status, DeploymentStatus::UpdatePending);
+        for status in [
+            DeploymentStatus::RefreshFailed,
+            DeploymentStatus::UpdateFailed,
+        ] {
+            state.status = status;
+            state.target_release = None;
+            accept_target_release(&mut state, release.clone());
+            assert_eq!(state.status, DeploymentStatus::UpdatePending);
+        }
     }
 
     #[test]
@@ -1066,6 +1074,79 @@ mod tests {
         accept_target_release(&mut state, release);
         assert_eq!(state.status, DeploymentStatus::UpdatePending);
         assert!(state.stack_state.is_some());
+    }
+
+    #[tokio::test]
+    async fn corrective_target_with_partial_state_and_no_current_release_converges() {
+        let storage = alien_core::Storage::new("files".into()).build();
+        let mut partial = alien_core::StackState::new(Platform::Test);
+        let mut resource = alien_core::StackResourceState::new_pending(
+            "storage".into(),
+            alien_core::Resource::new(storage.clone()),
+            None,
+            vec![],
+        );
+        resource.lifecycle = Some(alien_core::ResourceLifecycle::Live);
+        partial.resources.insert("files".into(), resource);
+        let release = ReleaseInfo {
+            release_id: Some("rel_corrected".into()),
+            version: None,
+            description: None,
+            stack: Stack::new("corrected".into())
+                .add(storage, alien_core::ResourceLifecycle::Live)
+                .build(),
+        };
+        let mut state = DeploymentState {
+            platform: Platform::Test,
+            status: DeploymentStatus::ProvisioningFailed,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(partial),
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata::default()),
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        accept_target_release(&mut state, release.clone());
+        assert_eq!(state.status, DeploymentStatus::UpdatePending);
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        for _ in 0..30 {
+            state =
+                alien_deployment::step(state, config.clone(), alien_core::ClientConfig::Test, None)
+                    .await
+                    .expect("corrective deployment step")
+                    .state;
+            if state.status == DeploymentStatus::Running {
+                break;
+            }
+            assert!(
+                !matches!(
+                    state.status,
+                    DeploymentStatus::UpdateFailed | DeploymentStatus::ProvisioningFailed
+                ),
+                "{:?}",
+                state.error
+            );
+        }
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert_eq!(
+            state.current_release.unwrap().release_id,
+            release.release_id
+        );
+        assert_eq!(
+            state.stack_state.unwrap().resources["files"].status,
+            alien_core::ResourceStatus::Running
+        );
     }
 
     #[test]
