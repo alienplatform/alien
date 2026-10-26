@@ -2660,137 +2660,79 @@ async fn setup_cannot_set_a_generated_secret() {
 }
 
 #[tokio::test]
-async fn setup_ignores_inactive_generated_secret_values() {
-    let mut stack = stack_with_storage_and_generated_secret("assets");
-    stack.inputs[0].when = Some(alien_core::StackInputCondition {
-        input: "enabled".into(),
-        equals: true,
-    });
-    stack.inputs.push(
-        serde_json::from_value(serde_json::json!({
-            "id": "enabled", "kind": "boolean", "providedBy": ["deployer"],
-            "required": true, "label": "Enabled", "description": "Enable credentials",
-            "default": { "type": "boolean", "value": false }
-        }))
-        .unwrap(),
-    );
-    let fixture = make_fixture(Some(stack.clone())).await;
-    let mut body = aws_s3_import_request(
-        "conditional-import",
-        "us-east-1",
-        "assets",
-        "example-imports",
-    );
-    body.input_values.insert(
-        "databasePassword".into(),
-        serde_json::json!({"invalid": true}),
-    );
-    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
-    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
-    let deployment = fixture
-        .deployment_store
-        .get_deployment_by_name(
-            &alien_manager::auth::Subject::system(),
-            &fixture.deployment_group_id,
+async fn registration_validates_active_conditional_values() {
+    for (enabled, value, expected) in [
+        (false, serde_json::json!(42), StatusCode::CREATED),
+        (true, serde_json::json!("bad"), StatusCode::BAD_REQUEST),
+        (
+            true,
+            serde_json::json!("https://example.test"),
+            StatusCode::CREATED,
+        ),
+    ] {
+        let mut stack = stack_with_storage_and_generated_secret("assets");
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id":"endpoint", "kind":"string", "providedBy":["deployer"], "required":true,
+             "label":"Endpoint", "description":"Service endpoint", "validation":{"format":"url"},
+             "when":{"input":"enabled","equals":true}},
+            {"id":"enabled", "kind":"boolean", "providedBy":["deployer"], "required":true,
+             "label":"Enabled", "description":"Enable service"}
+        ]))
+        .unwrap();
+        let fixture = make_fixture(Some(stack)).await;
+        let mut body = aws_s3_import_request(
             "conditional-import",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(!deployment.input_values.contains_key("databasePassword"));
-    settle_conditional_import(&fixture, &deployment.id, &stack).await;
-    body.input_values.remove("databasePassword");
-    body.input_values
-        .insert("enabled".into(), serde_json::json!(true));
-    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
-    assert_eq!(status, StatusCode::OK, "body = {json:#}");
-    let activated = fixture
-        .deployment_store
-        .get_deployment(&alien_manager::auth::Subject::system(), &deployment.id)
-        .await
-        .unwrap()
-        .unwrap();
-    let generated = activated.input_values["databasePassword"].as_str().unwrap();
-    assert_eq!(generated.len(), 48);
-    for enabled in [false, true] {
-        settle_conditional_import(&fixture, &deployment.id, &stack).await;
-        body.input_values
-            .insert("enabled".into(), serde_json::json!(enabled));
+            "us-east-1",
+            "assets",
+            "example-imports",
+        );
+        body.input_values = HashMap::from([
+            ("enabled".into(), serde_json::json!(enabled)),
+            ("endpoint".into(), value.clone()),
+        ]);
         let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
-        assert_eq!(status, StatusCode::OK, "body = {json:#}");
-        let updated = fixture
-            .deployment_store
-            .get_deployment(&alien_manager::auth::Subject::system(), &deployment.id)
-            .await
-            .unwrap()
+        assert_eq!(status, expected, "import enabled={enabled}: {json:#}");
+        if expected == StatusCode::BAD_REQUEST {
+            assert!(json.to_string().contains("endpoint"));
+        }
+        let (status, json) = post_initialize(
+            &fixture,
+            serde_json::json!({
+                "name":"conditional-initialize", "platform":"aws", "initialDesiredRelease":"active",
+                "inputValues":{"enabled":enabled,"endpoint":value}
+            }),
+        )
+        .await;
+        assert_eq!(status, expected, "initialize enabled={enabled}: {json:#}");
+        if expected == StatusCode::BAD_REQUEST {
+            assert!(json.to_string().contains("endpoint"));
+        }
+        let router = alien_manager::routes::deployments::router().with_state(fixture.state.clone());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/deployments")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(
+                header::AUTHORIZATION,
+                format!("Bearer {}", fixture.dg_token),
+            )
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({
+                    "name":"conditional-create", "platform":"aws", "inputValues":body.input_values
+                }))
+                .unwrap(),
+            ))
             .unwrap();
-        assert_eq!(updated.input_values["databasePassword"], generated);
+        let response = router.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(
+            status,
+            expected,
+            "create enabled={enabled}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
     }
-    let (status, json) = post_initialize(
-        &fixture,
-        serde_json::json!({
-            "name": "conditional-initialize", "platform": "aws", "initialDesiredRelease": "active",
-            "inputValues": { "databasePassword": { "invalid": true } }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
-    let deployment = fixture
-        .deployment_store
-        .get_deployment(
-            &alien_manager::auth::Subject::system(),
-            json["deploymentId"].as_str().unwrap(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(!deployment.input_values.contains_key("databasePassword"));
-}
-
-async fn settle_conditional_import(fixture: &Fixture, deployment_id: &str, stack: &Stack) {
-    let subject = alien_manager::auth::Subject::system();
-    let deployment = fixture
-        .deployment_store
-        .get_deployment(&subject, deployment_id)
-        .await
-        .unwrap()
-        .unwrap();
-    fixture
-        .deployment_store
-        .reconcile(
-            &subject,
-            ReconcileData {
-                deployment_id: deployment.id,
-                session: "conditional-test".into(),
-                execution_claim: None,
-                state: DeploymentState {
-                    status: DeploymentStatus::Running,
-                    platform: deployment.platform,
-                    current_release: Some(ReleaseInfo {
-                        release_id: fixture.release_id.clone(),
-                        version: None,
-                        description: None,
-                        stack: stack.clone(),
-                    }),
-                    target_release: None,
-                    stack_state: deployment.stack_state,
-                    error: None,
-                    environment_info: deployment.environment_info,
-                    runtime_metadata: deployment.runtime_metadata,
-                    retry_requested: false,
-                    protocol_version: deployment.deployment_protocol_version,
-                },
-                update_heartbeat: false,
-                suggested_delay_ms: None,
-                heartbeats: vec![],
-                observed_inventory_batches: vec![],
-                capabilities: vec![],
-                operator_version: None,
-                operations_report: None,
-            },
-        )
-        .await
-        .unwrap();
 }
 
 async fn post_initialize(

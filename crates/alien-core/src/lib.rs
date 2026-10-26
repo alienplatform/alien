@@ -5,8 +5,8 @@ mod stack_commands;
 
 mod stack_input;
 mod stack_input_resolution;
-pub use stack_input_resolution::*;
 pub use stack_input::*;
+pub use stack_input_resolution::*;
 
 mod operations_config;
 pub use operations_config::*;

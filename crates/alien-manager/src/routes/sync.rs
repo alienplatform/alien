@@ -2897,9 +2897,6 @@ fn resolve_pull_input_environment(
                     .iter()
                     .any(|existing| existing.name == mapping.name)
             });
-            if input.env.is_empty() {
-                input.required = false;
-            }
             input
         })
         .collect();
@@ -3561,7 +3558,8 @@ async fn initialize(
                             .iter()
                             .find(|input| input.id == *id)
                             .is_none_or(|input| {
-                                input.applies(&stack.inputs, &input_values, platform)
+                                input.when.is_none()
+                                    || input.applies(&stack.inputs, &input_values, platform)
                             })
                     })
                     .collect();
@@ -3571,6 +3569,11 @@ async fn initialize(
                 ) {
                     return error.into_response();
                 }
+                if let Err(error) =
+                    alien_core::resolve_stack_input_values(&stack.inputs, &input_values, platform)
+                {
+                    return error.into_response();
+                }
                 let condition_values = input_values.clone();
                 input_values.retain(|id, _| {
                     stack
@@ -3578,7 +3581,8 @@ async fn initialize(
                         .iter()
                         .find(|input| input.id == *id)
                         .is_none_or(|input| {
-                            input.applies(&stack.inputs, &condition_values, platform)
+                            input.when.is_none()
+                                || input.applies(&stack.inputs, &condition_values, platform)
                         })
                 });
             }

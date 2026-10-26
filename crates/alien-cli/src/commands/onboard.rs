@@ -771,21 +771,14 @@ fn inputs_for_platforms(
             continue;
         }
         for input in inputs {
-            if !include(input)
-                && !inputs.iter().any(|dependent| {
-                    include(dependent)
-                        && dependent
-                            .when
-                            .as_ref()
-                            .is_some_and(|when| when.input == input.id)
-                })
-            {
+            if !include(input) && !input.controls_input(inputs, &include) {
                 continue;
             }
             if input
                 .platforms
                 .as_ref()
                 .is_some_and(|input_platforms| !input_platforms.contains(platform))
+                && !input.controls_input(inputs, &include)
             {
                 continue;
             }
@@ -1025,9 +1018,6 @@ fn raw_input_applies(
     raw_values: &HashMap<String, String>,
     platforms: &[Platform],
 ) -> bool {
-    if input.when.is_none() {
-        return true;
-    }
     let values = raw_values
         .iter()
         .map(|(id, value)| (id.clone(), serde_json::Value::String(value.clone())))
@@ -2264,6 +2254,27 @@ mod tests {
         let err = parse_stack_input_arg("serviceToken", "--secret-input")
             .expect_err("missing equals should fail");
         assert!(err.to_string().contains("Invalid --secret-input format"));
+    }
+
+    #[test]
+    fn off_platform_controller_is_not_prompted_for_a_false_condition() {
+        let mut dependent = input("count", StackInputKind::Integer, true);
+        dependent.when = Some(alien_core::StackInputCondition {
+            input: "enabled".into(),
+            equals: false,
+        });
+        let mut controller = input("enabled", StackInputKind::Boolean, true);
+        controller.platforms = Some(vec![Platform::Gcp]);
+        let values = collect_stack_input_values(
+            &[dependent, controller],
+            &["count=3".into()],
+            &[],
+            &[Platform::Aws],
+            true,
+        )
+        .expect("an excluded controller must not be prompted");
+        assert_eq!(values.0.len(), 1);
+        assert!(values.0.contains_key("count"));
     }
 
     #[test]

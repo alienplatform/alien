@@ -238,7 +238,10 @@ pub async fn stack_import(
         stack_inputs
             .iter()
             .find(|input| input.id == *id)
-            .is_none_or(|input| input.applies(&stack_inputs, &condition_values, req.platform))
+            .is_none_or(|input| {
+                input.when.is_none()
+                    || input.applies(&stack_inputs, &condition_values, req.platform)
+            })
     });
     // Generated secrets are developer-owned and never setup parameters, so a
     // setup caller must not be able to set or replace one.
@@ -309,6 +312,25 @@ pub async fn stack_import(
         &req.input_values,
     ) {
         return e.into_response();
+    }
+    let dg = match state
+        .deployment_store
+        .get_deployment_group(&subject, &deployment_group_id)
+        .await
+    {
+        Ok(Some(dg)) => dg,
+        Ok(None) => return ErrorData::not_found_group(&deployment_group_id).into_response(),
+        Err(error) => return error.into_response(),
+    };
+    let mut validation_values = dg.setup.input_values.clone();
+    for (id, value) in &imported_gate_answers {
+        validation_values.insert(id.clone(), serde_json::Value::Bool(*value));
+    }
+    validation_values.extend(req.input_values.clone());
+    if let Err(error) =
+        alien_core::resolve_stack_input_values(&stack_inputs, &validation_values, req.platform)
+    {
+        return error.into_response();
     }
     // The strips run BEFORE the mutations, exactly like the deployment
     // paths: a declined frozen resource never existed, so nothing may be
@@ -663,15 +685,6 @@ pub async fn stack_import(
         return ErrorData::forbidden("A deployment token cannot create a deployment")
             .into_response();
     }
-    let dg = match state
-        .deployment_store
-        .get_deployment_group(&subject, &deployment_group_id)
-        .await
-    {
-        Ok(Some(dg)) => dg,
-        Ok(None) => return ErrorData::not_found_group(&deployment_group_id).into_response(),
-        Err(error) => return error.into_response(),
-    };
     let runtime_metadata = import_runtime_metadata(&prepared_stack, imported_gate_answers);
 
     let create_ctx = crate::auth::DeploymentCreateCtx {

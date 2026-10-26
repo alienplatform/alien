@@ -214,23 +214,16 @@ impl StackInputDefinition {
             .is_none_or(|platforms| platforms.is_empty() || platforms.contains(&platform))
     }
 
-    /// Whether this input is available on a platform, before evaluating `when`.
-    pub fn applies_to_platform(&self, platform: Platform) -> bool {
-        self.platforms
-            .as_ref()
-            .is_none_or(|platforms| platforms.is_empty() || platforms.contains(&platform))
-    }
-
     /// Whether this input applies, using the referenced input's provided value
-    /// or boolean default. An unanswered or off-platform reference never matches,
-    /// including `equals: false`. Definitions must pass release preflights first.
+    /// or boolean default. An off-platform reference resolves to false; an
+    /// unanswered reference never matches. Definitions must pass release preflights first.
     pub fn applies(
         &self,
         inputs: &[StackInputDefinition],
         values: &std::collections::HashMap<String, serde_json::Value>,
         platform: Platform,
     ) -> bool {
-        if !self.applies_to_platform(platform) {
+        if !self.applies_to(platform) {
             return false;
         }
         let Some(condition) = &self.when else {
@@ -239,8 +232,8 @@ impl StackInputDefinition {
         let Some(reference) = inputs.iter().find(|input| input.id == condition.input) else {
             return false;
         };
-        if !reference.applies_to_platform(platform) {
-            return false;
+        if !reference.applies_to(platform) {
+            return !condition.equals;
         }
         let value = match values
             .get(&condition.input)
@@ -253,6 +246,21 @@ impl StackInputDefinition {
             },
         };
         value == Some(condition.equals)
+    }
+
+    /// Whether this input controls any input selected by the caller.
+    pub fn controls_input(
+        &self,
+        inputs: &[StackInputDefinition],
+        include: impl Fn(&StackInputDefinition) -> bool,
+    ) -> bool {
+        inputs.iter().any(|dependent| {
+            include(dependent)
+                && dependent
+                    .when
+                    .as_ref()
+                    .is_some_and(|when| when.input == self.id)
+        })
     }
 
     /// Whether Alien generates this input's value when none is provided. A
@@ -332,12 +340,11 @@ pub fn resolve_stack_input_environment_variables(
     values: &std::collections::HashMap<String, serde_json::Value>,
     platform: Platform,
 ) -> crate::Result<Vec<crate::EnvironmentVariable>> {
-    let values = crate::resolve_stack_input_values(inputs, values, platform)?;
     let mut variables: Vec<crate::EnvironmentVariable> = Vec::new();
     for input in inputs
         .iter()
         .filter(|input| !input.env.is_empty())
-        .filter(|input| input.applies(inputs, &values, platform))
+        .filter(|input| input.applies(inputs, values, platform))
     {
         let value = match values.get(&input.id) {
             Some(serde_json::Value::Null) | None => match &input.default {
@@ -507,9 +514,56 @@ mod environment_tests {
         assert!(!inputs[1].applies(&inputs, &HashMap::new(), Platform::Aws));
         let values = HashMap::from([("enabled".into(), serde_json::json!(false))]);
         assert!(inputs[1].applies(&inputs, &values, Platform::Aws));
+        assert!(inputs[1].applies(&inputs, &values, Platform::Kubernetes));
+        inputs[1].when.as_mut().unwrap().equals = true;
         assert!(!inputs[1].applies(&inputs, &values, Platform::Kubernetes));
+        inputs[0].platforms = Some(vec![]);
+        assert!(!inputs[0].applies_to(Platform::Aws));
+        assert!(!inputs[1].applies(&inputs, &values, Platform::Aws));
+        inputs[1].when.as_mut().unwrap().equals = false;
+        assert!(inputs[1].applies(&inputs, &values, Platform::Aws));
         inputs[1].platforms = Some(vec![Platform::Kubernetes]);
         assert!(!inputs[1].applies(&inputs, &values, Platform::Aws));
+    }
+
+    #[test]
+    fn delivery_preserves_stored_values_without_revalidation() {
+        for (kind, value, validation) in [
+            (
+                StackInputKind::Number,
+                "1.50",
+                serde_json::json!({"min":"10"}),
+            ),
+            (StackInputKind::Number, "1e3", serde_json::json!({})),
+            (
+                StackInputKind::Integer,
+                "007",
+                serde_json::json!({"max":"5"}),
+            ),
+            (
+                StackInputKind::String,
+                "not-a-url",
+                serde_json::json!({"format":"url"}),
+            ),
+            (
+                StackInputKind::String,
+                "",
+                serde_json::json!({"minLength":3}),
+            ),
+        ] {
+            let mut stored = input("stored", kind, "STORED");
+            stored.required = true;
+            stored.validation = Some(serde_json::from_value(validation).unwrap());
+            let mut added = input("added", StackInputKind::String, "ADDED");
+            added.required = true;
+            let values = HashMap::from([("stored".into(), serde_json::json!(value))]);
+            let variables =
+                resolve_stack_input_environment_variables(&[stored, added], &values, Platform::Aws)
+                    .expect("delivery must not revalidate existing deployments");
+            assert_eq!(variables.len(), 1);
+            assert_eq!(variables[0].name, "STORED");
+            assert_eq!(variables[0].value, value);
+        }
     }
 
     #[test]

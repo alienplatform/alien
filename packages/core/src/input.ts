@@ -162,9 +162,14 @@ export function inputs<const T extends Record<string, StackInputDraft>>(
               ? "must reference a boolean input"
               : reference.options.when
                 ? "must reference an unconditional input; chains and cycles are unsupported"
-                : typeof condition.equals !== "boolean"
-                  ? "equals must be a boolean"
-                  : undefined
+                : draft.generate
+                  ? "cannot be combined with generate"
+                  : normalizeArray(draft.options.providedBy).includes("deployer") &&
+                      !normalizeArray(reference.options.providedBy).includes("deployer")
+                    ? "on a deployer input must reference a deployer-provided boolean"
+                    : typeof condition.equals !== "boolean"
+                      ? "equals must be a boolean"
+                      : undefined
       if (reason) {
         throw new AlienError(
           InvalidInputConditionError.create({ input: id, reference: condition.input, reason }),
@@ -225,11 +230,12 @@ export function stackInputApplies(
   platform?: Platform,
 ): boolean {
   const onPlatform = (definition: StackInputDefinition) =>
-    !platform || !definition.platforms?.length || definition.platforms.includes(platform)
+    !platform || !definition.platforms || definition.platforms.includes(platform)
   if (!onPlatform(input)) return false
   if (!input.when) return true
   const reference = inputs.find(candidate => candidate.id === input.when?.input)
-  if (!reference || !onPlatform(reference)) return false
+  if (!reference) return false
+  if (!onPlatform(reference)) return !input.when.equals
   const value =
     values[reference.id] ??
     (reference.default?.type === "boolean" ? reference.default.value : undefined)

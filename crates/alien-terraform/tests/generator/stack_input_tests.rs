@@ -245,7 +245,11 @@ fn conditional_inputs_validate_with_terraform_plan_for_provider(provider: StackI
         "Enable the endpoint",
         Some(true),
     ));
-    stack.inputs.last_mut().unwrap().provided_by = vec![provider];
+    stack.inputs.last_mut().unwrap().provided_by = if provider == StackInputProvider::Developer {
+        vec![StackInputProvider::Developer, StackInputProvider::Deployer]
+    } else {
+        vec![StackInputProvider::Deployer]
+    };
     let mut list = stack.inputs[0].clone();
     list.id = "labels".into();
     list.kind = StackInputKind::StringList;

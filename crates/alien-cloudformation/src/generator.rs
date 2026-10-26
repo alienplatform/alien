@@ -756,26 +756,32 @@ fn stack_inputs_for_cloudformation(
         .iter()
         .filter(|input| {
             (input.provided_by.contains(&StackInputProvider::Deployer)
-                || stack.inputs().iter().any(|dependent| {
+                || input.controls_input(stack.inputs(), |dependent| {
                     dependent.provided_by.contains(&StackInputProvider::Deployer)
-                        && dependent.applies_to_platform(platform)
-                        && dependent.when.as_ref().is_some_and(|condition| condition.input == input.id)
+                        && dependent.applies_to(platform)
                 }))
                 // Deployer secrets are written into the customer's own secret
                 // store, never passed through the template.
                 && !alien_core::is_deployer_secret_input(input)
                 && input.applies_to(platform)
         })
-        .filter(|input| {
-            input.when.as_ref().is_none_or(|condition| {
-                stack
+        .filter_map(|input| {
+            let mut input = input.clone();
+            if let Some(condition) = &input.when {
+                let controller_applies = stack
                     .inputs()
                     .iter()
                     .find(|reference| reference.id == condition.input)
-                    .is_some_and(|reference| reference.applies_to_platform(platform))
-            })
+                    .is_some_and(|reference| reference.applies_to(platform));
+                if !controller_applies {
+                    if condition.equals {
+                        return None;
+                    }
+                    input.when = None;
+                }
+            }
+            Some(input)
         })
-        .cloned()
         .collect()
 }
 

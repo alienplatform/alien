@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { boolean, getStackInputDefinitions, inputs, stackInputApplies, string } from "../input.js"
+import {
+  boolean,
+  getStackInputDefinitions,
+  inputs,
+  secret,
+  stackInputApplies,
+  string,
+} from "../input.js"
 
 const options = {
   providedBy: "deployer" as const,
@@ -29,10 +36,45 @@ describe("conditional inputs", () => {
     expect(stackInputApplies(bucket, all, { enabled: "true" }, "aws")).toBe(true)
   })
 
-  it("excludes an off-platform reference even when equals is false", () => {
+  it("resolves an off-platform reference to false", () => {
     const all = definitions(false)
     expect(stackInputApplies(all[1]!, all, { enabled: false }, "aws")).toBe(true)
-    expect(stackInputApplies(all[1]!, all, { enabled: false }, "kubernetes")).toBe(false)
+    expect(stackInputApplies(all[1]!, all, { enabled: true }, "kubernetes")).toBe(true)
+    const positive = definitions(true)
+    expect(stackInputApplies(positive[1]!, positive, { enabled: true }, "kubernetes")).toBe(false)
+    all[0]!.platforms = []
+    expect(stackInputApplies(all[0]!, all, {}, "aws")).toBe(false)
+    expect(stackInputApplies(all[1]!, all, { enabled: true }, "aws")).toBe(true)
+  })
+
+  it("rejects developer-only controllers for deployer inputs and conditional generation", () => {
+    expect(() =>
+      inputs({
+        enabled: boolean({ ...options, providedBy: "developer" }),
+        bucket: string({ ...options, when: { input: "enabled", equals: true } }),
+      }),
+    ).toThrow("deployer-provided")
+    expect(() =>
+      inputs({
+        enabled: boolean({ ...options, providedBy: "developer" }),
+        bucket: string({
+          ...options,
+          providedBy: "developer",
+          when: { input: "enabled", equals: true },
+        }),
+      }),
+    ).not.toThrow()
+    expect(() =>
+      inputs({
+        enabled: boolean({ ...options, providedBy: "developer" }),
+        token: secret({
+          ...options,
+          providedBy: "developer",
+          generate: { length: 64 },
+          when: { input: "enabled", equals: true },
+        }),
+      }),
+    ).toThrow("generate")
   })
 
   it.each(["missing", "bucket"])("rejects the reference %s", reference => {

@@ -4098,7 +4098,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 fetch_deployment_info(&resolved.base_url, &token, platform, setup_item).await?
             };
             validate_deployment_readiness(&info, platform)?;
-            (deployer_inputs_from_info(&info, platform), setup_item)
+            (deployer_inputs_from_info(&info), setup_item)
         }
         Err(error) => {
             if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
@@ -5736,8 +5736,6 @@ fn select_setup_item(
 #[serde(rename_all = "camelCase")]
 struct DeploymentInfoSetupConfig {
     inputs: Option<Vec<StackInputDefinition>>,
-    #[serde(default)]
-    values: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5832,16 +5830,13 @@ fn deployment_info_url(
     Ok(url)
 }
 
-fn deployer_inputs_from_info(
-    info: &DeploymentInfoResponse,
-    platform: Platform,
-) -> Vec<StackInputDefinition> {
+fn deployer_inputs_from_info(info: &DeploymentInfoResponse) -> Vec<StackInputDefinition> {
     info.setup_config
         .as_ref()
         .and_then(|setup_config| setup_config.inputs.clone())
         .unwrap_or_default()
         .into_iter()
-        .filter(|input| input.applies_to_platform(platform))
+        .filter(|input| input.provided_by.contains(&StackInputProvider::Deployer))
         .collect()
 }
 

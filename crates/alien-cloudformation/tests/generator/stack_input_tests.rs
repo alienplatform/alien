@@ -222,7 +222,11 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
         "Enable the endpoint",
         Some(true),
     ));
-    stack.inputs.last_mut().unwrap().provided_by = vec![provider];
+    stack.inputs.last_mut().unwrap().provided_by = if provider == StackInputProvider::Developer {
+        vec![StackInputProvider::Developer, StackInputProvider::Deployer]
+    } else {
+        vec![StackInputProvider::Deployer]
+    };
     let mut labels = stack.inputs[0].clone();
     labels.id = "labels".into();
     labels.kind = StackInputKind::StringList;

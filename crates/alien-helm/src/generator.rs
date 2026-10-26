@@ -269,10 +269,13 @@ fn generate_helm_chart_internal(
     );
     files.insert("values.schema.json".to_string(), values_schema_json(stack)?);
     files.insert("templates/_helpers.tpl".to_string(), helpers_tpl());
-    files.insert(
-        "templates/_inputs.tpl".to_string(),
-        stack_inputs_tpl(stack)?,
-    );
+    let conditional_inputs = stack.inputs().iter().any(|input| input.when.is_some());
+    if conditional_inputs {
+        files.insert(
+            "templates/_inputs.tpl".to_string(),
+            stack_inputs_tpl(stack)?,
+        );
+    }
     files.insert(
         "templates/_runtime-identity.tpl".to_string(),
         include_str!("templates/_runtime-identity.tpl").to_string(),
@@ -288,7 +291,10 @@ fn generate_helm_chart_internal(
         "templates/clusterrolebinding.yaml".to_string(),
         clusterrolebinding_tpl(),
     );
-    files.insert("templates/secret.yaml".to_string(), secret_tpl());
+    files.insert(
+        "templates/secret.yaml".to_string(),
+        resolve_template_inputs(secret_tpl(), conditional_inputs),
+    );
     files.insert(
         "templates/registry-secret.yaml".to_string(),
         registry_secret_tpl(),
@@ -296,7 +302,7 @@ fn generate_helm_chart_internal(
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert(
         "templates/deployment.yaml".to_string(),
-        deployment_tpl(analysis.sandbox_broker),
+        resolve_template_inputs(deployment_tpl(analysis.sandbox_broker), conditional_inputs),
     );
     files.insert(
         "templates/whitelabeled-log-collector-serviceaccount.yaml".to_string(),
@@ -5225,15 +5231,11 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             (input
                 .provided_by
                 .contains(&alien_core::StackInputProvider::Deployer)
-                || stack.inputs().iter().any(|dependent| {
+                || input.controls_input(stack.inputs(), |dependent| {
                     dependent
                         .provided_by
                         .contains(&alien_core::StackInputProvider::Deployer)
-                        && dependent.applies_to_platform(Platform::Kubernetes)
-                        && dependent
-                            .when
-                            .as_ref()
-                            .is_some_and(|condition| condition.input == input.id)
+                        && dependent.applies_to(Platform::Kubernetes)
                 }))
                 && !is_deployer_secret_input(input)
         })
@@ -5253,7 +5255,9 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
     let mut required = Vec::new();
     let mut conditional = Vec::new();
     for input in deployer_inputs {
-        if !input.applies_to_platform(Platform::Kubernetes) {
+        if stack.inputs().iter().any(|input| input.when.is_some())
+            && !input.applies_to(Platform::Kubernetes)
+        {
             properties.insert(input.id.clone(), serde_json::json!({}));
             continue;
         }
@@ -5320,8 +5324,8 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
                 .find(|reference| reference.id == when.input);
             let mut condition =
                 serde_json::json!({"properties": {&when.input: {"const": when.equals}}});
-            if !reference.is_some_and(|reference| reference.applies_to_platform(Platform::Kubernetes)) {
-                condition = serde_json::Value::Bool(false);
+            if !reference.is_some_and(|reference| reference.applies_to(Platform::Kubernetes)) {
+                condition = serde_json::Value::Bool(!when.equals);
             } else if !reference.is_some_and(|reference| matches!(reference.default, Some(alien_core::StackInputDefaultValue::Boolean(value)) if value == when.equals)) {
                 condition["required"] = serde_json::json!([&when.input]);
             }
@@ -5391,15 +5395,30 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         })
 }
 
+fn resolve_template_inputs(template: String, conditional: bool) -> String {
+    if !conditional {
+        return template;
+    }
+    template.replace(
+        ".Values.inputValues",
+        "(include \"deployment.inputValues\" . | fromJson)",
+    )
+}
+
 fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
     let mut template = String::from(
         r#"{{- define "deployment.inputValues" -}}
 {{- $values := deepCopy (default dict .Values.inputValues) -}}
+{{- $conditions := deepCopy $values -}}
 "#,
     );
     for input in stack.inputs() {
-        if !input.applies_to_platform(Platform::Kubernetes) {
+        if !input.applies_to(Platform::Kubernetes) {
             template.push_str(&format!("{{{{- $_ := unset $values {:?} -}}}}\n", input.id));
+            template.push_str(&format!(
+                "{{{{- $_ := set $conditions {:?} false -}}}}\n",
+                input.id
+            ));
             continue;
         }
         if let Some(default) = &input.default {
@@ -5414,11 +5433,12 @@ fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
                 alien_core::StackInputDefaultValue::StringList(value) => serde_json::json!(value),
             };
             let json = serde_json::json!([value]).to_string();
-            template.push_str(&format!("{{{{- if not (hasKey $values {id:?}) -}}}}{{{{- $_ := set $values {id:?} (first (fromJsonArray {json:?})) -}}}}{{{{- end -}}}}\n", id=input.id));
+            template.push_str(&format!("{{{{- if not (hasKey $conditions {id:?}) -}}}}{{{{- $_ := set $conditions {id:?} (first (fromJsonArray {json:?})) -}}}}{{{{- end -}}}}\n", id=input.id));
         }
     }
     for input in stack.inputs().iter().filter(|input| {
         input.when.is_some()
+            && input.applies_to(Platform::Kubernetes)
             && input
                 .provided_by
                 .contains(&alien_core::StackInputProvider::Deployer)
@@ -5426,8 +5446,8 @@ fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
         let Some(when) = &input.when else {
             continue;
         };
-        template.push_str(&format!("{{{{- if not (and (hasKey $values {reference:?}) (eq (toJson (get $values {reference:?})) {expected:?})) -}}}}{{{{- $_ := unset $values {id:?} -}}}}", reference=when.input, expected=when.equals.to_string(), id=input.id));
-        if input.required && !is_deployer_secret_input(input) {
+        template.push_str(&format!("{{{{- if not (and (hasKey $conditions {reference:?}) (eq (toJson (get $conditions {reference:?})) {expected:?})) -}}}}{{{{- $_ := unset $values {id:?} -}}}}", reference=when.input, expected=when.equals.to_string(), id=input.id));
+        if input.required && input.default.is_none() && !is_deployer_secret_input(input) {
             template.push_str(&format!(r#"{{{{- else if and (not .Values.management.deploymentId) (or .Values.management.token .Values.management.existingSecret.name) (not (hasKey $values {id:?})) -}}}}{{{{- fail {message:?} -}}}}"#, id=input.id, message=format!("Stack input '{}' is required", input.id)));
         }
         template.push_str("{{- end -}}\n");
@@ -5768,10 +5788,7 @@ fn secret_tpl() -> String {
       {{- $currentInputs = (index $existing.data "input-values.json" | b64dec) -}}
     {{- end -}}
   {{- end -}}
-  {{- $currentContext := dict "Values" (deepCopy .Values) -}}
-  {{- $_ := set $currentContext.Values "inputValues" (fromJson $currentInputs) -}}
-  {{- $normalizedCurrent := include "deployment.inputValues" $currentContext | fromJson | toJson -}}
-  {{- if ne $normalizedCurrent (toJson (include "deployment.inputValues" . | fromJson)) -}}
+  {{- if ne $currentInputs (toJson .Values.inputValues) -}}
     {{- fail "inputValues cannot change through Helm after installation; edit deployment inputs in the deployment dashboard and keep the original Helm values" -}}
   {{- end -}}
 {{- end -}}
@@ -5781,7 +5798,7 @@ fn secret_tpl() -> String {
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector (include "deployment.inputValues" . | fromJson) }}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector .Values.inputValues }}
 {{- $collectorToken := .Values.logCollector.token -}}
 {{- if and $nodeCollector (empty $collectorToken) -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
@@ -5812,8 +5829,8 @@ stringData:
   {{- if $nodeCollector }}
   collector-token: {{ $collectorToken | quote }}
   {{- end }}
-  {{- if (include "deployment.inputValues" . | fromJson) }}
-  input-values.json: {{ toJson (include "deployment.inputValues" . | fromJson) | quote }}
+  {{- if .Values.inputValues }}
+  input-values.json: {{ toJson .Values.inputValues | quote }}
   {{- end }}
 {{- end }}
 "#
@@ -6684,7 +6701,7 @@ spec:
               value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
-            {{- if (include "deployment.inputValues" . | fromJson) }}
+            {{- if .Values.inputValues }}
             - name: STACK_INPUT_VALUES_FILE
               value: /etc/deployment/input-values/input-values.json
             {{- end }}
@@ -6754,7 +6771,7 @@ spec:
             - name: config
               mountPath: /etc/deployment/config
               readOnly: true
-            {{- if (include "deployment.inputValues" . | fromJson) }}
+            {{- if .Values.inputValues }}
             - name: input-values
               mountPath: /etc/deployment/input-values
               readOnly: true
@@ -6791,7 +6808,7 @@ spec:
         - name: config
           configMap:
             name: {{ include "deployment.fullname" . }}
-        {{- if (include "deployment.inputValues" . | fromJson) }}
+        {{- if .Values.inputValues }}
         - name: input-values
           secret:
             secretName: {{ include "deployment.fullname" . }}
@@ -8966,7 +8983,7 @@ infrastructureExistingSecret: customer-bindings
     fn conditional_helm_inputs_for_provider(developer_controller: bool) {
         let inputs = serde_json::from_value(serde_json::json!([
             {"id":"bucket", "kind":"string", "required":true, "providedBy":["deployer"], "label":"Bucket", "description":"Snapshot bucket", "when":{"input":"enabled","equals":true}, "validation":{"minLength":3}},
-            {"id":"enabled", "kind":"boolean", "required":true, "providedBy":[if developer_controller { "developer" } else { "deployer" }], "label":"Enabled", "description":"Enable snapshots", "default":{"type":"boolean","value":true}}
+            {"id":"enabled", "kind":"boolean", "required":true, "providedBy":if developer_controller { vec!["developer", "deployer"] } else { vec!["deployer"] }, "label":"Enabled", "description":"Enable snapshots", "default":{"type":"boolean","value":true}}
         ])).unwrap();
         let stack = Stack::new("conditional-inputs".into())
             .inputs(inputs)
@@ -8996,15 +9013,11 @@ infrastructureExistingSecret: customer-bindings
         let values = documents
             .iter()
             .find_map(|document| document["stringData"]["input-values.json"].as_str());
-        if developer_controller {
-            assert!(values.is_none(), "no deployer input applies");
-        } else {
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(values.expect("registered input values"))
-                    .unwrap(),
-                serde_json::json!({"enabled":false})
-            );
-        }
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(values.expect("registered input values"))
+                .unwrap(),
+            serde_json::json!({"enabled":false})
+        );
         for input_values in [
             "enabled: true",
             "enabled: true\n  bucket: ''",
@@ -9034,8 +9047,50 @@ infrastructureExistingSecret: customer-bindings
             .unwrap();
         let registered: serde_json::Value = serde_json::from_str(registered).unwrap();
         assert_eq!(registered["bucket"], "snapshots");
-        if !developer_controller {
-            assert_eq!(registered["enabled"], true);
+        assert!(registered.get("enabled").is_none());
+    }
+
+    #[test]
+    fn helm_unconditional_defaults_are_not_registered() {
+        let registry = HelmRegistry::built_in();
+        for default in ["us-east-1", "us-west-2"] {
+            let input = serde_json::from_value(serde_json::json!({
+                "id":"region", "kind":"string", "required":true,
+                "providedBy":["deployer"], "label":"Region", "description":"Service region",
+                "default":{"type":"string","value":default}
+            }))
+            .unwrap();
+            let stack = Stack::new("default-inputs".into())
+                .inputs(vec![input])
+                .build();
+            let mut chart = generate_helm_chart(
+                &stack,
+                HelmOptions {
+                    registry: &registry,
+                    stack_settings: StackSettings::default(),
+                    chart_name: "default-inputs".into(),
+                },
+            )
+            .unwrap();
+            let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: dep_test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+            rendered.assert_ok("unconditional default install");
+            let documents: Vec<YamlValue> = serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|document| YamlValue::deserialize(document).unwrap())
+                .collect();
+            assert!(
+                documents
+                    .iter()
+                    .all(|document| document["stringData"]["input-values.json"].is_null()),
+                "defaults must remain release-owned, not registered as deployer answers"
+            );
+            let secret = chart.files.get_mut("templates/secret.yaml").unwrap();
+            *secret = secret.replace(".Release.IsUpgrade", "true").replace(
+                "lookup \"v1\" \"Secret\" .Release.Namespace (include \"deployment.fullname\" .)",
+                "(dict \"data\" (dict \"input-values.json\" (b64enc \"{}\")))",
+            );
+            crate::test_utils::helm_template(&chart.files, Some(values))
+                .assert_ok("changing an unprovided default must not block upgrade");
         }
     }
 

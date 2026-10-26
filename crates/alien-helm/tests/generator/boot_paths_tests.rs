@@ -181,3 +181,17 @@ fn operator_env(manifest: &str) -> std::collections::BTreeMap<String, String> {
         })
         .collect()
 }
+
+#[test]
+fn unconditional_deployer_default_keeps_existing_chart() {
+    let input = serde_json::from_value(serde_json::json!({
+        "id":"region", "kind":"string", "providedBy":["deployer"], "required":true,
+        "label":"Region", "description":"Service region", "default":{"type":"string","value":"us-east-1"}
+    })).unwrap();
+    let stack = Stack::new("default-inputs".into())
+        .inputs(vec![input])
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    super::helpers::snapshot_chart("unconditional_deployer_default", &chart);
+    super::helpers::assert_helm_valid(&chart, "unconditional deployer default");
+}

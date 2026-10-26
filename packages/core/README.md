@@ -85,11 +85,26 @@ When active, the input's normal requiredness and validation apply.
 
 The referenced input must be a boolean in the same stack and must not have its own
 `when`. Self-references, chains and cycles are rejected. A conditional boolean
-cannot gate a resource with `.enabled()`. If either input excludes the deployment
-platform, the dependent input does not apply. An unanswered reference does not
-match either boolean value, including `equals: false`.
+cannot gate a resource with `.enabled()`. A deployer-provided input requires a
+controller that can also be provided by the deployer; developer-only controllers
+may control developer-only inputs. `when` cannot be combined with `generate`.
+An input excluded from the deployment platform does not apply. An off-platform
+controller resolves to false, so `equals: false` matches and `equals: true` does
+not. An unanswered on-platform reference matches neither value.
+
+Both the CLI and manager must include conditional-input support before releasing
+or installing a stack that uses `when`. Version 3.3.43 predates that support;
+until a supporting release is tagged, build both from the revision introducing
+this feature or newer. Older CLIs and managers can require inactive inputs.
+Hosted management must also have conditional-input support deployed before any
+stack using `when` is released.
 
 Terraform modules using conditional inputs require Terraform 1.9 or newer.
 CloudFormation uses Rules for conditional requiredness; other constraints are
 validated during registration because CloudFormation parameter constraints apply
 even when an input is inactive.
+
+CloudFormation does not evaluate Rules when creating a CREATE change set. It
+checks them during stack creation: a failed assertion rolls the stack back before
+creating resources. Validate both condition states with CreateStack, not only
+CreateChangeSet.
