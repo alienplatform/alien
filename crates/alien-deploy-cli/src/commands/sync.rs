@@ -1881,7 +1881,7 @@ async fn uninstall_site(
                     &namespace,
                     &export_token,
                     after,
-                    true,
+                    Some(manifest.sequence),
                 )
                 .await?;
                 report.telemetry.extend(remaining);
@@ -2936,7 +2936,7 @@ async fn collect_report(
         &namespace,
         &export_token,
         after,
-        false,
+        None,
     )
     .await?;
     report_from_status(site, record, status, telemetry, dropped).map(Some)
@@ -3003,7 +3003,7 @@ async fn export_telemetry(
     namespace: &str,
     token: &str,
     after: i64,
-    seal: bool,
+    seal: Option<u64>,
 ) -> Result<(Vec<ReportedBatch>, u64)> {
     let values = release_values(settings, release, namespace)
         .await?
@@ -3071,12 +3071,13 @@ async fn export_telemetry(
     })?;
 
     let client = http()?;
-    if seal {
+    if let Some(sequence) = seal {
         let response = client
             .post(format!(
                 "http://127.0.0.1:{local_port}/airgap/telemetry/seal"
             ))
             .bearer_auth(token)
+            .json(&serde_json::json!({ "sequence": sequence }))
             .send()
             .await
             .into_alien_error()

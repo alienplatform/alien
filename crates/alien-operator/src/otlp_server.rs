@@ -130,8 +130,17 @@ struct AirgapTelemetryPage {
     dropped: u64,
 }
 
+#[derive(Deserialize)]
+struct AirgapSealRequest {
+    sequence: u64,
+}
+
 /// Only the site export credential may stop intake for its final drain.
-async fn handle_airgap_seal(State(state): State<OtlpServerState>, headers: HeaderMap) -> Response {
+async fn handle_airgap_seal(
+    State(state): State<OtlpServerState>,
+    headers: HeaderMap,
+    Json(request): Json<AirgapSealRequest>,
+) -> Response {
     let Some(expected) = &state.airgap_export_token else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -142,7 +151,7 @@ async fn handle_airgap_seal(State(state): State<OtlpServerState>, headers: Heade
     if presented != Some(expected.as_str()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match state.db.seal_airgap_telemetry().await {
+    match state.db.seal_airgap_telemetry(request.sequence).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => {
             error!(error = %error, "Failed to stop telemetry intake");
@@ -357,6 +366,7 @@ mod tests {
         assert_eq!(
             client
                 .post(format!("http://127.0.0.1:{port}/airgap/telemetry/seal"))
+                .json(&serde_json::json!({"sequence": 7}))
                 .bearer_auth("unrelated-token")
                 .send()
                 .await
@@ -415,6 +425,7 @@ mod tests {
         assert_eq!(
             client
                 .post(format!("{base}/airgap/telemetry/seal"))
+                .json(&serde_json::json!({"sequence": 7}))
                 .send()
                 .await
                 .unwrap()
@@ -433,6 +444,7 @@ mod tests {
         assert_eq!(db.telemetry_after(cursor, 100).await.unwrap().len(), 1);
         let sealed = client
             .post(format!("{base}/airgap/telemetry/seal"))
+            .json(&serde_json::json!({"sequence": 7}))
             .bearer_auth("export-secret")
             .send()
             .await
@@ -488,6 +500,20 @@ mod tests {
             .await
             .is_err());
         assert_eq!(reopened.telemetry_after(0, 100).await.unwrap().len(), 2);
+        // An already queued target may finish acceptance after sealing. It must
+        // not reopen intake before the signed deletion has completed.
+        reopened
+            .record_airgap_target(&crate::db::AirgapReceipt {
+                sequence: 6,
+                target_hash: "queued-target".into(),
+                attempt: None,
+            })
+            .await
+            .unwrap();
+        assert!(reopened
+            .store_telemetry("logs", b"queued target")
+            .await
+            .is_err());
         reopened
             .record_airgap_target(&crate::db::AirgapReceipt {
                 sequence: 8,

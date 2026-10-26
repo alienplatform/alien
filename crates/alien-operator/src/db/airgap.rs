@@ -56,17 +56,27 @@ async fn write_json<T: Serialize>(conn: &Connection, key: &str, value: &T) -> Re
 impl OperatorDb {
     /// Stop new telemetry writes under the same lock used by both ingestion paths.
     /// The marker survives restarts until a newer signed target is installed.
-    pub(crate) async fn seal_airgap_telemetry(&self) -> Result<()> {
+    pub(crate) async fn seal_airgap_telemetry(&self, sequence: u64) -> Result<()> {
         let conn = self.conn.lock().await;
-        write_json(&conn, "airgap_telemetry_sealed", &true).await
+        let previous = read_json::<u64>(&conn, "airgap_telemetry_sealed_through")
+            .await?
+            .unwrap_or(0);
+        write_json(
+            &conn,
+            "airgap_telemetry_sealed_through",
+            &sequence.max(previous),
+        )
+        .await
     }
 
     pub(super) async fn ensure_telemetry_writable(conn: &Connection) -> Result<()> {
-        if read_json::<bool>(conn, "airgap_telemetry_sealed")
-            .await?
-            .unwrap_or(false)
-        {
-            return Err(alien_error::AlienError::new(ErrorData::TelemetrySealed));
+        if let Some(sequence) = read_json::<u64>(conn, "airgap_telemetry_sealed_through").await? {
+            let installed = read_json::<u64>(conn, "airgap_sequence")
+                .await?
+                .unwrap_or(0);
+            if installed <= sequence {
+                return Err(alien_error::AlienError::new(ErrorData::TelemetrySealed));
+            }
         }
         Ok(())
     }
@@ -84,8 +94,7 @@ impl OperatorDb {
             .context(database_error("Beginning air-gapped target receipt"))?;
         let result = async {
             write_json(&conn, "airgap_sequence", &receipt.sequence).await?;
-            write_json(&conn, "airgap_receipt", receipt).await?;
-            write_json(&conn, "airgap_telemetry_sealed", &false).await
+            write_json(&conn, "airgap_receipt", receipt).await
         }
         .await;
         if let Err(error) = result {
