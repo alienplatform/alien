@@ -115,6 +115,24 @@ pub async fn handle_update_pending(
         })
     })?;
 
+    // For compatibility checks, use the prepared (mutated) stack from the previous deployment
+    // if available. This ensures we compare mutated stacks (old mutated vs new mutated),
+    // not raw user stacks. Falls back to current_release.stack if prepared_stack isn't available
+    // (for backward compatibility with existing deployments).
+    let old_stack_for_comparison = current
+        .runtime_metadata
+        .as_ref()
+        .and_then(|m| m.prepared_stack.as_ref())
+        .or(current.current_release.as_ref().map(|r| &r.stack));
+    if let Some(old) = old_stack_for_comparison {
+        alien_preflights::runner::validate_gate_platform_changes(
+            old,
+            &target_stack,
+            current.platform,
+        )
+        .context(ErrorData::PreflightChecksFailed)?;
+    }
+
     // This grant is written by direct setup and retained by the store as setup-owned
     // metadata. A release or a mutable runtime setting cannot confer setup authority.
     if let Some(metadata) = current
@@ -168,10 +186,7 @@ pub async fn handle_update_pending(
         .as_ref()
         .map(|metadata| metadata.persisted_gate_answers.clone())
         .unwrap_or_default();
-    let mut frozen_gating = crate::pending::frozen_gating_inputs(&target_stack);
-    frozen_gating.retain(|input| {
-        !alien_core::gate_is_off_platform(&target_stack.inputs, input, current.platform)
-    });
+    let frozen_gating = crate::pending::frozen_gating_inputs(&target_stack, current.platform);
     crate::pending::enforce_frozen_gate_fixity(
         &persisted_gate_answers,
         &frozen_gating,
@@ -196,15 +211,6 @@ pub async fn handle_update_pending(
 
     let runner = alien_preflights::runner::PreflightRunner::new();
 
-    // For compatibility checks, use the prepared (mutated) stack from the previous deployment
-    // if available. This ensures we compare mutated stacks (old mutated vs new mutated),
-    // not raw user stacks. Falls back to current_release.stack if prepared_stack isn't available
-    // (for backward compatibility with existing deployments).
-    let old_stack_for_comparison = current
-        .runtime_metadata
-        .as_ref()
-        .and_then(|m| m.prepared_stack.as_ref())
-        .or(current.current_release.as_ref().map(|r| &r.stack));
     let target_release_id = current
         .target_release
         .as_ref()

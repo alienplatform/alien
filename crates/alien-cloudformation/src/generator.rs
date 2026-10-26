@@ -759,10 +759,7 @@ fn stack_inputs_for_cloudformation(
                 // Deployer secrets are written into the customer's own secret
                 // store, never passed through the template.
                 && !alien_core::is_deployer_secret_input(input)
-                && input
-                    .platforms
-                    .as_ref()
-                    .is_none_or(|platforms| platforms.contains(&platform))
+                && input.applies_to(platform)
         })
         .cloned()
         .collect()
@@ -791,13 +788,7 @@ fn add_deployer_secret_outputs(
     let inputs: Vec<&StackInputDefinition> = stack
         .inputs()
         .iter()
-        .filter(|input| {
-            alien_core::is_deployer_secret_input(input)
-                && input
-                    .platforms
-                    .as_ref()
-                    .is_none_or(|platforms| platforms.contains(&platform))
-        })
+        .filter(|input| alien_core::is_deployer_secret_input(input) && input.applies_to(platform))
         .collect();
     if inputs.is_empty() {
         return Ok(());

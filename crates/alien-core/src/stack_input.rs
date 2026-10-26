@@ -190,6 +190,13 @@ pub struct StackInputDefinition {
 }
 
 impl StackInputDefinition {
+    /// Whether this input is available on the deployment platform, independently of its base cloud.
+    pub fn applies_to(&self, platform: Platform) -> bool {
+        self.platforms
+            .as_ref()
+            .is_none_or(|platforms| platforms.contains(&platform))
+    }
+
     /// Whether Alien generates this input's value when none is provided. A
     /// generated input never needs a value from the developer or deployer.
     pub fn is_generated(&self) -> bool {

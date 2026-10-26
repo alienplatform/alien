@@ -132,3 +132,62 @@ async fn render_preparation_removes_only_excluded_container_selections() {
         );
     }
 }
+
+#[tokio::test]
+async fn build_checks_ignore_excluded_public_container() {
+    let mut input = StackInputDefinition::deployer_boolean(
+        "enabled",
+        "Enabled",
+        "Create container",
+        Some(true),
+    );
+    input.platforms = Some(vec![Platform::Aws]);
+    let container = alien_core::Container::new("api".into())
+        .code(alien_core::ContainerCode::Image {
+            image: "example.com/api:latest".into(),
+        })
+        .permissions("execution".into())
+        .cpu(alien_core::ResourceSpec {
+            min: "1".into(),
+            desired: "1".into(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "1Gi".into(),
+            desired: "1Gi".into(),
+        })
+        .public_endpoint(alien_core::PublicEndpoint {
+            name: "http".into(),
+            port: 8080,
+            protocol: alien_core::ExposeProtocol::Http,
+            host_label: None,
+            wildcard_subdomains: false,
+        })
+        .build();
+    let mut stack = Stack::new("scoped-gate".into())
+        .inputs(vec![input])
+        .add_enabled_when(container, ResourceLifecycle::Live, "enabled")
+        .build();
+    stack
+        .permissions
+        .profiles
+        .insert("execution".into(), alien_core::PermissionProfile::new());
+    let runner = PreflightRunner::new();
+    runner
+        .run_build_time_preflights(&stack, Platform::Machines)
+        .await
+        .expect("excluded public container does not require Machines endpoint support");
+    runner
+        .run_prebuilt_release_checks(&stack, Platform::Machines)
+        .await
+        .expect("excluded container also passes prebuilt release checks");
+    let mut unscoped = stack;
+    unscoped.inputs[0].platforms = None;
+    let error = runner
+        .run_build_time_preflights(&unscoped, Platform::Machines)
+        .await
+        .expect_err("an available public container remains unsupported");
+    assert!(
+        format!("{error:?}").contains("MACHINES_CONTAINER_PUBLIC_ENDPOINT"),
+        "{error:?}"
+    );
+}

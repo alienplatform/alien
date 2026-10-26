@@ -66,8 +66,7 @@ pub fn gate_is_off_platform(
     inputs
         .iter()
         .find(|input| input.id == input_id)
-        .and_then(|input| input.platforms.as_ref())
-        .is_some_and(|platforms| !platforms.contains(&platform))
+        .is_some_and(|input| !input.applies_to(platform))
 }
 
 /// Remove resources whose gate input is unavailable on this platform, including their links

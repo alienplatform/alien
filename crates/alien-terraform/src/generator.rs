@@ -23,18 +23,18 @@ use crate::{
     target::TerraformTarget,
 };
 use alien_core::{
-    import::{setup_import_format_version_for_platform, EmitContext},
     ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
     StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
     TelemetryMode, UpdatesMode,
+    import::{EmitContext, setup_import_format_version_for_platform},
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use hcl::{
+    Identifier,
     expr::Expression,
     structure::{Block, BlockLabel, Body, Structure},
-    Identifier,
 };
 use indexmap::IndexMap;
 use std::collections::HashSet;
@@ -1820,10 +1820,7 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
                 // Deployer secrets are written into the customer's own secret
                 // store, so no variable (and no state) ever holds them.
                 && !alien_core::is_deployer_secret_input(input)
-                && input
-                    .platforms
-                    .as_ref()
-                    .is_none_or(|platforms| platforms.contains(&platform))
+                && input.applies_to(platform)
         })
         .cloned()
         .collect()
@@ -1854,10 +1851,7 @@ fn deployer_secret_outputs(
         .iter()
         .filter(|input| {
             alien_core::is_deployer_secret_input(input)
-                && input
-                    .platforms
-                    .as_ref()
-                    .is_none_or(|platforms| platforms.contains(&platform))
+                && input.applies_to(platform)
         })
         .collect();
     if inputs.is_empty() {
@@ -5343,8 +5337,10 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         assert!(registration_body.contains(
             "management_config = jsondecode(jsonencode(local.deployment_management_config))"
         ));
-        assert!(registration_body
-            .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
+        assert!(
+            registration_body
+                .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))")
+        );
 
         let outputs = render_body(outputs_body(
             TerraformTarget::Aws,
@@ -5372,14 +5368,18 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
     fn product_lifecycle_configures_kubernetes_provider_without_stack_manifests() {
         let module = product_module(false);
 
-        assert!(module
-            .get("versions.tf")
-            .expect("versions should render")
-            .contains("kubernetes = {"));
-        assert!(module
-            .get("providers.tf")
-            .expect("providers should render")
-            .contains("provider \"kubernetes\""));
+        assert!(
+            module
+                .get("versions.tf")
+                .expect("versions should render")
+                .contains("kubernetes = {")
+        );
+        assert!(
+            module
+                .get("providers.tf")
+                .expect("providers should render")
+                .contains("provider \"kubernetes\"")
+        );
     }
 
     #[test]
@@ -5415,8 +5415,11 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
                 .expect("helm should render"),
         );
 
-        assert!(helm
-            .contains("count = var.helm_install_enabled && var.remote_operator_enabled ? 1 : 0"));
+        assert!(
+            helm.contains(
+                "count = var.helm_install_enabled && var.remote_operator_enabled ? 1 : 0"
+            )
+        );
         assert!(helm.contains(
             "\"alien.dev/sync-token-revision\" = tostring(var.remote_operator_sync_token_revision)"
         ));
@@ -5431,14 +5434,18 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         let required_collector = product_module(true);
         let requirement = "remote_operator_collector_token is required while this product chart's Remote Operator log collector is enabled.";
 
-        assert!(!optional_collector
-            .get("helm.tf")
-            .expect("helm should render")
-            .contains(requirement));
-        assert!(required_collector
-            .get("helm.tf")
-            .expect("helm should render")
-            .contains(requirement));
+        assert!(
+            !optional_collector
+                .get("helm.tf")
+                .expect("helm should render")
+                .contains(requirement)
+        );
+        assert!(
+            required_collector
+                .get("helm.tf")
+                .expect("helm should render")
+                .contains(requirement)
+        );
     }
 
     #[test]
@@ -5547,10 +5554,12 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
         let module = ModuleFiles {
             files: IndexMap::from([("key.tf".to_string(), "variable \"unterminated".to_string())]),
         };
-        assert!(module
-            .variable_names()
-            .unwrap_err()
-            .message
-            .contains("key.tf"));
+        assert!(
+            module
+                .variable_names()
+                .unwrap_err()
+                .message
+                .contains("key.tf")
+        );
     }
 }

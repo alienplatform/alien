@@ -281,10 +281,7 @@ pub async fn stack_import(
         Ok(answers) => answers,
         Err(e) => return e.into_response(),
     };
-    let mut frozen_gating = alien_deployment::frozen_gating_inputs(source_stack);
-    frozen_gating.retain(|input| {
-        !alien_core::gate_is_off_platform(&source_stack.inputs, input, req.platform)
-    });
+    let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack, req.platform);
     if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
         &imported_gate_answers,
         &frozen_gating,
@@ -298,6 +295,7 @@ pub async fn stack_import(
     // a live resource dominated by a declined frozen gate goes with it, or
     // its links to the stripped sibling would dangle through the template
     // preflights. Live-only gates resolve after the mutations, below.
+    let declared_stack = source_stack;
     let source_stack = alien_deployment::strip_frozen_declines_with_compute_settings(
         source_stack.clone(),
         &imported_gate_answers,
@@ -351,6 +349,19 @@ pub async fn stack_import(
             if !state.authz.can_update_deployment(&subject, &existing) {
                 return ErrorData::forbidden("Cannot update imported deployment in this group")
                     .into_response();
+            }
+            if let Some(old) = existing
+                .runtime_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.prepared_stack.as_ref())
+            {
+                if let Err(error) = alien_preflights::runner::validate_gate_platform_changes(
+                    old,
+                    declared_stack,
+                    req.platform,
+                ) {
+                    return error.into_response();
+                }
             }
             if let Err(error) = validate_gcp_federation_handoff(&req, Some(&existing.id)) {
                 return error.into_response();

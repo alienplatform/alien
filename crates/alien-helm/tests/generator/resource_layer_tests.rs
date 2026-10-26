@@ -374,13 +374,11 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         .filter_map(|role| role["metadata"]["name"].as_str())
         .collect();
     assert!(
-        documents
-            .iter()
-            .any(|doc| doc["kind"] == "ClusterRoleBinding"
-                && doc["roleRef"]["name"]
-                    .as_str()
-                    .is_some_and(|name| node_readers.contains(&name))
-                && doc["subjects"][0]["name"] == manager),
+        documents.iter().any(|doc| doc["kind"] == "ClusterRoleBinding"
+            && doc["roleRef"]["name"]
+                .as_str()
+                .is_some_and(|name| node_readers.contains(&name))
+            && doc["subjects"][0]["name"] == manager),
         "the operator must list nodes to exclude node and pod ranges: {node_readers:?}"
     );
     assert!(
@@ -388,12 +386,10 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
             && doc["metadata"]["name"]
                 .as_str()
                 .is_some_and(|name| node_readers.contains(&name))
-            && doc["rules"]
-                .as_sequence()
-                .is_some_and(|rules| rules.iter().any(|rule| {
-                    rule["apiGroups"] == serde_yaml::Value::from(vec!["networking.k8s.io"])
-                        && rule["resources"] == serde_yaml::Value::from(vec!["servicecidrs"])
-                }))),
+            && doc["rules"].as_sequence().is_some_and(|rules| rules.iter().any(|rule| {
+                rule["apiGroups"] == serde_yaml::Value::from(vec!["networking.k8s.io"])
+                    && rule["resources"] == serde_yaml::Value::from(vec!["servicecidrs"])
+            }))),
         "the operator must list Service ranges to exclude them"
     );
 
@@ -403,12 +399,7 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         rendered.assert_ok(release);
         serde_yaml::Deserializer::from_str(&rendered.stdout)
             .map(|document| serde_yaml::Value::deserialize(document).unwrap())
-            .filter(|doc| {
-                matches!(
-                    doc["kind"].as_str(),
-                    Some("ClusterRole" | "ClusterRoleBinding")
-                )
-            })
+            .filter(|doc| matches!(doc["kind"].as_str(), Some("ClusterRole" | "ClusterRoleBinding")))
             .filter_map(|doc| doc["metadata"]["name"].as_str().map(str::to_string))
             .filter(|name| name.contains("-egress-nodes-"))
             .collect()
@@ -450,12 +441,10 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     for rule in role["rules"].as_sequence().unwrap() {
         let verbs = rule["verbs"].as_sequence().unwrap();
         if verbs.iter().any(|verb| verb == "delete" || verb == "get") {
-            let names = rule["resourceNames"]
-                .as_sequence()
-                .expect("named objects only");
-            assert!(names.iter().all(|name| name
-                .as_str()
-                .is_some_and(|name| name.starts_with(probe_name))));
+            let names = rule["resourceNames"].as_sequence().expect("named objects only");
+            assert!(names
+                .iter()
+                .all(|name| name.as_str().is_some_and(|name| name.starts_with(probe_name))));
         } else {
             assert_eq!(verbs, &vec![serde_yaml::Value::from("create")], "{rule:?}");
         }
@@ -470,10 +459,7 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     let condition = admission["spec"]["matchConditions"][0]["expression"]
         .as_str()
         .unwrap();
-    assert!(
-        condition.contains(&format!(":{probe_name}'")),
-        "{condition}"
-    );
+    assert!(condition.contains(&format!(":{probe_name}'")), "{condition}");
     let rules = serde_yaml::to_string(&admission["spec"]["validations"]).unwrap();
     assert!(rules.contains("automountServiceAccountToken == false") && rules.contains(image));
     // Created pods cannot ask for host powers the probe itself does not have.
@@ -521,10 +507,7 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         "size(object.spec.ingress) == 0".to_string(),
         "size(object.spec.egress) == 0".to_string(),
     ] {
-        assert!(
-            policy_rules.contains(&required),
-            "{required}: {policy_rules}"
-        );
+        assert!(policy_rules.contains(&required), "{required}: {policy_rules}");
     }
     assert!(documents
         .iter()
@@ -663,9 +646,7 @@ fn the_operator_is_given_the_address_of_its_own_broker_service() {
 
     let service = documents
         .iter()
-        .find(|document| {
-            document["kind"] == "Service" && document["metadata"]["name"] == service_name
-        })
+        .find(|document| document["kind"] == "Service" && document["metadata"]["name"] == service_name)
         .unwrap_or_else(|| panic!("{broker} names no Service this chart renders"));
     let service_port = service["spec"]["ports"]
         .as_sequence()
@@ -673,9 +654,7 @@ fn the_operator_is_given_the_address_of_its_own_broker_service() {
         .iter()
         .find(|entry| entry["port"].as_u64() == Some(port))
         .unwrap_or_else(|| panic!("Service {service_name} does not expose port {port}"));
-    let target = service_port["targetPort"]
-        .as_str()
-        .expect("named target port");
+    let target = service_port["targetPort"].as_str().expect("named target port");
     let container_port = container["ports"]
         .as_sequence()
         .expect("operator ports")
@@ -721,11 +700,7 @@ fn the_sandbox_policy_admits_its_linkers_on_the_agent_port() {
         })
         .expect("the sandbox NetworkPolicy");
     let ingress = policy["spec"]["ingress"].as_sequence().expect("ingress");
-    assert_eq!(
-        ingress.len(),
-        1,
-        "one rule, for the agent port: {ingress:?}"
-    );
+    assert_eq!(ingress.len(), 1, "one rule, for the agent port: {ingress:?}");
     assert_eq!(
         ingress[0]["ports"][0]["port"].as_u64(),
         Some(u64::from(alien_core::sandbox_image::AGENT_PORT))

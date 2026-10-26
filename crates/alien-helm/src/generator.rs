@@ -1442,13 +1442,7 @@ fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
     let inputs: Vec<_> = stack
         .inputs()
         .iter()
-        .filter(|input| {
-            is_deployer_secret_input(input)
-                && input
-                    .platforms
-                    .as_ref()
-                    .is_none_or(|platforms| platforms.contains(&Platform::Kubernetes))
-        })
+        .filter(|input| is_deployer_secret_input(input) && input.applies_to(Platform::Kubernetes))
         .collect();
     if inputs.is_empty() {
         return None;

@@ -5,8 +5,8 @@
 //! emitters render a frozen gate as `count = var.input_x ? 1 : 0` (Terraform)
 //! or an `Fn::Equals` condition (CloudFormation), and the runner resolves a
 //! live gate from the deployment's input values, so the input has to be a
-//! deployer variable that exists on the target and always holds a real
-//! boolean.
+//! deployer boolean variable. An input scoped away from the target declines
+//! the resource without requiring an answer.
 //!
 //! Two rules cover what a gate cannot reach on its own: a `"*"`-scoped grant is
 //! read straight off the profile and keeps its access after the resource is gone,

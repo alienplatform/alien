@@ -82,6 +82,9 @@ export abstract class ResourceBuilder extends ResourceMetadataBuilder {
    * A deployer who answers no never gets the resource, its outputs, or anything derived from it.
    * If the input's `platforms` excludes the deployment platform, the resource is
    * always declined, regardless of its default or any provided value.
+   * Scope uses the deployment platform: Kubernetes on AWS is `kubernetes`, not `aws`.
+   * Narrowing `platforms` to exclude an installed gated resource is refused on update.
+   * Excluded gates record no frozen answer; widening the scope can enable them through setup.
    * A frozen resource's answer is fixed when the deployment is created; a live
    * resource follows later edits to the input, and turning it off deletes the
    * resource together with its data.
