@@ -8804,6 +8804,87 @@ mod tests {
         .expect("product chart should render")
     }
 
+    /// Exercises Helm lookup against retained objects in a disposable cluster.
+    #[test]
+    #[ignore = "requires ALIEN_HELM_TEST_CONTEXT and a disposable Kubernetes cluster"]
+    fn postgres_reinstall_keeps_the_retained_volume_image() {
+        let context = std::env::var("ALIEN_HELM_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("postgres-reinstall-{}", std::process::id());
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        for (name, content) in chart.files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        let created = std::process::Command::new("kubectl")
+            .args(["--context", &context, "create", "namespace", &namespace])
+            .output()
+            .unwrap();
+        assert!(created.status.success());
+        let helm = |args: &[&str]| {
+            std::process::Command::new("helm")
+                .args(["--kube-context", &context, "--namespace", &namespace])
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        let chart_path = directory.path().to_str().unwrap();
+        assert!(helm(&["upgrade", "--install", "database", chart_path])
+            .status
+            .success());
+        assert!(helm(&["uninstall", "database"]).status.success());
+        let same = helm(&[
+            "upgrade",
+            "--install",
+            "database",
+            chart_path,
+            "--dry-run=server",
+        ]);
+        let changed = helm(&[
+            "upgrade",
+            "--install",
+            "database",
+            chart_path,
+            "--dry-run=server",
+            "--set",
+            "postgres.database.image.tag=pg99-bookworm",
+        ]);
+        let deleted = std::process::Command::new("kubectl")
+            .args([
+                "--context",
+                &context,
+                "delete",
+                "namespace",
+                &namespace,
+                "--wait=true",
+            ])
+            .output()
+            .unwrap();
+        assert!(deleted.status.success());
+        assert!(same.status.success(), "same image must reuse retained data");
+        assert!(
+            !changed.status.success(),
+            "different image must not mount retained data"
+        );
+        assert!(String::from_utf8_lossy(&changed.stderr).contains("image changes require"));
+    }
+
     #[test]
     fn postgres_names_and_bindings_distinguish_long_release_names() {
         let stack = Stack::new("database-stack".into())

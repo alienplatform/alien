@@ -51,12 +51,20 @@ pub(crate) const TEMPLATE: &str = r#"{{- range $id, $database := .Values.postgre
 {{- $labels := include "deployment.labels" $ | fromYaml }}
 {{- $_ := set $labels "app.kubernetes.io/name" $name }}
 {{- $installed := lookup "apps/v1" "StatefulSet" $.Release.Namespace $name }}
-{{- if $installed }}
-  {{- $previousImage := (index $installed.spec.template.spec.containers 0).image }}
-  {{- $desiredImage := printf "%s:%s" $database.image.repository $database.image.tag }}
-  {{- if ne $previousImage $desiredImage }}
-    {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
-  {{- end }}
+{{- $volume := lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $name }}
+{{- $desiredImage := printf "%s:%s" $database.image.repository $database.image.tag }}
+{{- $previousImage := "" }}
+{{- if $volume }}
+  {{- $previousImage = get (default dict $volume.metadata.annotations) "alien.dev/postgres-image" | default "" }}
+{{- end }}
+{{- if and (empty $previousImage) $installed }}
+  {{- $previousImage = (index $installed.spec.template.spec.containers 0).image }}
+{{- end }}
+{{- if and $volume (empty $previousImage) }}
+  {{- fail "Postgres data has no recorded image; restore the original alien.dev/postgres-image PVC annotation before installing" }}
+{{- end }}
+{{- if and $previousImage (ne $previousImage $desiredImage) }}
+  {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
 {{- end }}
 {{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}
 {{- $password := "" }}
@@ -87,6 +95,7 @@ metadata:
   name: {{ $name }}
   annotations:
     helm.sh/resource-policy: keep
+    alien.dev/postgres-image: {{ $desiredImage | quote }}
   labels:
     {{- $labels | toYaml | nindent 4 }}
 spec:
@@ -188,7 +197,7 @@ pub(crate) const README: &str = r#"
 
 Frozen Postgres resources run as single-instance StatefulSets with pgvector and a persistent volume. Helm owns these databases; application releases do not replace them. The cluster needs a default StorageClass, or set `postgres.<resource>.storageClassName` before installing. Storage encryption comes from that StorageClass. For high availability or a separately managed encryption key, use your own database.
 
-The password is generated once in a Kubernetes Secret and supplied to linked workloads through `secretKeyRef`. Upgrades reuse that Secret. Image changes require a database upgrade plan; the chart refuses to change an installed database image automatically.
+The password is generated once in a Kubernetes Secret and supplied to linked workloads through `secretKeyRef`. Upgrades reuse that Secret. Image changes require a database upgrade plan; the chart records the image on the retained PVC and refuses to change it automatically, including after uninstall. For older volumes without this annotation, upgrade the chart while the original StatefulSet still exists; if it has already been removed, restore the `alien.dev/postgres-image` PVC annotation from the original installation before reinstalling.
 
 To use your own PostgreSQL, create its password Secret in the installation namespace first, then set an external binding:
 
