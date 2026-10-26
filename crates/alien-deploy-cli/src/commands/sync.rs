@@ -845,6 +845,7 @@ async fn send_report(
     report: &SiteReport,
 ) -> Result<()> {
     let last = report.telemetry.iter().map(|batch| batch.id).max();
+    let deleting = report.state["status"].as_str() == Some("deleted");
     loop {
         let mut body = serde_json::json!({
             "state": report.state, "telemetry": [], "writtenAt": report.written_at,
@@ -877,6 +878,11 @@ async fn send_report(
             fresh.push(value);
         }
         let sending = !fresh.is_empty();
+        // A Deleted state removes the deployment metadata. Send it only after
+        // every batch is durably acknowledged, in a separate empty request.
+        if deleting && sending {
+            body["state"]["status"] = "deleting".into();
+        }
         body["telemetry"] = serde_json::Value::Array(fresh);
         let path = format!("/v1/deployments/{}/status-report", site.deployment_id);
         let response = http()?
@@ -888,10 +894,8 @@ async fn send_report(
             .into_alien_error()
             .context(api_failed(format!("POST {path}")))?;
         // The final acknowledgement can be lost after the manager removes
-        // the deployment. Only a pending Deleted report can accept absence.
-        if response.status() == reqwest::StatusCode::NOT_FOUND
-            && report.state["status"].as_str() == Some("deleted")
-        {
+        // the deployment. Accept absence only after all telemetry is acknowledged.
+        if response.status() == reqwest::StatusCode::NOT_FOUND && deleting && !sending {
             println!("{} was already deleted.", site.name);
             return Ok(());
         }
@@ -916,9 +920,12 @@ async fn send_report(
         // Saved after every request, so progress is never lost.
         save_site(folder, site)?;
         if last.is_some_and(|last| confirmed >= last) {
-            return Ok(());
+            if !deleting {
+                return Ok(());
+            }
+        } else {
+            println!("The manager took telemetry through batch {confirmed}; sending the rest.");
         }
-        println!("The manager took telemetry through batch {confirmed}; sending the rest.");
     }
 }
 
@@ -3337,12 +3344,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_a_deleted_report_accepts_not_found() {
-        for (status, deleted, accepted) in [
-            (404, true, true),
-            (404, false, false),
-            (403, true, false),
-            (500, true, false),
+    async fn only_a_fully_acknowledged_deleted_report_accepts_not_found() {
+        for (status, deleted, acknowledged, accepted) in [
+            (404, true, true, true),
+            (404, true, false, false),
+            (404, false, true, false),
+            (403, true, true, false),
+            (500, true, true, false),
         ] {
             let server = MockServer::start_async().await;
             let request = server
@@ -3359,6 +3367,10 @@ mod tests {
                     serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
                 report["state"]["status"] = serde_json::json!("deleted");
                 std::fs::write(path, serde_json::to_vec(&report).unwrap()).unwrap();
+            }
+            if acknowledged {
+                site.uploaded_through = 4;
+                save_site(dir.path(), &site).unwrap();
             }
             let result = send_reports(dir.path(), &mut site, &access(&server), false).await;
             assert_eq!(
@@ -3482,6 +3494,135 @@ mod tests {
             !report_path(dir.path()).exists(),
             "a sent report is removed"
         );
+    }
+
+    #[tokio::test]
+    async fn chunked_deletion_waits_for_all_logs_and_retries_a_lost_final_ack() {
+        for lose_final_ack in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stopped = stop.clone();
+            let server = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(30);
+                let mut received = Vec::new();
+                let mut requests = Vec::new();
+                let mut deleted = false;
+                while !stopped.load(std::sync::atomic::Ordering::SeqCst)
+                    && std::time::Instant::now() < deadline
+                {
+                    let (mut stream, _) = match listener.accept() {
+                        Ok(connection) => connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
+                        Err(error) => panic!("accept: {error}"),
+                    };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = std::io::BufReader::new(&mut stream);
+                    let mut length = None;
+                    loop {
+                        let mut line = String::new();
+                        std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) =
+                            line.to_ascii_lowercase().strip_prefix("content-length:")
+                        {
+                            length = Some(value.trim().parse::<usize>().unwrap());
+                        }
+                    }
+                    let mut bytes = vec![0; length.unwrap()];
+                    std::io::Read::read_exact(&mut reader, &mut bytes).unwrap();
+                    assert!(bytes.len() <= 1024 * 1024);
+                    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    let batches = body["telemetry"].as_array().unwrap();
+                    let status = if deleted {
+                        404
+                    } else {
+                        for batch in batches {
+                            assert_eq!(batch["data"], "x".repeat(300_000));
+                            received.push(batch["id"].as_i64().unwrap());
+                        }
+                        if body["state"]["status"] == "deleted" {
+                            deleted = true;
+                            if lose_final_ack {
+                                500
+                            } else {
+                                200
+                            }
+                        } else {
+                            200
+                        }
+                    };
+                    requests.push((
+                        body["state"]["status"].as_str().unwrap().to_string(),
+                        batches.len(),
+                    ));
+                    let response =
+                        serde_json::json!({"telemetryThrough": received.last()}).to_string();
+                    std::io::Write::write_all(&mut stream, format!(
+                        "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len(),
+                    ).as_bytes()).unwrap();
+                }
+                (received, requests, deleted)
+            });
+            let (dir, mut site) = folder_with_report();
+            let mut report: SiteReport =
+                serde_json::from_slice(&std::fs::read(report_path(dir.path())).unwrap()).unwrap();
+            report.state["status"] = "deleted".into();
+            report.state["metadata"] = "y".repeat(220_000).into();
+            report.telemetry = (1..=8)
+                .map(|id| ReportedBatch {
+                    id,
+                    signal: "logs".into(),
+                    data: "x".repeat(300_000),
+                })
+                .collect();
+            std::fs::write(
+                report_path(dir.path()),
+                serde_json::to_vec(&report).unwrap(),
+            )
+            .unwrap();
+            let access = ManagerAccess {
+                url: format!("http://{address}"),
+                token: "ax_deploy_test".into(),
+            };
+            let first = send_reports(dir.path(), &mut site, &access, false).await;
+            let retained_after_first = report_path(dir.path()).exists();
+            let first_mark = load_site(dir.path()).unwrap().uploaded_through;
+            let result = if lose_final_ack {
+                site = load_site(dir.path()).unwrap();
+                send_reports(dir.path(), &mut site, &access, false).await
+            } else {
+                Ok(())
+            };
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            let (received, requests, deleted) = server.join().unwrap();
+            assert_eq!(
+                received,
+                (1..=8).collect::<Vec<_>>(),
+                "all logs precede metadata deletion"
+            );
+            assert_eq!(first_mark, 8);
+            assert_eq!(first.is_err(), lose_final_ack);
+            assert_eq!(retained_after_first, lose_final_ack);
+            result.unwrap();
+            assert!(deleted);
+            assert_eq!(site.uploaded_through, 8);
+            assert!(site.deleted);
+            assert!(!report_path(dir.path()).exists());
+            assert_eq!(requests[..4], vec![("deleting".to_string(), 2); 4]);
+            assert!(requests[4..]
+                .iter()
+                .all(|request| *request == ("deleted".to_string(), 0)));
+            assert_eq!(requests.len(), if lose_final_ack { 6 } else { 5 });
+        }
     }
 
     #[tokio::test]
