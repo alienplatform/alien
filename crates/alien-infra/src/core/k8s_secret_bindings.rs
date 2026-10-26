@@ -163,23 +163,25 @@ mod tests {
 
     #[test]
     fn typed_bindings_keep_the_legacy_environment_projection() {
-        for (name, field, env, input) in [
+        for (name, field, env, literal_field, input) in [
             (
                 "database",
                 "host",
                 "ALIEN_BINDING_DATABASE_HOST",
+                "password",
                 json!({
                     "type":"postgres", "service":"external", "host":{"secretRef":{"name":"credentials","key":"value"}},
-                    "port":5432, "database":"app", "username":"app", "password":"literal-$100"
+                    "port":5432, "database":"app", "username":"app", "password":"literal-$100-$(VAR)"
                 }),
             ),
             (
                 "cache",
                 "dataDir",
                 "ALIEN_BINDING_CACHE_DATADIR",
+                "keyPrefix",
                 json!({
                     "type":"kv", "service":"local-kv", "dataDir":{"secretRef":{"name":"credentials","key":"value"}},
-                    "keyPrefix":"literal-$100"
+                    "keyPrefix":"literal-$100-$(VAR)"
                 }),
             ),
         ] {
@@ -188,6 +190,7 @@ mod tests {
             let projected = extract_binding_secrets(name, &input).unwrap();
             let mut expected = input;
             expected[field] = json!(format!("$({env})"));
+            expected[literal_field] = json!("literal-$100-$$(VAR)");
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(&projected.resolved_binding_json)
                     .unwrap(),
