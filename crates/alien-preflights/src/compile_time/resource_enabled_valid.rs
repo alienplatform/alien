@@ -5,8 +5,8 @@
 //! emitters render a frozen gate as `count = var.input_x ? 1 : 0` (Terraform)
 //! or an `Fn::Equals` condition (CloudFormation), and the runner resolves a
 //! live gate from the deployment's input values, so the input has to be a
-//! deployer variable that exists on the target and always holds a real
-//! boolean.
+//! deployer boolean variable. An input scoped away from the target declines
+//! the resource without requiring an answer.
 //!
 //! Two rules cover what a gate cannot reach on its own: a `"*"`-scoped grant is
 //! read straight off the profile and keeps its access after the resource is gone,
@@ -32,7 +32,7 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
             .any(|(_, entry)| entry.enabled_when.is_some())
     }
 
-    async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
+    async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
 
         for (resource_id, entry) in stack.resources() {
@@ -136,16 +136,6 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
                      or declare a default. An optional input with neither renders as null, and \
                      whether the resource exists would be undecided"
                 ));
-            }
-
-            if let Some(platforms) = input.platforms.as_ref() {
-                if !platforms.contains(&platform) {
-                    errors.push(format!(
-                        "Input '{input_id}' enables resource '{resource_id}' but is scoped to \
-                         {platforms:?}, so it is absent from the {platform:?} setup template \
-                         while the resource is still in it"
-                    ));
-                }
             }
         }
 
@@ -652,12 +642,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_an_input_scoped_away_from_the_target_platform() {
+    async fn accepts_an_input_scoped_away_from_the_target_platform() {
         let mut input = boolean_input();
         input.platforms = Some(vec![Platform::Gcp]);
         let errors = errors_for(stack_with(input)).await;
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("scoped to"), "{errors:?}");
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     /// The runtime role is built from the profile's "*" key alone, so this grant

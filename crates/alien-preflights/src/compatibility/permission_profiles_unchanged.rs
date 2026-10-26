@@ -328,6 +328,7 @@ impl StackCompatibilityCheck for PermissionProfilesUnchangedCheck {
         old_stack: &Stack,
         new_stack: &Stack,
         config: &alien_core::DeploymentConfig,
+        _platform: alien_core::Platform,
     ) -> Result<CheckResult> {
         check_permission_profiles(
             old_stack,

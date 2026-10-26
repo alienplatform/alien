@@ -310,15 +310,20 @@ mod input_values_tests {
                     &[input],
                     "enableFeature",
                     &decoded.input_values,
-                    "worker"
+                    "worker",
+                    crate::Platform::Aws
                 )
                 .unwrap(),
                 default
             );
         }
-        assert!(
-            crate::gate_resolves_true(&[], "enableFeature", &decoded.input_values, "worker")
-                .is_err()
-        );
+        assert!(crate::gate_resolves_true(
+            &[],
+            "enableFeature",
+            &decoded.input_values,
+            "worker",
+            crate::Platform::Aws
+        )
+        .is_err());
     }
 }

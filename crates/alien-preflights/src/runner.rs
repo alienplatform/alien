@@ -32,7 +32,6 @@ impl PreflightRunner {
         platform: Platform,
     ) -> Result<PreflightSummary> {
         info!("Running compile-time checks for platform {:?}", platform);
-
         let checks = self.registry.get_compile_time_checks(stack, platform);
         let results = run_stack_checks(checks, stack, platform).await?;
         Ok(PreflightSummary::from_results(results))
@@ -50,6 +49,7 @@ impl PreflightRunner {
         platform: Platform,
     ) -> Result<PreflightSummary> {
         info!("Running stack compatibility checks");
+        validate_gate_platform_changes(old_stack, new_stack, platform)?;
 
         let frozen_check = crate::compatibility::FrozenResourcesUnchangedCheck { platform };
         let mut checks = self.registry.get_compatibility_checks();
@@ -60,7 +60,7 @@ impl PreflightRunner {
             debug!("Running compatibility check: {}", check.description());
 
             let mut result = check
-                .check_with_config(old_stack, new_stack, config)
+                .check_with_config(old_stack, new_stack, config, platform)
                 .await
                 .context(ErrorData::StackCompatibilityCheckFailed {
                     check_name: check.description().to_string(),
@@ -210,6 +210,13 @@ impl PreflightRunner {
         );
 
         let mut current_stack = stack;
+        let mut effective_config = config.clone();
+        alien_core::remove_off_platform_gated_resources(
+            &mut current_stack,
+            stack_state.platform,
+            effective_config.stack_settings.compute.as_mut(),
+        );
+        let config = &effective_config;
 
         for mutation in self.registry.get_all_mutations() {
             if !mutation.should_run(&current_stack, stack_state, config) {
@@ -282,6 +289,9 @@ impl PreflightRunner {
             platform
         );
 
+        let mut platform_stack = stack.clone();
+        alien_core::remove_off_platform_gated_resources(&mut platform_stack, platform, None);
+        let stack = &platform_stack;
         let checks = self.registry.get_template_checks(stack, platform);
         let mut results = Vec::new();
 
@@ -428,9 +438,23 @@ impl PreflightRunner {
                 });
             }
         }
-        let config = &effective_config;
-
         let platform = stack_state.platform;
+        if let Some(old_stack) = old_stack {
+            validate_gate_platform_changes(old_stack, &stack, platform)?;
+        }
+        for input in &stack.inputs {
+            if !input.applies_to(platform) && config.input_values.contains_key(&input.id) {
+                warn!(input_id = %input.id, %platform,
+                    "Ignoring a supplied input because it is unavailable on this deployment platform");
+            }
+        }
+        let mut stack = stack;
+        alien_core::remove_off_platform_gated_resources(
+            &mut stack,
+            platform,
+            effective_config.stack_settings.compute.as_mut(),
+        );
+        let config = &effective_config;
         info!(
             "Running deployment-time preflights for platform {:?}",
             platform
@@ -605,15 +629,20 @@ fn without_declined_live_resources(
     platform: Platform,
 ) -> Result<Stack> {
     let (answers, still_frozen_gating) = alien_core::surviving_frozen_gate_answers(stack);
-    let declined =
-        alien_core::declined_live_resources(stack, input_values, &answers, &still_frozen_gating)
-            .map_err(|message| {
-                AlienError::new(ErrorData::DeploymentPrerequisiteCheckFailed {
-                    check_name: "Every runtime gate resolves to a boolean".to_string(),
-                    message,
-                    platform: Some(platform.to_string()),
-                })
-            })?;
+    let declined = alien_core::declined_live_resources(
+        stack,
+        input_values,
+        &answers,
+        &still_frozen_gating,
+        platform,
+    )
+    .map_err(|message| {
+        AlienError::new(ErrorData::DeploymentPrerequisiteCheckFailed {
+            check_name: "Every runtime gate resolves to a boolean".to_string(),
+            message,
+            platform: Some(platform.to_string()),
+        })
+    })?;
     let mut projected = stack.clone();
     alien_core::remove_declined_resources(&mut projected, &declined);
     Ok(projected)
@@ -1822,6 +1851,9 @@ async fn run_stack_checks(
     stack: &Stack,
     platform: Platform,
 ) -> Result<Vec<CheckResult>> {
+    let mut platform_stack = stack.clone();
+    alien_core::remove_off_platform_gated_resources(&mut platform_stack, platform, None);
+    let stack = &platform_stack;
     let mut results = Vec::new();
 
     for check in checks {
@@ -1854,4 +1886,32 @@ async fn run_stack_checks(
     }
 
     Ok(results)
+}
+
+/// Reject scope narrowing before setup authorization can allow an installed resource's removal.
+pub fn validate_gate_platform_changes(old: &Stack, new: &Stack, platform: Platform) -> Result<()> {
+    for (id, entry) in old.resources() {
+        let Some(input_id) = new
+            .resources
+            .get(id)
+            .unwrap_or(entry)
+            .enabled_when
+            .as_deref()
+        else {
+            continue;
+        };
+        if alien_core::gate_is_off_platform(&new.inputs, input_id, platform) {
+            return Err(AlienError::new(ErrorData::StackCompatibilityCheckFailed {
+                check_name: "GATE_PLATFORM_SCOPE_NARROWED".into(),
+                message: format!(
+                    "Cannot exclude platform '{platform}' from input '{input_id}': gated resource \
+                     '{id}' is already installed. Keep this platform in the input's platforms; \
+                     remove the resource explicitly in a separate release if deletion is intended."
+                ),
+                old_resource_id: Some(id.clone()),
+                new_resource_id: Some(id.clone()),
+            }));
+        }
+    }
+    Ok(())
 }

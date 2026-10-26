@@ -269,6 +269,7 @@ pub trait StackCompatibilityCheck: Send + Sync {
         old_stack: &Stack,
         new_stack: &Stack,
         _config: &DeploymentConfig,
+        _platform: alien_core::Platform,
     ) -> Result<CheckResult> {
         self.check(old_stack, new_stack).await
     }

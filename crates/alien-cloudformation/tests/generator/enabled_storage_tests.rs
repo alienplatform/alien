@@ -273,3 +273,18 @@ fn an_ungated_storage_stack_gains_no_conditions() {
     }
     assert!(entry_ids(&registration_payload(&template)).contains(&"files".to_string()));
 }
+
+#[test]
+fn platform_scoped_storage_matches_aws_template_target() {
+    for scope in [alien_core::Platform::Aws, alien_core::Platform::Gcp] {
+        let mut stack = gated_stack();
+        stack.inputs[0].platforms = Some(vec![scope]);
+        let template = render(&stack, "platform-scoped storage");
+        let expected = scope == alien_core::Platform::Aws;
+        assert_eq!(template.resources.contains_key(BUCKET_ID), expected);
+        assert_eq!(template.conditions.contains_key(GATE_CONDITION), expected);
+        if !expected {
+            assert!(resources_referencing(&template, BUCKET_ID).is_empty());
+        }
+    }
+}

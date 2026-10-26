@@ -253,11 +253,18 @@ pub fn generate_product_terraform_module_with_profile(
 fn generate_terraform_module_internal(
     stack: &Stack,
     target: TerraformTarget,
-    options: TerraformOptions<'_>,
+    mut options: TerraformOptions<'_>,
     product_remote_operator: bool,
     requires_remote_operator_collector_token: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<ModuleFiles> {
+    let mut platform_stack = stack.clone();
+    alien_core::remove_off_platform_gated_resources(
+        &mut platform_stack,
+        target.deployment_platform(),
+        options.stack_settings.compute.as_mut(),
+    );
+    let stack = &platform_stack;
     let labels = resource_labels(stack)?;
     let platform = target.cloud_platform();
     let mut stack_settings = options.stack_settings.clone();
@@ -1813,10 +1820,7 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
                 // Deployer secrets are written into the customer's own secret
                 // store, so no variable (and no state) ever holds them.
                 && !alien_core::is_deployer_secret_input(input)
-                && input
-                    .platforms
-                    .as_ref()
-                    .is_none_or(|platforms| platforms.contains(&platform))
+                && input.applies_to(platform)
         })
         .cloned()
         .collect()
@@ -1847,10 +1851,7 @@ fn deployer_secret_outputs(
         .iter()
         .filter(|input| {
             alien_core::is_deployer_secret_input(input)
-                && input
-                    .platforms
-                    .as_ref()
-                    .is_none_or(|platforms| platforms.contains(&platform))
+                && input.applies_to(platform)
         })
         .collect();
     if inputs.is_empty() {

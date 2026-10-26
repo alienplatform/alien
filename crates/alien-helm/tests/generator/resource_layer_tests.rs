@@ -729,3 +729,26 @@ fn the_sandbox_policy_admits_its_linkers_on_the_agent_port() {
         "only the operator and the linkers, every label value a string"
     );
 }
+
+#[test]
+fn platform_scoped_storage_is_absent_from_kubernetes_chart() {
+    let mut input = alien_core::StackInputDefinition::deployer_boolean(
+        "managedBucket",
+        "Managed bucket",
+        "Create a bucket",
+        Some(true),
+    );
+    input.platforms = Some(vec![alien_core::Platform::Aws]);
+    let stack = Stack::new("scoped-gate".into())
+        .inputs(vec![input])
+        .add_enabled_when(
+            Storage::new("data".into()).build(),
+            ResourceLifecycle::Frozen,
+            "managedBucket",
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    assert_helm_valid(&chart, "off-platform storage");
+    let values: serde_yaml::Value = serde_yaml::from_str(&chart.files["values.yaml"]).unwrap();
+    assert!(values["infrastructure"]["data"].is_null());
+}

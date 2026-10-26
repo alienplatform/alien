@@ -85,8 +85,13 @@ fn client() -> ClientConfig {
 
 /// The install and re-import paths: Frozen declines before the preflights, Live after.
 async fn prepared(declared: Stack, config: &DeploymentConfig, answers: &GateAnswers) -> Stack {
-    let frozen_gating = alien_deployment::frozen_gating_inputs(&declared);
-    let target = alien_deployment::strip_frozen_declines(declared, answers, &frozen_gating);
+    let frozen_gating = alien_deployment::frozen_gating_inputs(&declared, Platform::Aws);
+    let target = alien_deployment::strip_frozen_declines(
+        declared,
+        answers,
+        &frozen_gating,
+        alien_core::Platform::Aws,
+    );
     let (prepared, _, _) = PreflightRunner::new()
         .run_deployment_time_preflights(
             target,
@@ -104,6 +109,7 @@ async fn prepared(declared: Stack, config: &DeploymentConfig, answers: &GateAnsw
         &config.input_values,
         answers,
         &frozen_gating,
+        alien_core::Platform::Aws,
     )
     .expect("gate resolves")
 }
@@ -117,8 +123,13 @@ async fn update(
     installed: &Stack,
     authorization: Option<&SetupUpdateAuthorization>,
 ) -> Result<bool, String> {
-    let frozen_gating = alien_deployment::frozen_gating_inputs(&declared);
-    let target = alien_deployment::strip_frozen_declines(declared, answers, &frozen_gating);
+    let frozen_gating = alien_deployment::frozen_gating_inputs(&declared, Platform::Aws);
+    let target = alien_deployment::strip_frozen_declines(
+        declared,
+        answers,
+        &frozen_gating,
+        alien_core::Platform::Aws,
+    );
     PreflightRunner::new()
         .run_deployment_time_preflights(
             target,

@@ -122,8 +122,20 @@ pub enum RenderRegistrationMode {
 
 pub async fn render_task(args: RenderArgs) -> Result<()> {
     validate_args(&args)?;
-    let stack = load_configuration(args.stack.clone()).await?;
-    let stack_settings = load_stack_settings(args.stack_settings.as_deref())?;
+    let mut stack = load_configuration(args.stack.clone()).await?;
+    let mut stack_settings = load_stack_settings(args.stack_settings.as_deref())?;
+    let platform = match args.format {
+        RenderFormat::Cloudformation => Platform::Aws,
+        RenderFormat::Terraform => {
+            terraform_target(args.target.expect("validated by validate_args")).deployment_platform()
+        }
+        RenderFormat::Helm => Platform::Kubernetes,
+    };
+    alien_core::remove_off_platform_gated_resources(
+        &mut stack,
+        platform,
+        stack_settings.compute.as_mut(),
+    );
 
     match args.format {
         RenderFormat::Cloudformation => {

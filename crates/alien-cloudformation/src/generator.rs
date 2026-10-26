@@ -269,9 +269,16 @@ pub fn generate_cloudformation_template(
 /// Generate a distinct template with the requested configuration surface.
 pub fn generate_cloudformation_template_with_profile(
     stack: &Stack,
-    options: CloudFormationOptions<'_>,
+    mut options: CloudFormationOptions<'_>,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<CfTemplate> {
+    let mut platform_stack = stack.clone();
+    alien_core::remove_off_platform_gated_resources(
+        &mut platform_stack,
+        options.target.deployment_platform(),
+        options.stack_settings.compute.as_mut(),
+    );
+    let stack = &platform_stack;
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
     // A Kubernetes target runs sandboxes as pods behind the chart's NetworkPolicy.
@@ -752,10 +759,7 @@ fn stack_inputs_for_cloudformation(
                 // Deployer secrets are written into the customer's own secret
                 // store, never passed through the template.
                 && !alien_core::is_deployer_secret_input(input)
-                && input
-                    .platforms
-                    .as_ref()
-                    .is_none_or(|platforms| platforms.contains(&platform))
+                && input.applies_to(platform)
         })
         .cloned()
         .collect()
@@ -784,13 +788,7 @@ fn add_deployer_secret_outputs(
     let inputs: Vec<&StackInputDefinition> = stack
         .inputs()
         .iter()
-        .filter(|input| {
-            alien_core::is_deployer_secret_input(input)
-                && input
-                    .platforms
-                    .as_ref()
-                    .is_none_or(|platforms| platforms.contains(&platform))
-        })
+        .filter(|input| alien_core::is_deployer_secret_input(input) && input.applies_to(platform))
         .collect();
     if inputs.is_empty() {
         return Ok(());
