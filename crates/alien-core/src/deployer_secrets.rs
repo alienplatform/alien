@@ -915,12 +915,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_platform_scope_produces_no_secret_slots() {
+    fn legacy_empty_platform_scope_preserves_secret_slots() {
         let mut input = secret("token", vec![StackInputProvider::Deployer]);
         input.platforms = Some(vec![]);
-        assert!(
-            deployer_secret_slots(&[input], &HashMap::new(), Some(&[]), &[], Platform::Aws)
-                .is_empty()
+        assert_eq!(
+            deployer_secret_slots(&[input], &HashMap::new(), Some(&[]), &[], Platform::Aws).len(),
+            1
         );
     }
 

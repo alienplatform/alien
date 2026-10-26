@@ -149,9 +149,11 @@ async fn setup_update_refuses_scope_narrowing_for_installed_storage() {
                 "state": "ready", "bucketName": "scoped-gate-data",
             }));
             installed.resources.insert("data".into(), bucket);
-            for automatic_setup in [false, true] {
+            for (automatic_setup, saved_stack) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
                 let metadata = alien_core::RuntimeMetadata {
-                    prepared_stack: Some(old.clone()),
+                    prepared_stack: saved_stack.then(|| old.clone()),
                     automatic_setup,
                     persisted_gate_answers: [("managedBucket".into(), true)].into(),
                     ..Default::default()
@@ -339,7 +341,14 @@ async fn legacy_update_does_not_treat_a_declined_release_resource_as_installed()
         target.inputs[0].platforms = Some(vec![Platform::Gcp]);
         state.target_release = Some(release(target, "2.0.0"));
         state.status = DeploymentStatus::UpdatePending;
-        let updated = run(state, &config()).await;
+        let mut update_config = config();
+        update_config.stack_settings.compute = Some(
+            serde_json::from_value(serde_json::json!({
+                "containers": { "removed-container": {} }
+            }))
+            .unwrap(),
+        );
+        let updated = run(state, &update_config).await;
         assert!(updated.error.is_none());
         assert!(!updated.stack_state.unwrap().resources.contains_key("data"));
         assert!(!updated

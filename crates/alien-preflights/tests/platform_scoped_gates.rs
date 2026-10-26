@@ -194,6 +194,27 @@ async fn build_checks_ignore_excluded_public_container() {
 
 #[tokio::test]
 async fn ignored_gate_values_are_preflight_warnings_without_values_or_non_gate_inputs() {
+    #[derive(Clone)]
+    struct LogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let logs = LogWriter(Default::default());
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || writer.clone())
+        .finish();
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+
     for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
         let mut gate = StackInputDefinition::deployer_boolean(
             "enabled",
@@ -228,6 +249,7 @@ async fn ignored_gate_values_are_preflight_warnings_without_values_or_non_gate_i
             } else {
                 Default::default()
             };
+            logs.0.lock().unwrap().clear();
             let (prepared, summary, _) = PreflightRunner::new()
                 .run_deployment_time_preflights(
                     stack.clone(),
@@ -253,7 +275,100 @@ async fn ignored_gate_values_are_preflight_warnings_without_values_or_non_gate_i
                 assert!(warnings[0].contains("'machines'"));
                 assert!(!warnings[0].contains("unused"));
                 assert!(!warnings[0].contains("private-value"));
+                let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+                assert!(output.contains(warnings[0].as_str()), "{output}");
+                assert!(!output.contains("private-value"));
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn legacy_empty_scope_deploys_but_new_releases_are_rejected() {
+    let input: StackInputDefinition = serde_json::from_value(serde_json::json!({
+        "id": "region", "kind": "string", "providedBy": ["deployer"],
+        "required": false, "label": "Region", "description": "Service region",
+        "platforms": [], "default": {"type": "string", "value": "us-east-1"}, "env": [{"name": "REGION"}]
+    }))
+    .unwrap();
+    let secret: StackInputDefinition = serde_json::from_value(serde_json::json!({
+        "id": "token", "kind": "secret", "providedBy": ["deployer"],
+        "required": false, "label": "Token", "description": "Access token", "platforms": []
+    }))
+    .unwrap();
+    let stack = Stack::new("legacy".into())
+        .inputs(vec![input, secret])
+        .build();
+    let config = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(Default::default())
+        .allow_frozen_changes(false)
+        .build();
+    let runner = PreflightRunner::new();
+    for platform in [Platform::Aws, Platform::Machines] {
+        let mut config = config.clone();
+        if platform == Platform::Machines {
+            config.external_bindings.insert(
+                "deployer-secrets",
+                alien_core::ExternalBinding::Vault(alien_core::VaultBinding::parameter_store(
+                    "legacy",
+                )),
+            );
+        }
+        let error = runner
+            .run_build_time_preflights(&stack, platform)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:?}").contains("platforms must include at least one"),
+            "{error:?}"
+        );
+        let error = runner
+            .run_prebuilt_release_checks(&stack, platform)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:?}").contains("platforms must include at least one"),
+            "{error:?}"
+        );
+        runner
+            .run_template_preflights(&stack, platform)
+            .await
+            .expect("released template remains valid");
+        let (prepared, summary, _) = runner
+            .run_deployment_time_preflights(
+                stack.clone(),
+                &StackState::new(platform),
+                &config,
+                &alien_core::ClientConfig::Machines,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("existing release remains deployable");
+        assert!(summary.success);
+        let variables = alien_core::resolve_stack_input_environment_variables(
+            &prepared.inputs,
+            &config.input_values,
+            platform,
+        )
+        .unwrap();
+        assert_eq!(variables.len(), 1);
+        assert_eq!(variables[0].name, "REGION");
+        assert_eq!(variables[0].value, "us-east-1");
+        let slots = alien_core::deployer_secret_slots(
+            &prepared.inputs,
+            &config.input_values,
+            Some(&[]),
+            &[],
+            platform,
+        );
+        assert_eq!(slots.len(), 1);
     }
 }

@@ -352,7 +352,7 @@ mod tests {
                             .collect();
                         let excluded = platforms
                             .as_ref()
-                            .is_some_and(|scope| !scope.contains(&platform));
+                            .is_some_and(|scope| !scope.is_empty() && !scope.contains(&platform));
                         let expected = !excluded && provided.unwrap_or(default);
                         assert_eq!(
                             gate_resolves_true(

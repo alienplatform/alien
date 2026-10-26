@@ -191,10 +191,12 @@ pub struct StackInputDefinition {
 
 impl StackInputDefinition {
     /// Whether this input is available on the deployment platform, independently of its base cloud.
+    /// Empty scopes retain their legacy all-platform meaning for existing releases.
+    /// Build-time checks reject empty scopes in new releases.
     pub fn applies_to(&self, platform: Platform) -> bool {
         self.platforms
             .as_ref()
-            .is_none_or(|platforms| platforms.contains(&platform))
+            .is_none_or(|platforms| platforms.is_empty() || platforms.contains(&platform))
     }
 
     /// Whether Alien generates this input's value when none is provided. A
@@ -444,16 +446,16 @@ mod environment_tests {
     }
 
     #[test]
-    fn empty_platform_scope_produces_no_environment_variables() {
+    fn legacy_empty_platform_scope_preserves_environment_variables() {
         let mut input = input("region", StackInputKind::String, "REGION");
         input.platforms = Some(vec![]);
         input.default = Some(StackInputDefaultValue::String("us-east-1".into()));
         let values = HashMap::from([("region".into(), serde_json::json!("us-west-2"))]);
-        assert!(
-            resolve_stack_input_environment_variables(&[input], &values, Platform::Aws)
-                .unwrap()
-                .is_empty()
-        );
+        let variables =
+            resolve_stack_input_environment_variables(&[input], &values, Platform::Aws).unwrap();
+        assert_eq!(variables.len(), 1);
+        assert_eq!(variables[0].name, "REGION");
+        assert_eq!(variables[0].value, "us-west-2");
     }
 
     #[test]

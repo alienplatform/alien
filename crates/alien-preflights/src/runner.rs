@@ -438,9 +438,13 @@ impl PreflightRunner {
             }
         }
         let platform = stack_state.platform;
-        if let Some(old_stack) = old_stack {
-            validate_gate_platform_changes(old_stack, &stack, platform)?;
-        }
+        validate_installed_gate_platform_changes(
+            stack_state.resources.iter().filter_map(|(id, resource)| {
+                (resource.status != alien_core::ResourceStatus::Deleted).then_some(id)
+            }),
+            &stack,
+            platform,
+        )?;
         let warnings = stack
             .inputs
             .iter()
@@ -626,6 +630,13 @@ impl PreflightRunner {
                 warning_count: summary.warning_count,
                 results: summary.results,
             }));
+        }
+
+        for result in &summary.results {
+            let check_name = result.check_description.as_deref().unwrap_or("unknown");
+            for message in &result.warnings {
+                warn!(check = %check_name, "Preflight warning: {}", message);
+            }
         }
 
         Ok((mutated_stack, summary, setup_update_authorized))
@@ -1903,7 +1914,15 @@ async fn run_stack_checks(
 
 /// Reject scope narrowing before setup authorization can allow an installed resource's removal.
 pub fn validate_gate_platform_changes(old: &Stack, new: &Stack, platform: Platform) -> Result<()> {
-    for id in old.resources.keys() {
+    validate_installed_gate_platform_changes(old.resources.keys(), new, platform)
+}
+
+fn validate_installed_gate_platform_changes<'a>(
+    installed_ids: impl Iterator<Item = &'a String>,
+    new: &Stack,
+    platform: Platform,
+) -> Result<()> {
+    for id in installed_ids {
         let Some(input_id) = new
             .resources
             .get(id)
