@@ -20,7 +20,7 @@ use tokio::sync::Mutex;
 use turso::{Builder, Connection, Database, EncryptionOpts};
 
 use crate::error::{ErrorData, Result};
-use crate::loops::kubernetes_heartbeats::{is_settled, workload_identity};
+use crate::workload_observation::{is_settled, workload_identity};
 
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;
@@ -451,8 +451,10 @@ impl OperatorDb {
             })?;
         let stored: DeploymentState = match serde_json::from_str(&original) {
             Ok(state) => state,
-            Err(_) => {
+            Err(error) => {
+                let deployment_id = Self::get_deployment_id_locked(conn).await;
                 tracing::warn!(
+                    ?deployment_id, %error,
                     "Skipping checkpoint replacement: stored deployment state is unreadable"
                 );
                 return Ok(false);
@@ -579,8 +581,9 @@ impl OperatorDb {
         };
         let current: DeploymentState = match serde_json::from_str(&current_json) {
             Ok(state) => state,
-            Err(_) => {
-                tracing::warn!("Skipping heartbeat merge: stored deployment state is unreadable");
+            Err(error) => {
+                let deployment_id = Self::get_deployment_id_locked(&conn).await;
+                tracing::warn!(?deployment_id, %error, "Skipping heartbeat merge: stored deployment state is unreadable");
                 return Ok(false);
             }
         };
@@ -1507,7 +1510,10 @@ impl OperatorDb {
     /// Get deployment ID from initialization
     pub async fn get_deployment_id(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().await;
+        Self::get_deployment_id_locked(&conn).await
+    }
 
+    async fn get_deployment_id_locked(conn: &Connection) -> Result<Option<String>> {
         let mut rows = conn
             .query("SELECT value FROM state WHERE key = 'deployment_id'", ())
             .await
@@ -2915,10 +2921,18 @@ mod tests {
     }
     #[tokio::test]
     async fn unreadable_checkpoint_does_not_replace_state_or_merge_heartbeats() {
+        let log = tempfile::NamedTempFile::new().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(log.reopen().unwrap()))
+            .finish();
+        let _subscriber = tracing::subscriber::set_default(subscriber);
         let directory = tempfile::tempdir().unwrap();
         let db = OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
             .await
             .unwrap();
+        db.set_deployment_id("dep_unreadable").await.unwrap();
         let expected = heartbeat_state();
         for saved in [
             "not-json",
@@ -2936,6 +2950,22 @@ mod tests {
                 .await
                 .unwrap());
             assert!(db.get_pending_heartbeats().await.unwrap().is_empty());
+        }
+        let logs = std::fs::read_to_string(log.path()).unwrap();
+        for operation in [
+            "Skipping checkpoint replacement",
+            "Skipping heartbeat merge",
+        ] {
+            let entries: Vec<_> = logs
+                .lines()
+                .filter(|line| line.contains(operation))
+                .collect();
+            assert_eq!(entries.len(), 2);
+            assert!(entries
+                .iter()
+                .all(|line| line.contains("dep_unreadable") && line.contains("error=")));
+            assert!(entries[0].contains("expected ident"));
+            assert!(entries[1].contains("unknown variant"));
         }
     }
 

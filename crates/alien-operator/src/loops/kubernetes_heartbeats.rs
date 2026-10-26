@@ -8,12 +8,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_core::{
-    branded_standard_resource_tags, Container, ContainerHeartbeatData, DeploymentState,
-    DeploymentStatus, HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
-    HeartbeatIssueSeverity, KubernetesClientConfig, KubernetesContainerHeartbeatData,
-    KubernetesWorkloadKind, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceStatus, StackResourceState, WorkloadHeartbeatStatus,
-    WorkloadReplicaStatus,
+    branded_standard_resource_tags, Container, ContainerHeartbeatData, HeartbeatBackend,
+    HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatIssueSeverity,
+    KubernetesClientConfig, KubernetesContainerHeartbeatData, KubernetesWorkloadKind,
+    ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    WorkloadHeartbeatStatus, WorkloadReplicaStatus,
 };
 use alien_error::Context;
 use alien_k8s_clients::{
@@ -24,6 +23,7 @@ use chrono::Utc;
 use tracing::{debug, error, info, warn};
 
 use crate::error::{ErrorData, Result};
+use crate::workload_observation::{is_settled, workload_identity};
 use crate::OperatorState;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
@@ -107,42 +107,6 @@ async fn collect_heartbeats(state: &OperatorState) -> Result<()> {
         debug!("Skipping Kubernetes heartbeats during a deployment update");
     }
     Ok(())
-}
-
-pub(crate) fn is_settled(state: &DeploymentState) -> bool {
-    state.platform == Platform::Kubernetes
-        && matches!(
-            state.status,
-            DeploymentStatus::Running | DeploymentStatus::RefreshFailed
-        )
-        && state.target_release.as_ref().is_none_or(|target| {
-            target.release_id.is_some() && Some(target) == state.current_release.as_ref()
-        })
-        && state.current_release.is_some()
-}
-
-/// Identity used by the passive reader, excluding health-check bookkeeping.
-pub(crate) fn workload_identity(resource: &StackResourceState) -> Option<(&str, &str, bool)> {
-    if resource.resource_type != Container::RESOURCE_TYPE.as_ref()
-        || !matches!(
-            resource.status,
-            ResourceStatus::Running | ResourceStatus::RefreshFailed
-        )
-        || resource
-            .controller_platform
-            .is_some_and(|platform| platform != Platform::Kubernetes)
-    {
-        return None;
-    }
-    let internal = resource.internal_state.as_ref()?;
-    if internal.get("type")?.as_str()? != "KubernetesContainerController" {
-        return None;
-    }
-    Some((
-        internal.get("namespace")?.as_str()?,
-        internal.get("workloadName")?.as_str()?,
-        internal.get("isStateful")?.as_bool()?,
-    ))
 }
 
 async fn read_container(
@@ -301,6 +265,7 @@ fn unknown_container(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{DeploymentState, DeploymentStatus};
 
     #[test]
     fn passive_collection_continues_during_same_release_maintenance() {

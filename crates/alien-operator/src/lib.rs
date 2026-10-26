@@ -31,6 +31,7 @@ pub mod otlp_server;
 pub mod pod_logs;
 pub mod readiness_server;
 pub mod self_update;
+mod workload_observation;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
 pub use config::{OperatorConfig, SyncConfig};
