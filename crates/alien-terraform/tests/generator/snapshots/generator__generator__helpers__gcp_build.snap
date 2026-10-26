@@ -211,7 +211,11 @@ locals {
 
 === retain-data.py ===
 #!/usr/bin/env python3
-"""Detach the generated setup's retained resources, keeping a recovery receipt."""
+"""Detach the generated retention inventory, keeping a recovery receipt.
+
+AWS Aurora and its network are excluded by the generator and remain managed
+for destroy. KMS keys remain in the inventory.
+"""
 import argparse
 import json
 import os
