@@ -4666,6 +4666,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aws_build_accepts_nested_virtualization_x64_target() {
+        let output = tempdir().unwrap();
+        let cluster = alien_core::ComputeCluster::new("runtime".into())
+            .capacity_group(alien_core::CapacityGroup {
+                group_id: "pool".into(),
+                instance_type: None,
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: Some(true),
+            })
+            .build();
+        let stack = Stack::new("nested-virtualization".into())
+            .add(cluster, alien_core::ResourceLifecycle::Frozen)
+            .build();
+        let settings = BuildSettings {
+            output_directory: output.path().display().to_string(),
+            platform: PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            targets: Some(vec![BinaryTarget::LinuxX64]),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+        let built = build_stack(stack, &settings)
+            .await
+            .expect("release target must build");
+        assert!(built.resources.contains_key("runtime"));
+    }
+
+    #[tokio::test]
     async fn aws_build_rejects_worker_target_mismatch_before_writing_artifacts() {
         let output = tempdir().unwrap();
         let worker = Worker::new("job".to_string())
