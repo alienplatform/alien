@@ -449,11 +449,18 @@ impl OperatorDb {
             .context(ErrorData::DatabaseError {
                 message: "Failed to read observed deployment state value".to_string(),
             })?;
-        let stored: serde_json::Value = serde_json::from_str(&original)
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
+        let stored: DeploymentState = serde_json::from_str(&original).into_alien_error().context(
+            ErrorData::DatabaseError {
                 message: "Failed to parse observed deployment state".to_string(),
-            })?;
+            },
+        )?;
+        let stored =
+            serde_json::to_value(stored)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to normalize observed deployment state".to_string(),
+                })?;
+        // Read older checkpoints through the same defaults as the expected state.
         // Object key order is not state: resource HashMaps can reorder on read-back.
         if stored != expected {
             return Ok(false);
@@ -2898,6 +2905,43 @@ mod tests {
         assert!(
             wal_bytes < 8 * 1024 * 1024,
             "WAL grew to {wal_bytes} bytes; checkpoints are not restarting it"
+        );
+    }
+    #[tokio::test]
+    async fn legacy_state_defaults_do_not_prevent_checkpointing() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        // Older checkpoints predate the default retained-data policy.
+        let legacy = serde_json::json!({
+            "platform": "kubernetes", "status": "provisioning-failed",
+            "runtimeMetadata": {},
+            "protocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+        });
+        db.conn.lock().await.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('deployment_state', ?, datetime('now'))",
+            (legacy.to_string(),),
+        ).await.unwrap();
+        let expected = db.get_deployment_state().await.unwrap().unwrap();
+        let mut retry = expected.clone();
+        retry.retry_requested = true;
+        assert!(db
+            .compare_and_set_deployment_state(&expected, &retry)
+            .await
+            .unwrap());
+        assert!(
+            !db.compare_and_set_deployment_state(&expected, &expected)
+                .await
+                .unwrap(),
+            "a genuinely changed checkpoint must still reject a stale writer"
+        );
+        assert!(
+            db.get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .retry_requested
         );
     }
 }
