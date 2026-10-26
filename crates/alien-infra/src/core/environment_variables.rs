@@ -1158,6 +1158,18 @@ mod tests {
         let exposures = [
             (
                 KubernetesExposureSettings::Custom {
+                    domain: "acm.example.test".into(),
+                    route: route.clone(),
+                    certificate: KubernetesCertificateMode::AwsAcmArn {
+                        certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/test"
+                            .into(),
+                    },
+                },
+                "https://acm.example.test",
+                "acm.example.test",
+            ),
+            (
+                KubernetesExposureSettings::Custom {
                     domain: "login.example.test".into(),
                     route: route.clone(),
                     certificate: KubernetesCertificateMode::TlsSecretRef(KubernetesTlsSecretRef {

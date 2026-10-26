@@ -1379,7 +1379,8 @@ pub(crate) fn configured_public_endpoint_urls(
     };
     let scheme = match certificate {
         KubernetesCertificateMode::None => "http",
-        KubernetesCertificateMode::TlsSecretRef(_) => "https",
+        KubernetesCertificateMode::TlsSecretRef(_)
+        | KubernetesCertificateMode::AwsAcmArn { .. } => "https",
         _ => return None,
     };
     Some(
