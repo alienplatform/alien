@@ -14,8 +14,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, LifecycleRule, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, Result, ServiceAccount, Storage,
+    LifecycleRule, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
+    ServiceAccount, Storage, import::EmitContext,
 };
 use alien_permissions::BindingTarget;
 use hcl::{
@@ -107,9 +107,8 @@ fn emit_storage_key_iam(
     let Some(permission_set) = alien_permissions::get_permission_set("key/native-storage") else {
         return Ok(());
     };
-    let context = aws_terraform_permission_context().with_resource_name(format!(
-        "${{terraform_data.{key_label}_key_identity.output}}"
-    ));
+    let context = aws_terraform_permission_context()
+        .with_resource_name(format!("${{local.{key_label}_selected_key.arn}}"));
 
     // Only object readers and writers use the bucket key. A health check or provisioning
     // grant must not turn into kms:Decrypt on the deployment's key.
