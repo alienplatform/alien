@@ -86,6 +86,7 @@ impl StackCompatibilityCheck for SandboxSetupInputsUnchangedCheck {
             &config.input_values,
             &answers,
             &still_frozen_gating,
+            alien_core::Platform::Aws,
         )
         .map_err(|message| {
             AlienError::new(ErrorData::StackCompatibilityCheckFailed {

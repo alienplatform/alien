@@ -80,6 +80,8 @@ export abstract class ResourceBuilder extends ResourceMetadataBuilder {
   /**
    * Creates this resource only when the given boolean stack input is true.
    * A deployer who answers no never gets the resource, its outputs, or anything derived from it.
+   * If the input's `platforms` excludes the deployment platform, the resource is
+   * always declined, regardless of its default or any provided value.
    * A frozen resource's answer is fixed when the deployment is created; a live
    * resource follows later edits to the input, and turning it off deletes the
    * resource together with its data.

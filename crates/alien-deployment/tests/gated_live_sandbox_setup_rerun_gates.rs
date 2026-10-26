@@ -104,6 +104,7 @@ async fn prepared(declared: Stack, config: &DeploymentConfig, answers: &GateAnsw
         &config.input_values,
         answers,
         &frozen_gating,
+        alien_core::Platform::Aws,
     )
     .expect("gate resolves")
 }

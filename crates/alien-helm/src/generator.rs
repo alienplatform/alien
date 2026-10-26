@@ -242,6 +242,9 @@ fn generate_helm_chart_internal(
         Option<OperatorImageIdentityOptions<'_>>,
     )>,
 ) -> Result<HelmChart> {
+    let mut platform_stack = stack.clone();
+    alien_core::remove_off_platform_gated_resources(&mut platform_stack, Platform::Kubernetes);
+    let stack = &platform_stack;
     let chart_name = sanitize_chart_name(&options.chart_name);
     let analysis = ChartAnalysis::from_stack(stack, options.registry)?;
 

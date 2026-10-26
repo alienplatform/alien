@@ -431,6 +431,8 @@ impl PreflightRunner {
         let config = &effective_config;
 
         let platform = stack_state.platform;
+        let mut stack = stack;
+        alien_core::remove_off_platform_gated_resources(&mut stack, platform);
         info!(
             "Running deployment-time preflights for platform {:?}",
             platform
@@ -605,15 +607,20 @@ fn without_declined_live_resources(
     platform: Platform,
 ) -> Result<Stack> {
     let (answers, still_frozen_gating) = alien_core::surviving_frozen_gate_answers(stack);
-    let declined =
-        alien_core::declined_live_resources(stack, input_values, &answers, &still_frozen_gating)
-            .map_err(|message| {
-                AlienError::new(ErrorData::DeploymentPrerequisiteCheckFailed {
-                    check_name: "Every runtime gate resolves to a boolean".to_string(),
-                    message,
-                    platform: Some(platform.to_string()),
-                })
-            })?;
+    let declined = alien_core::declined_live_resources(
+        stack,
+        input_values,
+        &answers,
+        &still_frozen_gating,
+        platform,
+    )
+    .map_err(|message| {
+        AlienError::new(ErrorData::DeploymentPrerequisiteCheckFailed {
+            check_name: "Every runtime gate resolves to a boolean".to_string(),
+            message,
+            platform: Some(platform.to_string()),
+        })
+    })?;
     let mut projected = stack.clone();
     alien_core::remove_declined_resources(&mut projected, &declined);
     Ok(projected)

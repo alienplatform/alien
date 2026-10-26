@@ -2,8 +2,8 @@
 //! strip declined resources and the preflight runner that hashes the stack they will keep.
 
 use crate::{
-    ownership_policy_for_resource_type, GateAnswers, ResourceEntry, Stack, StackInputDefaultValue,
-    StackInputDefinition,
+    ownership_policy_for_resource_type, GateAnswers, Platform, ResourceEntry, Stack,
+    StackInputDefaultValue, StackInputDefinition,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -57,6 +57,33 @@ pub fn live_gated(stack: &Stack) -> impl Iterator<Item = (&String, &str)> {
         .filter_map(|(resource_id, entry)| Some((resource_id, live_gate_of(entry)?)))
 }
 
+/// Whether a gate's input is excluded from the deployment platform.
+pub fn gate_is_off_platform(
+    inputs: &[StackInputDefinition],
+    input_id: &str,
+    platform: Platform,
+) -> bool {
+    inputs
+        .iter()
+        .find(|input| input.id == input_id)
+        .and_then(|input| input.platforms.as_ref())
+        .is_some_and(|platforms| !platforms.contains(&platform))
+}
+
+/// Remove resources whose gate input is unavailable on this platform, including their links
+/// and grants. Unlike a mutable live decline, these resources can never be enabled here.
+pub fn remove_off_platform_gated_resources(stack: &mut Stack, platform: Platform) {
+    let declined = stack
+        .resources()
+        .filter_map(|(id, entry)| {
+            let input_id = entry.enabled_when.as_deref()?;
+            gate_is_off_platform(&stack.inputs, input_id, platform).then(|| id.clone())
+        })
+        .collect::<Vec<_>>();
+    remove_declined_resources(stack, &declined);
+}
+
+/// Inputs scoped away from the platform always resolve false, even with a provided value.
 /// The deployer's answer for a live gate: the provided value, else the
 /// input's declared boolean default. The error is the reason, for the caller to wrap.
 pub fn gate_resolves_true(
@@ -64,7 +91,11 @@ pub fn gate_resolves_true(
     input_id: &str,
     input_values: &HashMap<String, serde_json::Value>,
     resource_id: &str,
+    platform: Platform,
 ) -> Result<bool, String> {
+    if gate_is_off_platform(inputs, input_id, platform) {
+        return Ok(false);
+    }
     if let Some(value) = input_values.get(input_id) {
         return gate_value_as_bool(value).ok_or_else(|| {
             format!(
@@ -98,7 +129,11 @@ pub fn live_gate_resolves_true(
     persisted_gate_answers: &GateAnswers,
     still_frozen_gating: &HashSet<String>,
     resource_id: &str,
+    platform: Platform,
 ) -> Result<(bool, &'static str), String> {
+    if gate_is_off_platform(inputs, input_id, platform) {
+        return Ok((false, "platform"));
+    }
     // The recorded answer outranks the default only while the input actually
     // gates a frozen resource — that is what dominance means. Once a release
     // frees the input, its recorded answer is history, and a live gate
@@ -108,7 +143,7 @@ pub fn live_gate_resolves_true(
     // precedence this function did not apply.
     if input_values.contains_key(input_id) {
         return Ok((
-            gate_resolves_true(inputs, input_id, input_values, resource_id)?,
+            gate_resolves_true(inputs, input_id, input_values, resource_id, platform)?,
             "provided",
         ));
     }
@@ -118,7 +153,7 @@ pub fn live_gate_resolves_true(
         }
     }
     Ok((
-        gate_resolves_true(inputs, input_id, input_values, resource_id)?,
+        gate_resolves_true(inputs, input_id, input_values, resource_id, platform)?,
         "default",
     ))
 }
@@ -129,6 +164,7 @@ pub fn declined_live_resources(
     input_values: &HashMap<String, serde_json::Value>,
     persisted_gate_answers: &GateAnswers,
     still_frozen_gating: &HashSet<String>,
+    platform: Platform,
 ) -> Result<Vec<String>, String> {
     let mut declined = Vec::new();
     for (resource_id, input_id) in live_gated(stack) {
@@ -139,6 +175,7 @@ pub fn declined_live_resources(
             persisted_gate_answers,
             still_frozen_gating,
             resource_id,
+            platform,
         )?;
         if !accepted {
             declined.push(resource_id.clone());
@@ -241,5 +278,37 @@ fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
         crate::permissions::ManagementPermissions::Extend(profile)
         | crate::permissions::ManagementPermissions::Override(profile) => scrub(profile),
         crate::permissions::ManagementPermissions::Auto => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_scope_overrides_defaults_provided_and_recorded_answers() {
+        for platforms in [None, Some(vec![Platform::Aws]), Some(vec![])] {
+            for default in [false, true] {
+                let mut input = StackInputDefinition::deployer_boolean("managedBucket", "Managed bucket", "Create a bucket", Some(default));
+                input.platforms = platforms.clone();
+                for platform in [Platform::Aws, Platform::Machines, Platform::Local, Platform::Kubernetes] {
+                    for provided in [None, Some(false), Some(true)] {
+                        let values = provided.map(|value| (input.id.clone(), serde_json::json!(value))).into_iter().collect();
+                        let excluded = platforms.as_ref().is_some_and(|scope| !scope.contains(&platform));
+                        let expected = !excluded && provided.unwrap_or(default);
+                        assert_eq!(gate_resolves_true(std::slice::from_ref(&input), &input.id, &values, "data", platform).unwrap(), expected);
+                        for recorded in [false, true] {
+                            let answers = GateAnswers::from([(input.id.clone(), recorded)]);
+                            for frozen in [HashSet::new(), HashSet::from([input.id.clone()])] {
+                                let expected = !excluded && provided.unwrap_or(if frozen.is_empty() { default } else { recorded });
+                                let (actual, source) = live_gate_resolves_true(std::slice::from_ref(&input), &input.id, &values, &answers, &frozen, "data", platform).unwrap();
+                                assert_eq!(actual, expected);
+                                if excluded { assert_eq!(source, "platform"); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

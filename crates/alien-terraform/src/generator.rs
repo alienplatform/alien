@@ -258,6 +258,12 @@ fn generate_terraform_module_internal(
     requires_remote_operator_collector_token: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<ModuleFiles> {
+    let mut platform_stack = stack.clone();
+    alien_core::remove_off_platform_gated_resources(
+        &mut platform_stack,
+        target.deployment_platform(),
+    );
+    let stack = &platform_stack;
     let labels = resource_labels(stack)?;
     let platform = target.cloud_platform();
     let mut stack_settings = options.stack_settings.clone();

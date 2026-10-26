@@ -168,6 +168,8 @@ pub async fn handle_update_pending(
         .as_ref()
         .map(|metadata| metadata.persisted_gate_answers.clone())
         .unwrap_or_default();
+    let mut target_stack = target_stack;
+    alien_core::remove_off_platform_gated_resources(&mut target_stack, current.platform);
     let frozen_gating = crate::pending::frozen_gating_inputs(&target_stack);
     crate::pending::enforce_frozen_gate_fixity(
         &persisted_gate_answers,
@@ -245,12 +247,14 @@ pub async fn handle_update_pending(
         &persisted_gate_answers,
         &frozen_gating,
         target_release_id,
+        current.platform,
     );
     let mutated_stack = crate::pending::strip_declined_live_resources(
         mutated_stack,
         &config.input_values,
         &persisted_gate_answers,
         &frozen_gating,
+        current.platform,
     )?;
 
     if current.runtime_metadata.as_ref().is_some_and(|metadata| {

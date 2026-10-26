@@ -272,6 +272,12 @@ pub fn generate_cloudformation_template_with_profile(
     options: CloudFormationOptions<'_>,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<CfTemplate> {
+    let mut platform_stack = stack.clone();
+    alien_core::remove_off_platform_gated_resources(
+        &mut platform_stack,
+        options.target.deployment_platform(),
+    );
+    let stack = &platform_stack;
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
     // A Kubernetes target runs sandboxes as pods behind the chart's NetworkPolicy.

@@ -276,11 +276,14 @@ pub async fn stack_import(
             &delivered_resource_ids
         },
         &req.input_values,
+        req.platform,
     ) {
         Ok(answers) => answers,
         Err(e) => return e.into_response(),
     };
-    let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack);
+    let mut source_stack = source_stack.clone();
+    alien_core::remove_off_platform_gated_resources(&mut source_stack, req.platform);
+    let frozen_gating = alien_deployment::frozen_gating_inputs(&source_stack);
     if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
         &imported_gate_answers,
         &frozen_gating,
@@ -324,6 +327,7 @@ pub async fn stack_import(
         &req.input_values,
         &imported_gate_answers,
         &frozen_gating,
+        req.platform,
     ) {
         Ok(stack) => stack,
         Err(e) => return e.into_response(),
