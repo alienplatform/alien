@@ -14,6 +14,34 @@ use k8s_openapi::{
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 
+pub(crate) const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
+
+pub(crate) fn deployment_initial_replicas_ready(deployment: &Deployment) -> bool {
+    let desired = deployment
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.replicas)
+        .unwrap_or(1);
+    deployment_has_ready_replicas(deployment)
+        && deployment
+            .status
+            .as_ref()
+            .is_some_and(|status| status.ready_replicas.unwrap_or(0) >= desired)
+}
+
+pub(crate) fn statefulset_initial_replicas_ready(statefulset: &StatefulSet) -> bool {
+    let desired = statefulset
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.replicas)
+        .unwrap_or(1);
+    statefulset_has_ready_replicas(statefulset)
+        && statefulset
+            .status
+            .as_ref()
+            .is_some_and(|status| status.ready_replicas.unwrap_or(0) >= desired)
+}
+
 /// Kubernetes omits replica counters when their value is zero.
 pub(crate) fn deployment_has_ready_replicas(deployment: &Deployment) -> bool {
     let Some(status) = &deployment.status else {

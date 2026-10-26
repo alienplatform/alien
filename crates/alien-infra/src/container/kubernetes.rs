@@ -17,9 +17,10 @@ use crate::kubernetes_public_endpoint::{
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    deployment_has_ready_replicas, deployment_rollout_complete, emit_kubernetes_workload_heartbeat,
-    label_selector, statefulset_has_ready_replicas, KubernetesWorkload, KubernetesWorkloadDataKind,
-    KubernetesWorkloadHeartbeatInput,
+    deployment_has_ready_replicas, deployment_initial_replicas_ready, deployment_rollout_complete,
+    emit_kubernetes_workload_heartbeat, label_selector, statefulset_has_ready_replicas,
+    statefulset_initial_replicas_ready, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -48,7 +49,6 @@ use crate::core::applicable_secret_environment_variables;
 // especially when the registry endpoint is a remote proxy. Treat that as a
 // legitimate provisioning phase; terminal pull failures still surface through
 // workload heartbeats and events.
-const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
 
 async fn create_registry_pull_secret(
     secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
@@ -531,7 +531,7 @@ impl KubernetesContainerController {
                         (
                             status.ready_replicas,
                             Some(status.replicas),
-                            statefulset_has_ready_replicas(&statefulset),
+                            statefulset_initial_replicas_ready(&statefulset),
                         )
                     } else {
                         (None, None, false)
@@ -563,7 +563,7 @@ impl KubernetesContainerController {
                         (
                             status.ready_replicas,
                             status.replicas,
-                            deployment_has_ready_replicas(&deployment),
+                            deployment_initial_replicas_ready(&deployment),
                         )
                     } else {
                         (None, None, false)
@@ -2740,6 +2740,50 @@ impl KubernetesContainerController {
 mod tests {
     use super::*;
     use k8s_openapi::api::apps::v1::{DeploymentStatus, StatefulSetStatus};
+
+    #[tokio::test]
+    async fn initial_workload_waits_for_all_requested_replicas() {
+        for stateful in [false, true] {
+            for ready in [1, 3] {
+                let server = httpmock::MockServer::start_async().await;
+                let kind = if stateful {
+                    "StatefulSet"
+                } else {
+                    "Deployment"
+                };
+                let collection = if stateful {
+                    "statefulsets"
+                } else {
+                    "deployments"
+                };
+                server.mock(|when, then| {
+                    when.method(httpmock::Method::GET).path(format!("/apis/apps/v1/namespaces/test-ns/{collection}/web"));
+                    then.status(200).json_body(serde_json::json!({
+                        "apiVersion":"apps/v1", "kind":kind,
+                        "metadata":{"name":"web", "generation":1},
+                        "spec":{"replicas":3,"selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[]}}},
+                        "status":{"replicas":ready,"readyReplicas":ready,"observedGeneration":1}
+                    }));
+                });
+                let mut config = manifest_test_container(&[], stateful);
+                config.replicas = Some(3);
+                let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+                let mut ctx = harness.ctx();
+                point_at(&mut ctx, &server);
+                let mut controller = manifest_test_controller();
+                controller.is_stateful = stateful;
+                let action = controller
+                    .waiting_for_workload(&ctx)
+                    .await
+                    .expect("workload poll");
+                assert_eq!(
+                    matches!(action, KubernetesContainerHandlerAction::Continue { .. }),
+                    ready == 3,
+                    "{kind}, ready={ready}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn deployment_update_waits_for_the_new_revision_to_be_available() {
