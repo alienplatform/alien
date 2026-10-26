@@ -1244,7 +1244,8 @@ impl DeploymentStore for SqliteDeploymentStore {
             return Ok(());
         }
 
-        // Patch only the intent, and fence both active actors and concurrent requests.
+        // Patch only the intent and fence concurrent requests. An in-flight step
+        // keeps its lease; reconcile preserves delete status and the recorded policy.
         // Retained checkpoints remain available for a separate explicit erase.
         let policy_json = match policy {
             alien_core::DeletionPolicy::Retain => "retain",
@@ -1279,11 +1280,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .and_where(Expr::col(Deployments::Status).eq(deployment.status))
-            .and_where(Expr::col(Deployments::LockedBy).is_null())
             .to_string(SqliteQueryBuilder);
         if self.db.execute_returning_rows_affected(&sql).await? != 1 {
             return Err(ErrorData::bad_request(
-                "Deployment is executing or changed; retry deletion after it checkpoints",
+                "Deployment changed; retry deletion against its current state",
             )
             .into_generic());
         }

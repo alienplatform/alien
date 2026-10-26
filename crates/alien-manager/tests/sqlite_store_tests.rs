@@ -1487,28 +1487,7 @@ async fn stale_reconcile_preserves_runtime_delete_status_and_latest_stack_state(
         store
             .set_delete_pending(&test_subject(), &deployment.id)
             .await
-            .expect_err("an active actor must checkpoint and release before deletion");
-        store
-            .release(&test_subject(), &deployment.id, &session, None)
-            .await
-            .unwrap();
-        store
-            .set_delete_pending(&test_subject(), &deployment.id)
-            .await
-            .unwrap();
-        let acquired = store
-            .acquire(
-                &test_subject(),
-                &session,
-                &DeploymentFilter {
-                    deployment_ids: Some(vec![deployment.id.clone()]),
-                    ..Default::default()
-                },
-                1,
-            )
-            .await
-            .unwrap();
-        assert_eq!(acquired.len(), 1);
+            .expect("delete intent is accepted while the runtime step owns its lease");
         if delete_status != DeploymentStatus::DeletePending {
             store
                 .reconcile(
@@ -2714,31 +2693,6 @@ async fn deletion_policy_is_fenced_and_preserves_recovery_metadata() {
     let dep = create_test_deployment(&store, &group, "policy", Platform::Aws).await;
     db.conn().lock().await.execute(&format!("UPDATE deployments SET status = 'running', locked_by = 'active', runtime_metadata = '{{\"vaultCredentialsRevoked\":true}}' WHERE id = '{}'", dep.id), ()).await.unwrap();
     store
-        .set_delete_pending_with_policy(&test_subject(), &dep.id, alien_core::DeletionPolicy::Erase)
-        .await
-        .expect_err("active execution must finish before intent changes");
-    assert_eq!(
-        store
-            .get_deployment(&test_subject(), &dep.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
-        "running"
-    );
-    db.conn()
-        .lock()
-        .await
-        .execute(
-            &format!(
-                "UPDATE deployments SET locked_by = NULL WHERE id = '{}'",
-                dep.id
-            ),
-            (),
-        )
-        .await
-        .unwrap();
-    store
         .set_delete_pending(&test_subject(), &dep.id)
         .await
         .unwrap();
@@ -3347,6 +3301,42 @@ mod retention_handoff_tests {
             ResourceStatus::Deleted
         );
     }
+}
+
+#[tokio::test]
+async fn deletion_is_accepted_while_a_runtime_step_holds_the_lease() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group, "locked-delete", Platform::Aws).await;
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET status = 'running', locked_by = 'active' WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    store
+        .set_delete_pending(&test_subject(), &dep.id)
+        .await
+        .unwrap();
+    let saved = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.status, "delete-pending");
+    assert_eq!(saved.locked_by.as_deref(), Some("active"));
+    assert_eq!(
+        saved.deployment_protocol_version,
+        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+    );
+    assert_eq!(
+        saved.runtime_metadata.unwrap().deletion_policy,
+        alien_core::DeletionPolicy::Retain
+    );
 }
 
 #[tokio::test]
