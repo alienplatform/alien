@@ -518,7 +518,7 @@ mod environment_tests {
         inputs[1].when.as_mut().unwrap().equals = true;
         assert!(!inputs[1].applies(&inputs, &values, Platform::Kubernetes));
         inputs[0].platforms = Some(vec![]);
-        assert!(!inputs[0].applies_to(Platform::Aws));
+        assert!(inputs[0].applies_to(Platform::Aws));
         assert!(!inputs[1].applies(&inputs, &values, Platform::Aws));
         inputs[1].when.as_mut().unwrap().equals = false;
         assert!(inputs[1].applies(&inputs, &values, Platform::Aws));
@@ -564,6 +564,17 @@ mod environment_tests {
             assert_eq!(variables[0].name, "STORED");
             assert_eq!(variables[0].value, value);
         }
+    }
+
+    #[test]
+    fn legacy_empty_platform_list_still_maps_environment() {
+        let mut definition = input("region", StackInputKind::String, "REGION");
+        definition.platforms = Some(vec![]);
+        let values = HashMap::from([("region".into(), serde_json::json!("us-east-1"))]);
+        let env = resolve_stack_input_environment_variables(&[definition], &values, Platform::Aws)
+            .unwrap();
+        assert_eq!(env.len(), 1);
+        assert_eq!(env[0].value, "us-east-1");
     }
 
     #[test]

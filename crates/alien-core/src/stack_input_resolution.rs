@@ -18,8 +18,33 @@ pub fn resolve_stack_input_values(
     values: &HashMap<String, Value>,
     platform: Platform,
 ) -> Result<HashMap<String, Value>> {
+    resolve_selected_stack_input_values(inputs, inputs.iter(), values, platform)
+}
+
+/// Validate registration answers. Developer-only inputs are configured separately,
+/// so only validate those when an answer was actually supplied.
+pub fn validate_stack_import_input_values(
+    inputs: &[StackInputDefinition],
+    values: &HashMap<String, Value>,
+    platform: Platform,
+) -> Result<()> {
+    let selected = inputs.iter().filter(|input| {
+        input
+            .provided_by
+            .contains(&crate::StackInputProvider::Deployer)
+            || values.get(&input.id).is_some_and(|value| !value.is_null())
+    });
+    resolve_selected_stack_input_values(inputs, selected, values, platform).map(|_| ())
+}
+
+fn resolve_selected_stack_input_values<'a>(
+    inputs: &[StackInputDefinition],
+    selected: impl Iterator<Item = &'a StackInputDefinition>,
+    values: &HashMap<String, Value>,
+    platform: Platform,
+) -> Result<HashMap<String, Value>> {
     let mut resolved = HashMap::new();
-    for input in inputs {
+    for input in selected {
         if !input.applies(inputs, values, platform) {
             continue;
         }
@@ -41,6 +66,11 @@ pub fn resolve_stack_input_values(
             }
             continue;
         };
+        if !input.required
+            && (value.as_str() == Some("") || value.as_array().is_some_and(Vec::is_empty))
+        {
+            continue;
+        }
         let value = normalize(input, value)?;
         if input.required
             && (value.as_str() == Some("") || value.as_array().is_some_and(Vec::is_empty))
@@ -177,6 +207,24 @@ mod tests {
             {"id":"bucket", "kind":"string", "required":true, "providedBy":["deployer"], "label":"Bucket", "description":"Snapshot bucket", "when":{"input":"enabled","equals":true}, "validation":{"minLength":3}},
             {"id":"enabled", "kind":"boolean", "required":true, "providedBy":["deployer"], "label":"Enabled", "description":"Enable snapshots", "default":{"type":"boolean","value":true}}
         ])).unwrap()
+    }
+
+    #[test]
+    fn optional_blank_values_are_unanswered_before_constraints() {
+        let inputs: Vec<StackInputDefinition> = serde_json::from_value(serde_json::json!([
+            {"id":"url", "kind":"string", "providedBy":["deployer"], "required":false,
+             "label":"URL", "description":"Optional URL", "validation":{"format":"url"}},
+            {"id":"items", "kind":"stringList", "providedBy":["deployer"], "required":false,
+             "label":"Items", "description":"Optional items", "validation":{"minItems":1}}
+        ]))
+        .unwrap();
+        let values = HashMap::from([
+            ("url".into(), serde_json::json!("")),
+            ("items".into(), serde_json::json!([])),
+        ]);
+        assert!(resolve_stack_input_values(&inputs, &values, Platform::Aws)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

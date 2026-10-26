@@ -321,7 +321,8 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
                 alien_core::Platform::Aws,
             )
             .unwrap();
-            assert_eq!(resolved.get(id), (!expected.is_null()).then_some(&expected));
+            let answered = !expected.is_null() && !expected.as_array().is_some_and(Vec::is_empty);
+            assert_eq!(resolved.get(id), answered.then_some(&expected));
         }
     }
     for (id, parameter, answer) in [
@@ -363,7 +364,10 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
             )
             .unwrap();
             if id == "optionalString" {
-                assert_eq!(resolved[id], serde_json::json!(raw));
+                assert_eq!(
+                    resolved.get(id),
+                    (!raw.is_empty()).then_some(&serde_json::json!(raw))
+                );
             }
         }
     }

@@ -103,6 +103,7 @@ pub async fn stack_import(
 
     // Bootstrap may create in a group. A deployment credential may only
     // re-register its own existing setup; it must never fall through to create.
+    let mut registration_values = HashMap::new();
     let deployment_group_id = match &subject.scope {
         Scope::DeploymentGroup {
             deployment_group_id,
@@ -124,6 +125,7 @@ pub async fn stack_import(
                 return ErrorData::forbidden("Cannot register setup for another deployment")
                     .into_response();
             }
+            registration_values = existing.input_values;
             existing.deployment_group_id.clone()
         }
         _ => {
@@ -274,16 +276,34 @@ pub async fn stack_import(
     ) {
         return e.into_response();
     }
-    let dg = match state
-        .deployment_store
-        .get_deployment_group(&subject, &deployment_group_id)
-        .await
-    {
-        Ok(Some(dg)) => dg,
-        Ok(None) => return ErrorData::not_found_group(&deployment_group_id).into_response(),
-        Err(error) => return error.into_response(),
+    // Deployment credentials cannot read group configuration. Their saved answers
+    // provide the registration context; bootstrap credentials can use group defaults.
+    let needs_group_values = !matches!(subject.scope, Scope::Deployment { .. })
+        && stack_inputs.iter().any(|input| {
+            input
+                .provided_by
+                .contains(&alien_core::StackInputProvider::Deployer)
+                && input.kind != alien_core::StackInputKind::Secret
+                && input.applies_to(req.platform)
+                && !req.input_values.contains_key(&input.id)
+                && !imported_gate_answers.contains_key(&input.id)
+        });
+    let dg = if needs_group_values {
+        match state
+            .deployment_store
+            .get_deployment_group(&subject, &deployment_group_id)
+            .await
+        {
+            Ok(Some(dg)) => Some(dg),
+            Ok(None) => return ErrorData::not_found_group(&deployment_group_id).into_response(),
+            Err(error) => return error.into_response(),
+        }
+    } else {
+        None
     };
-    let mut validation_values = dg.setup.input_values.clone();
+    let mut validation_values = dg
+        .as_ref()
+        .map_or(registration_values, |dg| dg.setup.input_values.clone());
     for (id, value) in &imported_gate_answers {
         validation_values.insert(id.clone(), serde_json::Value::Bool(*value));
     }
@@ -319,9 +339,11 @@ pub async fn stack_import(
         })
         .into_response();
     }
-    if let Err(error) =
-        alien_core::resolve_stack_input_values(&stack_inputs, &validation_values, req.platform)
-    {
+    if let Err(error) = alien_core::validate_stack_import_input_values(
+        &stack_inputs,
+        &validation_values,
+        req.platform,
+    ) {
         return error.into_response();
     }
     // The strips run BEFORE the mutations, exactly like the deployment
@@ -678,6 +700,19 @@ pub async fn stack_import(
             .into_response();
     }
     let runtime_metadata = import_runtime_metadata(&prepared_stack, imported_gate_answers);
+
+    let dg = match dg {
+        Some(dg) => dg,
+        None => match state
+            .deployment_store
+            .get_deployment_group(&subject, &deployment_group_id)
+            .await
+        {
+            Ok(Some(dg)) => dg,
+            Ok(None) => return ErrorData::not_found_group(&deployment_group_id).into_response(),
+            Err(error) => return error.into_response(),
+        },
+    };
 
     let create_ctx = crate::auth::DeploymentCreateCtx {
         workspace_id: &dg.workspace_id,

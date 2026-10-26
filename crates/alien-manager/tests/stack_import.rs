@@ -3622,3 +3622,62 @@ async fn import_preserves_answers_controlled_by_group_inputs() {
         );
     }
 }
+
+#[tokio::test]
+async fn import_requires_only_deployer_answers_and_allows_deployment_token_replay() {
+    for conditional in [false, true] {
+        let mut stack = stack_with_storage_and_generated_secret("assets");
+        stack.inputs = serde_json::from_value(serde_json::json!([
+        {"id":"optionalUrl", "kind":"string", "providedBy":["deployer"], "required":false,
+         "label":"URL", "description":"Optional URL", "validation":{"format":"url"}},
+        {"id":"optionalItems", "kind":"stringList", "providedBy":["deployer"], "required":false,
+         "label":"Items", "description":"Optional items", "validation":{"minItems":1}},
+        {"id":"developerValue", "kind":"string", "providedBy":["developer"], "required":true,
+         "label":"Developer value", "description":"Configured separately", "validation":{"minLength":3}},
+        {"id":"developerSecret", "kind":"secret", "providedBy":["developer"], "required":true,
+         "label":"Developer secret", "description":"Configured separately"},
+        {"id":"endpoint", "kind":"string", "providedBy":["deployer"], "required":true,
+         "label":"Endpoint", "description":"Service endpoint", "when":{"input":"enabled","equals":true}},
+        {"id":"enabled", "kind":"boolean", "providedBy":["deployer"], "required":true,
+         "label":"Enabled", "description":"Enable service", "default":{"type":"boolean","value":true}}
+    ])).unwrap();
+        if !conditional {
+            for input in &mut stack.inputs {
+                input.when = None;
+            }
+        }
+        let fixture =
+            make_fixture_with_group_inputs(Platform::Aws, Some(stack), HashMap::new()).await;
+        let mut body = aws_s3_import_request(
+            "developer-input-import",
+            "us-east-1",
+            "assets",
+            "example-imports",
+        );
+        body.input_values
+            .insert("optionalUrl".into(), serde_json::json!(""));
+        body.input_values
+            .insert("optionalItems".into(), serde_json::json!([]));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+        assert!(json.to_string().contains("endpoint"), "{json:#}");
+        body.input_values
+            .insert("endpoint".into(), serde_json::json!("https://example.test"));
+        body.input_values
+            .insert("enabled".into(), serde_json::json!(false));
+        body.input_values
+            .insert("developerValue".into(), serde_json::json!("x"));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+        assert!(json.to_string().contains("developerValue"), "{json:#}");
+        body.input_values.remove("developerValue");
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::CREATED, "{json:#}");
+        let response: StackImportResponse = serde_json::from_value(json).unwrap();
+        let (status, json) =
+            post_import(&fixture, response.deployment_token.as_deref(), &body).await;
+        assert_eq!(status, StatusCode::OK, "{json:#}");
+        let replay: StackImportResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(replay.deployment_id, response.deployment_id);
+    }
+}
