@@ -12,7 +12,8 @@ use alien_core::{
     DeploymentStatus, HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
     HeartbeatIssueSeverity, KubernetesClientConfig, KubernetesContainerHeartbeatData,
     KubernetesWorkloadKind, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceStatus, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
+    ResourceHeartbeatData, ResourceStatus, StackResourceState, WorkloadHeartbeatStatus,
+    WorkloadReplicaStatus,
 };
 use alien_error::Context;
 use alien_k8s_clients::{
@@ -57,33 +58,7 @@ async fn collect_heartbeats(state: &OperatorState) -> Result<()> {
         .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
     let mut heartbeats = Vec::new();
     for (resource_id, resource) in &stack.resources {
-        if resource.resource_type != Container::RESOURCE_TYPE.as_ref()
-            || !matches!(
-                resource.status,
-                ResourceStatus::Running | ResourceStatus::RefreshFailed
-            )
-            || resource
-                .controller_platform
-                .is_some_and(|platform| platform != Platform::Kubernetes)
-        {
-            continue;
-        }
-        let Some(internal) = resource.internal_state.as_ref() else {
-            continue;
-        };
-        if internal.get("type").and_then(|value| value.as_str())
-            != Some("KubernetesContainerController")
-        {
-            continue;
-        }
-        let (Some(namespace), Some(name), Some(is_stateful)) = (
-            internal.get("namespace").and_then(|value| value.as_str()),
-            internal
-                .get("workloadName")
-                .and_then(|value| value.as_str()),
-            internal.get("isStateful").and_then(|value| value.as_bool()),
-        ) else {
-            warn!(%resource_id, "Kubernetes workload identity is incomplete");
+        let Some((namespace, name, is_stateful)) = workload_identity(resource) else {
             continue;
         };
         let kind = if is_stateful {
@@ -123,7 +98,7 @@ async fn collect_heartbeats(state: &OperatorState) -> Result<()> {
         return Ok(());
     }
     // A release may arrive while Kubernetes is being read. Compare and merge
-    // under the DB lock so a new target or deployment-step heartbeat wins.
+    // under the DB lock so replaced workloads and newer observations win.
     if !state
         .db
         .merge_pending_heartbeats_if_state_matches(&deployment, &heartbeats)
@@ -134,14 +109,40 @@ async fn collect_heartbeats(state: &OperatorState) -> Result<()> {
     Ok(())
 }
 
-fn is_settled(state: &DeploymentState) -> bool {
+pub(crate) fn is_settled(state: &DeploymentState) -> bool {
     state.platform == Platform::Kubernetes
         && matches!(
             state.status,
             DeploymentStatus::Running | DeploymentStatus::RefreshFailed
         )
-        && state.target_release.is_none()
+        && state.target_release.as_ref().is_none_or(|target| {
+            target.release_id.is_some() && Some(target) == state.current_release.as_ref()
+        })
         && state.current_release.is_some()
+}
+
+/// Identity used by the passive reader, excluding health-check bookkeeping.
+pub(crate) fn workload_identity(resource: &StackResourceState) -> Option<(&str, &str, bool)> {
+    if resource.resource_type != Container::RESOURCE_TYPE.as_ref()
+        || !matches!(
+            resource.status,
+            ResourceStatus::Running | ResourceStatus::RefreshFailed
+        )
+        || resource
+            .controller_platform
+            .is_some_and(|platform| platform != Platform::Kubernetes)
+    {
+        return None;
+    }
+    let internal = resource.internal_state.as_ref()?;
+    if internal.get("type")?.as_str()? != "KubernetesContainerController" {
+        return None;
+    }
+    Some((
+        internal.get("namespace")?.as_str()?,
+        internal.get("workloadName")?.as_str()?,
+        internal.get("isStateful")?.as_bool()?,
+    ))
 }
 
 async fn read_container(
@@ -295,4 +296,32 @@ fn unknown_container(
             events: vec![],
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn passive_collection_continues_during_same_release_maintenance() {
+        let release = alien_core::ReleaseInfo {
+            release_id: Some("rel_1".to_string()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("site".to_string()).build(),
+        };
+        let mut state: DeploymentState = serde_json::from_value(serde_json::json!({
+            "platform": "kubernetes", "status": "running", "protocolVersion": 1,
+            "currentRelease": release, "targetRelease": release,
+        }))
+        .unwrap();
+        assert!(is_settled(&state));
+        state.status = DeploymentStatus::RefreshFailed;
+        assert!(is_settled(&state));
+        state.target_release.as_mut().unwrap().release_id = Some("rel_2".to_string());
+        assert!(!is_settled(&state));
+        state.target_release = None;
+        state.status = DeploymentStatus::Deleting;
+        assert!(!is_settled(&state));
+    }
 }
