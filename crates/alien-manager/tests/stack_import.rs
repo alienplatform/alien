@@ -3647,7 +3647,8 @@ async fn import_requires_only_deployer_answers_and_allows_deployment_token_repla
             }
         }
         let fixture =
-            make_fixture_with_group_inputs(Platform::Aws, Some(stack), HashMap::new()).await;
+            make_fixture_with_group_inputs(Platform::Aws, Some(stack.clone()), HashMap::new())
+                .await;
         let mut body = aws_s3_import_request(
             "developer-input-import",
             "us-east-1",
@@ -3664,7 +3665,7 @@ async fn import_requires_only_deployer_answers_and_allows_deployment_token_repla
         body.input_values
             .insert("endpoint".into(), serde_json::json!("https://example.test"));
         body.input_values
-            .insert("enabled".into(), serde_json::json!(false));
+            .insert("enabled".into(), serde_json::json!(true));
         body.input_values
             .insert("developerValue".into(), serde_json::json!("x"));
         let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
@@ -3679,5 +3680,117 @@ async fn import_requires_only_deployer_answers_and_allows_deployment_token_repla
         assert_eq!(status, StatusCode::OK, "{json:#}");
         let replay: StackImportResponse = serde_json::from_value(json).unwrap();
         assert_eq!(replay.deployment_id, response.deployment_id);
+        let imported = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &response.deployment_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        fixture
+            .deployment_store
+            .reconcile(
+                &alien_manager::auth::Subject::system(),
+                ReconcileData {
+                    deployment_id: imported.id,
+                    session: "test-reconcile".into(),
+                    execution_claim: None,
+                    state: DeploymentState {
+                        status: DeploymentStatus::Running,
+                        platform: imported.platform,
+                        current_release: Some(ReleaseInfo {
+                            release_id: fixture.release_id.clone(),
+                            version: None,
+                            description: None,
+                            stack,
+                        }),
+                        target_release: None,
+                        stack_state: imported.stack_state,
+                        error: None,
+                        environment_info: imported.environment_info,
+                        runtime_metadata: imported.runtime_metadata,
+                        retry_requested: false,
+                        protocol_version: imported.deployment_protocol_version,
+                    },
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                    capabilities: vec![],
+                    operator_version: None,
+                    operations_report: None,
+                },
+            )
+            .await
+            .unwrap();
+        body.input_values
+            .insert("enabled".into(), serde_json::json!(true));
+        body.input_values.remove("endpoint");
+        let (status, json) =
+            post_import(&fixture, response.deployment_token.as_deref(), &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+        assert!(json.to_string().contains("endpoint"), "{json:#}");
+        let stored = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &response.deployment_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.input_values["endpoint"], "https://example.test");
+    }
+}
+
+#[tokio::test]
+async fn import_validates_developer_answers_controlled_by_group_inputs() {
+    for required in [false, true] {
+        let mut stack = stack_with_storage_and_generated_secret("assets");
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id":"endpoint", "kind":"string", "providedBy":["developer"], "required":required,
+             "label":"Endpoint", "description":"Service endpoint", "validation":{"format":"url"},
+             "when":{"input":"enabled","equals":true}},
+            {"id":"enabled", "kind":"boolean", "providedBy":["developer"], "required":true,
+             "label":"Enabled", "description":"Enable service"}
+        ]))
+        .unwrap();
+        let fixture = make_fixture_with_group_inputs(
+            Platform::Aws,
+            Some(stack),
+            HashMap::from([("enabled".into(), serde_json::json!(true))]),
+        )
+        .await;
+        let mut body = aws_s3_import_request(
+            "conditional-import",
+            "us-east-1",
+            "assets",
+            "example-imports",
+        );
+        body.input_values
+            .insert("endpoint".into(), serde_json::json!("invalid"));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+        assert!(json.to_string().contains("endpoint"), "{json:#}");
+        body.input_values
+            .insert("endpoint".into(), serde_json::json!("https://example.test"));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::CREATED, "required={required}: {json:#}");
+        let response: StackImportResponse = serde_json::from_value(json).unwrap();
+        let deployment = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &response.deployment_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            deployment.input_values["endpoint"],
+            serde_json::json!("https://example.test")
+        );
     }
 }

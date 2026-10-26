@@ -66,9 +66,11 @@ fn resolve_selected_stack_input_values<'a>(
             }
             continue;
         };
-        if !input.required
-            && (value.as_str() == Some("") || value.as_array().is_some_and(Vec::is_empty))
-        {
+        let unanswered = match input.kind {
+            StackInputKind::StringList => value.as_array().is_some_and(Vec::is_empty),
+            _ => value.as_str() == Some(""),
+        };
+        if !input.required && unanswered {
             continue;
         }
         let value = normalize(input, value)?;
@@ -207,6 +209,21 @@ mod tests {
             {"id":"bucket", "kind":"string", "required":true, "providedBy":["deployer"], "label":"Bucket", "description":"Snapshot bucket", "when":{"input":"enabled","equals":true}, "validation":{"minLength":3}},
             {"id":"enabled", "kind":"boolean", "required":true, "providedBy":["deployer"], "label":"Enabled", "description":"Enable snapshots", "default":{"type":"boolean","value":true}}
         ])).unwrap()
+    }
+
+    #[test]
+    fn optional_blank_values_must_match_the_declared_kind() {
+        for kind in ["string", "integer", "number", "boolean", "enum", "secret"] {
+            let definition: StackInputDefinition = serde_json::from_value(serde_json::json!({
+                "id":"answer", "kind":kind, "providedBy":["deployer"], "required":false,
+                "label":"Answer", "description":"Optional answer"
+            }))
+            .unwrap();
+            let values = HashMap::from([("answer".into(), serde_json::json!([]))]);
+            let error =
+                resolve_stack_input_values(&[definition], &values, Platform::Aws).unwrap_err();
+            assert_eq!(error.code, "STACK_INPUT_INVALID", "{kind}");
+        }
     }
 
     #[test]

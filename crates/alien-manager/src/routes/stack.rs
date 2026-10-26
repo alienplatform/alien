@@ -103,7 +103,6 @@ pub async fn stack_import(
 
     // Bootstrap may create in a group. A deployment credential may only
     // re-register its own existing setup; it must never fall through to create.
-    let mut registration_values = HashMap::new();
     let deployment_group_id = match &subject.scope {
         Scope::DeploymentGroup {
             deployment_group_id,
@@ -125,7 +124,6 @@ pub async fn stack_import(
                 return ErrorData::forbidden("Cannot register setup for another deployment")
                     .into_response();
             }
-            registration_values = existing.input_values;
             existing.deployment_group_id.clone()
         }
         _ => {
@@ -276,13 +274,20 @@ pub async fn stack_import(
     ) {
         return e.into_response();
     }
-    // Deployment credentials cannot read group configuration. Their saved answers
-    // provide the registration context; bootstrap credentials can use group defaults.
+    // Deployment credentials cannot read group configuration. A re-registration
+    // replaces the input map, so saved answers cannot satisfy missing required values.
     let needs_group_values = !matches!(subject.scope, Scope::Deployment { .. })
         && stack_inputs.iter().any(|input| {
-            input
+            (input
                 .provided_by
                 .contains(&alien_core::StackInputProvider::Deployer)
+                || stack_inputs.iter().any(|dependent| {
+                    req.input_values.contains_key(&dependent.id)
+                        && dependent
+                            .when
+                            .as_ref()
+                            .is_some_and(|condition| condition.input == input.id)
+                }))
                 && input.kind != alien_core::StackInputKind::Secret
                 && input.applies_to(req.platform)
                 && !req.input_values.contains_key(&input.id)
@@ -303,7 +308,7 @@ pub async fn stack_import(
     };
     let mut validation_values = dg
         .as_ref()
-        .map_or(registration_values, |dg| dg.setup.input_values.clone());
+        .map_or_else(HashMap::new, |dg| dg.setup.input_values.clone());
     for (id, value) in &imported_gate_answers {
         validation_values.insert(id.clone(), serde_json::Value::Bool(*value));
     }
