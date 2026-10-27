@@ -58,8 +58,11 @@ async fn drive(
             {
                 return state;
             }
-            if let Some(delay) = result.suggested_delay_ms {
-                tokio::time::sleep(Duration::from_millis(delay)).await;
+            // The suggested delays wait out cloud propagation, and local storage is ready at
+            // once. Yielding instead keeps the timeout above able to end a loop that never
+            // converges.
+            if result.suggested_delay_ms.is_some() {
+                tokio::task::yield_now().await;
             }
         }
     })

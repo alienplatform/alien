@@ -223,13 +223,18 @@ async fn forwards_requests_with_the_callers_own_headers() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn streams_large_bodies_in_both_directions() {
     let h = harness().await;
-    const SIZE: usize = 256 * 1024 * 1024;
+    // Four times the tunnel's 16 MiB connection window and 32 times its 2 MiB stream window,
+    // so both windows run out and refill many times in each direction.
+    const SIZE: usize = 64 * 1024 * 1024;
 
-    // Upload: generated chunk by chunk, never held in memory as a whole.
+    // Upload and download carry the same bytes.
     let mut expected = Sha256::new();
     for i in 0..SIZE / CHUNK {
         expected.update(pattern(i, CHUNK));
     }
+    let expected = expected.finalize();
+
+    // Upload: generated chunk by chunk, never held in memory as a whole.
     let upload = StreamBody::new(stream::iter((0..SIZE / CHUNK).map(|i| {
         Ok::<_, alien_tunnel::manager::BoxError>(Frame::data(Bytes::from(pattern(i, CHUNK))))
     })))
@@ -243,7 +248,7 @@ async fn streams_large_bodies_in_both_directions() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
         String::from_utf8(body.to_vec()).unwrap(),
-        format!("{SIZE} {}", hex::encode(expected.finalize())),
+        format!("{SIZE} {}", hex::encode(expected)),
         "service must receive every byte in order"
     );
 
@@ -264,12 +269,8 @@ async fn streams_large_bodies_in_both_directions() {
         len += chunk.len();
         received.update(&chunk);
     }
-    let mut expected = Sha256::new();
-    for i in 0..SIZE / CHUNK {
-        expected.update(pattern(i, CHUNK));
-    }
     assert_eq!(len, SIZE);
-    assert_eq!(received.finalize(), expected.finalize());
+    assert_eq!(received.finalize(), expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

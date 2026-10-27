@@ -15,7 +15,8 @@ A package is affected when one of its files changed, or when it depends (normall
 dev-dependency or as a build-dependency) on an affected package. A change to any file
 outside the workspace packages selects every package ("full"), unless it is documentation:
 manifests, the lockfile, toolchain and CI config, Dockerfiles, scripts, examples and the
-TypeScript packages can all change what Rust tests see.
+TypeScript packages can all change what Rust tests see. Every selection also includes
+alien-client-core, so its `no-retry-delay` feature can be turned on.
 
 Packages under `examples/` and `tests/` are fixtures: other packages' tests read their files
 (for example the CLI checks every example's template.toml), so a change there selects "full".
@@ -27,7 +28,12 @@ import sys
 from pathlib import PurePosixPath
 
 # Features the full workspace run enables; each applies only if its package is selected.
-CI_FEATURES = ["alien-manager/openapi", "alien-bindings/platform-sdk"]
+# `no-retry-delay` keeps mocked tests from waiting between client retries.
+CI_FEATURES = [
+    "alien-manager/openapi",
+    "alien-bindings/platform-sdk",
+    "alien-client-core/no-retry-delay",
+]
 
 # Paths outside the packages that cannot change a Rust build or test.
 IGNORED_PREFIXES = ("docs/", ".claude/", ".agents/")
@@ -91,6 +97,10 @@ def main() -> None:
             pending.extend(dependents[name] - selected)
         mode = "affected" if selected else "none"
 
+    if selected:
+        # Cargo takes a feature only of a selected package or of one's direct dependency, and
+        # most packages reach alien-client-core through others.
+        selected.add("alien-client-core")
     features = [feature for feature in CI_FEATURES if feature.split("/")[0] in selected]
     print(f"mode={mode}")
     print(f"packages={' '.join(f'-p {name}' for name in sorted(selected))}")

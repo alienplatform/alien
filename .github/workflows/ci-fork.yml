@@ -110,7 +110,7 @@ jobs:
       - name: Rust tests (non-cloud)
         run: |
           cargo nextest run --workspace \
-            --features alien-bindings/platform-sdk \
+            --features alien-bindings/platform-sdk,alien-client-core/no-retry-delay \
             --exclude byocdb \
             --exclude endpoint-agent \
             --exclude alien-test-server \

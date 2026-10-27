@@ -264,6 +264,22 @@ pub trait RequestBuilderExt {
     async fn send_raw(self) -> Result<reqwest::Response>;
 }
 
+/// The exponential back-off the cloud clients retry with unless a request overrides it: up to
+/// 3 retries, each delay up to 20s.
+pub fn default_retry_backoff() -> ExponentialBuilder {
+    let backoff = ExponentialBuilder::default()
+        .with_max_times(3)
+        .with_max_delay(Duration::from_secs(20))
+        .with_jitter();
+    // Mocked tests answer at once, so waiting between retries only adds time. The retries
+    // still happen, so every request a test expects is still sent.
+    if cfg!(feature = "no-retry-delay") {
+        backoff.with_min_delay(Duration::ZERO)
+    } else {
+        backoff
+    }
+}
+
 /// A `reqwest::RequestBuilder` wrapper that automatically retries failed
 /// requests using an exponential back-off strategy powered by the `backon`
 /// crate. Use [`RequestBuilderExt::with_retry`] to construct one.
@@ -290,14 +306,6 @@ impl RetriableRequestBuilder {
     /// Determine if a given error is retry-able using the retryable field.
     fn is_retryable_error(e: &AlienError<ErrorData>) -> bool {
         e.retryable
-    }
-
-    /// Creates a default exponential back-off (max 3 attempts, up to 20s).
-    fn default_backoff() -> ExponentialBuilder {
-        ExponentialBuilder::default()
-            .with_max_times(3)
-            .with_max_delay(Duration::from_secs(20))
-            .with_jitter()
     }
 
     /// Execute the request, applying retries, and parse the body as JSON.
@@ -473,7 +481,7 @@ impl RequestBuilderExt for reqwest::RequestBuilder {
     fn with_retry(self) -> RetriableRequestBuilder {
         RetriableRequestBuilder {
             inner: self,
-            backoff: RetriableRequestBuilder::default_backoff(),
+            backoff: default_retry_backoff(),
             retry_if: RetriableRequestBuilder::is_retryable_error,
         }
     }

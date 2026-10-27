@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 use reqwest::RequestBuilder;
 use serde::de::DeserializeOwned;
-use std::time::Duration;
 
 use std::collections::HashMap;
 
@@ -208,14 +207,6 @@ impl RetriableKubernetesRequestBuilder {
         e.retryable
     }
 
-    /// Creates a default exponential back-off (max 3 attempts, up to 20s).
-    fn default_backoff() -> ExponentialBuilder {
-        ExponentialBuilder::default()
-            .with_max_times(3)
-            .with_max_delay(Duration::from_secs(20))
-            .with_jitter()
-    }
-
     /// Execute the request, applying retries, and parse the body as JSON.
     pub async fn send_json<T: DeserializeOwned + Send + 'static>(self) -> Result<T> {
         let backoff = self.backoff;
@@ -353,7 +344,7 @@ impl KubernetesRequestBuilderExt for reqwest::RequestBuilder {
     fn with_retry(self) -> RetriableKubernetesRequestBuilder {
         RetriableKubernetesRequestBuilder {
             inner: self,
-            backoff: RetriableKubernetesRequestBuilder::default_backoff(),
+            backoff: alien_client_core::request_utils::default_retry_backoff(),
         }
     }
 

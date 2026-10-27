@@ -9,6 +9,11 @@ license-file.workspace = true
 [lib]
 crate-type = ["rlib"]
 
+[features]
+# Retries without waiting between attempts. CI turns it on for its mocked test run
+# (ci-fast.yml, ci-fork.yml); live cloud tests and shipped binaries keep the real back-off.
+no-retry-delay = []
+
 [dependencies]
 alien-error = { workspace = true }
 

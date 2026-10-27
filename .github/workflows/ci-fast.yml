@@ -182,7 +182,7 @@ jobs:
         ${{ needs.changes.outputs.rust_mode == 'affected'
         && format('{0}{1}', needs.changes.outputs.rust_packages,
              needs.changes.outputs.rust_features != '' && format(' --features {0}', needs.changes.outputs.rust_features) || '')
-        || '--workspace --features alien-manager/openapi,alien-bindings/platform-sdk' }}
+        || '--workspace --features alien-manager/openapi,alien-bindings/platform-sdk,alien-client-core/no-retry-delay' }}
 
     steps:
       - uses: actions/checkout@v7

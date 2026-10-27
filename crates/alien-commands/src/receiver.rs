@@ -1666,6 +1666,32 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn refused_submission_is_retried_until_the_lease_cap() {
+        // Nothing listens on port 1, so every attempt is refused. A refused connection is
+        // retryable: the budget ends the submission, not the first failed attempt.
+        let mut envelope = test_envelope("submit", None);
+        envelope.response_handling.submit_response_url = "http://127.0.0.1:1/response".to_string();
+        let lease_expires_at = Utc::now() + ChronoDuration::milliseconds(500);
+        let started = std::time::Instant::now();
+        let error =
+            submit_response_before(&envelope, CommandResponse::success(b"ok"), lease_expires_at)
+                .await
+                .expect_err("a refused submission must fail");
+
+        assert_eq!(error.code, "HTTP_OPERATION_FAILED");
+        assert!(
+            error.message.contains("headroom budget"),
+            "a refused connection must be retried until the budget ends it: {}",
+            error.message
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "submission exceeded the absolute lease expiry: {:?}",
+            started.elapsed()
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn execute_lease_budget_expiry_aborts_handler_and_reports_timeout() {
         static COMPLETED: AtomicBool = AtomicBool::new(false);

@@ -8,12 +8,11 @@ use alien_client_core::{Error, ErrorData, Result};
 
 use crate::azure::long_running_operation::{LongRunningOperation, OperationResult};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use backon::{ExponentialBuilder, Retryable};
+use backon::Retryable;
 use chrono::Utc;
 use http::{header::HeaderName, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
-use std::time::Duration;
 
 // -----------------------------------------------------------------------------
 // Client-base for Azure Storage using bearer token authentication
@@ -69,13 +68,6 @@ impl AzureClientBase {
 
     // ------------- Retry helpers -------------
 
-    fn create_backoff() -> ExponentialBuilder {
-        ExponentialBuilder::default()
-            .with_max_times(3)
-            .with_max_delay(Duration::from_secs(20))
-            .with_jitter()
-    }
-
     fn is_retryable_error(e: &AlienError<ErrorData>) -> bool {
         e.retryable
     }
@@ -88,7 +80,7 @@ impl AzureClientBase {
         Fut: std::future::Future<Output = Result<T>> + 'static,
         T: 'static,
     {
-        let backoff = Self::create_backoff();
+        let backoff = alien_client_core::request_utils::default_retry_backoff();
         use tokio::task::spawn_local;
         spawn_local(async move {
             retryable
@@ -111,7 +103,7 @@ impl AzureClientBase {
         Fut: std::future::Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
     {
-        let backoff = Self::create_backoff();
+        let backoff = alien_client_core::request_utils::default_retry_backoff();
         retryable
             .retry(backoff)
             .when(Self::is_retryable_error)
