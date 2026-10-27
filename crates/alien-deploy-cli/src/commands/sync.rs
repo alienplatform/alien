@@ -1498,9 +1498,8 @@ async fn deletion_inventory(
         )) && annotations["meta.helm.sh/release-name"] == stack_id
             && annotations["meta.helm.sh/release-namespace"] == namespace
             && object["metadata"]["labels"]["app.kubernetes.io/managed-by"] == "Helm";
-        // StatefulSet claim templates predate deployment labels on PVCs.
+        // Container claim templates have no labels; ownership comes from the StatefulSet.
         let runtime_claim = resource == "persistentvolumeclaims"
-            && object["metadata"]["labels"]["managed-by"] == "runtime"
             && claim_prefixes.iter().any(|prefix| {
                 name.strip_prefix(prefix).is_some_and(|ordinal| {
                     !ordinal.is_empty() && ordinal.bytes().all(|b| b.is_ascii_digit())
@@ -4241,10 +4240,22 @@ metadata:
     #[tokio::test]
     #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
     async fn signed_erase_removes_only_owned_data() {
+        signed_cleanup_preserves_unowned_claims("erase").await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
+    async fn signed_retain_preserves_statefulset_claims() {
+        signed_cleanup_preserves_unowned_claims("retain").await;
+    }
+
+    #[cfg(unix)]
+    async fn signed_cleanup_preserves_unowned_claims(policy: &str) {
         let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
-        let namespace = format!("sync-erase-{}", std::process::id());
+        let namespace = format!("sync-{policy}-{}", std::process::id());
         let (folder, mut site) = folder_with_report();
-        site.deployment_id = format!("dep_erase_{}", std::process::id());
+        site.deployment_id = format!("dep_{policy}_{}", std::process::id());
         let snapshot = folder.path().join("deleting-report.json");
         std::fs::rename(report_path(folder.path()), &snapshot).unwrap();
         let mut original: SiteReport =
@@ -4284,6 +4295,9 @@ spec:
       containers:
         - name: operator
           image: registry.k8s.io/pause:3.10
+          env:
+            - {name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY, value: alien.dev/deployment}
+            - {name: OPERATOR_RESOURCE_PREFIX, value: app}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -4337,6 +4351,105 @@ stringData:
             .unwrap()
             .is_some());
 
+        // Container claim templates have names but no ownership labels.
+        let workloads = tempfile::NamedTempFile::new().unwrap();
+        let mut objects = Vec::new();
+        for (name, labels) in [
+            (
+                "app-data",
+                serde_json::json!({"managed-by":"runtime", "alien.dev/deployment":"app"}),
+            ),
+            (
+                "other-data",
+                serde_json::json!({"managed-by":"runtime", "alien.dev/deployment":"other"}),
+            ),
+            ("customer-data", serde_json::json!({})),
+        ] {
+            objects.push(serde_json::json!({
+                "apiVersion":"apps/v1", "kind":"StatefulSet",
+                "metadata":{"name":name, "labels":labels},
+                "spec":{
+                    "serviceName":name, "replicas":1,
+                    "selector":{"matchLabels":{"app":name}},
+                    "template":{"metadata":{"labels":{"app":name}}, "spec":{
+                        "containers":[{"name":"app", "image":"registry.k8s.io/pause:3.10",
+                            "volumeMounts":[{"name":"data", "mountPath":"/data"}]}]
+                    }},
+                    "volumeClaimTemplates":[{"metadata":{"name":"data"}, "spec":{
+                        "accessModes":["ReadWriteOnce"], "resources":{"requests":{"storage":"1Mi"}}
+                    }}]
+                }
+            }));
+        }
+        for name in ["data-app-data-backup", "data-app-data-0-extra", "unrelated"] {
+            objects.push(serde_json::json!({
+                "apiVersion":"v1", "kind":"PersistentVolumeClaim", "metadata":{"name":name},
+                "spec":{"storageClassName":"", "accessModes":["ReadWriteOnce"],
+                    "resources":{"requests":{"storage":"1Mi"}}}
+            }));
+        }
+        std::fs::write(
+            workloads.path(),
+            serde_json::to_vec(&serde_json::json!({
+                "apiVersion":"v1", "kind":"List", "items":objects
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut apply = kubectl(Some(&context));
+        apply
+            .args(["apply", "--namespace", &namespace, "-f"])
+            .arg(workloads.path());
+        run(apply, "creating persistent workloads").await.unwrap();
+        for name in ["app-data", "other-data", "customer-data"] {
+            let mut wait = kubectl(Some(&context));
+            wait.args([
+                "rollout",
+                "status",
+                &format!("statefulset/{name}"),
+                "--namespace",
+                &namespace,
+                "--timeout=120s",
+            ]);
+            run(wait, "waiting for persistent workload").await.unwrap();
+        }
+        let mut get = kubectl(Some(&context));
+        get.args(["get", "pvc", "--namespace", &namespace, "-o", "json"]);
+        let claims_before: serde_json::Value =
+            serde_json::from_slice(&run(get, "reading original claims").await.unwrap()).unwrap();
+        let claim = claims_before["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["metadata"]["name"] == "data-app-data-0")
+            .unwrap();
+        assert!(claim["metadata"]["labels"]["managed-by"].is_null());
+        assert_eq!(claim["status"]["phase"], "Bound");
+        // The signed deletion follows workload teardown; retain the StatefulSet metadata.
+        let mut scale = kubectl(Some(&context));
+        scale.args([
+            "scale",
+            "statefulset",
+            "--all",
+            "--replicas=0",
+            "--namespace",
+            &namespace,
+        ]);
+        run(scale, "stopping test workloads").await.unwrap();
+        let mut wait = kubectl(Some(&context));
+        wait.args([
+            "wait",
+            "pod",
+            "--all",
+            "--for=delete",
+            "--namespace",
+            &namespace,
+            "--timeout=120s",
+        ]);
+        run(wait, "waiting for test workloads to stop")
+            .await
+            .unwrap();
+
         let recorded_data = deletion_inventory(&settings, "app", &namespace)
             .await
             .unwrap();
@@ -4364,7 +4477,7 @@ stringData:
             deletion_policy: None,
         };
         let mut signed_manifest = serde_json::to_value(&manifest).unwrap();
-        signed_manifest["deletionPolicy"] = "erase".into();
+        signed_manifest["deletionPolicy"] = policy.into();
         let bytes = serde_json::to_vec(&signed_manifest).unwrap();
         let key = BundleSigningKey::from_seed([6; 32]);
         std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
@@ -4450,55 +4563,87 @@ stringData:
         assert_eq!(reports.len(), 1);
         let report: SiteReport =
             serde_json::from_slice(&std::fs::read(&reports[0].1).unwrap()).unwrap();
-        assert_eq!(report.state["status"], "deleted");
-        assert_eq!(report.state["runtimeMetadata"]["deletionPolicy"], "erase");
+        assert_eq!(
+            report.state["status"],
+            if policy == "erase" {
+                "deleted"
+            } else {
+                "retained"
+            }
+        );
+        assert_eq!(report.state["runtimeMetadata"]["deletionPolicy"], policy);
         let mut get = kubectl(Some(&context));
         get.args(["get", "pvc,secret", "--namespace", &namespace, "-o", "json"]);
         let remaining: serde_json::Value =
             serde_json::from_slice(&run(get, "checking data erasure").await.unwrap()).unwrap();
-        assert!(!remaining["items"]
-            .as_array()
+        let remaining = remaining["items"].as_array().unwrap();
+        for original_claim in claims_before["items"].as_array().unwrap() {
+            let name = original_claim["metadata"]["name"].as_str().unwrap();
+            let found = remaining.iter().find(|v| v["metadata"]["name"] == name);
+            if policy == "erase" && matches!(name, "database" | "data-app-data-0") {
+                assert!(found.is_none(), "erase left claim {name}");
+            } else {
+                let found = found.unwrap_or_else(|| panic!("lost claim {name}"));
+                assert_eq!(found["metadata"]["uid"], original_claim["metadata"]["uid"]);
+                assert_eq!(
+                    found["spec"]["volumeName"],
+                    original_claim["spec"]["volumeName"]
+                );
+            }
+        }
+        let saved = load_machine(&site.deployment_id)
             .unwrap()
+            .deletion_inventory
+            .unwrap();
+        assert!(saved
+            .objects
             .iter()
-            .any(|object| matches!(
-                object["metadata"]["name"].as_str(),
-                Some("database" | "database-password")
-            )));
+            .any(|v| v.name == "data-app-data-0"
+                && v.uid == claim["metadata"]["uid"].as_str().unwrap()));
+        assert_eq!(
+            remaining
+                .iter()
+                .any(|v| v["metadata"]["name"] == "database-password"),
+            policy == "retain"
+        );
         assert_eq!(
             serde_json::to_value(&report.telemetry).unwrap(),
             serde_json::to_value(&original.telemetry).unwrap()
         );
         assert!(!snapshot.exists());
         assert!(!pending.exists());
-        // A completed erase receipt must not delete data recreated at the same name.
-        let mut create = kubectl(Some(&context));
-        create.args([
-            "create",
-            "secret",
-            "generic",
-            "database-password",
-            "--namespace",
-            &namespace,
-            "--from-literal=value=replacement",
-        ]);
-        run(create, "creating replacement data").await.unwrap();
-        let error = erase_inventory(&settings, &recorded_data)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("was replaced"));
-        let mut get = kubectl(Some(&context));
-        get.args([
-            "get",
-            "secret",
-            "database-password",
-            "--namespace",
-            &namespace,
-            "-o",
-            "json",
-        ]);
-        let replacement: serde_json::Value =
-            serde_json::from_slice(&run(get, "checking replacement data").await.unwrap()).unwrap();
-        assert_eq!(replacement["data"]["value"], "cmVwbGFjZW1lbnQ=");
+        if policy == "erase" {
+            // A completed erase receipt must not delete data recreated at the same name.
+            let mut create = kubectl(Some(&context));
+            create.args([
+                "create",
+                "secret",
+                "generic",
+                "database-password",
+                "--namespace",
+                &namespace,
+                "--from-literal=value=replacement",
+            ]);
+            run(create, "creating replacement data").await.unwrap();
+            let error = erase_inventory(&settings, &recorded_data)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("was replaced"));
+            let mut get = kubectl(Some(&context));
+            get.args([
+                "get",
+                "secret",
+                "database-password",
+                "--namespace",
+                &namespace,
+                "-o",
+                "json",
+            ]);
+            let replacement: serde_json::Value =
+                serde_json::from_slice(&run(get, "checking replacement data").await.unwrap())
+                    .unwrap();
+            assert_eq!(replacement["data"]["value"], "cmVwbGFjZW1lbnQ=");
+        }
         let mut delete = kubectl(Some(&context));
         delete.args(["delete", "namespace", &namespace]);
         run(delete, "removing test namespace").await.unwrap();
