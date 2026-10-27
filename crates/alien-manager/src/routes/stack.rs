@@ -274,6 +274,14 @@ pub async fn stack_import(
     ) {
         return e.into_response();
     }
+    let existing_deployment = match state
+        .deployment_store
+        .get_deployment_by_name(&subject, &deployment_group_id, &deployment_name)
+        .await
+    {
+        Ok(existing) => existing,
+        Err(error) => return error.into_response(),
+    };
     // Deployment credentials cannot read group configuration. A re-registration
     // replaces the input map, so saved answers cannot satisfy missing required values.
     let needs_group_values = !matches!(subject.scope, Scope::Deployment { .. })
@@ -344,8 +352,23 @@ pub async fn stack_import(
         })
         .into_response();
     }
+    let mut validation_inputs = stack_inputs.clone();
+    if existing_deployment
+        .as_ref()
+        .is_some_and(|existing| !is_pending_setup_reservation(existing, &release.id))
+        && matches!(subject.scope, Scope::DeploymentGroup { .. })
+    {
+        // An older setup template may re-register against a newer release. It
+        // cannot supply inputs added since it was generated. Deployment tokens
+        // still require complete answers because they replace the saved values.
+        for input in &mut validation_inputs {
+            if !req.input_values.contains_key(&input.id) {
+                input.required = false;
+            }
+        }
+    }
     if let Err(error) = alien_core::validate_stack_import_input_values(
-        &stack_inputs,
+        &validation_inputs,
         &validation_values,
         req.platform,
     ) {
@@ -404,148 +427,94 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
     let environment_info = infer_import_environment_info(&req);
-    match state
-        .deployment_store
-        .get_deployment_by_name(&subject, &deployment_group_id, &deployment_name)
-        .await
-    {
-        Ok(Some(existing)) => {
-            if existing.import_source.is_none() {
-                return AlienError::new(ErrorData::DeploymentNameConflict {
-                    name: deployment_name.clone(),
-                    deployment_group_id: deployment_group_id.clone(),
-                })
+    if let Some(existing) = existing_deployment {
+        if existing.import_source.is_none() {
+            return AlienError::new(ErrorData::DeploymentNameConflict {
+                name: deployment_name.clone(),
+                deployment_group_id: deployment_group_id.clone(),
+            })
+            .into_response();
+        }
+        if !state.authz.can_update_deployment(&subject, &existing) {
+            return ErrorData::forbidden("Cannot update imported deployment in this group")
                 .into_response();
-            }
-            if !state.authz.can_update_deployment(&subject, &existing) {
-                return ErrorData::forbidden("Cannot update imported deployment in this group")
-                    .into_response();
-            }
-            if let Some(old) = existing
-                .runtime_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.prepared_stack.as_ref())
-            {
-                if let Err(error) = alien_preflights::runner::validate_gate_platform_changes(
-                    old,
-                    declared_stack,
-                    req.platform,
-                ) {
-                    return error.into_response();
-                }
-            }
-            if let Err(error) = validate_gcp_federation_handoff(&req, Some(&existing.id)) {
+        }
+        if let Some(old) = existing
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.prepared_stack.as_ref())
+        {
+            if let Err(error) = alien_preflights::runner::validate_gate_platform_changes(
+                old,
+                declared_stack,
+                req.platform,
+            ) {
                 return error.into_response();
             }
-            if existing.stack_settings.as_ref().is_some_and(|settings| {
-                settings.endpoint_access != req.stack_settings.endpoint_access
-            }) {
-                return ErrorData::bad_request(
+        }
+        if let Err(error) = validate_gcp_federation_handoff(&req, Some(&existing.id)) {
+            return error.into_response();
+        }
+        if existing
+            .stack_settings
+            .as_ref()
+            .is_some_and(|settings| settings.endpoint_access != req.stack_settings.endpoint_access)
+        {
+            return ErrorData::bad_request(
                     "Endpoint access cannot change after setup. Create a new deployment to change endpoint access.",
                 ).into_response();
+        }
+        if let Err(error) = validate_reserved_setup_management(&req, &existing) {
+            return error.into_response();
+        }
+        // A compute update can grow a volume without the setup source
+        // learning about it, so its stale lower value keeps the installed
+        // capacity instead of failing the next update as a shrink.
+        if let Some(compute) = req.stack_settings.compute.as_mut() {
+            for kept in keep_volume_sizes_over_setup_source(
+                compute,
+                existing.stack_state.as_ref(),
+                existing
+                    .stack_settings
+                    .as_ref()
+                    .and_then(|settings| settings.compute.as_ref()),
+            ) {
+                // WARN, not INFO: the stored size silently differs from what the setup
+                // source says until its parameter or config is updated.
+                warn!(
+                    deployment_id = %existing.id,
+                    container_id = %kept.container_id,
+                    requested_gib = kept.requested_gib,
+                    kept_gib = kept.kept_gib,
+                    "Setup registration asked for a smaller volume than the deployment has; keeping the larger size. Update the setup source to the kept size"
+                );
             }
-            if let Err(error) = validate_reserved_setup_management(&req, &existing) {
-                return error.into_response();
-            }
-            // A compute update can grow a volume without the setup source
-            // learning about it, so its stale lower value keeps the installed
-            // capacity instead of failing the next update as a shrink.
-            if let Some(compute) = req.stack_settings.compute.as_mut() {
-                for kept in keep_volume_sizes_over_setup_source(
-                    compute,
-                    existing.stack_state.as_ref(),
-                    existing
-                        .stack_settings
-                        .as_ref()
-                        .and_then(|settings| settings.compute.as_ref()),
-                ) {
-                    // WARN, not INFO: the stored size silently differs from what the setup
-                    // source says until its parameter or config is updated.
-                    warn!(
-                        deployment_id = %existing.id,
-                        container_id = %kept.container_id,
-                        requested_gib = kept.requested_gib,
-                        kept_gib = kept.kept_gib,
-                        "Setup registration asked for a smaller volume than the deployment has; keeping the larger size. Update the setup source to the kept size"
-                    );
-                }
-            }
-            // This write replaces the stored map and the request never carries
-            // a generated secret, so keep the value the deployment holds.
-            crate::generated_inputs::carry_stored_generated_input_values(
-                &stack_inputs,
-                req.platform,
-                &existing.input_values,
-                &mut req.input_values,
-            );
-            if !setup_contract_lane_matches(&existing, &req) {
-                return AlienError::new(ErrorData::ImportedDeploymentConflict {
+        }
+        // This write replaces the stored map and the request never carries
+        // a generated secret, so keep the value the deployment holds.
+        crate::generated_inputs::carry_stored_generated_input_values(
+            &stack_inputs,
+            req.platform,
+            &existing.input_values,
+            &mut req.input_values,
+        );
+        if !setup_contract_lane_matches(&existing, &req) {
+            return AlienError::new(ErrorData::ImportedDeploymentConflict {
                     reason: format!(
                         "Imported deployment '{}' was installed for a different setup target or setup fingerprint version. Import it as a different deployment.",
                         existing.id
                     ),
                 })
                 .into_response();
-            }
-            let activates_setup_reservation = is_pending_setup_reservation(&existing, &release.id);
-            match setup_registration_replay(&existing.setup_metadata, &setup_metadata) {
-                SetupRegistrationReplay::Exact => {
-                    let deployment_token = response_deployment_token(&subject, &existing);
-                    let Some(stack_settings) = existing.stack_settings else {
-                        return ErrorData::internal(
-                            "imported deployment is missing stack_settings",
-                        )
-                        .into_response();
-                    };
-                    return (
-                        StatusCode::OK,
-                        Json(StackImportResponse {
-                            deployment_id: existing.id,
-                            deployment_token,
-                            stack_settings,
-                            stack_state,
-                        }),
-                    )
-                        .into_response();
-                }
-                SetupRegistrationReplay::Conflict => {
-                    return AlienError::new(ErrorData::ImportedDeploymentConflict {
-                        reason: format!(
-                            "Setup registration operation for deployment '{}' was replayed with a different payload",
-                            existing.id
-                        ),
-                    })
-                    .into_response();
-                }
-                SetupRegistrationReplay::None => {}
-            }
-            if !activates_setup_reservation {
-                if let Some(installed_settings) = existing.stack_settings.as_ref() {
-                    if let Err(error) = refuse_management_permission_changes(
-                        &source_stack,
-                        installed_settings,
-                        &req,
-                    )
-                    .await
-                    {
-                        return error.into_response();
-                    }
-                }
-            }
-            let has_registration_operation = setup_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get(SETUP_REGISTRATION_OPERATION_ID))
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|operation_id| !operation_id.is_empty());
-            if !has_registration_operation
-                && is_idempotent_import(&existing, &stack_state, &release.id, &req)
-            {
+        }
+        let activates_setup_reservation = is_pending_setup_reservation(&existing, &release.id);
+        match setup_registration_replay(&existing.setup_metadata, &setup_metadata) {
+            SetupRegistrationReplay::Exact => {
                 let deployment_token = response_deployment_token(&subject, &existing);
                 let Some(stack_settings) = existing.stack_settings else {
                     return ErrorData::internal("imported deployment is missing stack_settings")
                         .into_response();
                 };
-                let stack_state = existing.stack_state.unwrap_or(stack_state);
                 return (
                     StatusCode::OK,
                     Json(StackImportResponse {
@@ -557,141 +526,45 @@ pub async fn stack_import(
                 )
                     .into_response();
             }
-            if !activates_setup_reservation {
-                if let Some(existing_stack_state) = existing.stack_state.as_ref() {
-                    stack_state = match merge_reimported_stack_state(
-                        &state,
-                        &req,
-                        &prepared_stack,
-                        existing_stack_state,
-                        stack_state,
-                        existing
-                            .runtime_metadata
-                            .as_ref()
-                            .is_some_and(|metadata| metadata.automatic_setup),
-                    ) {
-                        Ok(state) => state,
-                        Err(error) => return error.into_response(),
-                    };
-                }
-            }
-            if !activates_setup_reservation
-                && !can_accept_reimport(&existing, &stack_state, &release.id, &req)
-            {
+            SetupRegistrationReplay::Conflict => {
                 return AlienError::new(ErrorData::ImportedDeploymentConflict {
-                    reason: format!(
-                        "Imported deployment '{}' is not in a re-importable state and the payload is not idempotent",
-                        existing.id
-                    ),
-                })
-                .into_response();
+                        reason: format!(
+                            "Setup registration operation for deployment '{}' was replayed with a different payload",
+                            existing.id
+                        ),
+                    })
+                    .into_response();
             }
-            if !activates_setup_reservation && !can_reconcile_after_import(&existing) {
-                return AlienError::new(ErrorData::ImportedDeploymentConflict {
-                    reason: format!(
-                        "Imported deployment '{}' is currently reconciling; retry setup after it reaches a stable state",
-                        existing.id
-                    ),
-                })
-                .into_response();
-            }
-            // A frozen gate is answered once. Refusing a changed answer HERE
-            // — inside the registration the setup artifact calls
-            // synchronously — is what makes a CloudFormation parameter edit
-            // roll the whole stack update back: the custom resource fails,
-            // and CloudFormation restores whatever its conditionals just
-            // created or deleted.
-            let persisted_answers = existing
-                .runtime_metadata
-                .as_ref()
-                .map(|metadata| metadata.persisted_gate_answers.clone())
-                .unwrap_or_default();
-            for (input_id, imported_answer) in &imported_gate_answers {
-                if automatic {
-                    continue;
-                }
-                if let Some(persisted) = persisted_answers.get(input_id) {
-                    if persisted != imported_answer {
-                        return AlienError::new(
-                            alien_deployment::ErrorData::FrozenGateAnswerChanged {
-                                input_id: input_id.clone(),
-                                persisted: *persisted,
-                                requested: *imported_answer,
-                            },
-                        )
-                        .into_response();
-                    }
+            SetupRegistrationReplay::None => {}
+        }
+        if !activates_setup_reservation {
+            if let Some(installed_settings) = existing.stack_settings.as_ref() {
+                if let Err(error) =
+                    refuse_management_permission_changes(&source_stack, installed_settings, &req)
+                        .await
+                {
+                    return error.into_response();
                 }
             }
-            let mut runtime_metadata = if activates_setup_reservation {
-                import_runtime_metadata(&prepared_stack, imported_gate_answers)
-            } else {
-                match reimport_runtime_metadata(
-                    &existing,
-                    &prepared_stack,
-                    &release.id,
-                    &req,
-                    imported_gate_answers,
-                ) {
-                    Ok(metadata) => metadata,
-                    Err(error) => return error.into_response(),
-                }
+        }
+        let has_registration_operation = setup_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(SETUP_REGISTRATION_OPERATION_ID))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|operation_id| !operation_id.is_empty());
+        if !has_registration_operation
+            && is_idempotent_import(&existing, &stack_state, &release.id, &req)
+        {
+            let deployment_token = response_deployment_token(&subject, &existing);
+            let Some(stack_settings) = existing.stack_settings else {
+                return ErrorData::internal("imported deployment is missing stack_settings")
+                    .into_response();
             };
-            if automatic {
-                runtime_metadata.automatic_setup = true;
-                runtime_metadata.initial_setup_authority =
-                    alien_core::InitialSetupAuthority::DirectSetup;
-            }
-            let should_reconcile = !activates_setup_reservation
-                && import_changes_deployment(
-                    &existing,
-                    &stack_state,
-                    &environment_info,
-                    &runtime_metadata,
-                    &release.id,
-                    &req,
-                );
-            let activation_status = activates_setup_reservation
-                .then(|| initial_import_status(&prepared_stack, &stack_state));
-            let setup_metadata = merge_setup_metadata(&existing.setup_metadata, setup_metadata);
-            let updated = match state
-                .deployment_store
-                .update_imported_stack_state(
-                    &subject,
-                    &existing.id,
-                    UpdateImportedDeploymentParams {
-                        stack_settings: req.stack_settings.clone(),
-                        stack_state: stack_state.clone(),
-                        environment_info: environment_info.clone(),
-                        runtime_metadata: runtime_metadata.clone(),
-                        setup_metadata,
-                        current_release_id: Some(release.id.clone()),
-                        setup_target: req.setup_target.clone(),
-                        setup_fingerprint: req.setup_fingerprint.clone(),
-                        setup_fingerprint_version: req.setup_fingerprint_version,
-                        activation_status,
-                        schedule_reconciliation: should_reconcile,
-                        input_values: req.input_values.clone(),
-                    },
-                )
-                .await
-            {
-                Ok(d) => d,
-                Err(e) => return e.into_response(),
-            };
-
-            let deployment_token = response_deployment_token(&subject, &updated);
-            let stack_settings = match updated.stack_settings {
-                Some(settings) => settings,
-                None => {
-                    return ErrorData::internal("imported deployment is missing stack_settings")
-                        .into_response();
-                }
-            };
+            let stack_state = existing.stack_state.unwrap_or(stack_state);
             return (
                 StatusCode::OK,
                 Json(StackImportResponse {
-                    deployment_id: updated.id,
+                    deployment_id: existing.id,
                     deployment_token,
                     stack_settings,
                     stack_state,
@@ -699,8 +572,145 @@ pub async fn stack_import(
             )
                 .into_response();
         }
-        Ok(None) => {}
-        Err(e) => return e.into_response(),
+        if !activates_setup_reservation {
+            if let Some(existing_stack_state) = existing.stack_state.as_ref() {
+                stack_state = match merge_reimported_stack_state(
+                    &state,
+                    &req,
+                    &prepared_stack,
+                    existing_stack_state,
+                    stack_state,
+                    existing
+                        .runtime_metadata
+                        .as_ref()
+                        .is_some_and(|metadata| metadata.automatic_setup),
+                ) {
+                    Ok(state) => state,
+                    Err(error) => return error.into_response(),
+                };
+            }
+        }
+        if !activates_setup_reservation
+            && !can_accept_reimport(&existing, &stack_state, &release.id, &req)
+        {
+            return AlienError::new(ErrorData::ImportedDeploymentConflict {
+                    reason: format!(
+                        "Imported deployment '{}' is not in a re-importable state and the payload is not idempotent",
+                        existing.id
+                    ),
+                })
+                .into_response();
+        }
+        if !activates_setup_reservation && !can_reconcile_after_import(&existing) {
+            return AlienError::new(ErrorData::ImportedDeploymentConflict {
+                    reason: format!(
+                        "Imported deployment '{}' is currently reconciling; retry setup after it reaches a stable state",
+                        existing.id
+                    ),
+                })
+                .into_response();
+        }
+        // A frozen gate is answered once. Refusing a changed answer HERE
+        // — inside the registration the setup artifact calls
+        // synchronously — is what makes a CloudFormation parameter edit
+        // roll the whole stack update back: the custom resource fails,
+        // and CloudFormation restores whatever its conditionals just
+        // created or deleted.
+        let persisted_answers = existing
+            .runtime_metadata
+            .as_ref()
+            .map(|metadata| metadata.persisted_gate_answers.clone())
+            .unwrap_or_default();
+        for (input_id, imported_answer) in &imported_gate_answers {
+            if automatic {
+                continue;
+            }
+            if let Some(persisted) = persisted_answers.get(input_id) {
+                if persisted != imported_answer {
+                    return AlienError::new(alien_deployment::ErrorData::FrozenGateAnswerChanged {
+                        input_id: input_id.clone(),
+                        persisted: *persisted,
+                        requested: *imported_answer,
+                    })
+                    .into_response();
+                }
+            }
+        }
+        let mut runtime_metadata = if activates_setup_reservation {
+            import_runtime_metadata(&prepared_stack, imported_gate_answers)
+        } else {
+            match reimport_runtime_metadata(
+                &existing,
+                &prepared_stack,
+                &release.id,
+                &req,
+                imported_gate_answers,
+            ) {
+                Ok(metadata) => metadata,
+                Err(error) => return error.into_response(),
+            }
+        };
+        if automatic {
+            runtime_metadata.automatic_setup = true;
+            runtime_metadata.initial_setup_authority =
+                alien_core::InitialSetupAuthority::DirectSetup;
+        }
+        let should_reconcile = !activates_setup_reservation
+            && import_changes_deployment(
+                &existing,
+                &stack_state,
+                &environment_info,
+                &runtime_metadata,
+                &release.id,
+                &req,
+            );
+        let activation_status = activates_setup_reservation
+            .then(|| initial_import_status(&prepared_stack, &stack_state));
+        let setup_metadata = merge_setup_metadata(&existing.setup_metadata, setup_metadata);
+        let updated = match state
+            .deployment_store
+            .update_imported_stack_state(
+                &subject,
+                &existing.id,
+                UpdateImportedDeploymentParams {
+                    stack_settings: req.stack_settings.clone(),
+                    stack_state: stack_state.clone(),
+                    environment_info: environment_info.clone(),
+                    runtime_metadata: runtime_metadata.clone(),
+                    setup_metadata,
+                    current_release_id: Some(release.id.clone()),
+                    setup_target: req.setup_target.clone(),
+                    setup_fingerprint: req.setup_fingerprint.clone(),
+                    setup_fingerprint_version: req.setup_fingerprint_version,
+                    activation_status,
+                    schedule_reconciliation: should_reconcile,
+                    input_values: req.input_values.clone(),
+                },
+            )
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => return e.into_response(),
+        };
+
+        let deployment_token = response_deployment_token(&subject, &updated);
+        let stack_settings = match updated.stack_settings {
+            Some(settings) => settings,
+            None => {
+                return ErrorData::internal("imported deployment is missing stack_settings")
+                    .into_response();
+            }
+        };
+        return (
+            StatusCode::OK,
+            Json(StackImportResponse {
+                deployment_id: updated.id,
+                deployment_token,
+                stack_settings,
+                stack_state,
+            }),
+        )
+            .into_response();
     }
 
     if let Err(error) = validate_gcp_federation_handoff(&req, None) {

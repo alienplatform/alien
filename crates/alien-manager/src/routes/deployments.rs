@@ -644,9 +644,11 @@ async fn create_deployment(
                     input.required = false;
                 }
             }
-            if let Err(error) =
-                alien_core::resolve_stack_input_values(&inputs, &validation_values, req.platform)
-            {
+            if let Err(error) = alien_core::validate_stack_import_input_values(
+                &inputs,
+                &validation_values,
+                req.platform,
+            ) {
                 return error.into_response();
             }
             crate::generated_inputs::generate_missing_input_values(
