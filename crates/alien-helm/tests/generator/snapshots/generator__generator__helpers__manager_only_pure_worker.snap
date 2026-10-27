@@ -2922,7 +2922,7 @@ spec:
 {{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
   {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
 {{- end }}
-{{- if and $database.existingPasswordSecret (not (lookup "v1" "Namespace" "" $.Release.Namespace)) }}
+{{- if and $database.existingPasswordSecret (not (lookup "v1" "Secret" $.Release.Namespace "")) }}
   {{- $recordedImage := required (printf "Cannot verify the installed Postgres image offline; set postgres.%s.recordedImage to the retained PVC alien.dev/postgres-image annotation (for a fresh database, pin the initial image)" $id) $database.recordedImage }}
   {{- if ne (first (splitList "@" $recordedImage)) (first (splitList "@" $desiredImage)) }}
     {{- fail (printf "Postgres image differs from postgres.%s.recordedImage; retain the recorded image or migrate the database before changing the pin" $id) }}
@@ -2938,8 +2938,8 @@ spec:
   {{- if lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $name }}
     {{- fail "Postgres data exists but its credentials Secret is missing; restore the original Secret before installing" }}
   {{- end }}
-  {{- if not (lookup "v1" "Namespace" "" $.Release.Namespace) }}
-    {{- fail "Cannot read the database namespace; create it before installing, or set postgres.<resource>.existingPasswordSecret to a Secret containing the password key for offline rendering" }}
+  {{- if not (lookup "v1" "Secret" $.Release.Namespace "") }}
+    {{- fail "Cannot read Secrets in the database namespace; create the namespace before installing, or set postgres.<resource>.existingPasswordSecret to a Secret containing the password key for offline rendering" }}
   {{- end }}
   {{- $password = randAlphaNum 48 | b64enc }}
 {{- end }}

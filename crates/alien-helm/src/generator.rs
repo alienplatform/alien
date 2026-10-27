@@ -8997,6 +8997,178 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires ALIEN_HELM_TEST_CONTEXT and a disposable Kubernetes cluster"]
+    fn postgres_install_and_upgrade_with_namespace_permissions() {
+        let context = std::env::var("ALIEN_HELM_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("postgres-scoped-{}", std::process::id());
+        let user = format!("system:serviceaccount:{namespace}:installer");
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        for (name, content) in chart.files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        let kubectl = |args: &[&str]| {
+            std::process::Command::new("kubectl")
+                .args(["--context", &context, "-n", &namespace])
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(kubectl(&["create", "namespace", &namespace])
+            .status
+            .success());
+        let result = std::panic::catch_unwind(|| {
+            assert!(kubectl(&["create", "serviceaccount", "installer"])
+                .status
+                .success());
+            assert!(kubectl(&[
+                "create",
+                "role",
+                "installer",
+                "--verb=*",
+                "--resource=secrets,persistentvolumeclaims,services,configmaps,serviceaccounts,pods,pods/log,events,deployments.apps,statefulsets.apps,replicasets.apps,jobs.batch,roles.rbac.authorization.k8s.io,rolebindings.rbac.authorization.k8s.io"
+            ])
+            .status
+            .success());
+            assert!(kubectl(&[
+                "create",
+                "rolebinding",
+                "installer",
+                "--role=installer",
+                &format!("--serviceaccount={namespace}:installer")
+            ])
+            .status
+            .success());
+            assert!(!kubectl(&["--as", &user, "get", "namespace", &namespace])
+                .status
+                .success());
+            assert!(kubectl(&[
+                "create",
+                "secret",
+                "generic",
+                "database-credentials",
+                "--from-literal=password=fixture"
+            ])
+            .status
+            .success());
+            let chart_path = directory.path().to_str().unwrap();
+            for credentials in ["database-credentials", ""] {
+                let release = if credentials.is_empty() {
+                    "generated"
+                } else {
+                    "supplied"
+                };
+                let values = directory.path().join("test-values.json");
+                std::fs::write(
+                    &values,
+                    serde_json::json!({
+                        "heartbeat":{"collection":{"nodes":{"enabled":false}}},
+                        "runtime":{"encryption":{"key":"a".repeat(64)}},
+                        "postgres":{"database":{
+                        "enabled":true, "existingPasswordSecret":credentials,
+                        "recordedImage":"pgvector/pgvector:pg17-bookworm"
+                    }}})
+                    .to_string(),
+                )
+                .unwrap();
+                if !credentials.is_empty() {
+                    for action in ["lint", "template"] {
+                        let output = std::process::Command::new("helm")
+                            .args([
+                                "--kube-context",
+                                &context,
+                                "-n",
+                                &namespace,
+                                action,
+                                chart_path,
+                                "-f",
+                            ])
+                            .arg(&values)
+                            .output()
+                            .unwrap();
+                        assert!(
+                            output.status.success(),
+                            "{action}: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                }
+                for action in ["install", "upgrade"] {
+                    eprintln!("namespace-only Role: helm {action} {release}, context={context}, namespace={namespace}, user={user}");
+                    let output = std::process::Command::new("helm")
+                        .args([
+                            "--kube-context",
+                            &context,
+                            "--kube-as-user",
+                            &user,
+                            "-n",
+                            &namespace,
+                            action,
+                            release,
+                            chart_path,
+                            "-f",
+                        ])
+                        .arg(&values)
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                // The live PVC annotation remains authoritative even with a supplied pin.
+                let changed = std::process::Command::new("helm")
+                    .args([
+                        "--kube-context",
+                        &context,
+                        "--kube-as-user",
+                        &user,
+                        "-n",
+                        &namespace,
+                        "upgrade",
+                        release,
+                        chart_path,
+                        "-f",
+                    ])
+                    .arg(&values)
+                    .args(["--set", "postgres.database.image.tag=pg18-bookworm"])
+                    .output()
+                    .unwrap();
+                assert!(!changed.status.success());
+                assert!(
+                    String::from_utf8_lossy(&changed.stderr).contains("explicit database upgrade")
+                );
+            }
+        });
+        assert!(
+            kubectl(&["delete", "namespace", &namespace, "--wait=false"])
+                .status
+                .success()
+        );
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+    }
+
+    #[test]
     fn postgres_offline_render_keeps_the_recorded_image() {
         let stack = Stack::new("database-stack".into())
             .add(
