@@ -344,6 +344,34 @@
           }
         }
       },
+      // Automatic setup creates these profiles at runtime. Manual setup keeps
+      // compute-cluster/management, which can only inspect the setup-owned profile.
+      // TagInstanceProfile authorizes tags included in CreateInstanceProfile;
+      // AWS also requires ListInstanceProfileTags for profile tagging.
+      {
+        "label": "Manage runtime compute instance profiles",
+        "grant": {
+          "actions": [
+            "iam:CreateInstanceProfile",
+            "iam:TagInstanceProfile",
+            "iam:ListInstanceProfileTags",
+            "iam:AddRoleToInstanceProfile",
+            "iam:RemoveRoleFromInstanceProfile",
+            "iam:DeleteInstanceProfile"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:instance-profile/${stackPrefix}-*-profile"]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:instance-profile/${stackPrefix}-${resourceName}-profile",
+              "arn:aws:iam::${awsAccountId}:instance-profile/${stackPrefix}-${resourceName}-isolation-v1-profile"
+            ]
+          }
+        }
+      },
       // Read profile metadata in this account: generated profile names need not
       // carry the stack prefix. The backing role is inspected within PassRole's scope.
       {
