@@ -44,10 +44,14 @@ pub(crate) const HELPERS: &str = r#"
 {{- end -}}
 
 {{- define "deployment.infrastructure" -}}
-{{- $bindings := deepCopy (default dict .Values.infrastructure) -}}
+{{- default dict .Values.infrastructure | toJson -}}
+{{- end -}}
+
+{{- define "deployment.chartDefaultBindings" -}}
+{{- $bindings := dict -}}
 {{- if not .Values.infrastructureExistingSecret -}}
 {{- range $id, $database := .Values.postgres -}}
-  {{- if and $database.enabled (not (hasKey $bindings $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) -}}
+  {{- if and $database.enabled (not (hasKey (default dict $.Values.infrastructure) $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) -}}
     {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) -}}
     {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" (default $name $database.existingPasswordSecret) "key" "password")) "sslMode" "disable") -}}
   {{- end -}}

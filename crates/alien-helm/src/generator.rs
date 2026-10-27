@@ -6773,6 +6773,10 @@ spec:
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
             {{- end }}
+            {{- if ne (include "deployment.chartDefaultBindings" .) "{}" }}
+            - name: CHART_DEFAULT_BINDINGS
+              value: {{ include "deployment.chartDefaultBindings" . | quote }}
+            {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
             - name: TUNNEL_ENABLED
@@ -9241,16 +9245,18 @@ mod tests {
                     );
                 }
             }
-            let binding_secret = docs_by_kind(&docs, "Secret")
+            let operator = docs_by_kind(&docs, "Deployment")
                 .into_iter()
-                .find(|secret| secret["stringData"]["external-bindings.json"].is_string())
+                .next()
                 .unwrap();
-            let bindings: serde_json::Value = serde_json::from_str(
-                binding_secret["stringData"]["external-bindings.json"]
-                    .as_str()
-                    .unwrap(),
-            )
-            .unwrap();
+            let defaults = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .find(|env| env["name"] == "CHART_DEFAULT_BINDINGS")
+                .unwrap();
+            let bindings: serde_json::Value =
+                serde_json::from_str(defaults["value"].as_str().unwrap()).unwrap();
             assert_eq!(bindings["database"]["host"], format!("{name}.default.svc"));
             assert_eq!(
                 bindings["database"]["password"]["secretKeyRef"]["name"],

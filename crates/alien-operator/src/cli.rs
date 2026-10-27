@@ -161,6 +161,10 @@ pub struct Args {
     #[arg(long, env = "EXTERNAL_BINDINGS_FILE")]
     pub external_bindings_file: Option<PathBuf>,
 
+    /// Default bindings emitted by the chart for databases it provisions.
+    #[arg(long, env = "CHART_DEFAULT_BINDINGS")]
+    pub chart_default_bindings: Option<String>,
+
     #[arg(long, env = "PUBLIC_ENDPOINTS")]
     pub public_endpoints: Option<String>,
 
@@ -695,6 +699,10 @@ async fn run_operator_cli(
             .unwrap_or_default();
 
     stack_settings = stack_settings_with_bindings(stack_settings, external_bindings);
+    let chart_default_bindings = parse_json_opt::<alien_core::ExternalBindings>(
+        args.chart_default_bindings,
+        "chart default bindings",
+    )?;
     let operations = parse_operator_operations(args.operations)?;
 
     let operator_config = OperatorConfig::builder()
@@ -733,6 +741,7 @@ async fn run_operator_cli(
         .maybe_collector_token(collector_token)
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
+        .maybe_chart_default_bindings(chart_default_bindings)
         .maybe_operations(operations)
         .local_debug_enabled(args.enable_local_debug)
         .tunnel_enabled(args.tunnel_enabled)
@@ -1275,12 +1284,11 @@ fn stack_settings_with_bindings(
     bindings: Option<alien_core::ExternalBindings>,
 ) -> alien_core::StackSettings {
     if let Some(bindings) = bindings {
-        crate::config::merge_installation_bindings(
-            settings
-                .external_bindings
-                .get_or_insert_with(Default::default),
-            &bindings,
-        );
+        settings
+            .external_bindings
+            .get_or_insert_with(Default::default)
+            .0
+            .extend(bindings.0);
     }
     settings
 }
@@ -1764,12 +1772,12 @@ mod tests {
     }
 
     #[test]
-    fn file_bindings_preserve_supplied_settings_and_database() {
+    fn file_bindings_override_database_and_preserve_other_settings() {
         let supplied: alien_core::ExternalBindings = serde_json::from_value(serde_json::json!({
             "database":{"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":"existing-password"},
             "bucket":{"type":"storage","service":"s3","bucketName":"existing-bucket"}
         })).unwrap();
-        let defaults = serde_json::from_value(serde_json::json!({
+        let defaults: alien_core::ExternalBindings = serde_json::from_value(serde_json::json!({
             "database":{"type":"postgres","service":"external","host":"new-db.site.svc","port":5432,"database":"app","username":"postgres","password":{"secretKeyRef":{"name":"new-db","key":"password"}}}
         })).unwrap();
         let settings = super::stack_settings_with_bindings(
@@ -1777,9 +1785,11 @@ mod tests {
                 external_bindings: Some(supplied.clone()),
                 ..Default::default()
             },
-            Some(defaults),
+            Some(defaults.clone()),
         );
-        assert_eq!(settings.external_bindings, Some(supplied));
+        let actual = settings.external_bindings.unwrap();
+        assert_eq!(actual.get("database"), defaults.get("database"));
+        assert_eq!(actual.get("bucket"), supplied.get("bucket"));
     }
 
     #[tokio::test]
