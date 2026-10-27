@@ -13,7 +13,10 @@ export const CustomDomainConfigSchema = z.object({
     get "certificate"(){
                 return CustomCertificateConfigSchema.describe("Platform-specific certificate references for custom domains.")
               },
-"domain": z.string().describe("Fully qualified domain name to use.")
+"domain": z.optional(z.string().describe("Fully qualified domain name for a supplied certificate.")),
+"endpoints": z.optional(z.object({
+    
+    }).catchall(z.string()).describe("Hostnames keyed by endpoint name for a managed certificate."))
     }).describe("Custom domain configuration for a single resource.")
 
 export type CustomDomainConfig = z.infer<typeof CustomDomainConfigSchema>

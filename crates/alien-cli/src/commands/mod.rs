@@ -12,6 +12,8 @@ mod deployment_move;
 pub mod deployments;
 pub mod destroy;
 pub mod dev_helpers;
+#[cfg(feature = "platform")]
+pub mod domains;
 mod event_display;
 #[cfg(feature = "platform")]
 pub mod examples;
@@ -71,6 +73,8 @@ pub use dev_helpers::{
     wait_for_resumed_dev_deployment, write_dev_status, CliEnvVar, DevDeploymentLiveState,
     DevDeploymentSnapshot,
 };
+#[cfg(feature = "platform")]
+pub use domains::{domains_task, DomainsArgs};
 #[cfg(feature = "platform")]
 pub use examples::{examples_task, ExamplesArgs};
 pub use init::{init_task, InitArgs};

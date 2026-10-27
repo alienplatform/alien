@@ -131,12 +131,32 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::Move { json: true, .. }
                 | DeploymentsCmd::Pin { json: true, .. }
                 | DeploymentsCmd::SetChannel { json: true, .. }
+                | DeploymentsCmd::SetDomains { json: true, .. }
         )
     }
 }
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DeploymentsCmd {
+    /// Use managed certificates for endpoint hostnames, or restore generated domains
+    SetDomains {
+        /// Deployment ID or reference
+        id: String,
+        #[arg(long)]
+        resource: String,
+        /// Endpoint name and hostname (repeat for each endpoint)
+        #[arg(
+            long = "endpoint",
+            required_unless_present = "clear",
+            conflicts_with = "clear"
+        )]
+        endpoints: Vec<String>,
+        /// Restore generated domains for this resource
+        #[arg(long)]
+        clear: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Create a new deployment
     Create {
         /// Deployment display name
@@ -460,6 +480,88 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
     }
 
     match args.cmd {
+        DeploymentsCmd::SetDomains {
+            id,
+            resource,
+            endpoints,
+            clear: _,
+            json,
+        } => {
+            #[cfg(not(feature = "platform"))]
+            {
+                let _ = (id, resource, endpoints, json);
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "command".to_string(),
+                    message: "Managed custom domains require a platform-enabled CLI".to_string(),
+                }));
+            }
+            #[cfg(feature = "platform")]
+            {
+                if !ctx.is_platform() {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "command".to_string(),
+                        message: "Managed custom domains require a platform deployment".to_string(),
+                    }));
+                }
+                let mut names = std::collections::HashMap::new();
+                for endpoint in endpoints {
+                    let (name, hostname) = endpoint
+                        .split_once('=')
+                        .filter(|(name, hostname)| !name.is_empty() && !hostname.is_empty())
+                        .ok_or_else(|| {
+                            AlienError::new(ErrorData::ValidationError {
+                                field: "endpoint".to_string(),
+                                message: "Use --endpoint name=hostname".to_string(),
+                            })
+                        })?;
+                    if names
+                        .insert(name.to_string(), hostname.to_string())
+                        .is_some()
+                    {
+                        return Err(AlienError::new(ErrorData::ValidationError {
+                            field: "endpoint".to_string(),
+                            message: format!("Endpoint {name} was specified twice"),
+                        }));
+                    }
+                }
+                let body: alien_platform_api::types::UpdateDeploymentDomainsBody =
+                    serde_json::from_value(
+                        serde_json::json!({ "resourceId": resource, "endpoints": names }),
+                    )
+                    .into_alien_error()
+                    .context(ErrorData::ValidationError {
+                        field: "domains".to_string(),
+                        message: "Invalid endpoint hostnames".to_string(),
+                    })?;
+                let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+                let client = ctx.sdk_client().await?;
+                let deployment = crate::platform_deployment_resolver::resolve(
+                    &ctx, &client, &workspace, &id, None, !json,
+                )
+                .await?;
+                let response = client
+                    .update_deployment_domains()
+                    .workspace(workspace.as_str())
+                    .id(deployment.id.as_str())
+                    .body(body)
+                    .send()
+                    .await
+                    .into_sdk_error()
+                    .context(ErrorData::ApiRequestFailed {
+                        message: "Updating deployment domains".to_string(),
+                        url: None,
+                    })?
+                    .into_inner();
+                if json {
+                    print_json(&response)?;
+                } else {
+                    println!(
+                        "Domain settings saved. Use `alien deployments get {id}` to check certificate status and traffic records."
+                    );
+                }
+                Ok(())
+            }
+        }
         // Platform mode lists canonical platform records; local modes list manager records.
         DeploymentsCmd::Ls { project, json } => {
             #[cfg(feature = "platform")]
@@ -1104,6 +1206,32 @@ mod machines_inventory_tests {
     use alien_platform_api::types::DeploymentMachineNetworkHealth;
 
     #[test]
+    fn custom_domain_arguments_require_hostnames_or_explicit_clear() {
+        let base = [
+            "deployments",
+            "set-domains",
+            "example/api",
+            "--resource",
+            "api",
+        ];
+        assert!(DeploymentsArgs::try_parse_from(base).is_err());
+        assert!(DeploymentsArgs::try_parse_from(base.into_iter().chain(["--clear"])).is_ok());
+        assert!(DeploymentsArgs::try_parse_from(base.into_iter().chain([
+            "--endpoint",
+            "api=app.example.com",
+            "--endpoint",
+            "shares=*.files.example.com",
+        ]))
+        .is_ok());
+        assert!(DeploymentsArgs::try_parse_from(base.into_iter().chain([
+            "--clear",
+            "--endpoint",
+            "api=app.example.com",
+        ]))
+        .is_err());
+    }
+
+    #[test]
     fn machine_inventory_sorts_network_divergence_first() {
         assert_eq!(
             network_health_rank(Some(DeploymentMachineNetworkHealth::Degraded)),
@@ -1386,11 +1514,25 @@ async fn get_deployment_task(
     let deployment = resolve_deployment_reference(client, reference).await?;
     let observed_resources = observed_rollout_resources(ctx, &deployment, !json).await?;
 
+    let details = platform_detail
+        .map(serde_json::to_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "serialization".to_string(),
+            reason: "Could not serialize certificate status".to_string(),
+        })?;
     if json {
         return print_json(&DeploymentDetailOutput {
             deployment: &deployment,
             update_state: platform_detail.and_then(|detail| detail.update_state.as_ref()),
             observed_resources,
+            certificates: details
+                .as_ref()
+                .and_then(|detail| detail.get("certificates")),
+            traffic_records: details
+                .as_ref()
+                .and_then(|detail| detail.get("trafficRecords")),
         });
     }
 
@@ -1445,6 +1587,45 @@ async fn get_deployment_task(
         println!("{}", render_human_error(&error));
     }
 
+    if let Some(details) = &details {
+        if let Some(certificates) = details
+            .get("certificates")
+            .and_then(serde_json::Value::as_array)
+        {
+            for certificate in certificates {
+                println!(
+                    "Certificate {}: {}",
+                    certificate["resourceId"].as_str().unwrap_or("-"),
+                    certificate["status"].as_str().unwrap_or("-")
+                );
+                for field in [
+                    "names",
+                    "issuer",
+                    "notAfter",
+                    "lastRenewal",
+                    "nextRenewal",
+                    "lastError",
+                ] {
+                    if let Some(value) = certificate.get(field).filter(|value| !value.is_null()) {
+                        println!("  {field}: {value}");
+                    }
+                }
+            }
+        }
+        if let Some(records) = details
+            .get("trafficRecords")
+            .and_then(serde_json::Value::as_array)
+        {
+            for record in records {
+                println!(
+                    "Traffic: {} CNAME {} ({})",
+                    record["name"].as_str().unwrap_or("-"),
+                    record["target"].as_str().unwrap_or("-"),
+                    record["status"].as_str().unwrap_or("unknown")
+                );
+            }
+        }
+    }
     if let Some(update_state) = platform_detail.and_then(|detail| detail.update_state.as_ref()) {
         print_deployment_update_state(update_state);
     }
@@ -1482,6 +1663,10 @@ struct DeploymentDetailOutput<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     update_state: Option<&'a DeploymentDetailResponseUpdateState>,
     observed_resources: Vec<ObservedRolloutResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    certificates: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    traffic_records: Option<&'a serde_json::Value>,
 }
 
 fn print_deployment_update_state(update_state: &DeploymentDetailResponseUpdateState) {

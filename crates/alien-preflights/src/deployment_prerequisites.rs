@@ -1708,6 +1708,7 @@ mod tests {
                             id.to_string(),
                             CustomDomainConfig {
                                 domain: format!("{id}.example.com"),
+                                endpoints: HashMap::new(),
                                 certificate: CustomCertificateConfig {
                                     aws: Some(AwsCustomCertificateConfig {
                                         certificate_arn: format!(

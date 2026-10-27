@@ -34,8 +34,8 @@ use crate::commands::platform::{
 };
 #[cfg(feature = "platform")]
 use crate::commands::{
-    api_keys_task, customers_task, examples_task, usage_task, ApiKeysArgs, CustomersArgs,
-    ExamplesArgs, UsageArgs,
+    api_keys_task, customers_task, domains_task, examples_task, usage_task, ApiKeysArgs,
+    CustomersArgs, DomainsArgs, ExamplesArgs, UsageArgs,
 };
 use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
@@ -166,6 +166,8 @@ impl Cli {
             #[cfg(feature = "platform")]
             Some(Commands::DeploymentGroups(args)) => args.wants_json_output(),
             #[cfg(feature = "platform")]
+            Some(Commands::Domains(args)) => args.json,
+            #[cfg(feature = "platform")]
             Some(Commands::ApiKeys(args)) => args.wants_json_output(),
             #[cfg(feature = "platform")]
             Some(Commands::Examples(args)) => args.json,
@@ -253,6 +255,10 @@ pub enum Commands {
     #[cfg(feature = "platform")]
     #[command(name = "deployment-groups", visible_aliases = ["customers", "customer"])]
     DeploymentGroups(CustomersArgs),
+
+    /// Manage workspace domains
+    #[cfg(feature = "platform")]
+    Domains(DomainsArgs),
 
     /// Create, inspect, and revoke API keys
     #[cfg(feature = "platform")]
@@ -2121,6 +2127,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Packages(args)) => packages_task(args, ctx).await?,
             #[cfg(feature = "platform")]
             Some(Commands::DeploymentGroups(args)) => customers_task(args, ctx).await?,
+            #[cfg(feature = "platform")]
+            Some(Commands::Domains(args)) => domains_task(args, ctx).await?,
             #[cfg(feature = "platform")]
             Some(Commands::ApiKeys(args)) => api_keys_task(args, ctx).await?,
             #[cfg(feature = "platform")]
