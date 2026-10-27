@@ -547,6 +547,19 @@ pub async fn pull_chart(dir: &Path, reference: &str, access: &RegistryAccess) ->
     Ok(file)
 }
 
+fn merge_chart_values(values: &mut serde_yaml::Value, overrides: &serde_yaml::Value) {
+    if let (Some(values), Some(overrides)) = (values.as_mapping_mut(), overrides.as_mapping()) {
+        for (key, value) in overrides {
+            merge_chart_values(
+                values.entry(key.clone()).or_insert(serde_yaml::Value::Null),
+                value,
+            );
+        }
+    } else {
+        *values = overrides.clone();
+    }
+}
+
 /// Helm values that name an image the chart runs itself. Each holds
 /// `repository` and `tag`.
 pub const CHART_IMAGE_VALUES: [&str; 2] = ["runtime.image", "runtime.cleanup.onUninstall.image"];
@@ -554,7 +567,11 @@ pub const CHART_IMAGE_VALUES: [&str; 2] = ["runtime.image", "runtime.cleanup.onU
 /// The images a packaged chart runs by default, by values key, as
 /// `repository:tag` references. The Operator (`runtime.image`) must be
 /// there.
-pub fn chart_images(chart: &Path) -> Result<BTreeMap<String, String>> {
+pub fn chart_images(
+    chart: &Path,
+    target: &serde_json::Value,
+    overrides: &[serde_yaml::Value],
+) -> Result<BTreeMap<String, String>> {
     let file = std::fs::File::open(chart)
         .into_alien_error()
         .context(file_failed(format!("opening {}", chart.display())))?;
@@ -583,11 +600,15 @@ pub fn chart_images(chart: &Path) -> Result<BTreeMap<String, String>> {
             break;
         }
     }
-    let values: serde_yaml::Value = serde_yaml::from_str(
+    let mut values: serde_yaml::Value = serde_yaml::from_str(
         &values.ok_or_else(|| AlienError::new(invalid("the chart has no values.yaml")))?,
     )
     .into_alien_error()
     .context(invalid("the chart's values.yaml is not valid YAML"))?;
+
+    for override_values in overrides {
+        merge_chart_values(&mut values, override_values);
+    }
 
     let mut images = BTreeMap::new();
     let mut image_keys: Vec<String> = CHART_IMAGE_VALUES
@@ -598,8 +619,32 @@ pub fn chart_images(chart: &Path) -> Result<BTreeMap<String, String>> {
         .get("postgres")
         .and_then(serde_yaml::Value::as_mapping)
     {
-        for id in databases.keys().filter_map(serde_yaml::Value::as_str) {
-            image_keys.push(format!("postgres.{id}.image"));
+        for (id, database) in databases {
+            let Some(id) = id.as_str() else {
+                continue;
+            };
+            let enabled =
+                database.get("enabled").and_then(serde_yaml::Value::as_bool) == Some(true);
+            let supplied = values["infrastructureExistingSecret"]
+                .as_str()
+                .is_some_and(|name| !name.is_empty())
+                || values["infrastructure"].get(id).is_some()
+                || values["stackSettings"]["externalBindings"]
+                    .get(id)
+                    .is_some();
+            if enabled && !supplied {
+                // Helm cannot see bindings carried only in the manager target.
+                if target["config"]["externalBindings"].get(id).is_some()
+                    || target["config"]["stackSettings"]["externalBindings"]
+                        .get(id)
+                        .is_some()
+                {
+                    return Err(AlienError::new(invalid(&format!(
+                        "postgres.{id}.enabled conflicts with the supplied database binding; disable it or include the binding in the same Helm values used online and at the site"
+                    ))));
+                }
+                image_keys.push(format!("postgres.{id}.image"));
+            }
         }
     }
     for key in image_keys {
@@ -944,7 +989,35 @@ mod tests {
         let path = dir.path().join("app-1.0.0.tgz");
         std::fs::write(&path, package_chart(&chart).unwrap()).unwrap();
 
-        let images = chart_images(&path).unwrap();
+        let enabled: serde_yaml::Value = serde_yaml::from_str(
+            "postgres:\n  database:\n    enabled: true\n  analytics:\n    enabled: true\n",
+        )
+        .unwrap();
+        let images = chart_images(&path, &serde_json::Value::Null, &[enabled.clone()]).unwrap();
+        let disabled = chart_images(&path, &serde_json::Value::Null, &[]).unwrap();
+        assert!(!disabled.keys().any(|key| key.starts_with("postgres.")));
+        for target in [
+            serde_json::json!({"config":{"externalBindings":{"database":{"type":"postgres","service":"external"}}}}),
+            serde_json::json!({"config":{"stackSettings":{"externalBindings":{"database":{"type":"postgres","service":"external"}}}}}),
+        ] {
+            let error = chart_images(&path, &target, &[enabled.clone()]).unwrap_err();
+            assert!(error.message.contains("postgres.database.enabled"));
+            let supplied: serde_yaml::Value = serde_yaml::from_str(
+                "stackSettings: {externalBindings: {database: {type: postgres, service: external}}}",
+            ).unwrap();
+            let images = chart_images(&path, &target, &[enabled.clone(), supplied]).unwrap();
+            assert!(!images.contains_key("postgres.database.image"));
+            assert!(images.contains_key("postgres.analytics.image"));
+        }
+        for supplied in [
+            "infrastructure: {database: {type: postgres, service: external}}",
+            "stackSettings: {externalBindings: {database: {type: postgres, service: external}}}",
+            "infrastructureExistingSecret: supplied-bindings",
+        ] {
+            let overrides = [enabled.clone(), serde_yaml::from_str(supplied).unwrap()];
+            let supplied = chart_images(&path, &serde_json::Value::Null, &overrides).unwrap();
+            assert!(!supplied.contains_key("postgres.database.image"));
+        }
         assert_eq!(
             images,
             BTreeMap::from([
