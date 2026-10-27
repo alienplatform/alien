@@ -96,6 +96,46 @@ fn validate_input(
         ));
     }
 
+    if let Some(condition) = &input.when {
+        if input.generate.is_some() {
+            errors.push(format!(
+                "Stack input '{}': when cannot be combined with generate",
+                input.id
+            ));
+        }
+        let reason =
+            if condition.input == input.id {
+                Some("when cannot reference the input itself")
+            } else {
+                match stack
+                .inputs()
+                .iter()
+                .find(|reference| reference.id == condition.input)
+            {
+                None => Some("when references an unknown input"),
+                Some(reference) if reference.kind != StackInputKind::Boolean => {
+                    Some("when must reference a boolean input")
+                }
+                Some(reference) if reference.when.is_some() => Some(
+                    "when must reference an unconditional input; chains and cycles are unsupported",
+                ),
+                Some(reference)
+                    if input.provided_by.contains(&StackInputProvider::Deployer)
+                        && !reference.provided_by.contains(&StackInputProvider::Deployer) =>
+                {
+                    Some("when on a deployer input must reference a deployer-provided boolean")
+                }
+                Some(_) => None,
+            }
+            };
+        if let Some(reason) = reason {
+            errors.push(format!(
+                "Stack input '{}': {} ('{}')",
+                input.id, reason, condition.input
+            ));
+        }
+    }
+
     if input.provided_by.is_empty() {
         errors.push(format!(
             "Stack input '{}': providedBy must include at least one provider",
@@ -474,6 +514,7 @@ mod tests {
         StackInputDefinition {
             id: id.to_string(),
             kind: StackInputKind::String,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required: true,
             label: "Tenant slug".to_string(),
@@ -498,6 +539,54 @@ mod tests {
                 target_resources: Some(vec!["api".to_string()]),
                 var_type: Some(StackInputEnvironmentVariableType::Plain),
             }],
+        }
+    }
+
+    #[tokio::test]
+    async fn validates_conditional_input_references() {
+        let toggle = StackInputDefinition::deployer_boolean(
+            "enabled",
+            "Enabled",
+            "Enable snapshots",
+            Some(true),
+        );
+        for (reference, kind, conditional, valid) in [
+            ("enabled", StackInputKind::Boolean, false, true),
+            ("missing", StackInputKind::Boolean, false, false),
+            ("bucket", StackInputKind::Boolean, false, false),
+            ("enabled", StackInputKind::String, false, false),
+            ("enabled", StackInputKind::Boolean, true, false),
+        ] {
+            let mut toggle = toggle.clone();
+            toggle.kind = kind;
+            toggle.default = None;
+            if conditional {
+                toggle.when = Some(alien_core::StackInputCondition {
+                    input: "bucket".into(),
+                    equals: true,
+                });
+            }
+            let mut bucket = string_input("bucket");
+            bucket.when = Some(alien_core::StackInputCondition {
+                input: reference.into(),
+                equals: true,
+            });
+            let result = StackInputsDefinitionCheck
+                .check(&test_stack(vec![toggle, bucket]), Platform::Aws)
+                .await
+                .unwrap();
+            assert_eq!(
+                result.success, valid,
+                "reference {reference}: {:?}",
+                result.errors
+            );
+            if !valid {
+                assert!(
+                    result.errors.iter().any(|error| error.contains("when")),
+                    "{:?}",
+                    result.errors
+                );
+            }
         }
     }
 
@@ -588,6 +677,7 @@ mod tests {
         StackInputDefinition {
             id: "databasePassword".to_string(),
             kind: StackInputKind::Secret,
+            when: None,
             provided_by: vec![StackInputProvider::Developer],
             required: true,
             label: "Database password".to_string(),
@@ -622,6 +712,49 @@ mod tests {
             "Stack input 'databasePassword': platforms must include at least one platform; omit platforms to allow all platforms"
         ]);
         assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn conditional_inputs_enforce_provider_and_generation_rules() {
+        for (dependent_deployer, controller_deployer, generated, valid) in [
+            (true, false, false, false),
+            (true, true, false, true),
+            (false, false, false, true),
+            (false, false, true, false),
+        ] {
+            let provider = |deployer| {
+                if deployer {
+                    StackInputProvider::Deployer
+                } else {
+                    StackInputProvider::Developer
+                }
+            };
+            let mut dependent = if generated {
+                generated_secret(64)
+            } else {
+                string_input("bucket")
+            };
+            dependent.provided_by = vec![provider(dependent_deployer)];
+            dependent.when = Some(alien_core::StackInputCondition {
+                input: "enabled".into(),
+                equals: true,
+            });
+            let mut controller = StackInputDefinition::deployer_boolean(
+                "enabled",
+                "Enabled",
+                "Enable feature",
+                Some(true),
+            );
+            controller.provided_by = vec![provider(controller_deployer)];
+            let result = StackInputsDefinitionCheck
+                .check(&test_stack(vec![dependent, controller]), Platform::Aws)
+                .await
+                .unwrap();
+            assert_eq!(result.success, valid, "deployer dependent={dependent_deployer}, deployer controller={controller_deployer}, generated={generated}: {:?}", result.errors);
+            if !valid {
+                assert!(result.errors.iter().any(|error| error.contains("when")));
+            }
+        }
     }
 
     #[tokio::test]

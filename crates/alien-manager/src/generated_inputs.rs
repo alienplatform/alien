@@ -46,8 +46,8 @@ pub fn generate_missing_input_values(
 
 /// For a write that replaces an existing deployment's input values: keeps the
 /// value the deployment already stores for every generated input `values`
-/// does not set. Never generates — a missing stored value means another
-/// control plane owns the secret, and inventing one here would replace it.
+/// does not set. Missing values may be owned by an embedding control plane
+/// and are left alone.
 pub fn carry_stored_generated_input_values(
     inputs: &[StackInputDefinition],
     platform: Platform,
@@ -91,6 +91,7 @@ mod tests {
         StackInputDefinition {
             id: id.to_string(),
             kind: StackInputKind::Secret,
+            when: None,
             provided_by: vec![StackInputProvider::Developer],
             required: true,
             label: "Signing key".to_string(),

@@ -151,6 +151,17 @@ pub struct StackInputGenerate {
     pub length: u32,
 }
 
+/// A boolean input condition controlling whether another input applies.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct StackInputCondition {
+    /// ID of an unconditional boolean input in the same stack.
+    pub input: String,
+    /// Boolean value for which this input applies.
+    pub equals: bool,
+}
+
 /// Stack input definition serialized into a release stack.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -177,6 +188,10 @@ pub struct StackInputDefinition {
     /// Platforms where this input applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platforms: Option<Vec<Platform>>,
+    /// Only applies when the referenced boolean resolves to the given value.
+    /// Inactive inputs ignore provided values, validation and environment mappings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<StackInputCondition>,
     /// Portable validation constraints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation: Option<StackInputValidation>,
@@ -197,6 +212,55 @@ impl StackInputDefinition {
         self.platforms
             .as_ref()
             .is_none_or(|platforms| platforms.is_empty() || platforms.contains(&platform))
+    }
+
+    /// Whether this input applies, using the referenced input's provided value
+    /// or boolean default. An off-platform reference resolves to false; an
+    /// unanswered reference never matches. Definitions must pass release preflights first.
+    pub fn applies(
+        &self,
+        inputs: &[StackInputDefinition],
+        values: &std::collections::HashMap<String, serde_json::Value>,
+        platform: Platform,
+    ) -> bool {
+        if !self.applies_to(platform) {
+            return false;
+        }
+        let Some(condition) = &self.when else {
+            return true;
+        };
+        let Some(reference) = inputs.iter().find(|input| input.id == condition.input) else {
+            return false;
+        };
+        if !reference.applies_to(platform) {
+            return !condition.equals;
+        }
+        let value = match values
+            .get(&condition.input)
+            .filter(|value| !value.is_null())
+        {
+            Some(value) => crate::gate_value_as_bool(value),
+            None => match reference.default {
+                Some(StackInputDefaultValue::Boolean(value)) => Some(value),
+                _ => None,
+            },
+        };
+        value == Some(condition.equals)
+    }
+
+    /// Whether this input controls any input selected by the caller.
+    pub fn controls_input(
+        &self,
+        inputs: &[StackInputDefinition],
+        include: impl Fn(&StackInputDefinition) -> bool,
+    ) -> bool {
+        inputs.iter().any(|dependent| {
+            include(dependent)
+                && dependent
+                    .when
+                    .as_ref()
+                    .is_some_and(|when| when.input == self.id)
+        })
     }
 
     /// Whether Alien generates this input's value when none is provided. A
@@ -220,6 +284,7 @@ impl StackInputDefinition {
         Self {
             id: id.to_string(),
             kind: StackInputKind::Boolean,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required: default.is_none(),
             label: label.to_string(),
@@ -279,7 +344,7 @@ pub fn resolve_stack_input_environment_variables(
     for input in inputs
         .iter()
         .filter(|input| !input.env.is_empty())
-        .filter(|input| input.applies_to(platform))
+        .filter(|input| input.applies(inputs, values, platform))
     {
         let value = match values.get(&input.id) {
             Some(serde_json::Value::Null) | None => match &input.default {
@@ -373,6 +438,7 @@ mod environment_tests {
         StackInputDefinition {
             id: id.to_string(),
             kind,
+            when: None,
             provided_by: vec![StackInputProvider::Developer],
             required: false,
             label: id.to_string(),
@@ -388,6 +454,127 @@ mod environment_tests {
                 var_type: None,
             }],
         }
+    }
+
+    #[test]
+    fn conditional_environment_uses_provided_boolean_before_default() {
+        let toggle = StackInputDefinition::deployer_boolean(
+            "enabled",
+            "Enabled",
+            "Enable snapshots",
+            Some(true),
+        );
+        let mut bucket = input("bucket", StackInputKind::String, "BUCKET");
+        bucket.required = true;
+        bucket.when = Some(StackInputCondition {
+            input: "enabled".into(),
+            equals: true,
+        });
+        bucket.default = Some(StackInputDefaultValue::String("default-bucket".into()));
+        let inputs = vec![toggle, bucket];
+        for (answer, expected) in [
+            (None, Some("default-bucket")),
+            (Some(serde_json::json!(true)), Some("default-bucket")),
+            (Some(serde_json::json!("true")), Some("default-bucket")),
+            (Some(serde_json::json!(false)), None),
+            (Some(serde_json::json!("false")), None),
+        ] {
+            let values = answer
+                .map(|value| HashMap::from([("enabled".into(), value)]))
+                .unwrap_or_default();
+            let env =
+                resolve_stack_input_environment_variables(&inputs, &values, Platform::Aws).unwrap();
+            assert_eq!(
+                env.first().map(|variable| variable.value.as_str()),
+                expected
+            );
+        }
+        let values = HashMap::from([
+            ("enabled".into(), serde_json::json!(false)),
+            ("bucket".into(), serde_json::json!({"invalid": "ignored"})),
+        ]);
+        assert!(
+            resolve_stack_input_environment_variables(&inputs, &values, Platform::Aws)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn conditional_input_requires_an_answer_and_both_platform_scopes() {
+        let mut toggle =
+            StackInputDefinition::deployer_boolean("enabled", "Enabled", "Enable snapshots", None);
+        toggle.platforms = Some(vec![Platform::Aws]);
+        let mut bucket = input("bucket", StackInputKind::String, "BUCKET");
+        bucket.when = Some(StackInputCondition {
+            input: "enabled".into(),
+            equals: false,
+        });
+        let mut inputs = vec![toggle, bucket];
+        assert!(!inputs[1].applies(&inputs, &HashMap::new(), Platform::Aws));
+        let values = HashMap::from([("enabled".into(), serde_json::json!(false))]);
+        assert!(inputs[1].applies(&inputs, &values, Platform::Aws));
+        assert!(inputs[1].applies(&inputs, &values, Platform::Kubernetes));
+        inputs[1].when.as_mut().unwrap().equals = true;
+        assert!(!inputs[1].applies(&inputs, &values, Platform::Kubernetes));
+        inputs[0].platforms = Some(vec![]);
+        assert!(inputs[0].applies_to(Platform::Aws));
+        assert!(!inputs[1].applies(&inputs, &values, Platform::Aws));
+        inputs[1].when.as_mut().unwrap().equals = false;
+        assert!(inputs[1].applies(&inputs, &values, Platform::Aws));
+        inputs[1].platforms = Some(vec![Platform::Kubernetes]);
+        assert!(!inputs[1].applies(&inputs, &values, Platform::Aws));
+    }
+
+    #[test]
+    fn delivery_preserves_stored_values_without_revalidation() {
+        for (kind, value, validation) in [
+            (
+                StackInputKind::Number,
+                "1.50",
+                serde_json::json!({"min":"10"}),
+            ),
+            (StackInputKind::Number, "1e3", serde_json::json!({})),
+            (
+                StackInputKind::Integer,
+                "007",
+                serde_json::json!({"max":"5"}),
+            ),
+            (
+                StackInputKind::String,
+                "not-a-url",
+                serde_json::json!({"format":"url"}),
+            ),
+            (
+                StackInputKind::String,
+                "",
+                serde_json::json!({"minLength":3}),
+            ),
+        ] {
+            let mut stored = input("stored", kind, "STORED");
+            stored.required = true;
+            stored.validation = Some(serde_json::from_value(validation).unwrap());
+            let mut added = input("added", StackInputKind::String, "ADDED");
+            added.required = true;
+            let values = HashMap::from([("stored".into(), serde_json::json!(value))]);
+            let variables =
+                resolve_stack_input_environment_variables(&[stored, added], &values, Platform::Aws)
+                    .expect("delivery must not revalidate existing deployments");
+            assert_eq!(variables.len(), 1);
+            assert_eq!(variables[0].name, "STORED");
+            assert_eq!(variables[0].value, value);
+        }
+    }
+
+    #[test]
+    fn legacy_empty_platform_list_still_maps_environment() {
+        let mut definition = input("region", StackInputKind::String, "REGION");
+        definition.platforms = Some(vec![]);
+        let values = HashMap::from([("region".into(), serde_json::json!("us-east-1"))]);
+        let env = resolve_stack_input_environment_variables(&[definition], &values, Platform::Aws)
+            .unwrap();
+        assert_eq!(env.len(), 1);
+        assert_eq!(env[0].value, "us-east-1");
     }
 
     #[test]

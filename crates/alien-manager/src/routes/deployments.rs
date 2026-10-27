@@ -635,6 +635,22 @@ async fn create_deployment(
             .as_ref()
             .and_then(|release| release.stacks.get(&req.platform))
         {
+            let mut validation_values = dg.setup.input_values.clone();
+            validation_values.extend(input_values.clone());
+            let mut inputs = stack.inputs.clone();
+            if awaits_registration {
+                // The installer supplies missing answers when it registers the setup.
+                for input in &mut inputs {
+                    input.required = false;
+                }
+            }
+            if let Err(error) = alien_core::validate_stack_import_input_values(
+                &inputs,
+                &validation_values,
+                req.platform,
+            ) {
+                return error.into_response();
+            }
             crate::generated_inputs::generate_missing_input_values(
                 &stack.inputs,
                 req.platform,

@@ -269,6 +269,13 @@ fn generate_helm_chart_internal(
     );
     files.insert("values.schema.json".to_string(), values_schema_json(stack)?);
     files.insert("templates/_helpers.tpl".to_string(), helpers_tpl());
+    let conditional_inputs = stack.inputs().iter().any(|input| input.when.is_some());
+    if conditional_inputs {
+        files.insert(
+            "templates/_inputs.tpl".to_string(),
+            stack_inputs_tpl(stack)?,
+        );
+    }
     files.insert(
         "templates/_runtime-identity.tpl".to_string(),
         include_str!("templates/_runtime-identity.tpl").to_string(),
@@ -284,7 +291,10 @@ fn generate_helm_chart_internal(
         "templates/clusterrolebinding.yaml".to_string(),
         clusterrolebinding_tpl(),
     );
-    files.insert("templates/secret.yaml".to_string(), secret_tpl());
+    files.insert(
+        "templates/secret.yaml".to_string(),
+        resolve_template_inputs(secret_tpl(), conditional_inputs),
+    );
     files.insert(
         "templates/registry-secret.yaml".to_string(),
         registry_secret_tpl(),
@@ -292,7 +302,7 @@ fn generate_helm_chart_internal(
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert(
         "templates/deployment.yaml".to_string(),
-        deployment_tpl(analysis.sandbox_broker),
+        resolve_template_inputs(deployment_tpl(analysis.sandbox_broker), conditional_inputs),
     );
     files.insert(
         "templates/whitelabeled-log-collector-serviceaccount.yaml".to_string(),
@@ -5227,9 +5237,15 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         .inputs()
         .iter()
         .filter(|input| {
-            input
+            (input
                 .provided_by
                 .contains(&alien_core::StackInputProvider::Deployer)
+                || input.controls_input(stack.inputs(), |dependent| {
+                    dependent
+                        .provided_by
+                        .contains(&alien_core::StackInputProvider::Deployer)
+                        && dependent.applies_to(Platform::Kubernetes)
+                }))
                 && !is_deployer_secret_input(input)
         })
         .collect::<Vec<_>>();
@@ -5246,8 +5262,15 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
     input_schema["additionalProperties"] = serde_json::Value::Bool(false);
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
+    let mut conditional = Vec::new();
     for input in deployer_inputs {
-        if input.required && input.default.is_none() {
+        if stack.inputs().iter().any(|input| input.when.is_some())
+            && !input.applies_to(Platform::Kubernetes)
+        {
+            properties.insert(input.id.clone(), serde_json::json!({}));
+            continue;
+        }
+        if input.required && input.default.is_none() && input.when.is_none() {
             required.push(input.id.clone());
         }
         use alien_core::StackInputKind;
@@ -5303,7 +5326,28 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
                 field["format"] = serde_json::json!("uri");
             }
         }
-        properties.insert(input.id.clone(), field);
+        if let Some(when) = &input.when {
+            let reference = stack
+                .inputs()
+                .iter()
+                .find(|reference| reference.id == when.input);
+            let mut condition =
+                serde_json::json!({"properties": {&when.input: {"const": when.equals}}});
+            if !reference.is_some_and(|reference| reference.applies_to(Platform::Kubernetes)) {
+                condition = serde_json::Value::Bool(!when.equals);
+            } else if !reference.is_some_and(|reference| matches!(reference.default, Some(alien_core::StackInputDefaultValue::Boolean(value)) if value == when.equals)) {
+                condition["required"] = serde_json::json!([&when.input]);
+            }
+            conditional.push(
+                serde_json::json!({"if": condition, "then": {"properties": {&input.id: field}}}),
+            );
+            properties.insert(input.id.clone(), serde_json::json!({}));
+        } else {
+            properties.insert(input.id.clone(), field);
+        }
+    }
+    if !conditional.is_empty() {
+        input_schema["allOf"] = serde_json::json!(conditional);
     }
     input_schema["properties"] = serde_json::Value::Object(properties);
     if !required.is_empty() {
@@ -5358,6 +5402,74 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         .context(ErrorData::JsonSerializationFailed {
             reason: "failed to serialize Helm input values schema".to_string(),
         })
+}
+
+fn resolve_template_inputs(template: String, conditional: bool) -> String {
+    if !conditional {
+        return template;
+    }
+    template.replace(
+        ".Values.inputValues",
+        "(include \"deployment.inputValues\" . | fromJson)",
+    )
+}
+
+fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
+    let mut template = String::from(
+        r#"{{- define "deployment.inputValues" -}}
+{{- $values := deepCopy (default dict .Values.inputValues) -}}
+{{- $conditions := deepCopy $values -}}
+"#,
+    );
+    for input in stack.inputs() {
+        if !input.applies_to(Platform::Kubernetes) {
+            template.push_str(&format!("{{{{- $_ := unset $values {:?} -}}}}\n", input.id));
+            template.push_str(&format!(
+                "{{{{- $_ := set $conditions {:?} false -}}}}\n",
+                input.id
+            ));
+            continue;
+        }
+        if let Some(default) = &input.default {
+            let value = match default {
+                alien_core::StackInputDefaultValue::String(value) => serde_json::json!(value),
+                alien_core::StackInputDefaultValue::Number(value) => serde_json::from_str(value)
+                    .into_alien_error()
+                    .context(ErrorData::JsonSerializationFailed {
+                        reason: format!("invalid numeric default for '{}'", input.id),
+                    })?,
+                alien_core::StackInputDefaultValue::Boolean(value) => serde_json::json!(value),
+                alien_core::StackInputDefaultValue::StringList(value) => serde_json::json!(value),
+            };
+            let json = serde_json::json!([value]).to_string();
+            template.push_str(&format!("{{{{- if not (hasKey $conditions {id:?}) -}}}}{{{{- $_ := set $conditions {id:?} (first (fromJsonArray {json:?})) -}}}}{{{{- end -}}}}\n", id=input.id));
+        }
+    }
+    for input in stack.inputs().iter().filter(|input| {
+        input.when.is_some()
+            && input.applies_to(Platform::Kubernetes)
+            && input
+                .provided_by
+                .contains(&alien_core::StackInputProvider::Deployer)
+    }) {
+        let Some(when) = &input.when else {
+            continue;
+        };
+        template.push_str(&format!("{{{{- if not (and (hasKey $conditions {reference:?}) (eq (toJson (get $conditions {reference:?})) {expected:?})) -}}}}{{{{- $_ := unset $values {id:?} -}}}}", reference=when.input, expected=when.equals.to_string(), id=input.id));
+        if input.required && input.default.is_none() && !is_deployer_secret_input(input) {
+            template.push_str(&format!(r#"{{{{- else if and (not .Values.management.deploymentId) (or .Values.management.token .Values.management.existingSecret.name) (not (hasKey $values {id:?})) -}}}}{{{{- fail {message:?} -}}}}"#, id=input.id, message=format!("Stack input '{}' is required", input.id)));
+        }
+        template.push_str("{{- end -}}\n");
+    }
+    for input in stack.inputs().iter().filter(|input| {
+        !input
+            .provided_by
+            .contains(&alien_core::StackInputProvider::Deployer)
+    }) {
+        template.push_str(&format!("{{{{- $_ := unset $values {:?} -}}}}\n", input.id));
+    }
+    template.push_str("{{- toJson $values -}}\n{{- end -}}\n");
+    Ok(template)
 }
 
 fn helpers_tpl() -> String {
@@ -8889,11 +9001,183 @@ infrastructureExistingSecret: customer-bindings
     }
 
     #[test]
+    fn conditional_inputs_are_validated_and_omitted_by_helm() {
+        for developer_controller in [false, true] {
+            conditional_helm_inputs_for_provider(developer_controller);
+        }
+    }
+
+    fn conditional_helm_inputs_for_provider(developer_controller: bool) {
+        let inputs = serde_json::from_value(serde_json::json!([
+            {"id":"bucket", "kind":"string", "required":true, "providedBy":["deployer"], "label":"Bucket", "description":"Snapshot bucket", "when":{"input":"enabled","equals":true}, "validation":{"minLength":3}},
+            {"id":"enabled", "kind":"boolean", "required":true, "providedBy":if developer_controller { vec!["developer", "deployer"] } else { vec!["deployer"] }, "label":"Enabled", "description":"Enable snapshots", "default":{"type":"boolean","value":true}}
+        ])).unwrap();
+        let stack = Stack::new("conditional-inputs".into())
+            .inputs(inputs)
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "conditional-inputs".into(),
+            },
+        )
+        .unwrap();
+        crate::test_utils::helm_lint(&chart.files).assert_ok("conditional chart defaults");
+        let base = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        let rendered = crate::test_utils::helm_template(
+            &chart.files,
+            Some(&format!(
+                "{base}inputValues:\n  enabled: false\n  bucket: 42\n"
+            )),
+        );
+        rendered.assert_ok("inactive malformed value is ignored");
+        let documents: Vec<YamlValue> = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| YamlValue::deserialize(document).unwrap())
+            .collect();
+        let values = documents
+            .iter()
+            .find_map(|document| document["stringData"]["input-values.json"].as_str());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(values.expect("registered input values"))
+                .unwrap(),
+            serde_json::json!({"enabled":false})
+        );
+        for input_values in [
+            "enabled: true",
+            "enabled: true\n  bucket: ''",
+            "enabled: true\n  bucket: 42",
+        ] {
+            let rendered = crate::test_utils::helm_template(
+                &chart.files,
+                Some(&format!("{base}inputValues:\n  {input_values}\n")),
+            );
+            assert!(
+                !rendered.is_ok(),
+                "invalid active input accepted: {input_values}"
+            );
+            assert!(rendered.stderr.contains("bucket"), "{}", rendered.stderr);
+        }
+        let rendered = crate::test_utils::helm_template(
+            &chart.files,
+            Some(&format!("{base}inputValues:\n  bucket: snapshots\n")),
+        );
+        rendered.assert_ok("boolean default activates valid input");
+        let documents: Vec<YamlValue> = serde_yaml::Deserializer::from_str(&rendered.stdout)
+            .map(|document| YamlValue::deserialize(document).unwrap())
+            .collect();
+        let registered = documents
+            .iter()
+            .find_map(|document| document["stringData"]["input-values.json"].as_str())
+            .unwrap();
+        let registered: serde_json::Value = serde_json::from_str(registered).unwrap();
+        assert_eq!(registered["bucket"], "snapshots");
+        assert!(registered.get("enabled").is_none());
+    }
+
+    #[test]
+    fn helm_unconditional_defaults_are_not_registered() {
+        let registry = HelmRegistry::built_in();
+        for default in ["us-east-1", "us-west-2"] {
+            let input = serde_json::from_value(serde_json::json!({
+                "id":"region", "kind":"string", "required":true,
+                "providedBy":["deployer"], "label":"Region", "description":"Service region",
+                "default":{"type":"string","value":default}
+            }))
+            .unwrap();
+            let stack = Stack::new("default-inputs".into())
+                .inputs(vec![input])
+                .build();
+            let mut chart = generate_helm_chart(
+                &stack,
+                HelmOptions {
+                    registry: &registry,
+                    stack_settings: StackSettings::default(),
+                    chart_name: "default-inputs".into(),
+                },
+            )
+            .unwrap();
+            let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: dep_test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
+            rendered.assert_ok("unconditional default install");
+            let documents: Vec<YamlValue> = serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|document| YamlValue::deserialize(document).unwrap())
+                .collect();
+            assert!(
+                documents
+                    .iter()
+                    .all(|document| document["stringData"]["input-values.json"].is_null()),
+                "defaults must remain release-owned, not registered as deployer answers"
+            );
+            let secret = chart.files.get_mut("templates/secret.yaml").unwrap();
+            *secret = secret.replace(".Release.IsUpgrade", "true").replace(
+                "lookup \"v1\" \"Secret\" .Release.Namespace (include \"deployment.fullname\" .)",
+                "(dict \"data\" (dict \"input-values.json\" (b64enc \"{}\")))",
+            );
+            crate::test_utils::helm_template(&chart.files, Some(values))
+                .assert_ok("changing an unprovided default must not block upgrade");
+        }
+    }
+
+    #[test]
+    fn helm_upgrade_normalizes_legacy_input_defaults() {
+        let stack = Stack::new("upgrade-inputs".into())
+            .inputs(vec![
+                alien_core::StackInputDefinition::deployer_boolean(
+                    "enabled",
+                    "Enabled",
+                    "Enable feature",
+                    Some(true),
+                ),
+                serde_json::from_value(serde_json::json!({
+                    "id": "bucket", "kind": "string", "providedBy": ["deployer"],
+                    "required": true, "label": "Bucket", "description": "Snapshot bucket",
+                    "when": {"input": "enabled", "equals": true}
+                }))
+                .unwrap(),
+            ])
+            .build();
+        let registry = HelmRegistry::built_in();
+        let mut chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "upgrade-inputs".into(),
+            },
+        )
+        .unwrap();
+        // Supply the installed Secret in place of the live lookup while Helm
+        // executes the generated upgrade guard and the rest of the chart.
+        let secret = chart.files.get_mut("templates/secret.yaml").unwrap();
+        *secret = secret.replace(".Release.IsUpgrade", "true").replace(
+            "lookup \"v1\" \"Secret\" .Release.Namespace (include \"deployment.fullname\" .)",
+            "(dict \"data\" (dict \"input-values.json\" (b64enc \"{}\")))",
+        );
+        let base = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: dep_test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        crate::test_utils::helm_template(&chart.files, Some(base))
+            .assert_ok("legacy omitted defaults survive upgrade");
+        let changed = crate::test_utils::helm_template(
+            &chart.files,
+            Some(&format!("{base}inputValues:\n  enabled: false\n")),
+        );
+        assert!(!changed.is_ok());
+        assert!(
+            changed.stderr.contains("inputValues cannot change"),
+            "{}",
+            changed.stderr
+        );
+    }
+
+    #[test]
     fn helm_rejects_unknown_or_wrongly_typed_deployer_inputs() {
         let stack = Stack::new("input-stack".to_string())
             .inputs(vec![alien_core::StackInputDefinition {
                 id: "ingestUrl".to_string(),
                 kind: alien_core::StackInputKind::String,
+                when: None,
                 provided_by: vec![alien_core::StackInputProvider::Deployer],
                 required: true,
                 label: "Ingest URL".to_string(),
@@ -8979,6 +9263,7 @@ infrastructureExistingSecret: customer-bindings
         let secret = |id: &str, label: &str, required: bool| alien_core::StackInputDefinition {
             id: id.to_string(),
             kind: alien_core::StackInputKind::Secret,
+            when: None,
             provided_by: vec![alien_core::StackInputProvider::Deployer],
             required,
             label: label.to_string(),

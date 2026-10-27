@@ -181,3 +181,23 @@ fn operator_env(manifest: &str) -> std::collections::BTreeMap<String, String> {
         })
         .collect()
 }
+
+#[test]
+fn unconditional_deployer_default_keeps_existing_chart() {
+    let input = serde_json::from_value(serde_json::json!({
+        "id":"region", "kind":"string", "providedBy":["deployer"], "required":true,
+        "label":"Region", "description":"Service region", "default":{"type":"string","value":"us-east-1"}
+    })).unwrap();
+    let stack = Stack::new("default-inputs".into())
+        .inputs(vec![input])
+        .build();
+    let mut chart = render(&stack, StackSettings::default());
+    super::helpers::assert_helm_valid(&chart, "unconditional deployer default");
+    // Workspace feature unification can enable serde_json/preserve_order. JSON object
+    // key order does not affect the schema; keep the template snapshots byte-for-byte.
+    let schema = chart.files.get_mut("values.schema.json").unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(schema).unwrap();
+    value.sort_all_objects();
+    *schema = serde_json::to_string_pretty(&value).unwrap();
+    super::helpers::snapshot_chart("unconditional_deployer_default", &chart);
+}

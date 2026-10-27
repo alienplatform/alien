@@ -771,13 +771,14 @@ fn inputs_for_platforms(
             continue;
         }
         for input in inputs {
-            if !include(input) {
+            if !include(input) && !input.controls_input(inputs, &include) {
                 continue;
             }
             if input
                 .platforms
                 .as_ref()
                 .is_some_and(|input_platforms| !input_platforms.contains(platform))
+                && !input.controls_input(inputs, &include)
             {
                 continue;
             }
@@ -802,58 +803,76 @@ struct AirgappedInputArgs {
 }
 
 fn split_airgapped_inputs(
+    platforms: &[Platform],
     deployer_inputs: &[StackInputDefinition],
     input_values: &[String],
     secret_input_values: &[String],
     json: bool,
 ) -> Result<AirgappedInputArgs> {
     let mut split = AirgappedInputArgs::default();
-    let args = input_values.iter().map(|arg| (arg, "--input")).chain(
+    let mut raw_values = HashMap::new();
+    for (arg, flag) in input_values.iter().map(|arg| (arg, "--input")).chain(
         secret_input_values
             .iter()
             .map(|arg| (arg, "--secret-input")),
-    );
-    for (arg, flag) in args {
+    ) {
         let (id, value) = parse_stack_input_arg(arg, flag)?;
-        let Some(input) = deployer_inputs.iter().find(|input| input.id == id) else {
-            match flag {
-                "--input" => split.group_inputs.push(arg.clone()),
-                _ => split.group_secret_inputs.push(arg.clone()),
+        let is_deployer_only = deployer_inputs.iter().any(|input| {
+            input.id == id
+                && input.provided_by.contains(&StackInputProvider::Deployer)
+                && !input.provided_by.contains(&StackInputProvider::Developer)
+        });
+        if !is_deployer_only {
+            if flag == "--input" {
+                split.group_inputs.push(arg.clone());
+            } else {
+                split.group_secret_inputs.push(arg.clone());
+            }
+        }
+        raw_values.insert(id, value);
+    }
+    let mut ordered: Vec<_> = deployer_inputs
+        .iter()
+        .filter(|input| {
+            input.provided_by.contains(&StackInputProvider::Deployer)
+                && !input.provided_by.contains(&StackInputProvider::Developer)
+        })
+        .collect();
+    ordered.sort_by_key(|input| input.when.is_some());
+    for input in ordered {
+        if !raw_input_applies(input, deployer_inputs, &raw_values, platforms) {
+            continue;
+        }
+        if is_deployer_secret_input(input) {
+            if raw_values.contains_key(&input.id) {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "input".to_string(),
+                    message: deployer_secret_value_refusal(&input.label),
+                }));
             }
             continue;
-        };
-        if is_deployer_secret_input(input) {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "input".to_string(),
-                message: deployer_secret_value_refusal(&input.label),
-            }));
         }
-        split
-            .deployment_values
-            .insert(id, stack_input_json_value(input, &value)?);
-    }
-
-    for input in deployer_inputs
-        .iter()
-        .filter(|input| input.required && !input.is_generated() && !is_deployer_secret_input(input))
-    {
-        if split.deployment_values.contains_key(&input.id) {
-            continue;
+        if !raw_values.contains_key(&input.id)
+            && input.required
+            && input.default.is_none()
+            && !input.is_generated()
+        {
+            if json || !can_prompt() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "input".into(),
+                    message: format!("Missing deployer input: {}. An air-gapped site has no setup page to answer it: pass --input {}=...", input.label, input.id),
+                }));
+            }
+            raw_values.insert(
+                input.id.clone(),
+                prompt_text(&input.label, input.placeholder.as_deref())?,
+            );
         }
-        if json || !can_prompt() {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "input".to_string(),
-                message: format!(
-                    "Missing deployer input: {}. An air-gapped site has no setup page to \
-                     answer it: pass --input {}=...",
-                    input.label, input.id
-                ),
-            }));
+        if let Some(value) = raw_values.get(&input.id) {
+            split
+                .deployment_values
+                .insert(input.id.clone(), stack_input_json_value(input, value)?);
         }
-        let value = prompt_text(&input.label, input.placeholder.as_deref())?;
-        split
-            .deployment_values
-            .insert(input.id.clone(), stack_input_json_value(input, &value)?);
     }
     Ok(split)
 }
@@ -871,6 +890,7 @@ fn airgapped_or_group_inputs(
         });
     }
     split_airgapped_inputs(
+        selected_platforms,
         &deployer_only_inputs_for_platforms(release_inputs, selected_platforms),
         &args.input_values,
         &args.secret_input_values,
@@ -909,7 +929,9 @@ fn collect_stack_input_values(
     }
 
     for id in raw_values.keys() {
-        let Some(input) = inputs.iter().find(|input| input.id == *id) else {
+        let Some(input) = inputs.iter().find(|input| {
+            input.id == *id && input.provided_by.contains(&StackInputProvider::Developer)
+        }) else {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "input".to_string(),
                 message: format!("Unknown or unavailable developer stack input '{id}'."),
@@ -940,10 +962,20 @@ fn collect_stack_input_values(
     // Alien generates a value for generated inputs when none is passed. A
     // secret the deployer may also provide is optional here: without a
     // developer value, the deployer writes it into their own secret store.
-    for input in inputs
+    let mut ordered: Vec<_> = inputs
         .iter()
-        .filter(|input| input.required && !input.is_generated() && !is_deployer_secret_input(input))
-    {
+        .filter(|input| input.provided_by.contains(&StackInputProvider::Developer))
+        .collect();
+    ordered.sort_by_key(|input| input.when.is_some());
+    for input in &ordered {
+        if !input.required
+            || input.default.is_some()
+            || input.is_generated()
+            || is_deployer_secret_input(input)
+            || !raw_input_applies(input, inputs, &raw_values, selected_platforms)
+        {
+            continue;
+        }
         if !raw_values.contains_key(&input.id) {
             if json || !can_prompt() {
                 return Err(AlienError::new(ErrorData::ValidationError {
@@ -967,7 +999,10 @@ fn collect_stack_input_values(
     }
 
     let mut values = HashMap::<String, types::StackInputValueRequest>::new();
-    for input in inputs {
+    for input in ordered {
+        if !raw_input_applies(input, inputs, &raw_values, selected_platforms) {
+            continue;
+        }
         let Some(value) = raw_values.get(&input.id) else {
             continue;
         };
@@ -975,6 +1010,21 @@ fn collect_stack_input_values(
     }
 
     Ok(types::StackInputValuesRequest(values))
+}
+
+fn raw_input_applies(
+    input: &StackInputDefinition,
+    inputs: &[StackInputDefinition],
+    raw_values: &HashMap<String, String>,
+    platforms: &[Platform],
+) -> bool {
+    let values = raw_values
+        .iter()
+        .map(|(id, value)| (id.clone(), serde_json::Value::String(value.clone())))
+        .collect();
+    platforms
+        .iter()
+        .any(|platform| input.applies(inputs, &values, *platform))
 }
 
 fn narrowing_hint(input: &StackInputDefinition, selected_platforms: &[Platform]) -> String {
@@ -1095,6 +1145,9 @@ fn validate_string_stack_input(input: &StackInputDefinition, value: &str) -> Res
 fn print_required_developer_inputs(inputs: &[StackInputDefinition]) {
     let required = inputs
         .iter()
+        .filter(|input| {
+            input.when.is_none() && input.provided_by.contains(&StackInputProvider::Developer)
+        })
         .filter(|input| input.required && !input.is_generated() && !is_deployer_secret_input(input))
         .collect::<Vec<_>>();
     if required.is_empty() {
@@ -1814,6 +1867,7 @@ mod tests {
         StackInputDefinition {
             id: id.to_string(),
             kind,
+            when: None,
             provided_by: vec![StackInputProvider::Developer],
             required,
             label: "Control plane API key".to_string(),
@@ -1829,6 +1883,7 @@ mod tests {
 
     fn deployer_input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
         StackInputDefinition {
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             label: format!("Deployer {id}"),
             ..input(id, kind, required)
@@ -1842,6 +1897,7 @@ mod tests {
             deployer_input("replicas", StackInputKind::Integer, false),
         ];
         let split = split_airgapped_inputs(
+            &[Platform::Aws],
             &deployer,
             &[
                 "siteLabel=plant-7".to_string(),
@@ -1865,7 +1921,7 @@ mod tests {
     #[test]
     fn airgapped_onboarding_requires_deployer_inputs_up_front() {
         let deployer = [deployer_input("siteLabel", StackInputKind::String, true)];
-        let error = split_airgapped_inputs(&deployer, &[], &[], true)
+        let error = split_airgapped_inputs(&[Platform::Aws], &deployer, &[], &[], true)
             .expect_err("a required deployer input has no other place to be answered");
         assert!(
             error.message.contains("--input siteLabel="),
@@ -1877,16 +1933,22 @@ mod tests {
     #[test]
     fn airgapped_onboarding_refuses_deployer_secret_values() {
         let deployer = [deployer_input("dbPassword", StackInputKind::Secret, true)];
-        let error =
-            split_airgapped_inputs(&deployer, &[], &["dbPassword=hunter2".to_string()], true)
-                .expect_err("deployer secrets never pass through Alien");
+        let error = split_airgapped_inputs(
+            &[Platform::Aws],
+            &deployer,
+            &[],
+            &["dbPassword=hunter2".to_string()],
+            true,
+        )
+        .expect_err("deployer secrets never pass through Alien");
         assert!(
             error.message.contains("deployer secret"),
             "{}",
             error.message
         );
         // Without a value it is not required here: the site writes it into its own store.
-        let split = split_airgapped_inputs(&deployer, &[], &[], true).expect("split");
+        let split =
+            split_airgapped_inputs(&[Platform::Aws], &deployer, &[], &[], true).expect("split");
         assert!(split.deployment_values.is_empty());
     }
 
@@ -2192,6 +2254,57 @@ mod tests {
         let err = parse_stack_input_arg("serviceToken", "--secret-input")
             .expect_err("missing equals should fail");
         assert!(err.to_string().contains("Invalid --secret-input format"));
+    }
+
+    #[test]
+    fn off_platform_controller_is_not_prompted_for_a_false_condition() {
+        let mut dependent = input("count", StackInputKind::Integer, true);
+        dependent.when = Some(alien_core::StackInputCondition {
+            input: "enabled".into(),
+            equals: false,
+        });
+        let mut controller = input("enabled", StackInputKind::Boolean, true);
+        controller.platforms = Some(vec![Platform::Gcp]);
+        let values = collect_stack_input_values(
+            &[dependent, controller],
+            &["count=3".into()],
+            &[],
+            &[Platform::Aws],
+            true,
+        )
+        .expect("an excluded controller must not be prompted");
+        assert_eq!(values.0.len(), 1);
+        assert!(values.0.contains_key("count"));
+    }
+
+    #[test]
+    fn developer_conditions_ignore_inactive_invalid_values() {
+        let mut dependent = input("count", StackInputKind::Integer, true);
+        dependent.when = Some(alien_core::StackInputCondition {
+            input: "enabled".into(),
+            equals: true,
+        });
+        let mut toggle = input("enabled", StackInputKind::Boolean, true);
+        toggle.default = Some(alien_core::StackInputDefaultValue::Boolean(false));
+        let inputs = [dependent, toggle];
+        let values = collect_stack_input_values(
+            &inputs,
+            &["count=invalid".into()],
+            &[],
+            &[Platform::Aws],
+            true,
+        )
+        .unwrap();
+        assert!(values.0.is_empty());
+        let error = collect_stack_input_values(
+            &inputs,
+            &["enabled=true".into()],
+            &[],
+            &[Platform::Aws],
+            true,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("count"));
     }
 
     #[test]

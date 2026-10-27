@@ -755,13 +755,33 @@ fn stack_inputs_for_cloudformation(
         .inputs()
         .iter()
         .filter(|input| {
-            input.provided_by.contains(&StackInputProvider::Deployer)
+            (input.provided_by.contains(&StackInputProvider::Deployer)
+                || input.controls_input(stack.inputs(), |dependent| {
+                    dependent.provided_by.contains(&StackInputProvider::Deployer)
+                        && dependent.applies_to(platform)
+                }))
                 // Deployer secrets are written into the customer's own secret
                 // store, never passed through the template.
                 && !alien_core::is_deployer_secret_input(input)
                 && input.applies_to(platform)
         })
-        .cloned()
+        .filter_map(|input| {
+            let mut input = input.clone();
+            if let Some(condition) = &input.when {
+                let controller_applies = stack
+                    .inputs()
+                    .iter()
+                    .find(|reference| reference.id == condition.input)
+                    .is_some_and(|reference| reference.applies_to(platform));
+                if !controller_applies {
+                    if condition.equals {
+                        return None;
+                    }
+                    input.when = None;
+                }
+            }
+            Some(input)
+        })
         .collect()
 }
 
@@ -885,7 +905,44 @@ fn add_stack_input_parameters(
             }));
         }
         if input.kind == StackInputKind::StringList {
-            add_list_parameter_condition(template, &parameter_name);
+            if input.when.is_none() {
+                add_list_parameter_condition(template, &parameter_name);
+            } else {
+                template.conditions.insert(
+                    format!("Has{parameter_name}"),
+                    CfExpression::not(equals_ref(&parameter_name, "")),
+                );
+            }
+        }
+        if let Some(when) = &input.when {
+            if stack_input_omits_empty_value(input) && input.kind != StackInputKind::StringList {
+                template.conditions.insert(
+                    format!("Has{parameter_name}"),
+                    CfExpression::not(equals_ref(&parameter_name, "")),
+                );
+            }
+            let controller = stack_input_parameter_name_for_id(&when.input);
+            let active = equals_ref(&controller, &when.equals.to_string());
+            template
+                .conditions
+                .insert(format!("{parameter_name}Applies"), active.clone());
+            if input.required {
+                template.rules.insert(
+                    format!("{parameter_name}Required"),
+                    CfRule {
+                        assertions: vec![CfRuleAssertion {
+                            assertion: CfExpression::or([
+                                CfExpression::not(active),
+                                CfExpression::not(equals_ref(&parameter_name, "")),
+                            ]),
+                            assert_description: format!(
+                                "{} is required when {} is {}.",
+                                input.id, when.input, when.equals
+                            ),
+                        }],
+                    },
+                );
+            }
         }
         template
             .parameters
@@ -935,6 +992,20 @@ fn stack_input_parameter(input: &StackInputDefinition) -> CfParameter {
         ]);
     }
 
+    if input.when.is_some() {
+        // CloudFormation applies parameter constraints before Rules, even to
+        // inactive inputs. The registration endpoint validates active values.
+        parameter.parameter_type = "String".into();
+        parameter
+            .default
+            .get_or_insert_with(|| CfExpression::from(""));
+        parameter.allowed_values = None;
+        parameter.allowed_pattern = None;
+        parameter.min_length = None;
+        parameter.max_length = None;
+        parameter.min_value = None;
+        parameter.max_value = None;
+    }
     parameter
 }
 
@@ -956,17 +1027,71 @@ fn stack_input_default_expression(default: &StackInputDefaultValue) -> CfExpress
     }
 }
 
+// A blank parameter without an input default represents an unanswered optional input.
+// With a text/list default, blank is an explicit empty answer; numeric/boolean kinds cannot
+// represent that answer and must omit the placeholder instead.
+fn stack_input_omits_empty_value(input: &StackInputDefinition) -> bool {
+    !input.required
+        && (input.default.is_none()
+            || matches!(
+                input.kind,
+                StackInputKind::Number | StackInputKind::Integer | StackInputKind::Boolean
+            ))
+}
+
 fn stack_input_values_expression(inputs: &[StackInputDefinition]) -> CfExpression {
-    CfExpression::object(inputs.iter().map(|input| {
-        (
-            input.id.clone(),
-            if input.kind == StackInputKind::StringList {
-                list_parameter_value(&stack_input_parameter_name(input))
-            } else {
-                CfExpression::ref_(stack_input_parameter_name(input))
-            },
-        )
-    }))
+    CfExpression::object(
+        inputs
+            .iter()
+            .filter(|input| input.provided_by.contains(&StackInputProvider::Deployer))
+            .map(|input| {
+                let parameter = stack_input_parameter_name(input);
+                let value = if input.kind == StackInputKind::StringList {
+                    if input.when.is_none() {
+                        list_parameter_value(&parameter)
+                    } else {
+                        CfExpression::if_(
+                            format!("Has{parameter}"),
+                            CfExpression::object([(
+                                "Fn::Split",
+                                CfExpression::list([
+                                    CfExpression::from(","),
+                                    CfExpression::ref_(&parameter),
+                                ]),
+                            )]),
+                            if stack_input_omits_empty_value(input) {
+                                CfExpression::no_value()
+                            } else {
+                                CfExpression::list(Vec::<CfExpression>::new())
+                            },
+                        )
+                    }
+                } else {
+                    CfExpression::ref_(&parameter)
+                };
+                let value = if input.when.is_some() {
+                    let value = if stack_input_omits_empty_value(input)
+                        && input.kind != StackInputKind::StringList
+                    {
+                        CfExpression::if_(
+                            format!("Has{parameter}"),
+                            value,
+                            CfExpression::no_value(),
+                        )
+                    } else {
+                        value
+                    };
+                    CfExpression::if_(
+                        format!("{parameter}Applies"),
+                        value,
+                        CfExpression::no_value(),
+                    )
+                } else {
+                    value
+                };
+                (input.id.clone(), value)
+            }),
+    )
 }
 
 fn regional_service_token(

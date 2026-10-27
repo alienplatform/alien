@@ -1408,6 +1408,7 @@ mod tests {
         let mut input = StackInputDefinition {
             id: "databasePassword".to_string(),
             kind: StackInputKind::Secret,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required: true,
             label: "Database password".to_string(),
@@ -1809,6 +1810,7 @@ mod tests {
             inputs: vec![StackInputDefinition {
                 id: "apiKey".to_string(),
                 kind: StackInputKind::Secret,
+                when: None,
                 provided_by: vec![StackInputProvider::Deployer],
                 required: true,
                 label: "API key".to_string(),

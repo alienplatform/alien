@@ -16,6 +16,7 @@ fn stack_with_inputs() -> Stack {
         .inputs(vec![StackInputDefinition {
             id: "apiBaseUrl".to_string(),
             kind: StackInputKind::String,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required: true,
             label: "API base URL".to_string(),
@@ -102,6 +103,7 @@ fn deployer_secret_input(provided_by: Vec<StackInputProvider>) -> StackInputDefi
     StackInputDefinition {
         id: "tailScaleAuthKey".to_string(),
         kind: StackInputKind::Secret,
+        when: None,
         provided_by,
         required: true,
         label: "Tailscale auth key".to_string(),
@@ -198,4 +200,241 @@ fn deployer_secrets_never_pass_through_the_template() {
         .expect("location");
         assert_eq!(evaluate(&output.value, stack_name), expected.name);
     }
+}
+
+#[test]
+fn conditional_inputs_produce_a_valid_cloudformation_template() {
+    for provider in [StackInputProvider::Deployer, StackInputProvider::Developer] {
+        conditional_inputs_produce_a_valid_cloudformation_template_for_provider(provider);
+    }
+}
+
+fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
+    provider: StackInputProvider,
+) {
+    let mut stack = stack_with_inputs();
+    let mut input = serde_json::to_value(&stack.inputs[0]).unwrap();
+    input["when"] = serde_json::json!({"input": "enabled", "equals": true});
+    stack.inputs[0] = serde_json::from_value(input).unwrap();
+    stack.inputs.push(StackInputDefinition::deployer_boolean(
+        "enabled",
+        "Enabled",
+        "Enable the endpoint",
+        Some(true),
+    ));
+    stack.inputs.last_mut().unwrap().provided_by = if provider == StackInputProvider::Developer {
+        vec![StackInputProvider::Developer, StackInputProvider::Deployer]
+    } else {
+        vec![StackInputProvider::Deployer]
+    };
+    let mut labels = stack.inputs[0].clone();
+    labels.id = "labels".into();
+    labels.kind = StackInputKind::StringList;
+    labels.required = false;
+    labels.validation = None;
+    let mut optional_labels = labels.clone();
+    optional_labels.id = "optionalLabels".into();
+    optional_labels.validation =
+        Some(serde_json::from_value(serde_json::json!({"minItems":1})).unwrap());
+    stack.inputs.push(optional_labels);
+    labels.default = Some(alien_core::StackInputDefaultValue::StringList(vec![
+        "default".into(),
+    ]));
+    stack.inputs.push(labels);
+    for (id, kind) in [
+        ("optionalNumber", StackInputKind::Number),
+        ("optionalBoolean", StackInputKind::Boolean),
+        ("optionalString", StackInputKind::String),
+    ] {
+        let mut input = stack.inputs[0].clone();
+        input.id = id.into();
+        input.kind = kind;
+        input.required = false;
+        input.default = (input.kind == StackInputKind::String)
+            .then(|| alien_core::StackInputDefaultValue::String("default-answer".into()));
+        input.validation = None;
+        stack.inputs.push(input);
+    }
+
+    let mut optional_text = stack.inputs[0].clone();
+    optional_text.id = "optionalText".into();
+    optional_text.required = false;
+    stack.inputs.push(optional_text);
+
+    let registry = sample_registry();
+    let template = generate_cloudformation_template(
+        &stack,
+        CloudFormationOptions {
+            registry: &registry,
+            target: CloudFormationTarget::Aws,
+            stack_settings: StackSettings::default(),
+            setup_target: "aws".into(),
+            setup_fingerprint: "test".into(),
+            setup_fingerprint_version: 1,
+            registration: RegistrationMode::CustomResource {
+                lambda_arn: "arn:aws:lambda:us-east-1:123456789012:function:register".into(),
+                callback_url: None,
+            },
+            description: None,
+            management_trust: Default::default(),
+        },
+    )
+    .unwrap();
+    alien_cloudformation::test_utils::cfn_lint(&to_yaml(&template).unwrap())
+        .assert_ok("conditional input template");
+    let registered = serde_json::to_value(
+        &template.resources["DeploymentRegistration"].properties["InputValues"],
+    )
+    .unwrap();
+    for (id, parameter, empty) in [
+        ("labels", "InputLabels", serde_json::json!([])),
+        (
+            "optionalLabels",
+            "InputOptionalLabels",
+            serde_json::Value::Null,
+        ),
+    ] {
+        for (raw, expected) in [("", empty), ("one,two", serde_json::json!(["one", "two"]))] {
+            let mut parameters = serde_json::json!({"InputEnabled":"true"});
+            parameters[parameter] = serde_json::json!(raw);
+            for (name, condition) in &template.conditions {
+                if name == &format!("Has{parameter}") || name == &format!("{parameter}Applies") {
+                    parameters[name] =
+                        evaluate_rule(&serde_json::to_value(condition).unwrap(), &parameters);
+                }
+            }
+            let value = evaluate_rule(&registered[id], &parameters);
+            assert_eq!(value, expected);
+            let mut answers = std::collections::HashMap::from([
+                ("enabled".to_string(), serde_json::json!(true)),
+                (
+                    "apiBaseUrl".to_string(),
+                    serde_json::json!("https://example.test"),
+                ),
+            ]);
+            if !value.is_null() {
+                answers.insert(id.to_string(), value);
+            }
+            let resolved = alien_core::resolve_stack_input_values(
+                &stack.inputs,
+                &answers,
+                alien_core::Platform::Aws,
+            )
+            .unwrap();
+            let answered = !expected.is_null() && !expected.as_array().is_some_and(Vec::is_empty);
+            assert_eq!(resolved.get(id), answered.then_some(&expected));
+        }
+    }
+    for (id, parameter, answer) in [
+        ("optionalNumber", "InputOptionalNumber", "42"),
+        ("optionalBoolean", "InputOptionalBoolean", "false"),
+        ("optionalString", "InputOptionalString", "custom-answer"),
+        ("optionalText", "InputOptionalText", "https://example.test"),
+    ] {
+        let empty = if id == "optionalString" {
+            serde_json::json!("")
+        } else {
+            serde_json::Value::Null
+        };
+        for (raw, expected) in [("", empty), (answer, serde_json::json!(answer))] {
+            let mut parameters = serde_json::json!({"InputEnabled":"true"});
+            parameters[parameter] = serde_json::json!(raw);
+            for (name, condition) in &template.conditions {
+                if name == &format!("Has{parameter}") || name == &format!("{parameter}Applies") {
+                    parameters[name] =
+                        evaluate_rule(&serde_json::to_value(condition).unwrap(), &parameters);
+                }
+            }
+            let value = evaluate_rule(&registered[id], &parameters);
+            assert_eq!(value, expected, "{id} with {raw:?}");
+            let mut answers = std::collections::HashMap::from([
+                ("enabled".to_string(), serde_json::json!(true)),
+                (
+                    "apiBaseUrl".to_string(),
+                    serde_json::json!("https://example.test"),
+                ),
+            ]);
+            if !value.is_null() {
+                answers.insert(id.to_string(), value);
+            }
+            let resolved = alien_core::resolve_stack_input_values(
+                &stack.inputs,
+                &answers,
+                alien_core::Platform::Aws,
+            )
+            .unwrap();
+            if id == "optionalString" {
+                assert_eq!(
+                    resolved.get(id),
+                    (!raw.is_empty()).then_some(&serde_json::json!(raw))
+                );
+            }
+        }
+    }
+    let rule = template
+        .rules
+        .get("InputApiBaseUrlRequired")
+        .expect("conditional required rule");
+    for (enabled, url, accepted) in [
+        ("false", "", true),
+        ("true", "", false),
+        ("true", "https://example.test", true),
+    ] {
+        let parameters = serde_json::json!({"InputEnabled": enabled, "InputApiBaseUrl": url});
+        for assertion in &rule.assertions {
+            assert_eq!(
+                evaluate_rule(
+                    &serde_json::to_value(&assertion.assertion).unwrap(),
+                    &parameters
+                ),
+                serde_json::json!(accepted)
+            );
+        }
+    }
+}
+
+// Evaluate the documented CloudFormation rule operators over parameter values.
+fn evaluate_rule(
+    expression: &serde_json::Value,
+    parameters: &serde_json::Value,
+) -> serde_json::Value {
+    if let Some(reference) = expression.get("Ref") {
+        return parameters[reference.as_str().unwrap()].clone();
+    }
+    if let Some(values) = expression.get("Fn::If") {
+        let branch = if parameters[values[0].as_str().unwrap()].as_bool().unwrap() {
+            1
+        } else {
+            2
+        };
+        return evaluate_rule(&values[branch], parameters);
+    }
+    if let Some(values) = expression.get("Fn::Split") {
+        let value = evaluate_rule(&values[1], parameters);
+        return serde_json::json!(value
+            .as_str()
+            .unwrap()
+            .split(values[0].as_str().unwrap())
+            .collect::<Vec<_>>());
+    }
+    if let Some(values) = expression.get("Fn::Equals") {
+        return serde_json::json!(
+            evaluate_rule(&values[0], parameters) == evaluate_rule(&values[1], parameters)
+        );
+    }
+    if let Some(values) = expression.get("Fn::Not") {
+        return serde_json::json!(!evaluate_rule(&values[0], parameters).as_bool().unwrap());
+    }
+    if let Some(values) = expression.get("Fn::Or") {
+        return serde_json::json!(values.as_array().unwrap().iter().any(|value| evaluate_rule(
+            value, parameters
+        )
+        .as_bool()
+        .unwrap()));
+    }
+    assert!(
+        !expression.is_object(),
+        "unsupported rule operator: {expression}"
+    );
+    expression.clone()
 }

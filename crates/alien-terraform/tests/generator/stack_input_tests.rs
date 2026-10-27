@@ -13,6 +13,7 @@ fn plain_input_stack() -> Stack {
         .inputs(vec![StackInputDefinition {
             id: "apiBaseUrl".to_string(),
             kind: StackInputKind::String,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required: true,
             label: "API base URL".to_string(),
@@ -69,6 +70,7 @@ fn deployer_secret_stack(provided_by: Vec<StackInputProvider>) -> Stack {
         .inputs(vec![StackInputDefinition {
             id: "apiKey".to_string(),
             kind: StackInputKind::Secret,
+            when: None,
             provided_by,
             required: true,
             label: "API key".to_string(),
@@ -191,6 +193,7 @@ fn inputs_colliding_after_normalization_are_refused() {
         StackInputDefinition {
             id: id.to_string(),
             kind: StackInputKind::Boolean,
+            when: None,
             provided_by: vec![StackInputProvider::Deployer],
             required: true,
             label: format!("Input {id}"),
@@ -222,4 +225,105 @@ fn inputs_colliding_after_normalization_are_refused() {
         "the message should render without space runs: {}",
         error.message
     );
+}
+
+#[test]
+fn conditional_inputs_validate_with_terraform_plan() {
+    for provider in [StackInputProvider::Deployer, StackInputProvider::Developer] {
+        conditional_inputs_validate_with_terraform_plan_for_provider(provider);
+    }
+}
+
+fn conditional_inputs_validate_with_terraform_plan_for_provider(provider: StackInputProvider) {
+    let mut stack = plain_input_stack();
+    let mut input = serde_json::to_value(&stack.inputs[0]).unwrap();
+    input["when"] = serde_json::json!({"input": "enabled", "equals": true});
+    stack.inputs[0] = serde_json::from_value(input).unwrap();
+    stack.inputs.push(StackInputDefinition::deployer_boolean(
+        "enabled",
+        "Enabled",
+        "Enable the endpoint",
+        Some(true),
+    ));
+    stack.inputs.last_mut().unwrap().provided_by = if provider == StackInputProvider::Developer {
+        vec![StackInputProvider::Developer, StackInputProvider::Deployer]
+    } else {
+        vec![StackInputProvider::Deployer]
+    };
+    let mut list = stack.inputs[0].clone();
+    list.id = "labels".into();
+    list.kind = StackInputKind::StringList;
+    list.required = false;
+    list.validation = None;
+    stack.inputs.push(list);
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    assert_terraform_valid(&module, "conditional_inputs");
+
+    // Exercise the generated input interface without provisioning cloud resources.
+    let variables: hcl::Body = hcl::from_str(module.get("variables.tf").unwrap()).unwrap();
+    let variables = hcl::Body::from(
+        variables
+            .into_iter()
+            .filter(|structure| match structure {
+                hcl::Structure::Block(block) => {
+                    block.identifier.as_str() == "variable"
+                        && block
+                            .labels
+                            .first()
+                            .is_some_and(|label| label.as_str().starts_with("input_"))
+                }
+                _ => false,
+            })
+            .collect::<Vec<_>>(),
+    );
+    let files =
+        indexmap::IndexMap::from([("inputs.tf".to_string(), hcl::to_string(&variables).unwrap())]);
+    let disabled = super::helpers::test_utils::terraform_plan_with_vars(
+        &files,
+        &[("input_enabled", "false"), ("input_api_base_url", "\"\"")],
+    );
+    disabled.assert_ok("inactive required input accepts empty value");
+    for (enabled, labels, accepted) in [
+        ("false", "[42]", true),
+        ("true", "[42]", false),
+        ("true", "[null]", false),
+        ("true", "[\"label\"]", true),
+    ] {
+        let plan = super::helpers::test_utils::terraform_plan_with_vars(
+            &files,
+            &[
+                ("input_enabled", enabled),
+                ("input_api_base_url", "\"https://example.test\""),
+                ("input_labels", labels),
+            ],
+        );
+        assert_eq!(
+            plan.is_ok(),
+            accepted,
+            "{enabled}/{labels}: {}",
+            plan.stderr
+        );
+        if !accepted {
+            assert!(plan.stderr.contains("input_labels"), "{}", plan.stderr);
+        }
+    }
+
+    let enabled = super::helpers::test_utils::terraform_plan_with_vars(
+        &files,
+        &[("input_enabled", "true"), ("input_api_base_url", "\"\"")],
+    );
+    assert!(!enabled.is_ok(), "an active required input cannot be empty");
+    assert!(
+        enabled.stderr.contains("input_api_base_url"),
+        "{}",
+        enabled.stderr
+    );
+    super::helpers::test_utils::terraform_plan_with_vars(
+        &files,
+        &[
+            ("input_enabled", "true"),
+            ("input_api_base_url", "\"https://example.test\""),
+        ],
+    )
+    .assert_ok("active valid input");
 }

@@ -114,6 +114,12 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
                 continue;
             };
 
+            if input.when.is_some() {
+                errors.push(format!(
+                    "Input '{input_id}' enables resource '{resource_id}' but has when; resource gates must be unconditional"
+                ));
+            }
+
             if input.kind != StackInputKind::Boolean {
                 errors.push(format!(
                     "Resource '{resource_id}' is enabled by input '{input_id}', which is {:?}. \

@@ -1,9 +1,9 @@
 //! Configure an exact existing setup target before acquiring its execution claim.
 
 use super::{
-    collect_deployer_input_values, create_manager_client, create_manager_http_client,
-    deployment_info_url, load_public_endpoints, load_stack_settings, push_initial_setup_targeted,
-    resolve_base_url, resolve_token, stack_input_matches_context, DeployConfigFile,
+    create_manager_client, create_manager_http_client, deployer_secret_value_error,
+    deployment_info_url, load_public_endpoints, load_stack_settings, parse_stack_input_arg,
+    push_initial_setup_targeted, resolve_base_url, resolve_token, DeployConfigFile,
     DeploymentInfoSetupConfig, SetupRunOutcome, UpArgs,
 };
 use crate::{
@@ -11,8 +11,8 @@ use crate::{
     output,
 };
 use alien_core::{
-    embedded_config::DeployCliConfig, ClientConfig, ExternalBinding, ExternalBindings, Platform,
-    StorageBinding,
+    embedded_config::DeployCliConfig, is_deployer_secret_input, ClientConfig, ExternalBinding,
+    ExternalBindings, Platform, StackInputProvider, StorageBinding,
 };
 use alien_deployment::manager_api_transport::AcquiredDeploymentPayload;
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -181,28 +181,49 @@ fn explicit_input_values(
     if !supplied {
         return Ok(HashMap::new());
     }
-    let mut inputs = setup_config
+    let inputs = setup_config
+        .and_then(|config| config.inputs.as_deref())
+        .unwrap_or_default();
+    let mut values = config
         .and_then(|config| config.inputs.clone())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for value in &args.input_values {
+        let (id, value) = parse_stack_input_arg(value, "--input")?;
+        values.insert(id, value);
+    }
+    if let Some(value) = args.secret_input_values.first() {
+        let (id, _) = parse_stack_input_arg(value, "--secret-input")?;
+        return Err(deployer_secret_value_error(inputs, &id));
+    }
+    if let Some(id) = config
+        .and_then(|config| config.secret_inputs.as_ref())
+        .and_then(|values| values.keys().next())
+    {
+        return Err(deployer_secret_value_error(inputs, id));
+    }
+    for id in values.keys() {
+        let input = inputs
+            .iter()
+            .find(|input| {
+                input.id == *id
+                    && input.provided_by.contains(&StackInputProvider::Deployer)
+                    && input.applies_to(Platform::Machines)
+            })
+            .ok_or_else(|| {
+                invalid_target(&format!(
+                    "Unknown or unavailable deployer stack input '{id}'."
+                ))
+            })?;
+        if is_deployer_secret_input(input) {
+            return Err(deployer_secret_value_error(inputs, id));
+        }
+    }
+    // The server combines this patch with stored answers before evaluating conditions
+    // and coercing values. Evaluating against release defaults here can drop an edit.
+    Ok(values
         .into_iter()
-        .filter(|input| stack_input_matches_context(input, Platform::Machines))
-        .collect::<Vec<_>>();
-    if inputs.is_empty() {
-        return Err(invalid_target(
-            "The exact target has no deployer input definitions for the supplied values.",
-        ));
-    }
-    // This is a patch: required values already stored by setup must be retained,
-    // not prompted for again or replaced by release defaults.
-    for input in &mut inputs {
-        input.required = false;
-    }
-    collect_deployer_input_values(
-        &inputs,
-        &args.input_values,
-        &args.secret_input_values,
-        config,
-    )
+        .map(|(id, value)| (id, Value::String(value)))
+        .collect())
 }
 
 fn invalid_target(message: &str) -> AlienError<ErrorData> {
@@ -639,13 +660,30 @@ mod tests {
     }
 
     #[test]
-    fn input_patch_only_contains_explicit_typed_values() {
+    fn conditional_patch_preserves_explicit_values_without_stored_answers() {
+        for values in [Value::Null, json!({})] {
+            let definitions: DeploymentInfoSetupConfig = serde_json::from_value(json!({
+                "inputs": [
+                    {"id":"bucket", "kind":"integer", "providedBy":["deployer"], "required":true, "label":"Bucket", "description":"Bucket count", "when":{"input":"enabled","equals":true}},
+                    {"id":"enabled", "kind":"boolean", "providedBy":["deployer"], "required":true, "label":"Enabled", "description":"Enable snapshots", "default":{"type":"boolean","value":false}}
+                ], "values": values
+            })).unwrap();
+            let args = UpArgs::parse_from(["democtl", "--input", "bucket=3"]);
+            assert_eq!(
+                explicit_input_values(&args, None, Some(&definitions)).unwrap(),
+                HashMap::from([("bucket".into(), json!("3"))])
+            );
+        }
+    }
+
+    #[test]
+    fn input_patch_only_contains_explicit_values() {
         let args = UpArgs::parse_from(["democtl", "--input", "archiveEnabled=true"]);
         let definitions: DeploymentInfoSetupConfig =
             serde_json::from_value(input_definitions()).unwrap();
         let values = explicit_input_values(&args, None, Some(&definitions)).unwrap();
         assert_eq!(values.len(), 1);
-        assert_eq!(values["archiveEnabled"], true);
+        assert_eq!(values["archiveEnabled"], "true");
         assert!(!values.contains_key("storageSecret"));
         assert!(!values.contains_key("alreadyConfigured"));
         let malformed = UpArgs::parse_from(["democtl", "--secret-input", "sensitive-test-marker"]);
@@ -712,7 +750,7 @@ storageSecret = "canary-secret"
             let inputs = server.mock_async(|when, then| {
                 when.method(PATCH).path("/v1/deployments/dep_demo/inputs").json_body(json!({
                     "expectedBaseOperationId":"op_blocked",
-                    "inputValues":{"archiveEnabled":true}
+                    "inputValues":{"archiveEnabled":"true"}
                 }));
                 if outcome == "stale" { then.status(409).body("test-secret"); }
                 else { then.status(200).json_body(json!({

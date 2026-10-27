@@ -51,7 +51,8 @@ use alien_manager::stores::sqlite::{
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams,
     CreateImportedDeploymentParams, CreateReleaseParams, CreateTokenParams, CredentialResolver,
-    DeploymentStore, ReconcileData, ReleaseStore, TelemetryBackend, TokenStore, TokenType,
+    DeploymentGroupSetup, DeploymentStore, ReconcileData, ReleaseStore, TelemetryBackend,
+    TokenStore, TokenType,
 };
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,14 @@ async fn make_fixture(seeded_stack: Option<Stack>) -> Fixture {
 }
 
 async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stack>) -> Fixture {
+    make_fixture_with_group_inputs(platform, seeded_stack, HashMap::new()).await
+}
+
+async fn make_fixture_with_group_inputs(
+    platform: Platform,
+    seeded_stack: Option<Stack>,
+    input_values: HashMap<String, serde_json::Value>,
+) -> Fixture {
     // Use a temp directory because turso's WAL mode needs a real file path.
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("test.db");
@@ -105,7 +114,10 @@ async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stac
             CreateDeploymentGroupParams {
                 name: "imported-group".to_string(),
                 max_deployments: 100,
-                setup: Default::default(),
+                setup: DeploymentGroupSetup {
+                    input_values,
+                    ..Default::default()
+                },
             },
         )
         .await
@@ -2273,6 +2285,7 @@ async fn an_import_carrying_a_deployer_secret_value_is_refused() {
     stack.inputs = vec![alien_core::StackInputDefinition {
         id: "apiKey".to_string(),
         kind: alien_core::StackInputKind::Secret,
+        when: None,
         provided_by: vec![alien_core::StackInputProvider::Deployer],
         required: true,
         label: "API key".to_string(),
@@ -2518,6 +2531,7 @@ fn stack_with_storage_and_generated_secret(resource_id: &str) -> Stack {
         .inputs(vec![alien_core::StackInputDefinition {
             id: "databasePassword".to_string(),
             kind: alien_core::StackInputKind::Secret,
+            when: None,
             provided_by: vec![alien_core::StackInputProvider::Developer],
             required: true,
             label: "Database password".to_string(),
@@ -2655,6 +2669,82 @@ async fn setup_cannot_set_a_generated_secret() {
         .await
         .unwrap();
     assert!(existing.is_none(), "nothing is created");
+}
+
+#[tokio::test]
+async fn registration_validates_active_conditional_values() {
+    for (enabled, value, expected) in [
+        (false, serde_json::json!(42), StatusCode::CREATED),
+        (true, serde_json::json!("bad"), StatusCode::BAD_REQUEST),
+        (
+            true,
+            serde_json::json!("https://example.test"),
+            StatusCode::CREATED,
+        ),
+    ] {
+        let mut stack = stack_with_storage_and_generated_secret("assets");
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id":"endpoint", "kind":"string", "providedBy":["deployer"], "required":true,
+             "label":"Endpoint", "description":"Service endpoint", "validation":{"format":"url"},
+             "when":{"input":"enabled","equals":true}},
+            {"id":"enabled", "kind":"boolean", "providedBy":["deployer"], "required":true,
+             "label":"Enabled", "description":"Enable service"}
+        ]))
+        .unwrap();
+        let fixture = make_fixture(Some(stack)).await;
+        let mut body = aws_s3_import_request(
+            "conditional-import",
+            "us-east-1",
+            "assets",
+            "example-imports",
+        );
+        body.input_values = HashMap::from([
+            ("enabled".into(), serde_json::json!(enabled)),
+            ("endpoint".into(), value.clone()),
+        ]);
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, expected, "import enabled={enabled}: {json:#}");
+        if expected == StatusCode::BAD_REQUEST {
+            assert!(json.to_string().contains("endpoint"));
+        }
+        let (status, json) = post_initialize(
+            &fixture,
+            serde_json::json!({
+                "name":"conditional-initialize", "platform":"aws", "initialDesiredRelease":"active",
+                "inputValues":{"enabled":enabled,"endpoint":value}
+            }),
+        )
+        .await;
+        assert_eq!(status, expected, "initialize enabled={enabled}: {json:#}");
+        if expected == StatusCode::BAD_REQUEST {
+            assert!(json.to_string().contains("endpoint"));
+        }
+        let router = alien_manager::routes::deployments::router().with_state(fixture.state.clone());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/deployments")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(
+                header::AUTHORIZATION,
+                format!("Bearer {}", fixture.dg_token),
+            )
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({
+                    "name":"conditional-create", "platform":"aws", "inputValues":body.input_values
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(
+            status,
+            expected,
+            "create enabled={enabled}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
 }
 
 async fn post_initialize(
@@ -3488,3 +3578,410 @@ mod protocol;
 
 #[path = "stack_import/reservation.rs"]
 mod reservation;
+
+#[tokio::test]
+async fn import_preserves_answers_controlled_by_group_inputs() {
+    for (required, enabled) in [(false, true), (true, true), (false, false), (true, false)] {
+        let mut stack = stack_with_storage_and_generated_secret("assets");
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id":"endpoint", "kind":"string", "providedBy":["deployer"], "required":required,
+             "label":"Endpoint", "description":"Service endpoint", "env":[{"name":"ENDPOINT"}],
+             "when":{"input":"enabled","equals":true}},
+            {"id":"enabled", "kind":"boolean", "providedBy":["developer","deployer"], "required":true,
+             "label":"Enabled", "description":"Enable service"}
+        ])).unwrap();
+        let fixture = make_fixture_with_group_inputs(
+            Platform::Aws,
+            Some(stack.clone()),
+            HashMap::from([("enabled".into(), serde_json::json!(enabled))]),
+        )
+        .await;
+        let mut body = aws_s3_import_request(
+            "conditional-import",
+            "us-east-1",
+            "assets",
+            "example-imports",
+        );
+        body.input_values
+            .insert("endpoint".into(), serde_json::json!("https://example.test"));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::CREATED, "required={required}: {json:#}");
+        let response: StackImportResponse = serde_json::from_value(json).unwrap();
+        let deployment = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &response.deployment_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            deployment.input_values["enabled"],
+            serde_json::json!(enabled)
+        );
+        if enabled {
+            assert_eq!(
+                deployment.input_values["endpoint"],
+                serde_json::json!("https://example.test")
+            );
+        } else {
+            assert!(!deployment.input_values.contains_key("endpoint"));
+        }
+        let env = alien_core::resolve_stack_input_environment_variables(
+            &stack.inputs,
+            &deployment.input_values,
+            Platform::Aws,
+        )
+        .unwrap();
+        assert_eq!(
+            env.len(),
+            usize::from(enabled),
+            "the group controller must survive registration"
+        );
+        if enabled {
+            assert_eq!(env[0].name, "ENDPOINT");
+            assert_eq!(env[0].value, "https://example.test");
+        }
+    }
+}
+
+#[tokio::test]
+async fn import_requires_only_deployer_answers_and_allows_deployment_token_replay() {
+    for conditional in [false, true] {
+        let mut stack = stack_with_storage_and_generated_secret("assets");
+        stack.inputs = serde_json::from_value(serde_json::json!([
+        {"id":"optionalUrl", "kind":"string", "providedBy":["deployer"], "required":false,
+         "label":"URL", "description":"Optional URL", "validation":{"format":"url"}},
+        {"id":"optionalItems", "kind":"stringList", "providedBy":["deployer"], "required":false,
+         "label":"Items", "description":"Optional items", "validation":{"minItems":1}},
+        {"id":"developerValue", "kind":"string", "providedBy":["developer"], "required":true,
+         "label":"Developer value", "description":"Configured separately", "validation":{"minLength":3}},
+        {"id":"developerSecret", "kind":"secret", "providedBy":["developer"], "required":true,
+         "label":"Developer secret", "description":"Configured separately"},
+        {"id":"endpoint", "kind":"string", "providedBy":["deployer"], "required":true,
+         "label":"Endpoint", "description":"Service endpoint", "when":{"input":"enabled","equals":true}},
+        {"id":"enabled", "kind":"boolean", "providedBy":["deployer"], "required":true,
+         "label":"Enabled", "description":"Enable service", "default":{"type":"boolean","value":true}}
+    ])).unwrap();
+        if !conditional {
+            for input in &mut stack.inputs {
+                input.when = None;
+            }
+        }
+        let fixture =
+            make_fixture_with_group_inputs(Platform::Aws, Some(stack.clone()), HashMap::new())
+                .await;
+        let mut body = aws_s3_import_request(
+            "developer-input-import",
+            "us-east-1",
+            "assets",
+            "example-imports",
+        );
+        body.input_values
+            .insert("optionalUrl".into(), serde_json::json!(""));
+        body.input_values
+            .insert("optionalItems".into(), serde_json::json!([]));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+        assert!(json.to_string().contains("endpoint"), "{json:#}");
+        body.input_values
+            .insert("endpoint".into(), serde_json::json!("https://example.test"));
+        body.input_values
+            .insert("enabled".into(), serde_json::json!(true));
+        body.input_values
+            .insert("developerValue".into(), serde_json::json!("x"));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+        assert!(json.to_string().contains("developerValue"), "{json:#}");
+        body.input_values.remove("developerValue");
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::CREATED, "{json:#}");
+        let response: StackImportResponse = serde_json::from_value(json).unwrap();
+        let (status, json) =
+            post_import(&fixture, response.deployment_token.as_deref(), &body).await;
+        assert_eq!(status, StatusCode::OK, "{json:#}");
+        let replay: StackImportResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(replay.deployment_id, response.deployment_id);
+        let imported = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &response.deployment_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        fixture
+            .deployment_store
+            .reconcile(
+                &alien_manager::auth::Subject::system(),
+                ReconcileData {
+                    deployment_id: imported.id,
+                    session: "test-reconcile".into(),
+                    execution_claim: None,
+                    state: DeploymentState {
+                        status: DeploymentStatus::Running,
+                        platform: imported.platform,
+                        current_release: Some(ReleaseInfo {
+                            release_id: fixture.release_id.clone(),
+                            version: None,
+                            description: None,
+                            stack,
+                        }),
+                        target_release: None,
+                        stack_state: imported.stack_state,
+                        error: None,
+                        environment_info: imported.environment_info,
+                        runtime_metadata: imported.runtime_metadata,
+                        retry_requested: false,
+                        protocol_version: imported.deployment_protocol_version,
+                    },
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                    capabilities: vec![],
+                    operator_version: None,
+                    operations_report: None,
+                },
+            )
+            .await
+            .unwrap();
+        body.input_values
+            .insert("enabled".into(), serde_json::json!(true));
+        body.input_values.remove("endpoint");
+        let (status, json) =
+            post_import(&fixture, response.deployment_token.as_deref(), &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+        assert!(json.to_string().contains("endpoint"), "{json:#}");
+        let stored = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &response.deployment_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.input_values["endpoint"], "https://example.test");
+    }
+}
+
+#[tokio::test]
+async fn import_validates_developer_answers_controlled_by_group_inputs() {
+    for required in [false, true] {
+        let mut stack = stack_with_storage_and_generated_secret("assets");
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id":"endpoint", "kind":"string", "providedBy":["developer"], "required":required,
+             "label":"Endpoint", "description":"Service endpoint", "validation":{"format":"url"},
+             "when":{"input":"enabled","equals":true}},
+            {"id":"enabled", "kind":"boolean", "providedBy":["developer"], "required":true,
+             "label":"Enabled", "description":"Enable service"}
+        ]))
+        .unwrap();
+        let fixture = make_fixture_with_group_inputs(
+            Platform::Aws,
+            Some(stack),
+            HashMap::from([("enabled".into(), serde_json::json!(true))]),
+        )
+        .await;
+        let mut body = aws_s3_import_request(
+            "conditional-import",
+            "us-east-1",
+            "assets",
+            "example-imports",
+        );
+        body.input_values
+            .insert("endpoint".into(), serde_json::json!("invalid"));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+        assert!(json.to_string().contains("endpoint"), "{json:#}");
+        body.input_values
+            .insert("endpoint".into(), serde_json::json!("https://example.test"));
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::CREATED, "required={required}: {json:#}");
+        let response: StackImportResponse = serde_json::from_value(json).unwrap();
+        let deployment = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &response.deployment_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            deployment.input_values["endpoint"],
+            serde_json::json!("https://example.test")
+        );
+    }
+}
+
+#[tokio::test]
+async fn older_template_reregistration_allows_new_required_inputs_but_validates_answers() {
+    let mut stack = stack_with_storage_and_generated_secret("assets");
+    stack.inputs.clear();
+    let fixture = make_fixture(Some(stack.clone())).await;
+    let mut body =
+        aws_s3_import_request("older-template", "us-east-1", "assets", "example-imports");
+    body.release_id = fixture.release_id.clone();
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "{json:#}");
+    let original: StackImportResponse = serde_json::from_value(json).unwrap();
+    let imported = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &original.deployment_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: imported.id,
+                session: "test-reconcile".into(),
+                execution_claim: None,
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: imported.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: stack.clone(),
+                    }),
+                    target_release: None,
+                    stack_state: imported.stack_state,
+                    error: None,
+                    environment_info: imported.environment_info,
+                    runtime_metadata: imported.runtime_metadata,
+                    retry_requested: false,
+                    protocol_version: imported.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+                operations_report: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    stack.inputs = serde_json::from_value(serde_json::json!([
+        {"id":"endpoint", "kind":"string", "providedBy":["deployer"], "required":true,
+         "label":"Endpoint", "description":"Service endpoint", "validation":{"format":"url"}}
+    ]))
+    .unwrap();
+    let release = fixture
+        .state
+        .release_store
+        .create_release(
+            &alien_manager::auth::Subject::system(),
+            CreateReleaseParams {
+                project_id: "default".into(),
+                stacks: HashMap::from([(Platform::Aws, stack)]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .unwrap();
+    body.release_id = Some(release.id);
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let updated: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert_eq!(updated.deployment_id, original.deployment_id);
+
+    body.input_values
+        .insert("endpoint".into(), serde_json::json!("invalid"));
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+    assert!(json.to_string().contains("endpoint"), "{json:#}");
+    body.input_values
+        .insert("endpoint".into(), serde_json::json!(""));
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+    assert!(json.to_string().contains("endpoint"), "{json:#}");
+
+    body.input_values.clear();
+    body.deployment_name = "first-registration".into();
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+    assert!(json.to_string().contains("endpoint"), "{json:#}");
+
+    let response = alien_manager::routes::deployments::router()
+        .with_state(fixture.state.clone())
+        .oneshot(Request::builder().method("POST").uri("/v1/deployments")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, format!("Bearer {}", fixture.dg_token))
+            .body(Body::from(serde_json::to_vec(&serde_json::json!({
+                "name":body.deployment_name, "platform":"aws", "setupHandoff":"await-registration",
+                "setupMethod":"cloudformation", "pinnedReleaseId":body.release_id
+            })).unwrap())).unwrap()).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
+    assert!(json.to_string().contains("endpoint"), "{json:#}");
+}
+
+#[tokio::test]
+async fn create_requires_deployer_answers_and_validates_present_developer_answers() {
+    for (values, expected) in [
+        (serde_json::json!({}), StatusCode::BAD_REQUEST),
+        (
+            serde_json::json!({"endpoint":"https://example.test"}),
+            StatusCode::CREATED,
+        ),
+        (
+            serde_json::json!({"endpoint":"https://example.test", "developerValue":"x"}),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let mut stack = stack_with_storage_and_generated_secret("assets");
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id":"developerValue", "kind":"string", "providedBy":["developer"], "required":true,
+             "label":"Developer value", "description":"Configured separately", "validation":{"minLength":3}},
+            {"id":"developerSecret", "kind":"secret", "providedBy":["developer"], "required":true,
+             "label":"Developer secret", "description":"Configured separately"},
+            {"id":"endpoint", "kind":"string", "providedBy":["deployer"], "required":true,
+             "label":"Endpoint", "description":"Service endpoint", "validation":{"format":"url"}}
+        ])).unwrap();
+        let fixture = make_fixture(Some(stack)).await;
+        let router = alien_manager::routes::deployments::router().with_state(fixture.state.clone());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/deployments")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(
+                header::AUTHORIZATION,
+                format!("Bearer {}", fixture.dg_token),
+            )
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({
+                    "name":"developer-create", "platform":"aws", "inputValues":values
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(status, expected, "{}", String::from_utf8_lossy(&bytes));
+    }
+}

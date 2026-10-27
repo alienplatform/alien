@@ -243,6 +243,7 @@ export type {
   ServiceAccountHeartbeatStatus,
   ServiceActivationHeartbeatData,
   ServiceActivationHeartbeatStatus,
+  StackInputCondition,
   // Stack resource state types
   StackResourceState,
   StackSettings,
@@ -472,6 +473,7 @@ export {
   ServiceAccountHeartbeatStatusSchema,
   ServiceActivationHeartbeatDataSchema,
   ServiceActivationHeartbeatStatusSchema,
+  StackInputConditionSchema,
   StackInputDefaultValueSchema,
   StackInputDefinitionSchema,
   StackInputEnvironmentMappingSchema,

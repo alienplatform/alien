@@ -909,7 +909,7 @@ mod tests {
             SyncInput, SyncRequest,
         },
         ContainerHeartbeatData, DeploymentConfig, DeploymentState, DeploymentStatus,
-        EnvironmentVariablesSnapshot, ExternalBindings, Platform, ReleaseInfo,
+        EnvironmentVariable, EnvironmentVariablesSnapshot, ExternalBindings, Platform, ReleaseInfo,
         ResourceHeartbeatData, RuntimeMetadata, Stack, StackSettings, StackState,
         CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
@@ -947,9 +947,10 @@ mod tests {
         agent_report_completes_claim, build_target_deployment_config, deployment_needs_target,
         deployment_state_from_record, deployment_target_release_id, management_platform,
         may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
-        should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_kubernetes_base_platform, AgentSyncRequest, AgentSyncWireRequest, HelmRelease,
-        InitialDesiredRelease, InitializeRequest, ReconcileRequest, RunnerConfigSources,
+        resolve_pull_input_environment, should_ignore_agent_state_report,
+        should_return_current_state_for_agent_sync, validate_kubernetes_base_platform,
+        AgentSyncRequest, AgentSyncWireRequest, HelmRelease, InitialDesiredRelease,
+        InitializeRequest, ReconcileRequest, RunnerConfigSources,
     };
 
     #[tokio::test]
@@ -2085,6 +2086,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn off_platform_inputs_do_not_remove_independent_environment_values() {
+        let input = serde_json::from_value(serde_json::json!({
+            "id": "logLevel", "kind": "string", "providedBy": ["deployer"],
+            "required": true, "label": "Log level", "description": "Logging verbosity",
+            "platforms": ["aws"], "env": [{"name": "LOG_LEVEL"}]
+        }))
+        .unwrap();
+        let stack = Stack::new("logging".into()).inputs(vec![input]).build();
+        let mut deployment = deployment_record_with_state("running", None);
+        let variable = EnvironmentVariable {
+            name: "LOG_LEVEL".into(),
+            value: "debug".into(),
+            var_type: alien_core::EnvironmentVariableType::Plain,
+            target_resources: None,
+        };
+        deployment.user_environment_variables = Some(vec![variable.clone()]);
+        let resolved = resolve_pull_input_environment(&stack, &deployment).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].name, variable.name);
+        assert_eq!(resolved[0].value, variable.value);
+    }
+
     /// The reported case: a control plane supplies the config and stacks, the
     /// manager's loop starts the update, and `alien deploy` acquires it. The
     /// acquired config must be the one the loop runs with, or the second
@@ -2849,6 +2873,42 @@ fn remove_container_tunnels(stack: &mut alien_core::Stack) -> bool {
     removed
 }
 
+fn resolve_pull_input_environment(
+    stack: &alien_core::Stack,
+    deployment: &DeploymentRecord,
+) -> alien_core::Result<Vec<EnvironmentVariable>> {
+    let mut env_vars: Vec<EnvironmentVariable> = deployment
+        .user_environment_variables
+        .clone()
+        .unwrap_or_default();
+    // Inputs mapped to environment variables resolve against the
+    // target release, so a release that adds a mapped input takes
+    // effect without re-onboarding. Variables the deployment already
+    // carries win: embedders that resolve inputs themselves (into the
+    // deployment's variables) keep their values, and those mappings aren't
+    // resolved a second time. An input's other mappings still apply.
+    let unresolved_inputs: Vec<_> = stack
+        .inputs
+        .iter()
+        .map(|input| {
+            let mut input = input.clone();
+            input.env.retain(|mapping| {
+                !env_vars
+                    .iter()
+                    .any(|existing| existing.name == mapping.name)
+            });
+            input
+        })
+        .collect();
+    let input_env = alien_core::resolve_stack_input_environment_variables(
+        &unresolved_inputs,
+        &deployment.input_values,
+        deployment.platform,
+    )?;
+    env_vars.extend(input_env);
+    Ok(env_vars)
+}
+
 pub(crate) async fn build_pull_target(
     state: &AppState,
     deployment: &DeploymentRecord,
@@ -2907,51 +2967,16 @@ pub(crate) async fn build_pull_target(
         );
     }
 
-    let mut env_vars: Vec<EnvironmentVariable> = deployment
-        .user_environment_variables
-        .clone()
-        .unwrap_or_default();
-    // Inputs mapped to environment variables resolve against the
-    // target release, so a release that adds a mapped input takes
-    // effect without re-onboarding. Variables the deployment already
-    // carries win: embedders that resolve inputs themselves (into the
-    // deployment's variables) keep their values, and those mappings aren't
-    // resolved a second time. An input's other mappings still apply.
-    let unresolved_inputs: Vec<_> = stack
-        .inputs
-        .iter()
-        .filter_map(|input| {
-            let mut input = input.clone();
-            input.env.retain(|mapping| {
-                !env_vars
-                    .iter()
-                    .any(|existing| existing.name == mapping.name)
-            });
-            (!input.env.is_empty()).then_some(input)
-        })
-        .collect();
-    let input_env = match alien_core::resolve_stack_input_environment_variables(
-        &unresolved_inputs,
-        &deployment.input_values,
-        deployment.platform,
-    ) {
+    let env_vars = match resolve_pull_input_environment(&stack, deployment) {
         Ok(variables) => variables,
-        Err(e) => {
+        Err(error) => {
             return Err(ErrorData::bad_request(format!(
                 "Deployment input values do not resolve for release {}: {}",
-                r.id, e.message
+                r.id, error.message
             ))
-            .into_response());
+            .into_response())
         }
     };
-    for variable in input_env {
-        if !env_vars
-            .iter()
-            .any(|existing| existing.name == variable.name)
-        {
-            env_vars.push(variable);
-        }
-    }
 
     // Records loaded for sync always carry stack settings; in a
     // handler, answer with a 500 rather than panic-dropping the
@@ -3501,17 +3526,6 @@ async fn initialize(
                     Ok(release) => release,
                     Err(e) => return e.into_response(),
                 };
-            if let Some(stack) = starting_release
-                .as_ref()
-                .and_then(|release| release.stacks.get(&platform))
-            {
-                if let Err(e) = crate::generated_inputs::reject_generated_input_values(
-                    &stack.inputs,
-                    &req.input_values,
-                ) {
-                    return e.into_response();
-                }
-            }
 
             // Developer-provided setup on the group applies to every deployment
             // it creates; values supplied by the deployer at install win.
@@ -3530,7 +3544,48 @@ async fn initialize(
                 Err(e) => return e.into_response(),
             };
             let mut input_values = group_setup.input_values;
-            input_values.extend(req.input_values);
+            input_values.extend(req.input_values.clone());
+            if let Some(stack) = starting_release
+                .as_ref()
+                .and_then(|release| release.stacks.get(&platform))
+            {
+                let supplied_values = req
+                    .input_values
+                    .into_iter()
+                    .filter(|(id, _)| {
+                        stack
+                            .inputs
+                            .iter()
+                            .find(|input| input.id == *id)
+                            .is_none_or(|input| {
+                                input.when.is_none()
+                                    || input.applies(&stack.inputs, &input_values, platform)
+                            })
+                    })
+                    .collect();
+                if let Err(error) = crate::generated_inputs::reject_generated_input_values(
+                    &stack.inputs,
+                    &supplied_values,
+                ) {
+                    return error.into_response();
+                }
+                if let Err(error) =
+                    alien_core::resolve_stack_input_values(&stack.inputs, &input_values, platform)
+                {
+                    return error.into_response();
+                }
+                let condition_values = input_values.clone();
+                input_values.retain(|id, _| {
+                    stack
+                        .inputs
+                        .iter()
+                        .find(|input| input.id == *id)
+                        .is_none_or(|input| {
+                            input.when.is_none()
+                                || input.applies(&stack.inputs, &condition_values, platform)
+                        })
+                });
+            }
             let environment_variables = (!group_setup.environment_variables.is_empty())
                 .then_some(group_setup.environment_variables);
 

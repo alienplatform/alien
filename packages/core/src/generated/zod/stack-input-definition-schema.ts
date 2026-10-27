@@ -5,6 +5,7 @@
 
 import * as z from "zod";
 import { PlatformSchema } from "./platform-schema.js";
+import { StackInputConditionSchema } from "./stack-input-condition-schema.js";
 import { StackInputDefaultValueSchema } from "./stack-input-default-value-schema.js";
 import { StackInputEnvironmentMappingSchema } from "./stack-input-environment-mapping-schema.js";
 import { StackInputGenerateSchema } from "./stack-input-generate-schema.js";
@@ -41,6 +42,9 @@ get "providedBy"(){
 "required": z.boolean().describe("Whether a resolved value is required before deployment can proceed."),
 get "validation"(){
                 return z.union([StackInputValidationSchema, z.null()]).optional()
+              },
+get "when"(){
+                return z.union([StackInputConditionSchema, z.null()]).optional()
               }
     }).describe("Stack input definition serialized into a release stack.")
 
