@@ -66,6 +66,10 @@ The Operator:
                   argv is visible in `ps` / `/proc/<pid>/cmdline`."
 )]
 pub struct Args {
+    /// Validate this image without opening state or connecting to a manager.
+    #[arg(long, hide = true)]
+    pub self_update_check: bool,
+
     #[arg(long, env = "PLATFORM", value_parser = parse_platform)]
     pub platform: Platform,
 
@@ -449,6 +453,17 @@ async fn run_operator_cli(
 
     // Run the extension hook before any operator state is touched. Idempotent.
     init_hook();
+    if args.self_update_check {
+        std::fs::write(
+            "/dev/termination-log",
+            crate::self_update::IMAGE_CHECK_SUCCESS,
+        )
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Writing the image validation result".into(),
+        })?;
+        return Ok(());
+    }
 
     let data_dir = args
         .data_dir
