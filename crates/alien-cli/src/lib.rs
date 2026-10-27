@@ -34,8 +34,8 @@ use crate::commands::platform::{
 };
 #[cfg(feature = "platform")]
 use crate::commands::{
-    api_keys_task, customers_task, domains_task, examples_task, usage_task, ApiKeysArgs, CustomersArgs, DomainsArgs,
-    ExamplesArgs, UsageArgs,
+    api_keys_task, customers_task, domains_task, examples_task, usage_task, ApiKeysArgs,
+    CustomersArgs, DomainsArgs, ExamplesArgs, UsageArgs,
 };
 use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,

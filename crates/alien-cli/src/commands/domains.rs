@@ -2,7 +2,7 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
 use alien_error::{Context, IntoAlienError};
-use alien_platform_api::{SdkResultExt as _, types::CreateDomainBody};
+use alien_platform_api::{types::CreateDomainBody, SdkResultExt as _};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use serde_json::Value;
@@ -185,9 +185,13 @@ mod tests {
                 ..
             }
         ));
-        assert!(
-            DomainsArgs::try_parse_from(["domains", "add", "app.example.com", "--dns", "invalid"])
-                .is_err()
-        );
+        assert!(DomainsArgs::try_parse_from([
+            "domains",
+            "add",
+            "app.example.com",
+            "--dns",
+            "invalid"
+        ])
+        .is_err());
     }
 }

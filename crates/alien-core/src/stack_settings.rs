@@ -1087,8 +1087,8 @@ mod failure_domain_tests {
         .expect("stack settings should deserialize");
 
         assert_eq!(
-            serde_json::to_value(settings).expect("stack settings should serialize")["publicEndpoints"]
-                ["loader"]["shares"],
+            serde_json::to_value(settings).expect("stack settings should serialize")
+                ["publicEndpoints"]["loader"]["shares"],
             "https://shares.compute.example.com"
         );
     }

@@ -3,7 +3,7 @@ use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
 use crate::commands::destroy::{kept_deployer_secrets, print_kept_deployer_secrets};
-use crate::commands::event_display::{EventDisplayRow, print_event_table};
+use crate::commands::event_display::{print_event_table, EventDisplayRow};
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -14,11 +14,10 @@ use crate::ui::{
     heading, make_table, print_table, render_human_error, status_cell, success_line,
 };
 use alien_cli_common::network::{self, NetworkArgs};
-use alien_core::{ComputeClusterOutputs, RESOURCE_PREFIX_ERROR_MESSAGE, is_valid_resource_prefix};
+use alien_core::{is_valid_resource_prefix, ComputeClusterOutputs, RESOURCE_PREFIX_ERROR_MESSAGE};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_manager_api::types::{DeleteDeploymentAction, DeploymentResponse, Platform};
-use alien_platform_api::SdkResultExt as _;
+use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
     CreateDeploymentWorkspace, CreateVolumeRestoreRequest, DeploymentDetailResponse,
@@ -28,6 +27,7 @@ use alien_platform_api::types::{
     PinDeploymentReleaseId, PinDeploymentReleaseWorkspace, PinReleaseRequest,
     PinReleaseRequestReleaseId, VolumeRestore,
 };
+use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
@@ -1216,23 +1216,19 @@ mod machines_inventory_tests {
         ];
         assert!(DeploymentsArgs::try_parse_from(base).is_err());
         assert!(DeploymentsArgs::try_parse_from(base.into_iter().chain(["--clear"])).is_ok());
-        assert!(
-            DeploymentsArgs::try_parse_from(base.into_iter().chain([
-                "--endpoint",
-                "api=app.example.com",
-                "--endpoint",
-                "shares=*.files.example.com",
-            ]))
-            .is_ok()
-        );
-        assert!(
-            DeploymentsArgs::try_parse_from(base.into_iter().chain([
-                "--clear",
-                "--endpoint",
-                "api=app.example.com",
-            ]))
-            .is_err()
-        );
+        assert!(DeploymentsArgs::try_parse_from(base.into_iter().chain([
+            "--endpoint",
+            "api=app.example.com",
+            "--endpoint",
+            "shares=*.files.example.com",
+        ]))
+        .is_ok());
+        assert!(DeploymentsArgs::try_parse_from(base.into_iter().chain([
+            "--clear",
+            "--endpoint",
+            "api=app.example.com",
+        ]))
+        .is_err());
     }
 
     #[test]
@@ -3785,23 +3781,21 @@ mod tests {
         deployment["environmentInfo"] = serde_json::Value::Null;
         let hint = setup_rerun_hint(&deployment).expect("setup must rerun");
         assert_eq!(hint.environment, None);
-        assert!(
-            retry_next_steps("dep_demo", Some(&hint))[2]
-                .contains("with the same cloud credentials")
-        );
+        assert!(retry_next_steps("dep_demo", Some(&hint))[2]
+            .contains("with the same cloud credentials"));
     }
     use alien_manager_api::types::{DeploymentGroupMinimal, Platform};
     use alien_platform_api::types::{DeploymentUpdateOperationStatus, DeploymentUpdateReason};
     use axum::{
-        Json, Router,
         extract::State,
         http::StatusCode,
         response::{IntoResponse, Response},
         routing::get,
+        Json, Router,
     };
     use std::sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     };
 
     fn update_operation(
