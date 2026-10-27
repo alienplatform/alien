@@ -8837,6 +8837,35 @@ mod tests {
             .output()
             .unwrap();
         assert!(created.status.success());
+        struct TestNamespace<'a> {
+            context: &'a str,
+            name: &'a str,
+        }
+        impl Drop for TestNamespace<'_> {
+            fn drop(&mut self) {
+                let result = std::process::Command::new("kubectl")
+                    .args([
+                        "--context",
+                        self.context,
+                        "delete",
+                        "namespace",
+                        self.name,
+                        "--ignore-not-found",
+                        "--wait=false",
+                    ])
+                    .output();
+                if !result.as_ref().is_ok_and(|output| output.status.success()) {
+                    eprintln!(
+                        "Could not clean up test namespace {}: {result:?}",
+                        self.name
+                    );
+                }
+            }
+        }
+        let _namespace = TestNamespace {
+            context: &context,
+            name: &namespace,
+        };
         let helm = |args: &[&str]| {
             std::process::Command::new("helm")
                 .args(["--kube-context", &context, "--namespace", &namespace])
@@ -8933,7 +8962,7 @@ mod tests {
             .unwrap();
             let rendered = crate::test_utils::helm_template(
                 &chart.files,
-                Some("postgres:\n  database:\n    enabled: true\n"),
+                Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n"),
             );
             rendered.assert_ok("database quantities");
             let docs = parse_manifest_docs(&rendered.stdout);
@@ -8961,6 +8990,85 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn postgres_offline_render_requires_stable_credentials() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let mut chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let missing = crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some("postgres:\n  database:\n    enabled: true\n"),
+            "app",
+        );
+        assert!(
+            !missing.is_ok(),
+            "offline renders must not rotate database credentials"
+        );
+        assert!(missing.stderr.contains("existingPasswordSecret"));
+        let values = "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n";
+        let first = crate::test_utils::helm_template_for_release(&chart.files, Some(values), "app");
+        first.assert_ok("explicit database credentials");
+        let docs = parse_manifest_docs(&first.stdout);
+        let first_template = docs_by_kind(&docs, "StatefulSet")[0]["spec"]["template"].clone();
+        assert_eq!(
+            first_template["spec"]["containers"][0]["env"][2]["valueFrom"]["secretKeyRef"]["name"],
+            "database-credentials"
+        );
+        assert!(docs_by_kind(&docs, "Secret")
+            .iter()
+            .all(|s| s["data"]["password"].is_null()));
+    }
+
+    #[test]
+    fn postgres_chart_version_does_not_restart_the_database() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let mut chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let values = "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n";
+        let first = crate::test_utils::helm_template_for_release(&chart.files, Some(values), "app");
+        first.assert_ok("database chart");
+        let docs = parse_manifest_docs(&first.stdout);
+        let first_template = docs_by_kind(&docs, "StatefulSet")[0]["spec"]["template"].clone();
+        let metadata = chart.files.get_mut("Chart.yaml").unwrap();
+        let mut value: serde_yaml::Value = serde_yaml::from_str(metadata).unwrap();
+        value["version"] = "99.0.0".into();
+        *metadata = serde_yaml::to_string(&value).unwrap();
+        let upgraded =
+            crate::test_utils::helm_template_for_release(&chart.files, Some(values), "app");
+        upgraded.assert_ok("chart version upgrade");
+        let docs = parse_manifest_docs(&upgraded.stdout);
+        assert_eq!(
+            docs_by_kind(&docs, "StatefulSet")[0]["spec"]["template"],
+            first_template
+        );
     }
 
     #[test]
@@ -9094,7 +9202,7 @@ mod tests {
         ] {
             let rendered = crate::test_utils::helm_template_for_release(
                 &chart.files,
-                Some("postgres:\n  database:\n    enabled: true\n"),
+                Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n"),
                 release,
             );
             rendered.assert_ok("long database release");
@@ -9118,9 +9226,9 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 password["valueFrom"]["secretKeyRef"]["name"].as_str(),
-                Some(name)
+                Some("existing-credentials")
             );
-            for kind in ["Secret", "PersistentVolumeClaim", "Service"] {
+            for kind in ["PersistentVolumeClaim", "Service"] {
                 let matching: Vec<_> = docs_by_kind(&docs, kind)
                     .into_iter()
                     .filter(|doc| doc["metadata"]["name"].as_str() == Some(name))
@@ -9146,7 +9254,7 @@ mod tests {
             assert_eq!(bindings["database"]["host"], format!("{name}.default.svc"));
             assert_eq!(
                 bindings["database"]["password"]["secretKeyRef"]["name"],
-                name
+                "existing-credentials"
             );
             names.push(name.to_string());
         }
@@ -9176,7 +9284,7 @@ mod tests {
         .unwrap();
         let rendered = crate::test_utils::helm_template(
             &chart.files,
-            Some("postgres:\n  database:\n    enabled: true\n"),
+            Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n"),
         );
         rendered.assert_ok("database chart");
         let docs = parse_manifest_docs(&rendered.stdout);

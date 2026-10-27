@@ -258,6 +258,21 @@ fn generate_terraform_module_internal(
     requires_remote_operator_collector_token: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<ModuleFiles> {
+    if target == TerraformTarget::Eks
+        && matches!(
+            options
+                .stack_settings
+                .kubernetes
+                .as_ref()
+                .and_then(|settings| settings.exposure.as_ref()),
+            Some(KubernetesExposureSettings::CustomBaseDomain { .. })
+        )
+    {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "customBaseDomain routing in EKS Terraform setup".to_string(),
+            reason: "Use custom endpoint routing, or install the Helm chart on an existing cluster for base-domain routing.".to_string(),
+        }));
+    }
     let mut platform_stack = stack.clone();
     alien_core::remove_off_platform_gated_resources(
         &mut platform_stack,
@@ -5205,6 +5220,35 @@ mod tests {
 
     use super::*;
     use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef};
+
+    #[test]
+    fn eks_rejects_base_domains_it_cannot_route() {
+        let registry = TfRegistry::built_in();
+        let error = generate_terraform_module(
+            &Stack::new("app".into()).build(),
+            TerraformTarget::Eks,
+            TerraformOptions {
+                registry: &registry,
+                display_name: None,
+                stack_settings: StackSettings {
+                    kubernetes: Some(KubernetesSettings {
+                        cluster: None,
+                        exposure: Some(KubernetesExposureSettings::CustomBaseDomain {
+                            base_domain: "app.example.com".into(),
+                            route: alien_core::KubernetesRouteProfile::Ingress(Default::default()),
+                            certificate: KubernetesCertificateMode::None,
+                        }),
+                    }),
+                    ..Default::default()
+                },
+                registration: None,
+                helm_install: None,
+                supported_aws_regions: Vec::new(),
+            },
+        )
+        .expect_err("base-domain routing must not silently become generated hostnames");
+        assert!(error.to_string().contains("customBaseDomain"));
+    }
 
     #[test]
     fn eks_kubernetes_and_helm_provider_auth_validate() {

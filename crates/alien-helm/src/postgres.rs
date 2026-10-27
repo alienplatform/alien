@@ -11,6 +11,7 @@ pub(crate) fn values(stack: &Stack) -> Value {
         }
         Some((id.clone(), json!({
             "enabled": false,
+            "existingPasswordSecret": "",
             "image": {"repository": "pgvector/pgvector", "tag": format!("pg{}-bookworm", database.version)},
             "storage": kubernetes_size(&database.storage, false),
             "storageClassName": "",
@@ -48,7 +49,7 @@ pub(crate) const HELPERS: &str = r#"
 {{- range $id, $database := .Values.postgres -}}
   {{- if and $database.enabled (not (hasKey $bindings $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) -}}
     {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) -}}
-    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" $name "key" "password")) "sslMode" "disable") -}}
+    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" (default $name $database.existingPasswordSecret) "key" "password")) "sslMode" "disable") -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -79,6 +80,8 @@ pub(crate) const TEMPLATE: &str = r#"{{- range $id, $database := .Values.postgre
 {{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
   {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
 {{- end }}
+{{- $credentials := default $name $database.existingPasswordSecret }}
+{{- if not $database.existingPasswordSecret }}
 {{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}
 {{- $password := "" }}
 {{- if $existing }}
@@ -86,6 +89,9 @@ pub(crate) const TEMPLATE: &str = r#"{{- range $id, $database := .Values.postgre
 {{- else }}
   {{- if lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $name }}
     {{- fail "Postgres data exists but its credentials Secret is missing; restore the original Secret before installing" }}
+  {{- end }}
+  {{- if not (lookup "v1" "Namespace" "" $.Release.Namespace) }}
+    {{- fail "Cannot read the database namespace; create it before installing, or set postgres.<resource>.existingPasswordSecret to a Secret containing the password key for offline rendering" }}
   {{- end }}
   {{- $password = randAlphaNum 48 | b64enc }}
 {{- end }}
@@ -101,6 +107,7 @@ metadata:
 type: Opaque
 data:
   password: {{ $password | quote }}
+{{- end }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -150,7 +157,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/component: {{ $name }}
-        {{- $labels | toYaml | nindent 8 }}
+        app.kubernetes.io/name: {{ $name }}
+        app.kubernetes.io/instance: {{ $.Release.Name }}
     spec:
       automountServiceAccountToken: false
       {{- with $.Values.runtime.imagePullSecrets }}
@@ -171,7 +179,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ $name }}
+                  name: {{ $credentials }}
                   key: password
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
@@ -197,7 +205,7 @@ pub(crate) const README: &str = r#"
 
 Set `postgres.<resource>.enabled: true` to provision a Frozen Postgres resource as a single-instance StatefulSet with pgvector and a persistent volume. Database provisioning is off by default so existing database bindings remain in use. Enable it only when no database is supplied by your installation or management configuration. Helm owns these databases; application releases do not replace them. The cluster needs a default StorageClass, or set `postgres.<resource>.storageClassName` before installing. Storage encryption comes from that StorageClass. For high availability or a separately managed encryption key, use your own database.
 
-The password is generated once in a Kubernetes Secret and supplied to linked workloads through `secretKeyRef`. Upgrades reuse that Secret. Image changes require a database upgrade plan; the chart records the image on the retained PVC and refuses to change it automatically, including after uninstall. For older volumes without this annotation, upgrade the chart while the original StatefulSet still exists; if it has already been removed, restore the `alien.dev/postgres-image` PVC annotation from the original installation before reinstalling.
+Create the installation namespace before using Helm. Helm generates a password once in a retained Kubernetes Secret and reuses it on upgrades. For GitOps or offline rendering, set `postgres.<resource>.existingPasswordSecret` to a customer-managed Secret with a `password` key; create that Secret before the database starts. The chart never rewrites a supplied credentials Secret. Keep the same Secret and password while retaining the database volume. Image changes require a database upgrade plan; the chart records the image on the retained PVC and refuses to change it automatically, including after uninstall. For older volumes without this annotation, upgrade the chart while the original StatefulSet still exists; if it has already been removed, restore the `alien.dev/postgres-image` PVC annotation from the original installation before reinstalling.
 
 To use your own PostgreSQL, create its password Secret in the installation namespace first, then set an external binding:
 

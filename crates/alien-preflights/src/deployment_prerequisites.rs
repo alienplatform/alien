@@ -762,6 +762,13 @@ impl DeploymentPrerequisiteCheck for ExternalBindingStillBoundCheck {
     }
 }
 
+fn postgres_password_is_reference(binding: &alien_core::ExternalBinding) -> bool {
+    matches!(binding,
+        alien_core::ExternalBinding::Postgres(alien_core::PostgresBinding::External(database))
+            if !matches!(database.password, alien_core::BindingValue::Value(_))
+    )
+}
+
 /// Validates that provided external bindings match their resource types.
 pub struct ExternalBindingsTypeCheck;
 
@@ -779,9 +786,14 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsTypeCheck {
         &self,
         _stack: &Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> bool {
         !external_binding_required_types(stack_state.platform).is_empty()
+            || config
+                .external_bindings
+                .0
+                .values()
+                .any(postgres_password_is_reference)
     }
 
     async fn check(
@@ -790,7 +802,7 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsTypeCheck {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<CheckResult> {
-        let errors = external_binding_required_resources(stack, stack_state)
+        let mut errors = external_binding_required_resources(stack, stack_state)
             .filter_map(|(resource_id, entry, resource_type)| {
                 let binding = config.external_bindings.get(resource_id.as_str())?;
                 validate_binding_type(&entry.config, binding).err().map(|_| {
@@ -800,6 +812,14 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsTypeCheck {
                 })
             })
             .collect::<Vec<_>>();
+
+        if stack_state.platform != Platform::Kubernetes {
+            for (id, binding) in &config.external_bindings.0 {
+                if postgres_password_is_reference(binding) {
+                    errors.push(format!("Postgres binding '{id}' uses a password Secret reference, which requires Kubernetes; provide a string password for {}.", stack_state.platform));
+                }
+            }
+        }
 
         if errors.is_empty() {
             Ok(CheckResult::success())
@@ -931,6 +951,38 @@ mod tests {
             deployment_token: None,
             native_image_host: None,
             volume_restores: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn postgres_password_references_require_kubernetes() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        for reference in ["secretRef", "secretKeyRef"] {
+            let mut config = deployment_config();
+            config.external_bindings = serde_json::from_value(serde_json::json!({
+                "database":{"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":{reference:{"name":"credentials","key":"password"}}}
+            })).unwrap();
+            for platform in [
+                Platform::Aws,
+                Platform::Gcp,
+                Platform::Azure,
+                Platform::Local,
+                Platform::Kubernetes,
+            ] {
+                let state = stack_state(platform);
+                let check = ExternalBindingsTypeCheck;
+                assert!(check.should_run(&stack, &state, &config));
+                assert_eq!(
+                    check.check(&stack, &state, &config).await.unwrap().success,
+                    platform == Platform::Kubernetes,
+                    "{platform:?} {reference}"
+                );
+            }
         }
     }
 
