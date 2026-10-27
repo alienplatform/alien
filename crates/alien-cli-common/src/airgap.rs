@@ -649,8 +649,9 @@ pub fn chart_images(
             break;
         }
     }
+    // Helm permits charts without defaults; installation values still apply.
     let mut values: serde_yaml::Value = serde_yaml::from_str(
-        &values.ok_or_else(|| AlienError::new(invalid("the chart has no values.yaml")))?,
+        &values.unwrap_or_else(|| "{}".to_string()),
     )
     .into_alien_error()
     .context(invalid("the chart's values.yaml is not valid YAML"))?;

@@ -292,6 +292,8 @@ alien-deploy sync \
 
 It verifies the update, pushes the images to `localhost:5001`, installs the chart, waits for the service to run, and writes a report into `customer-3-sync/from-site/`. It remembers the registry, namespace, values and context, and the install remembers your key: later syncs need no options, and an update signed with any other key is refused.
 
+Pass the same values file with `-f values.yaml` to sync online and at the site so the bundle includes every enabled chart database image.
+
 Site settings use the same Helm values format as a connected install. For a stack with a public endpoint, the site admin supplies its routing configuration in that values file, alongside external resource bindings and stack inputs:
 
 ```yaml

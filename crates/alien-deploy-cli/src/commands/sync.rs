@@ -2691,10 +2691,20 @@ async fn release_values(
     release: &str,
     namespace: &str,
 ) -> Result<Option<serde_json::Value>> {
+    read_release_values(settings, release, namespace, true).await
+}
+
+async fn read_release_values(
+    settings: &SiteSide,
+    release: &str,
+    namespace: &str,
+    include_defaults: bool,
+) -> Result<Option<serde_json::Value>> {
     let mut cmd = Command::new("helm");
-    cmd.args([
-        "get", "values", release, "-n", namespace, "-o", "json", "--all",
-    ]);
+    cmd.args(["get", "values", release, "-n", namespace, "-o", "json"]);
+    if include_defaults {
+        cmd.arg("--all");
+    }
     if let Some(context) = &settings.kube_context {
         cmd.arg("--kube-context").arg(context);
     }
@@ -3301,6 +3311,60 @@ async fn helm_upgrade(
     deployment_id: &str,
     deployment_name: &str,
 ) -> Result<()> {
+    // Match --reset-then-reuse-values: new chart defaults, saved user values,
+    // then the files supplied for this installation.
+    let mut values = Vec::new();
+    if let Some(saved) = read_release_values(settings, &record.stack_id, namespace, false)
+        .await?
+        .filter(|saved| !saved.is_null())
+    {
+        values.push(
+            serde_yaml::to_value(saved)
+                .into_alien_error()
+                .context(config_error("reading the installed Helm values"))?,
+        );
+    }
+    for path in &settings.values {
+        let bytes = std::fs::read(path)
+            .into_alien_error()
+            .context(config_error(format!(
+                "reading Helm values {}",
+                path.display()
+            )))?;
+        values.push(
+            serde_yaml::from_slice(&bytes)
+                .into_alien_error()
+                .context(config_error(format!(
+                    "parsing Helm values {}",
+                    path.display()
+                )))?,
+        );
+    }
+    // Helm pins this image from the bundle even when chart defaults omit it.
+    if let Some(image) = record.chart_images.get(airgap::CHART_IMAGE_VALUES[0]) {
+        values.push(
+            serde_yaml::to_value(serde_json::json!({"runtime": {"image": {
+                "repository": image.repository, "tag": image.tag
+            }}}))
+            .into_alien_error()
+            .context(config_error("reading the bundled Operator image"))?,
+        );
+    }
+    let images = airgap::chart_images(chart, &serde_json::Value::Null, &values)
+        .context(config_error("checking the site's chart images"))?;
+    for key in images.keys().filter(|key| key.starts_with("postgres.")) {
+        if !record.chart_images.contains_key(key) {
+            let resource = key
+                .trim_start_matches("postgres.")
+                .trim_end_matches(".image");
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: format!("postgres.{resource}.enabled"),
+                message: format!(
+                    "Database '{resource}' is enabled at this site, but its image is not in the bundle. Remove this pending bundle from to-site/, then pass the same values file online and at the site and re-download the update."
+                ),
+            }));
+        }
+    }
     let mut cmd = Command::new("helm");
     cmd.arg("upgrade")
         .arg("--install")
@@ -3643,6 +3707,157 @@ mod tests {
 
     use super::*;
 
+    #[tokio::test]
+    #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
+    async fn site_database_requires_carried_image() {
+        let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("sync-database-image-{}", std::process::id());
+        let chart = tempfile::tempdir().unwrap();
+        std::fs::write(
+            chart.path().join("Chart.yaml"),
+            "apiVersion: v2\nname: app\nversion: 0.1.0\n",
+        )
+        .unwrap();
+        std::fs::write(chart.path().join("values.yaml"), "runtime:\n  image:\n    repository: registry.example.com/operator\n    tag: fixture\npostgres:\n  database:\n    enabled: false\n    image:\n      repository: pgvector/pgvector\n      tag: pg16\n").unwrap();
+        let values = chart.path().join("site.yaml");
+        std::fs::write(&values, "postgres:\n  database:\n    enabled: true\n").unwrap();
+        let mut package = Command::new("helm");
+        package
+            .arg("package")
+            .arg(chart.path())
+            .arg("--destination")
+            .arg(chart.path());
+        run(package, "packaging database fixture").await.unwrap();
+        let mut settings = SiteSide {
+            registry: "registry.example.com/site".into(),
+            registry_credentials: None,
+            insecure_registry: false,
+            namespace: Some(namespace.clone()),
+            values: vec![values],
+            kube_context: Some(context),
+        };
+        let mut record = InstalledBundle {
+            rollout_succeeded: false,
+            release_id: "release".into(),
+            stack_id: "app".into(),
+            chart: "app-0.1.0.tgz".into(),
+            chart_images: BTreeMap::from([(
+                "runtime.image".into(),
+                SiteImage {
+                    repository: "registry.example.com/site/operator".into(),
+                    tag: "fixture".into(),
+                },
+            )]),
+            telemetry_ack: None,
+            inventory: BTreeSet::new(),
+            registry: Some(settings.registry.clone()),
+        };
+        let result = helm_upgrade(
+            &settings,
+            &record,
+            &chart.path().join(&record.chart),
+            &namespace,
+            None,
+            "fixture",
+            "dep_fixture",
+            "fixture",
+        )
+        .await;
+        let installed = release_values(&settings, "app", &namespace).await.unwrap();
+        let mut cleanup = kubectl(settings.kube_context.as_deref());
+        cleanup.args([
+            "delete",
+            "namespace",
+            &namespace,
+            "--ignore-not-found",
+            "--wait=true",
+        ]);
+        run(cleanup, "removing database fixture").await.unwrap();
+        let error = result.expect_err("site enabled database without a carried image");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        let message = error.to_string();
+        assert!(message.contains("database"), "{message}");
+        assert!(message.contains("same values"), "{message}");
+        assert!(message.contains("online"), "{message}");
+        assert!(message.contains("download"), "{message}");
+        assert!(installed.is_none(), "Helm must not install the release");
+
+        record.chart_images.insert(
+            "postgres.database.image".into(),
+            SiteImage {
+                repository: "registry.example.com/site/database".into(),
+                tag: "pg16".into(),
+            },
+        );
+        let carried = helm_upgrade(
+            &settings,
+            &record,
+            &chart.path().join(&record.chart),
+            &namespace,
+            None,
+            "fixture",
+            "dep_fixture",
+            "fixture",
+        )
+        .await;
+        let carried_values = release_values(&settings, "app", &namespace).await.unwrap();
+        record.chart_images.remove("postgres.database.image");
+        settings.values.clear();
+        let remembered = helm_upgrade(
+            &settings,
+            &record,
+            &chart.path().join(&record.chart),
+            &namespace,
+            None,
+            "fixture",
+            "dep_fixture",
+            "fixture",
+        )
+        .await;
+        let values = chart.path().join("site.yaml");
+        settings.values = vec![values.clone()];
+        std::fs::write(&values, "postgres:\n  database:\n    enabled: false\n").unwrap();
+        let disabled = helm_upgrade(
+            &settings,
+            &record,
+            &chart.path().join(&record.chart),
+            &namespace,
+            None,
+            "fixture",
+            "dep_fixture",
+            "fixture",
+        )
+        .await;
+        std::fs::write(&values, "postgres:\n  database:\n    enabled: true\nstackSettings:\n  externalBindings:\n    database:\n      type: postgres\n      service: external\n").unwrap();
+        let external = helm_upgrade(
+            &settings,
+            &record,
+            &chart.path().join(&record.chart),
+            &namespace,
+            None,
+            "fixture",
+            "dep_fixture",
+            "fixture",
+        )
+        .await;
+        let mut cleanup = kubectl(settings.kube_context.as_deref());
+        cleanup.args([
+            "delete",
+            "namespace",
+            &namespace,
+            "--ignore-not-found",
+            "--wait=true",
+        ]);
+        run(cleanup, "removing database fixture").await.unwrap();
+        carried.unwrap();
+        assert_eq!(
+            carried_values.unwrap()["postgres"]["database"]["image"]["repository"],
+            "registry.example.com/site/database"
+        );
+        assert_eq!(remembered.unwrap_err().code, "VALIDATION_ERROR");
+        disabled.unwrap();
+        external.unwrap();
+    }
     /// Rollback changes chart-owned data even if the subsequent rollout is interrupted.
     #[cfg(unix)]
     #[tokio::test]
