@@ -230,7 +230,7 @@ export function stackInputApplies(
   platform?: Platform,
 ): boolean {
   const onPlatform = (definition: StackInputDefinition) =>
-    !platform || !definition.platforms || definition.platforms.includes(platform)
+    !platform || !definition.platforms?.length || definition.platforms.includes(platform)
   if (!onPlatform(input)) return false
   if (!input.when) return true
   const reference = inputs.find(candidate => candidate.id === input.when?.input)

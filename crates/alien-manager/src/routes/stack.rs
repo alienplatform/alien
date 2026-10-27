@@ -351,6 +351,15 @@ pub async fn stack_import(
     ) {
         return error.into_response();
     }
+    // Delivery evaluates conditions from saved answers, so preserve the same
+    // controller answers used during registration, including group-provided false.
+    for condition in stack_inputs.iter().filter_map(|input| input.when.as_ref()) {
+        if let Some(value) = validation_values.get(&condition.input) {
+            req.input_values
+                .entry(condition.input.clone())
+                .or_insert_with(|| value.clone());
+        }
+    }
     // The strips run BEFORE the mutations, exactly like the deployment
     // paths: a declined frozen resource never existed, so nothing may be
     // derived from it — no service-account grants, no profile entries — and

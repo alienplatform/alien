@@ -42,9 +42,19 @@ describe("conditional inputs", () => {
     expect(stackInputApplies(all[1]!, all, { enabled: true }, "kubernetes")).toBe(true)
     const positive = definitions(true)
     expect(stackInputApplies(positive[1]!, positive, { enabled: true }, "kubernetes")).toBe(false)
+  })
+
+  it("keeps legacy empty platform scopes available", () => {
+    const all = definitions(false)
     all[0]!.platforms = []
-    expect(stackInputApplies(all[0]!, all, {}, "aws")).toBe(false)
-    expect(stackInputApplies(all[1]!, all, { enabled: true }, "aws")).toBe(true)
+    expect(stackInputApplies(all[0]!, all, {}, "aws")).toBe(true)
+    expect(stackInputApplies(all[1]!, all, { enabled: true }, "aws")).toBe(false)
+    expect(stackInputApplies(all[1]!, all, { enabled: false }, "aws")).toBe(true)
+    const positive = definitions(true)
+    positive[0]!.platforms = []
+    positive[1]!.platforms = []
+    expect(stackInputApplies(positive[1]!, positive, {}, "kubernetes")).toBe(true)
+    expect(stackInputApplies(positive[1]!, positive, { enabled: false }, "aws")).toBe(false)
   })
 
   it("rejects developer-only controllers for deployer inputs and conditional generation", () => {

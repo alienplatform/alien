@@ -3581,19 +3581,19 @@ mod reservation;
 
 #[tokio::test]
 async fn import_preserves_answers_controlled_by_group_inputs() {
-    for required in [false, true] {
+    for (required, enabled) in [(false, true), (true, true), (false, false), (true, false)] {
         let mut stack = stack_with_storage_and_generated_secret("assets");
         stack.inputs = serde_json::from_value(serde_json::json!([
             {"id":"endpoint", "kind":"string", "providedBy":["deployer"], "required":required,
-             "label":"Endpoint", "description":"Service endpoint",
+             "label":"Endpoint", "description":"Service endpoint", "env":[{"name":"ENDPOINT"}],
              "when":{"input":"enabled","equals":true}},
             {"id":"enabled", "kind":"boolean", "providedBy":["developer","deployer"], "required":true,
              "label":"Enabled", "description":"Enable service"}
         ])).unwrap();
         let fixture = make_fixture_with_group_inputs(
             Platform::Aws,
-            Some(stack),
-            HashMap::from([("enabled".into(), serde_json::json!(true))]),
+            Some(stack.clone()),
+            HashMap::from([("enabled".into(), serde_json::json!(enabled))]),
         )
         .await;
         let mut body = aws_s3_import_request(
@@ -3617,9 +3617,32 @@ async fn import_preserves_answers_controlled_by_group_inputs() {
             .unwrap()
             .unwrap();
         assert_eq!(
-            deployment.input_values["endpoint"],
-            serde_json::json!("https://example.test")
+            deployment.input_values["enabled"],
+            serde_json::json!(enabled)
         );
+        if enabled {
+            assert_eq!(
+                deployment.input_values["endpoint"],
+                serde_json::json!("https://example.test")
+            );
+        } else {
+            assert!(!deployment.input_values.contains_key("endpoint"));
+        }
+        let env = alien_core::resolve_stack_input_environment_variables(
+            &stack.inputs,
+            &deployment.input_values,
+            Platform::Aws,
+        )
+        .unwrap();
+        assert_eq!(
+            env.len(),
+            usize::from(enabled),
+            "the group controller must survive registration"
+        );
+        if enabled {
+            assert_eq!(env[0].name, "ENDPOINT");
+            assert_eq!(env[0].value, "https://example.test");
+        }
     }
 }
 
