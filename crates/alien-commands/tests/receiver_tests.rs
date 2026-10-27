@@ -606,13 +606,14 @@ fn observability_envelope(command: &str, deadline: Option<DateTime<Utc>>) -> Env
 
 #[tokio::test]
 async fn process_lease_emits_command_processed_with_pinned_fields() {
-    // Submit target is an unroutable local port: the submit fails fast
-    // (connection refused, no DNS, offline) so `submit_status` is "failed"
-    // while the completion event still fires with every pinned field.
+    // The command server has no `cmd_1`, so it rejects the submit with a 404,
+    // which is final: `submit_status` is "failed" while the completion event
+    // still fires with every pinned field.
+    let server = TestCommandServer::new().await;
     let deadline = Utc::now() + ChronoDuration::seconds(30);
     let mut envelope = observability_envelope("echo", Some(deadline));
     envelope.response_handling.submit_response_url =
-        "http://127.0.0.1:1/v1/commands/cmd_1/response".to_string();
+        format!("{}commands/cmd_1/response", server.command_base_url());
     let lease = LeaseInfo {
         lease_id: "lease_obs".to_string(),
         lease_expires_at: Utc::now() + ChronoDuration::seconds(60),
@@ -674,18 +675,18 @@ async fn process_lease_emits_command_processed_with_pinned_fields() {
 
 #[tokio::test]
 async fn process_lease_emits_command_processed_for_handler_error() {
-    // Submit target is an unroutable local port (same trick as the
-    // success-path test above): the submit fails fast so this test stays
-    // deterministic and network-free.
+    // The submit is rejected with a final 404, as in the success-path test
+    // above, so this test stays deterministic and network-free.
     //
     // No deadline on the envelope: the completion event's `deadline` field
     // must be entirely absent (tracing's `Option<T>: Value` skips `None`),
     // matching the TS twin's bare-string-or-`null` semantics for the
     // no-deadline case.
+    let server = TestCommandServer::new().await;
     let mut envelope = observability_envelope("burn", None);
     envelope.target = CommandTarget::new("worker-1", CommandTargetType::Container);
     envelope.response_handling.submit_response_url =
-        "http://127.0.0.1:1/v1/commands/cmd_1/response".to_string();
+        format!("{}commands/cmd_1/response", server.command_base_url());
     let lease = LeaseInfo {
         lease_id: "lease_err".to_string(),
         lease_expires_at: Utc::now() + ChronoDuration::seconds(60),
