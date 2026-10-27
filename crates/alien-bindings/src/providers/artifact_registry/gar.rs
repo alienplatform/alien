@@ -18,6 +18,13 @@ use async_trait::async_trait;
 use chrono;
 use tracing::{debug, info, warn};
 
+/// How long to wait between reads of a repository operation; 60 reads bound the wait.
+#[cfg(not(test))]
+const OPERATION_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+// The mocked API settles an operation on the next read, so a unit test only pays for the reads.
+#[cfg(test)]
+const OPERATION_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+
 /// The Google-managed service agent a compute service pulls as.
 ///
 /// Google's default grant covers a same-project pull; naming this agent is what reaches a
@@ -298,7 +305,7 @@ impl GarArtifactRegistry {
                     conflict_reason: "repository operation has no name".to_string(),
                 })
             })?;
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(OPERATION_POLL).await;
             operation = self
                 .client
                 .get_operation(self.project_id.clone(), self.location.clone(), name)
