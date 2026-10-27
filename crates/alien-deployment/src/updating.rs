@@ -949,8 +949,8 @@ mod tests {
         use super::super::*;
         use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
         use alien_core::{
-            ClientConfig, DeploymentState, EnvironmentVariablesSnapshot, ExternalBindings,
-            ReleaseInfo, RuntimeMetadata, Sandbox, SandboxCode, SandboxEgress,
+            AwsServiceOverrides, ClientConfig, DeploymentState, EnvironmentVariablesSnapshot,
+            ExternalBindings, ReleaseInfo, RuntimeMetadata, Sandbox, SandboxCode, SandboxEgress,
             SandboxLifecyclePolicy, StackSettings,
         };
         use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
@@ -992,8 +992,26 @@ mod tests {
                 .build()
         }
 
-        fn client_config() -> ClientConfig {
-            ClientConfig::Aws(Box::new(AwsClientConfig::mock()))
+        /// A Service Quotas endpoint that reports no quota, so the deployment-time quota check
+        /// records it as unknown without calling AWS.
+        async fn quota_server() -> httpmock::MockServer {
+            let server = httpmock::MockServer::start_async().await;
+            server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST);
+                    then.status(200).body("{}");
+                })
+                .await;
+            server
+        }
+
+        fn client_config(quotas: &httpmock::MockServer) -> ClientConfig {
+            ClientConfig::Aws(Box::new(AwsClientConfig {
+                service_overrides: Some(AwsServiceOverrides {
+                    endpoints: [("servicequotas".into(), quotas.base_url())].into(),
+                }),
+                ..AwsClientConfig::mock()
+            }))
         }
 
         fn stack_state() -> StackState {
@@ -1002,12 +1020,13 @@ mod tests {
 
         /// The stack an earlier setup prepared, as Pending would have stored it.
         async fn prepared(stack: Stack) -> Stack {
+            let quotas = quota_server().await;
             alien_preflights::runner::PreflightRunner::new()
                 .run_deployment_time_preflights(
                     stack,
                     &stack_state(),
                     &config(),
-                    &client_config(),
+                    &client_config(&quotas),
                     None,
                     None,
                     Some(InitialSetupAuthority::DirectSetup),
@@ -1078,11 +1097,12 @@ mod tests {
                 retry_requested: false,
                 protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
             };
+            let quotas = quota_server().await;
             handle_update_pending(
                 state,
                 target,
                 config(),
-                client_config(),
+                client_config(&quotas),
                 std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
             )
             .await
@@ -1247,11 +1267,12 @@ mod tests {
                 protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
             };
 
+            let quotas = quota_server().await;
             let error = handle_update_pending(
                 state,
                 target,
                 config(),
-                client_config(),
+                client_config(&quotas),
                 std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
             )
             .await
