@@ -39,6 +39,34 @@
           }
         }
       },
+      // AWS also authorizes these creates against the parent: the VPC for subnets, route
+      // tables and security groups, the subnet and Elastic IP for NAT gateways. Request tags
+      // don't apply to a parent, so the parent must already carry this network's tags.
+      {
+        "grant": {
+          "actions": [
+            "ec2:CreateSubnet",
+            "ec2:CreateRouteTable",
+            "ec2:CreateSecurityGroup",
+            "ec2:CreateNatGateway"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:elastic-ip/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
       // Existing network resources can be changed only after they carry Alien boundary tags.
       {
         "grant": {
