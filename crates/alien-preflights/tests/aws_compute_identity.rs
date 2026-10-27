@@ -129,6 +129,11 @@ async fn automatic_compute_identity_create_retry_and_teardown_are_authorized() {
                 "{action} on {role}"
             );
         }
+        assert_eq!(
+            evaluate(&policy, &Request::new("iam:PassRole", &role)),
+            Decision::Allowed,
+            "PassRole on {role} without iam:PassedToService"
+        );
         for name in [
             "AmazonSSMManagedInstanceCore",
             "CloudWatchAgentServerPolicy",
@@ -146,12 +151,19 @@ async fn automatic_compute_identity_create_retry_and_teardown_are_authorized() {
 }
 
 #[tokio::test]
-async fn automatic_profile_writes_stay_in_the_deployment() {
+async fn automatic_profile_writes_follow_stack_prefix_and_account() {
     let policy = management(SetupManagement::Automatic).await;
     for action in PROFILE_ACTIONS
         .iter()
         .filter(|action| **action != "iam:GetInstanceProfile")
     {
+        // The stack wildcard also matches longer prefixes such as acme-prod.
+        let nested_prefix = arn("instance-profile", "acme-prod-compute-profile");
+        assert_eq!(
+            evaluate(&policy, &Request::new(action, &nested_prefix)),
+            Decision::Allowed,
+            "{action} on {nested_prefix} is included by the acme-* grant"
+        );
         for target in [
             arn("instance-profile", "other-compute-profile"),
             format!("arn:aws:iam::other-account:instance-profile/{PREFIX}-compute-profile"),
