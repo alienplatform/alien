@@ -1706,8 +1706,23 @@ async fn erase_inventory(settings: &SiteSide, inventory: &DeletionInventory) -> 
                 object.resource, object.name
             ))));
         }
+        if object.resource == "persistentvolumeclaims"
+            && current["spec"]["volumeName"]
+                .as_str()
+                .filter(|name| !name.is_empty())
+                != object.volume.as_ref().map(|volume| volume.name.as_str())
+        {
+            return Err(AlienError::new(config_error(format!(
+                "volume binding for {}/{} changed; retry deletion to record and prepare the bound volume",
+                object.resource, object.name
+            ))));
+        }
+        // Bindings can change after this read; let the caller re-inventory on conflict.
+        let resource_version = current["metadata"]["resourceVersion"]
+            .as_str()
+            .ok_or_else(|| AlienError::new(config_error("data object has no resource version")))?;
         let options = work.path().join("delete.json");
-        std::fs::write(&options, serde_json::json!({"apiVersion":"v1","kind":"DeleteOptions","preconditions":{"uid":object.uid}}).to_string())
+        std::fs::write(&options, serde_json::json!({"apiVersion":"v1","kind":"DeleteOptions","preconditions":{"uid":object.uid,"resourceVersion":resource_version}}).to_string())
             .into_alien_error().context(config_error("writing deletion precondition"))?;
         let mut delete = kubectl(settings.kube_context.as_deref());
         delete
@@ -4648,6 +4663,162 @@ metadata:
     #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT"]
     async fn signed_erase_includes_claims_created_after_interrupted_inventory() {
         signed_cleanup_preserves_unowned_claims("erase", true).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
+    async fn erase_rechecks_a_claim_bound_after_preparation() {
+        let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("sync-late-volume-{}", std::process::id());
+        let settings = SiteSide {
+            registry: "registry.example.com/site".into(),
+            registry_credentials: None,
+            insecure_registry: false,
+            namespace: Some(namespace.clone()),
+            values: Vec::new(),
+            kube_context: Some(context.clone()),
+        };
+        let kubectl_output = |args: &[&str]| {
+            std::process::Command::new("kubectl")
+                .args(["--context", &context, "-n", &namespace])
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(kubectl_output(&["create", "namespace", &namespace])
+            .status
+            .success());
+        let work = tempfile::tempdir().unwrap();
+        let storage_class = format!("sync-late-volume-{}", std::process::id());
+        let class_path = work.path().join("class.json");
+        std::fs::write(&class_path, serde_json::json!({
+            "apiVersion":"storage.k8s.io/v1", "kind":"StorageClass", "metadata":{"name":storage_class},
+            "provisioner":"rancher.io/local-path", "reclaimPolicy":"Retain", "volumeBindingMode":"WaitForFirstConsumer"
+        }).to_string()).unwrap();
+        assert!(
+            kubectl_output(&["apply", "-f", class_path.to_str().unwrap()])
+                .status
+                .success()
+        );
+        let claim_path = work.path().join("claim.json");
+        std::fs::write(&claim_path, serde_json::json!({
+            "apiVersion":"v1", "kind":"PersistentVolumeClaim", "metadata":{"name":"data"},
+            "spec":{"storageClassName":storage_class, "accessModes":["ReadWriteOnce"], "resources":{"requests":{"storage":"1Mi"}}}
+        }).to_string()).unwrap();
+        assert!(
+            kubectl_output(&["apply", "-f", claim_path.to_str().unwrap()])
+                .status
+                .success()
+        );
+        let claim: serde_json::Value =
+            serde_json::from_slice(&kubectl_output(&["get", "pvc", "data", "-o", "json"]).stdout)
+                .unwrap();
+        assert!(claim["spec"]["volumeName"].is_null());
+        let mut inventory = DeletionInventory {
+            namespace: namespace.clone(),
+            stack_id: "app".into(),
+            kube_context: Some(context.clone()),
+            objects: vec![DeletionObject {
+                resource: "persistentvolumeclaims".into(),
+                name: "data".into(),
+                uid: claim["metadata"]["uid"].as_str().unwrap().into(),
+                volume: None,
+            }],
+            claim_prefixes: Vec::new(),
+            runtime_selector: None,
+            report: None,
+        };
+        prepare_volume_erasure(&settings, &mut inventory)
+            .await
+            .unwrap();
+        assert!(inventory.objects[0].volume.is_none());
+        eprintln!("prepared unbound claim uid={}", inventory.objects[0].uid);
+        let pod_path = work.path().join("pod.json");
+        std::fs::write(&pod_path, serde_json::json!({
+            "apiVersion":"v1", "kind":"Pod", "metadata":{"name":"consumer"},
+            "spec":{"containers":[{"name":"consumer","image":"registry.k8s.io/pause:3.10","volumeMounts":[{"name":"data","mountPath":"/data"}]}],
+                "volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"data"}}]}
+        }).to_string()).unwrap();
+        assert!(kubectl_output(&["apply", "-f", pod_path.to_str().unwrap()])
+            .status
+            .success());
+        assert!(kubectl_output(&[
+            "wait",
+            "pvc/data",
+            "--for=jsonpath={.status.phase}=Bound",
+            "--timeout=120s"
+        ])
+        .status
+        .success());
+        let bound: serde_json::Value =
+            serde_json::from_slice(&kubectl_output(&["get", "pvc", "data", "-o", "json"]).stdout)
+                .unwrap();
+        let volume = bound["spec"]["volumeName"].as_str().unwrap();
+        let pv: serde_json::Value =
+            serde_json::from_slice(&kubectl_output(&["get", "pv", volume, "-o", "json"]).stdout)
+                .unwrap();
+        assert_eq!(pv["spec"]["persistentVolumeReclaimPolicy"], "Retain");
+        eprintln!("claim bound after preparation: volume={volume}, reclaimPolicy=Retain");
+        assert!(
+            kubectl_output(&["delete", "pod", "consumer", "--wait=true"])
+                .status
+                .success()
+        );
+        let result = erase_inventory(&settings, &inventory).await;
+        eprintln!("first erasure result: {result:?}");
+        let remaining = kubectl_output(&["get", "pvc", "data", "-o", "json"]);
+        // Clean even on a regression: a failed assertion must not leave a Retain volume.
+        if result.is_ok() {
+            assert!(kubectl_output(&[
+                "patch",
+                "pv",
+                volume,
+                "--type=merge",
+                "-p",
+                r#"{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}"#
+            ])
+            .status
+            .success());
+        } else {
+            let retained: serde_json::Value = serde_json::from_slice(
+                &kubectl_output(&["get", "pv", volume, "-o", "json"]).stdout,
+            )
+            .unwrap();
+            assert_eq!(retained["metadata"]["uid"], pv["metadata"]["uid"]);
+            assert_eq!(retained["spec"]["persistentVolumeReclaimPolicy"], "Retain");
+            prepare_volume_erasure(&settings, &mut inventory)
+                .await
+                .unwrap();
+            assert_eq!(inventory.objects[0].volume.as_ref().unwrap().name, volume);
+            let prepared: serde_json::Value = serde_json::from_slice(
+                &kubectl_output(&["get", "pv", volume, "-o", "json"]).stdout,
+            )
+            .unwrap();
+            assert_eq!(prepared["spec"]["persistentVolumeReclaimPolicy"], "Delete");
+            erase_inventory(&settings, &inventory).await.unwrap();
+            wait_for_erased_volumes(&settings, &inventory)
+                .await
+                .unwrap();
+            eprintln!("retry recorded the bound volume, changed policy to Delete, and observed volume removal");
+        }
+        assert!(
+            kubectl_output(&["delete", "namespace", &namespace, "--wait=false"])
+                .status
+                .success()
+        );
+        assert!(kubectl_output(&["delete", "storageclass", &storage_class])
+            .status
+            .success());
+        let error = result
+            .expect_err("erase must retain a claim whose newly bound volume was not recorded");
+        assert!(error.to_string().contains("retry deletion"));
+        assert!(
+            remaining.status.success(),
+            "claim must remain available for volume preparation"
+        );
+        let remaining: serde_json::Value = serde_json::from_slice(&remaining.stdout).unwrap();
+        assert_eq!(remaining["metadata"]["uid"], claim["metadata"]["uid"]);
     }
 
     #[cfg(unix)]
