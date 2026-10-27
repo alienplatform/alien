@@ -455,11 +455,13 @@ async fn run_operator_cli(
         .unwrap_or_else(|| "/var/lib/operator".to_string());
     let data_dir_path = PathBuf::from(&data_dir);
 
-    let _lock = InstanceLock::acquire(&data_dir_path)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("Failed to acquire instance lock in '{}'", data_dir),
-        })?;
+    let _lock =
+        InstanceLock::acquire_with_timeout(&data_dir_path, std::time::Duration::from_secs(60))
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to acquire instance lock in '{}'", data_dir),
+            })?;
 
     install_panic_hook(&data_dir_path);
 
