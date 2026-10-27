@@ -894,7 +894,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- $existing := lookup "v1" "ConfigMap" .Release.Namespace $scopeName -}}
 {{- if $existing -}}
 {{- required "The existing runtime cleanup scope has no labelValue." (index (default dict $existing.data) "labelValue") -}}
-{{- else if .Release.IsUpgrade -}}
+{{- /* Releases older than the cleanup scope still have their manager ServiceAccount. */ -}}
+{{- else if and .Release.IsUpgrade (not (lookup "v1" "ServiceAccount" .Release.Namespace (include "deployment.managerServiceAccountName" .))) -}}
 {{- fail "Cannot discover the existing runtime cleanup scope. Set logCollector.scope.deploymentLabelValue=<current label> to keep this install's scope when rendering an upgrade without cluster lookup (helm template --is-upgrade or GitOps). Read <current label> from the installed runtime-scope ConfigMap data.labelValue." -}}
 {{- else -}}
 {{- include "deployment.serviceAccountPrefix" . -}}

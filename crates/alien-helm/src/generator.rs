@@ -5442,7 +5442,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- $existing := lookup "v1" "ConfigMap" .Release.Namespace $scopeName -}}
 {{- if $existing -}}
 {{- required "The existing runtime cleanup scope has no labelValue." (index (default dict $existing.data) "labelValue") -}}
-{{- else if .Release.IsUpgrade -}}
+{{- /* Releases older than the cleanup scope still have their manager ServiceAccount. */ -}}
+{{- else if and .Release.IsUpgrade (not (lookup "v1" "ServiceAccount" .Release.Namespace (include "deployment.managerServiceAccountName" .))) -}}
 {{- fail "Cannot discover the existing runtime cleanup scope. Set logCollector.scope.deploymentLabelValue=<current label> to keep this install's scope when rendering an upgrade without cluster lookup (helm template --is-upgrade or GitOps). Read <current label> from the installed runtime-scope ConfigMap data.labelValue." -}}
 {{- else -}}
 {{- include "deployment.serviceAccountPrefix" . -}}
@@ -10521,12 +10522,32 @@ remoteOperator:
 
     #[test]
     fn runtime_scope_preserves_the_installed_value_unless_explicit() {
-        for (explicit, installed, upgrade, expected) in [
-            ("", "", false, Some("prepared001")),
-            ("", "original-release", true, Some("original-release")),
-            ("explicit001", "original-release", true, Some("explicit001")),
-            ("", "", true, None),
-            ("original-release", "", true, Some("original-release")),
+        for (explicit, installed, upgrade, manager_exists, expected) in [
+            ("", "", false, false, Some("prepared001")),
+            ("", "original-release", true, true, Some("original-release")),
+            (
+                "",
+                "original-release",
+                true,
+                false,
+                Some("original-release"),
+            ),
+            (
+                "explicit001",
+                "original-release",
+                true,
+                true,
+                Some("explicit001"),
+            ),
+            ("", "", true, false, None),
+            ("", "", true, true, Some("prepared001")),
+            (
+                "original-release",
+                "",
+                true,
+                false,
+                Some("original-release"),
+            ),
         ] {
             let mut chart = sample_product_chart();
             chart.files.retain(|name, _| {
@@ -10540,6 +10561,14 @@ remoteOperator:
             if installed.is_empty() {
                 *helpers = helpers.replace("(dict \"data\" (dict \"labelValue\" \"\"))", "dict");
             }
+            *helpers = helpers.replace(
+                "lookup \"v1\" \"ServiceAccount\" .Release.Namespace (include \"deployment.managerServiceAccountName\" .)",
+                if manager_exists {
+                    "(dict \"metadata\" (dict \"name\" \"prepared001-manager-sa\"))"
+                } else {
+                    "dict"
+                },
+            );
             chart.files.insert(
                 "templates/scope-test.yaml".into(),
                 "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: scope-test\ndata:\n  value: {{ include \"deployment.runtimeLabelValue\" . | quote }}\n".into(),
@@ -10548,7 +10577,9 @@ remoteOperator:
                 let template = chart.files.get_mut("templates/scope-test.yaml").unwrap();
                 template.insert_str(0, "{{- $_ := set .Release \"IsUpgrade\" true -}}\n");
             }
-            let values = format!("serviceAccountPrefix: prepared001\nlogCollector:\n  scope:\n    deploymentLabelValue: {explicit:?}\n");
+            let values = format!(
+                "serviceAccountPrefix: prepared001\nlogCollector:\n  scope:\n    deploymentLabelValue: {explicit:?}\n"
+            );
             let rendered = crate::test_utils::helm_template(&chart.files, Some(&values));
             if let Some(expected) = expected {
                 rendered.assert_ok("runtime scope precedence");
@@ -10556,9 +10587,11 @@ remoteOperator:
                 assert_eq!(docs[0]["data"]["value"], expected);
             } else {
                 assert!(!rendered.is_ok());
-                assert!(rendered
-                    .stderr
-                    .contains("Set logCollector.scope.deploymentLabelValue=<current label>"));
+                assert!(
+                    rendered
+                        .stderr
+                        .contains("Set logCollector.scope.deploymentLabelValue=<current label>")
+                );
             }
         }
     }
