@@ -55,6 +55,7 @@ pub struct AlienManagerBuilder {
     tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     /// Chart settings; `Some` serves Helm charts from the registry.
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
+    operator_image_provider: Option<Arc<dyn OperatorImageProvider>>,
     /// Release channels; `None` sends every release to every deployment.
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
     /// Signs air-gapped bundles.
@@ -87,6 +88,7 @@ impl AlienManagerBuilder {
             import_registry: None,
             tunnels: None,
             charts: None,
+            operator_image_provider: None,
             release_channels: None,
             bundle_signing_key: None,
             bundle_sources: None,
@@ -126,6 +128,14 @@ impl AlienManagerBuilder {
     /// manager.
     pub fn charts(mut self, settings: crate::routes::charts::ChartSettings) -> Self {
         self.charts = Some(Arc::new(settings));
+        self
+    }
+
+    /// Override the Operator image advertised during connected sync.
+    /// Without a provider, the image comes from [`Self::charts`]. A custom
+    /// provider returning `None` suppresses updates, even when charts are served.
+    pub fn operator_image_provider(mut self, provider: Arc<dyn OperatorImageProvider>) -> Self {
+        self.operator_image_provider = Some(provider);
         self
     }
 
@@ -812,6 +822,7 @@ impl AlienManagerBuilder {
             self.import_registry,
             self.tunnels,
             self.charts,
+            self.operator_image_provider,
             self.release_channels,
             self.bundle_signing_key,
             self.bundle_sources,
@@ -931,6 +942,7 @@ async fn finalize(
     import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
     tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
+    operator_image_provider: Option<Arc<dyn OperatorImageProvider>>,
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
@@ -976,6 +988,7 @@ async fn finalize(
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
         tunnels,
         charts,
+        operator_image_provider,
         release_channels,
         bundle_signing_key,
         bundle_sources,

@@ -407,6 +407,7 @@ async fn handed_off_deployment(answer: Answer) -> Fixture {
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         tunnels: None,
         charts: None,
+        operator_image_provider: None,
         release_channels: None,
         bundle_signing_key: None,
         bundle_sources: None,

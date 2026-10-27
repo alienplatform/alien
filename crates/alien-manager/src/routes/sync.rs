@@ -1121,6 +1121,7 @@ mod tests {
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
             tunnels: None,
             charts: None,
+            operator_image_provider: None,
             release_channels: None,
             bundle_signing_key: None,
             bundle_sources: None,
@@ -2849,10 +2850,18 @@ async fn agent_sync(
         target_operations_bundle_set,
         target_dynamic_containers,
         tunnel_url: state.tunnels.as_ref().map(|_| state.config.base_url()),
-        target_operator_image: state
-            .charts
-            .as_ref()
-            .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
+        target_operator_image: match &state.operator_image_provider {
+            Some(provider) => match provider.target_image(&subject, &deployment).await {
+                Ok(image) => image,
+                Err(error) => {
+                    tracing::warn!(deployment_id = %deployment.id, error = %error, "Failed to resolve Operator image");
+                    return ErrorData::internal("Failed to resolve Operator image").into_response();
+                }
+            },
+            None => state.charts.as_ref().map(|charts| {
+                charts.deployed_operator_image(&state.config.base_url())
+            }),
+        },
     })
     .into_response()
 }

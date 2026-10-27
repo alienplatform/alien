@@ -227,6 +227,7 @@ async fn fixture_with_backend_delay(delay: Duration) -> Fixture {
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         tunnels: None,
         charts: None,
+        operator_image_provider: None,
         release_channels: None,
         bundle_signing_key: None,
         bundle_sources: None,

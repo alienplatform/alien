@@ -92,6 +92,8 @@ pub struct AppState {
     pub tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     /// Chart settings; `Some` serves Helm charts at `/v2/charts/...`.
     pub charts: Option<Arc<charts::ChartSettings>>,
+    /// Overrides the chart image for connected Operator updates.
+    pub operator_image_provider: Option<Arc<dyn OperatorImageProvider>>,
     /// Release channels; `None` sends every release to every deployment.
     pub release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
     /// Signs air-gapped bundles. `None` when this manager doesn't sign them.

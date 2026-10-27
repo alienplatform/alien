@@ -11,7 +11,10 @@
 //! TCP and reads `deploymentConfig` the way `alien deploy` does.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use sha2::{Digest, Sha256};
 
@@ -223,6 +226,7 @@ async fn deployment_with_queued_update(record_token: bool) -> Fixture {
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         tunnels: None,
         charts: None,
+        operator_image_provider: None,
         release_channels: None,
         bundle_signing_key: None,
         bundle_sources: None,
@@ -386,5 +390,128 @@ async fn an_acquire_whose_config_cannot_be_built_gives_back_the_lease() {
     assert!(
         record.retry_requested,
         "the retry request the acquire consumed was restored"
+    );
+}
+
+struct TestOperatorImage {
+    calls: Arc<AtomicUsize>,
+    deployment_id: String,
+    image: Option<String>,
+    fail: bool,
+}
+
+#[async_trait::async_trait]
+impl alien_manager::traits::OperatorImageProvider for TestOperatorImage {
+    async fn target_image(
+        &self,
+        _subject: &Subject,
+        deployment: &alien_manager::traits::DeploymentRecord,
+    ) -> Result<Option<String>, AlienError> {
+        assert_eq!(deployment.id, self.deployment_id);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail {
+            return Err(
+                alien_manager::error::ErrorData::internal("image unavailable").into_generic(),
+            );
+        }
+        Ok(self.image.clone())
+    }
+}
+
+impl Fixture {
+    async fn sync_operator(&self, token: &str) -> (reqwest::StatusCode, serde_json::Value) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = alien_manager::routes::sync::router().with_state(self.state.clone());
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let response = reqwest::Client::new()
+            .post(format!("http://{address}/v1/sync"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "deploymentId": self.deployment_id,
+                "maxSupportedDeploymentProtocolVersion": alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+            }))
+            .send().await.unwrap();
+        let status = response.status();
+        let body = response.json().await.unwrap();
+        task.abort();
+        (status, body)
+    }
+}
+
+#[tokio::test]
+async fn connected_sync_resolves_operator_image_after_authorization() {
+    let mut fixture = deployment_with_queued_update(true).await;
+    let (status, body) = fixture.sync_operator(&fixture.deployment_token).await;
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    assert!(body.get("targetOperatorImage").is_none());
+    fixture.state.charts = Some(Arc::new(alien_manager::routes::charts::ChartSettings::new(
+        Some("operator:standalone".into()),
+        false,
+    )));
+    let (status, body) = fixture.sync_operator(&fixture.deployment_token).await;
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    assert_eq!(body["targetOperatorImage"], "operator:standalone");
+    let calls = Arc::new(AtomicUsize::new(0));
+    for (image, fail) in [
+        (
+            Some("registry.example.test/branded:next".to_string()),
+            false,
+        ),
+        (None, false),
+        (None, true),
+    ] {
+        fixture.state.operator_image_provider = Some(Arc::new(TestOperatorImage {
+            calls: calls.clone(),
+            deployment_id: fixture.deployment_id.clone(),
+            image: image.clone(),
+            fail,
+        }));
+        let (status, body) = fixture.sync_operator(&fixture.deployment_token).await;
+        if fail {
+            assert_eq!(status, reqwest::StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        } else {
+            assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+            assert_eq!(
+                body.get("targetOperatorImage").and_then(|v| v.as_str()),
+                image.as_deref()
+            );
+        }
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    let other = fixture
+        .store
+        .create_deployment(
+            &Subject::system(),
+            CreateDeploymentParams {
+                name: "app-2".into(),
+                deployment_group_id: fixture
+                    .store
+                    .get_deployment(&Subject::system(), &fixture.deployment_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .deployment_group_id,
+                platform: Platform::Aws,
+                base_platform: None,
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                stack_settings: Default::default(),
+                stack_state: None,
+                environment_variables: None,
+                public_subdomain: None,
+                input_values: Default::default(),
+                setup_item: None,
+                deployment_token: None,
+            },
+        )
+        .await
+        .unwrap();
+    fixture.deployment_id = other.id;
+    let (status, _) = fixture.sync_operator(&fixture.deployment_token).await;
+    assert!(status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "provider not reached for another deployment"
     );
 }

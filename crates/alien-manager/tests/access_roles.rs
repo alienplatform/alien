@@ -216,6 +216,7 @@ async fn state() -> (AppState, String, tempfile::TempDir) {
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         tunnels: Some(TunnelRegistry::new()),
         charts: None,
+        operator_image_provider: None,
         release_channels: None,
         bundle_signing_key: None,
         bundle_sources: None,
