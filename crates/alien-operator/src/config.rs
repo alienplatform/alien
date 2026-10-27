@@ -2,11 +2,30 @@
 //!
 //! Configuration can be built from CLI arguments or programmatically via the builder.
 
-use alien_core::{Platform, PublicEndpointUrls, StackSettings, TelemetryMode, UpdatesMode};
+use alien_core::{
+    BindingValue, ExternalBinding, ExternalBindings, Platform, PostgresBinding, PublicEndpointUrls,
+    StackSettings, TelemetryMode, UpdatesMode,
+};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 use url::Url;
+
+/// Installation bindings override supplied values, except for chart database defaults.
+pub(crate) fn merge_installation_bindings(
+    bindings: &mut ExternalBindings,
+    installation: &ExternalBindings,
+) {
+    for (id, binding) in &installation.0 {
+        let chart_default = matches!(binding,
+            ExternalBinding::Postgres(PostgresBinding::External(database))
+                if matches!(&database.password, BindingValue::Expression(value) if value.get("secretKeyRef").is_some())
+        );
+        if !chart_default || !bindings.has(id) {
+            bindings.insert(id.clone(), binding.clone());
+        }
+    }
+}
 
 /// Sync configuration for connecting to remote management server
 ///

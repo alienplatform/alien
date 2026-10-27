@@ -8841,6 +8841,11 @@ mod tests {
             std::process::Command::new("helm")
                 .args(["--kube-context", &context, "--namespace", &namespace])
                 .args(args)
+                .args(if args.first() == Some(&"upgrade") {
+                    vec!["--set", "postgres.database.enabled=true"]
+                } else {
+                    Vec::new()
+                })
                 .output()
                 .unwrap()
         };
@@ -8850,8 +8855,13 @@ mod tests {
             .success());
         assert!(helm(&["uninstall", "database"]).status.success());
         let digest_refresh = helm(&[
-            "upgrade", "--install", "database", chart_path, "--dry-run=server",
-            "--set", "postgres.database.image.tag=pg17-bookworm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "upgrade",
+            "--install",
+            "database",
+            chart_path,
+            "--dry-run=server",
+            "--set",
+            "postgres.database.image.tag=pg17-bookworm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         ]);
         let same = helm(&[
             "upgrade",
@@ -8921,7 +8931,10 @@ mod tests {
                 },
             )
             .unwrap();
-            let rendered = crate::test_utils::helm_template(&chart.files, None);
+            let rendered = crate::test_utils::helm_template(
+                &chart.files,
+                Some("postgres:\n  database:\n    enabled: true\n"),
+            );
             rendered.assert_ok("database quantities");
             let docs = parse_manifest_docs(&rendered.stdout);
             let database = &docs_by_kind(&docs, "StatefulSet")[0];
@@ -8946,6 +8959,62 @@ mod tests {
                     expected,
                     "{memory} memory and {storage} storage must retain their byte counts"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn postgres_requires_opt_in_and_preserves_stack_settings_bindings() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let bindings = serde_json::json!({
+            "database":{"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":"existing-password"},
+            "bucket":{"type":"storage","service":"s3","bucketName":"existing-bucket"}
+        });
+        for values in [
+            serde_json::json!({
+                "infrastructure":null, "stackSettings":{"externalBindings":bindings},
+                "postgres":{"database":{"enabled":true,"highAvailability":true,"encryptionKey":"existing-key"}}
+            }),
+            serde_json::json!({}),
+        ] {
+            let rendered = crate::test_utils::helm_template_for_release(
+                &chart.files,
+                Some(&serde_yaml::to_string(&values).unwrap()),
+                "app",
+            );
+            rendered.assert_ok("supplied database");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            assert!(docs_by_kind(&docs, "StatefulSet").is_empty());
+            assert!(docs_by_kind(&docs, "PersistentVolumeClaim")
+                .iter()
+                .all(|p| !p["metadata"]["name"].as_str().unwrap().contains("-pg-")));
+            assert!(docs_by_kind(&docs, "Secret")
+                .iter()
+                .all(|p| !p["metadata"]["name"].as_str().unwrap().contains("-pg-")));
+            if values["stackSettings"].is_object() {
+                let settings = docs_by_kind(&docs, "ConfigMap")
+                    .into_iter()
+                    .find(|d| d["data"]["stack-settings.json"].is_string())
+                    .unwrap();
+                let settings: serde_json::Value =
+                    serde_json::from_str(settings["data"]["stack-settings.json"].as_str().unwrap())
+                        .unwrap();
+                assert_eq!(settings["externalBindings"], bindings);
             }
         }
     }
@@ -9023,8 +9092,11 @@ mod tests {
             "acme-production-installation-one",
             "acme-production-installation-two",
         ] {
-            let rendered =
-                crate::test_utils::helm_template_for_release(&chart.files, None, release);
+            let rendered = crate::test_utils::helm_template_for_release(
+                &chart.files,
+                Some("postgres:\n  database:\n    enabled: true\n"),
+                release,
+            );
             rendered.assert_ok("long database release");
             let docs = parse_manifest_docs(&rendered.stdout);
             let databases = docs_by_kind(&docs, "StatefulSet");
@@ -9102,7 +9174,10 @@ mod tests {
             },
         )
         .unwrap();
-        let rendered = crate::test_utils::helm_template(&chart.files, None);
+        let rendered = crate::test_utils::helm_template(
+            &chart.files,
+            Some("postgres:\n  database:\n    enabled: true\n"),
+        );
         rendered.assert_ok("database chart");
         let docs = parse_manifest_docs(&rendered.stdout);
         let database = docs_by_kind(&docs, "StatefulSet")
@@ -11237,11 +11312,9 @@ remoteOperator:
                 assert_eq!(docs[0]["data"]["value"], expected);
             } else {
                 assert!(!rendered.is_ok());
-                assert!(
-                    rendered
-                        .stderr
-                        .contains("Set logCollector.scope.deploymentLabelValue=<current label>")
-                );
+                assert!(rendered
+                    .stderr
+                    .contains("Set logCollector.scope.deploymentLabelValue=<current label>"));
             }
         }
     }
@@ -11508,7 +11581,8 @@ remoteOperator:
                     })
                     .collect();
                 assert_eq!(
-                    selected.len(), 1,
+                    selected.len(),
+                    1,
                     "{}/{} must select exactly its intended workload, remote enabled={remote_enabled}",
                     doc["kind"].as_str().unwrap(),
                     doc["metadata"]["name"].as_str().unwrap(),
@@ -11545,11 +11619,13 @@ logCollector:
             daemonsets[0]["spec"]["template"]["spec"]["containers"][0]["image"],
             "fluent/fluent-bit:3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
         );
-        assert!(docs_by_kind(&docs, "Role").iter().all(|role| !role["rules"]
-            .as_sequence()
-            .is_some_and(|rules| rules
-                .iter()
-                .any(|rule| rule["resources"] == serde_yaml::to_value(["pods/log"]).unwrap()))));
+        assert!(docs_by_kind(&docs, "Role").iter().all(|role| {
+            !role["rules"].as_sequence().is_some_and(|rules| {
+                rules
+                    .iter()
+                    .any(|rule| rule["resources"] == serde_yaml::to_value(["pods/log"]).unwrap())
+            })
+        }));
         let remote = docs_by_kind(&docs, "Deployment")
             .into_iter()
             .find(|deployment| operator_env_value(deployment, "COLLECTOR_TOKEN_FILE").is_some())

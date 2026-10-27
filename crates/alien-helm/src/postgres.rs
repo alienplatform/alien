@@ -10,6 +10,7 @@ pub(crate) fn values(stack: &Stack) -> Value {
             return None;
         }
         Some((id.clone(), json!({
+            "enabled": false,
             "image": {"repository": "pgvector/pgvector", "tag": format!("pg{}-bookworm", database.version)},
             "storage": kubernetes_size(&database.storage, false),
             "storageClassName": "",
@@ -45,7 +46,7 @@ pub(crate) const HELPERS: &str = r#"
 {{- $bindings := deepCopy (default dict .Values.infrastructure) -}}
 {{- if not .Values.infrastructureExistingSecret -}}
 {{- range $id, $database := .Values.postgres -}}
-  {{- if not (hasKey $bindings $id) -}}
+  {{- if and $database.enabled (not (hasKey $bindings $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) -}}
     {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) -}}
     {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" $name "key" "password")) "sslMode" "disable") -}}
   {{- end -}}
@@ -56,7 +57,7 @@ pub(crate) const HELPERS: &str = r#"
 "#;
 
 pub(crate) const TEMPLATE: &str = r#"{{- range $id, $database := .Values.postgres }}
-{{- if and (not $.Values.infrastructureExistingSecret) (not (hasKey (default dict $.Values.infrastructure) $id)) }}
+{{- if and $database.enabled (not $.Values.infrastructureExistingSecret) (not (hasKey (default dict $.Values.infrastructure) $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) }}
 {{- if $database.highAvailability }}{{ fail "In-cluster Postgres is single-instance; supply an external binding for high availability" }}{{ end }}
 {{- if $database.encryptionKey }}{{ fail "In-cluster Postgres uses StorageClass encryption; supply an external binding for an explicit database encryption key" }}{{ end }}
 {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) }}
@@ -194,7 +195,7 @@ spec:
 pub(crate) const README: &str = r#"
 ## PostgreSQL
 
-Frozen Postgres resources run as single-instance StatefulSets with pgvector and a persistent volume. Helm owns these databases; application releases do not replace them. The cluster needs a default StorageClass, or set `postgres.<resource>.storageClassName` before installing. Storage encryption comes from that StorageClass. For high availability or a separately managed encryption key, use your own database.
+Set `postgres.<resource>.enabled: true` to provision a Frozen Postgres resource as a single-instance StatefulSet with pgvector and a persistent volume. Database provisioning is off by default so existing database bindings remain in use. Enable it only when no database is supplied by your installation or management configuration. Helm owns these databases; application releases do not replace them. The cluster needs a default StorageClass, or set `postgres.<resource>.storageClassName` before installing. Storage encryption comes from that StorageClass. For high availability or a separately managed encryption key, use your own database.
 
 The password is generated once in a Kubernetes Secret and supplied to linked workloads through `secretKeyRef`. Upgrades reuse that Secret. Image changes require a database upgrade plan; the chart records the image on the retained PVC and refuses to change it automatically, including after uninstall. For older volumes without this annotation, upgrade the chart while the original StatefulSet still exists; if it has already been removed, restore the `alien.dev/postgres-image` PVC annotation from the original installation before reinstalling.
 

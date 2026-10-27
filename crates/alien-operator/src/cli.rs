@@ -694,9 +694,7 @@ async fn run_operator_cli(
         parse_json_opt::<alien_core::StackSettings>(stack_settings_json, "stack settings")?
             .unwrap_or_default();
 
-    if let Some(bindings) = external_bindings {
-        stack_settings.external_bindings = Some(bindings);
-    }
+    stack_settings = stack_settings_with_bindings(stack_settings, external_bindings);
     let operations = parse_operator_operations(args.operations)?;
 
     let operator_config = OperatorConfig::builder()
@@ -1272,6 +1270,21 @@ fn parse_json_opt<T: serde::de::DeserializeOwned>(
     }
 }
 
+fn stack_settings_with_bindings(
+    mut settings: alien_core::StackSettings,
+    bindings: Option<alien_core::ExternalBindings>,
+) -> alien_core::StackSettings {
+    if let Some(bindings) = bindings {
+        crate::config::merge_installation_bindings(
+            settings
+                .external_bindings
+                .get_or_insert_with(Default::default),
+            &bindings,
+        );
+    }
+    settings
+}
+
 async fn load_config_value(
     inline: Option<String>,
     file: Option<&std::path::Path>,
@@ -1748,6 +1761,25 @@ mod tests {
             assert_eq!(config.env_prefix.as_deref(), Some("ACME"));
             assert_eq!(config.label_domain.as_deref(), Some("acme.dev"));
         });
+    }
+
+    #[test]
+    fn file_bindings_preserve_supplied_settings_and_database() {
+        let supplied: alien_core::ExternalBindings = serde_json::from_value(serde_json::json!({
+            "database":{"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":"existing-password"},
+            "bucket":{"type":"storage","service":"s3","bucketName":"existing-bucket"}
+        })).unwrap();
+        let defaults = serde_json::from_value(serde_json::json!({
+            "database":{"type":"postgres","service":"external","host":"new-db.site.svc","port":5432,"database":"app","username":"postgres","password":{"secretKeyRef":{"name":"new-db","key":"password"}}}
+        })).unwrap();
+        let settings = super::stack_settings_with_bindings(
+            alien_core::StackSettings {
+                external_bindings: Some(supplied.clone()),
+                ..Default::default()
+            },
+            Some(defaults),
+        );
+        assert_eq!(settings.external_bindings, Some(supplied));
     }
 
     #[tokio::test]
