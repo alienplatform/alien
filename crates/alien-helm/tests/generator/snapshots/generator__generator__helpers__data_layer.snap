@@ -2875,9 +2875,9 @@ spec:
 {{- $bindings := deepCopy (default dict .Values.infrastructure) -}}
 {{- if not .Values.infrastructureExistingSecret -}}
 {{- range $id, $database := .Values.postgres -}}
-  {{- if not (hasKey $bindings $id) -}}
+  {{- if and $database.enabled (not (hasKey $bindings $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) -}}
     {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) -}}
-    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" $name "key" "password")) "sslMode" "disable") -}}
+    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" (default $name $database.existingPasswordSecret) "key" "password")) "sslMode" "disable") -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -2886,7 +2886,7 @@ spec:
 
 === templates/postgres.yaml ===
 {{- range $id, $database := .Values.postgres }}
-{{- if and (not $.Values.infrastructureExistingSecret) (not (hasKey (default dict $.Values.infrastructure) $id)) }}
+{{- if and $database.enabled (not $.Values.infrastructureExistingSecret) (not (hasKey (default dict $.Values.infrastructure) $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) }}
 {{- if $database.highAvailability }}{{ fail "In-cluster Postgres is single-instance; supply an external binding for high availability" }}{{ end }}
 {{- if $database.encryptionKey }}{{ fail "In-cluster Postgres uses StorageClass encryption; supply an external binding for an explicit database encryption key" }}{{ end }}
 {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) }}
@@ -2908,6 +2908,8 @@ spec:
 {{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
   {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
 {{- end }}
+{{- $credentials := default $name $database.existingPasswordSecret }}
+{{- if not $database.existingPasswordSecret }}
 {{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}
 {{- $password := "" }}
 {{- if $existing }}
@@ -2915,6 +2917,9 @@ spec:
 {{- else }}
   {{- if lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $name }}
     {{- fail "Postgres data exists but its credentials Secret is missing; restore the original Secret before installing" }}
+  {{- end }}
+  {{- if not (lookup "v1" "Namespace" "" $.Release.Namespace) }}
+    {{- fail "Cannot read the database namespace; create it before installing, or set postgres.<resource>.existingPasswordSecret to a Secret containing the password key for offline rendering" }}
   {{- end }}
   {{- $password = randAlphaNum 48 | b64enc }}
 {{- end }}
@@ -2930,6 +2935,7 @@ metadata:
 type: Opaque
 data:
   password: {{ $password | quote }}
+{{- end }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -2979,7 +2985,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/component: {{ $name }}
-        {{- $labels | toYaml | nindent 8 }}
+        app.kubernetes.io/name: {{ $name }}
+        app.kubernetes.io/instance: {{ $.Release.Name }}
     spec:
       automountServiceAccountToken: false
       {{- with $.Values.runtime.imagePullSecrets }}
@@ -3000,7 +3007,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ $name }}
+                  name: {{ $credentials }}
                   key: password
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata

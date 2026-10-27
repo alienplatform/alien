@@ -38,6 +38,18 @@ import {
 } from "./bindingvaluevecstringunion.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
+  ExternalPasswordSecretKeyRef,
+  ExternalPasswordSecretKeyRef$inboundSchema,
+  ExternalPasswordSecretKeyRef$Outbound,
+  ExternalPasswordSecretKeyRef$outboundSchema,
+} from "./externalpasswordsecretkeyref.js";
+import {
+  ExternalPasswordSecretRef,
+  ExternalPasswordSecretRef$inboundSchema,
+  ExternalPasswordSecretRef$Outbound,
+  ExternalPasswordSecretRef$outboundSchema,
+} from "./externalpasswordsecretref.js";
+import {
   ExternalPostgresSslMode,
   ExternalPostgresSslMode$inboundSchema,
   ExternalPostgresSslMode$outboundSchema,
@@ -108,6 +120,22 @@ export type ExternalBindingLocalPostgres = {
   type: TypePostgres6;
 };
 
+export type Password1 =
+  | ExternalPasswordSecretRef
+  | ExternalPasswordSecretKeyRef
+  | string;
+
+/**
+ * Connection password or Kubernetes Secret reference. Kubernetes workloads resolve
+ *
+ * @remarks
+ * the reference through secretKeyRef before the application loads its binding.
+ */
+export type Password2 =
+  | ExternalPasswordSecretRef
+  | ExternalPasswordSecretKeyRef
+  | string;
+
 export const TypePostgres5 = {
   Postgres: "postgres",
 } as const;
@@ -132,13 +160,12 @@ export type ExternalBindingExternal = {
    */
   host: BindingValueStringUnion;
   /**
-   * Connection password as a concrete value, never an unresolved `SecretRef`: the platform
+   * Connection password or Kubernetes Secret reference. Kubernetes workloads resolve
    *
    * @remarks
-   * materializes the Kubernetes secret into the pod env. The cloud variants carry a secret
-   * locator instead.
+   * the reference through secretKeyRef before the application loads its binding.
    */
-  password: string;
+  password: ExternalPasswordSecretRef | ExternalPasswordSecretKeyRef | string;
   /**
    * Represents a value that can be either a concrete value, a template expression,
    *
@@ -1203,6 +1230,76 @@ export function externalBindingLocalPostgresFromJSON(
 }
 
 /** @internal */
+export const Password1$inboundSchema: z.ZodType<Password1, unknown> = z.union([
+  ExternalPasswordSecretRef$inboundSchema,
+  ExternalPasswordSecretKeyRef$inboundSchema,
+  z.string(),
+]);
+/** @internal */
+export type Password1$Outbound =
+  | ExternalPasswordSecretRef$Outbound
+  | ExternalPasswordSecretKeyRef$Outbound
+  | string;
+
+/** @internal */
+export const Password1$outboundSchema: z.ZodType<
+  Password1$Outbound,
+  Password1
+> = z.union([
+  ExternalPasswordSecretRef$outboundSchema,
+  ExternalPasswordSecretKeyRef$outboundSchema,
+  z.string(),
+]);
+
+export function password1ToJSON(password1: Password1): string {
+  return JSON.stringify(Password1$outboundSchema.parse(password1));
+}
+export function password1FromJSON(
+  jsonString: string,
+): SafeParseResult<Password1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Password1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Password1' from JSON`,
+  );
+}
+
+/** @internal */
+export const Password2$inboundSchema: z.ZodType<Password2, unknown> = z.union([
+  ExternalPasswordSecretRef$inboundSchema,
+  ExternalPasswordSecretKeyRef$inboundSchema,
+  z.string(),
+]);
+/** @internal */
+export type Password2$Outbound =
+  | ExternalPasswordSecretRef$Outbound
+  | ExternalPasswordSecretKeyRef$Outbound
+  | string;
+
+/** @internal */
+export const Password2$outboundSchema: z.ZodType<
+  Password2$Outbound,
+  Password2
+> = z.union([
+  ExternalPasswordSecretRef$outboundSchema,
+  ExternalPasswordSecretKeyRef$outboundSchema,
+  z.string(),
+]);
+
+export function password2ToJSON(password2: Password2): string {
+  return JSON.stringify(Password2$outboundSchema.parse(password2));
+}
+export function password2FromJSON(
+  jsonString: string,
+): SafeParseResult<Password2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Password2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Password2' from JSON`,
+  );
+}
+
+/** @internal */
 export const TypePostgres5$inboundSchema: z.ZodEnum<typeof TypePostgres5> = z
   .enum(TypePostgres5);
 /** @internal */
@@ -1216,7 +1313,11 @@ export const ExternalBindingExternal$inboundSchema: z.ZodType<
 > = z.object({
   database: BindingValueStringUnion$inboundSchema,
   host: BindingValueStringUnion$inboundSchema,
-  password: z.string(),
+  password: z.union([
+    ExternalPasswordSecretRef$inboundSchema,
+    ExternalPasswordSecretKeyRef$inboundSchema,
+    z.string(),
+  ]),
   port: BindingValueU16Union$inboundSchema,
   sslMode: ExternalPostgresSslMode$inboundSchema.optional(),
   username: BindingValueStringUnion$inboundSchema,
@@ -1227,7 +1328,10 @@ export const ExternalBindingExternal$inboundSchema: z.ZodType<
 export type ExternalBindingExternal$Outbound = {
   database: BindingValueStringUnion$Outbound;
   host: BindingValueStringUnion$Outbound;
-  password: string;
+  password:
+    | ExternalPasswordSecretRef$Outbound
+    | ExternalPasswordSecretKeyRef$Outbound
+    | string;
   port: BindingValueU16Union$Outbound;
   sslMode?: string | undefined;
   username: BindingValueStringUnion$Outbound;
@@ -1242,7 +1346,11 @@ export const ExternalBindingExternal$outboundSchema: z.ZodType<
 > = z.object({
   database: BindingValueStringUnion$outboundSchema,
   host: BindingValueStringUnion$outboundSchema,
-  password: z.string(),
+  password: z.union([
+    ExternalPasswordSecretRef$outboundSchema,
+    ExternalPasswordSecretKeyRef$outboundSchema,
+    z.string(),
+  ]),
   port: BindingValueU16Union$outboundSchema,
   sslMode: ExternalPostgresSslMode$outboundSchema.optional(),
   username: BindingValueStringUnion$outboundSchema,

@@ -9001,7 +9001,7 @@ mod tests {
             )
             .build();
         let registry = HelmRegistry::built_in();
-        let mut chart = generate_helm_chart(
+        let chart = generate_helm_chart(
             &stack,
             HelmOptions {
                 registry: &registry,

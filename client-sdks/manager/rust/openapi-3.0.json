@@ -8018,6 +8018,30 @@
           "$ref": "#/components/schemas/ExternalBinding"
         }
       },
+      "ExternalPasswordSecretKeyRef": {
+        "type": "object",
+        "required": [
+          "secretKeyRef"
+        ],
+        "properties": {
+          "secretKeyRef": {
+            "$ref": "#/components/schemas/SecretReference"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExternalPasswordSecretRef": {
+        "type": "object",
+        "required": [
+          "secretRef"
+        ],
+        "properties": {
+          "secretRef": {
+            "$ref": "#/components/schemas/SecretReference"
+          }
+        },
+        "additionalProperties": false
+      },
       "ExternalPostgresBinding": {
         "type": "object",
         "description": "Operator-provided / BYO database binding.",
@@ -8036,8 +8060,22 @@
             "$ref": "#/components/schemas/BindingValue_String"
           },
           "password": {
-            "type": "string",
-            "description": "Connection password as a concrete value, never an unresolved `SecretRef`: the platform\nmaterializes the Kubernetes secret into the pod env. The cloud variants carry a secret\nlocator instead."
+            "oneOf": [
+              {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExternalPasswordSecretRef"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExternalPasswordSecretKeyRef"
+                  }
+                ]
+              }
+            ],
+            "description": "Connection password or Kubernetes Secret reference. Kubernetes workloads resolve\nthe reference through secretKeyRef before the application loads its binding."
           },
           "port": {
             "$ref": "#/components/schemas/BindingValue_u16"
@@ -10382,6 +10420,36 @@
               "route": {
                 "$ref": "#/components/schemas/KubernetesRouteProfile",
                 "description": "Runtime route profile to materialize."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Give each named public endpoint a hostname below a customer-owned base domain.",
+            "required": [
+              "baseDomain",
+              "route",
+              "certificate",
+              "mode"
+            ],
+            "properties": {
+              "baseDomain": {
+                "type": "string",
+                "description": "DNS name without a wildcard or URL scheme, for example `app.example.com`."
+              },
+              "certificate": {
+                "$ref": "#/components/schemas/KubernetesCertificateMode",
+                "description": "One customer-owned certificate reference covering every endpoint hostname."
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "customBaseDomain"
+                ]
+              },
+              "route": {
+                "$ref": "#/components/schemas/KubernetesRouteProfile",
+                "description": "Route profile shared by all public endpoints."
               }
             }
           }
