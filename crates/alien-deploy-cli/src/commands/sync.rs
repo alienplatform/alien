@@ -1379,6 +1379,9 @@ struct DeletionInventory {
     stack_id: String,
     kube_context: Option<String>,
     objects: Vec<DeletionObject>,
+    /// Claim templates remain authoritative after their StatefulSets are stopped.
+    #[serde(default)]
+    claim_prefixes: Vec<String>,
     #[serde(default)]
     runtime_selector: Option<String>,
     #[serde(default)]
@@ -1395,10 +1398,20 @@ struct DeletionObject {
     volume: Option<DeletionVolume>,
 }
 
+#[cfg(test)]
 async fn deletion_inventory(
     settings: &SiteSide,
     stack_id: &str,
     namespace: &str,
+) -> Result<DeletionInventory> {
+    deletion_inventory_with_previous(settings, stack_id, namespace, None).await
+}
+
+async fn deletion_inventory_with_previous(
+    settings: &SiteSide,
+    stack_id: &str,
+    namespace: &str,
+    previous: Option<&DeletionInventory>,
 ) -> Result<DeletionInventory> {
     let mut command = Command::new("helm");
     command.args(["get", "manifest", stack_id, "--namespace", namespace]);
@@ -1465,7 +1478,9 @@ async fn deletion_inventory(
                 && object["metadata"]["labels"][key] == *prefix
         })
     };
-    let mut claim_prefixes = Vec::new();
+    let mut claim_prefixes = previous
+        .map(|inventory| inventory.claim_prefixes.clone())
+        .unwrap_or_default();
     for object in items
         .iter()
         .filter(|v| v["kind"] == "StatefulSet" && runtime_owned(v))
@@ -1481,7 +1496,11 @@ async fn deletion_inventory(
             }
         }
     }
-    let mut data = Vec::new();
+    claim_prefixes.sort();
+    claim_prefixes.dedup();
+    let mut data = previous
+        .map(|inventory| inventory.objects.clone())
+        .unwrap_or_default();
     for object in items {
         let resource = match object["kind"].as_str() {
             Some("PersistentVolumeClaim") => "persistentvolumeclaims",
@@ -1509,12 +1528,23 @@ async fn deletion_inventory(
             let uid = object["metadata"]["uid"]
                 .as_str()
                 .ok_or_else(|| AlienError::new(config_error("data object has no UID")))?;
-            data.push(DeletionObject {
-                resource: resource.into(),
-                name: name.into(),
-                uid: uid.into(),
-                volume: None,
-            });
+            if let Some(saved) = data
+                .iter()
+                .find(|saved| saved.resource == resource && saved.name == name)
+            {
+                if saved.uid != uid {
+                    return Err(AlienError::new(config_error(format!(
+                        "{resource}/{name} was replaced; refusing to erase a different object"
+                    ))));
+                }
+            } else {
+                data.push(DeletionObject {
+                    resource: resource.into(),
+                    name: name.into(),
+                    uid: uid.into(),
+                    volume: None,
+                });
+            }
         }
     }
     Ok(DeletionInventory {
@@ -1522,9 +1552,129 @@ async fn deletion_inventory(
         stack_id: stack_id.into(),
         kube_context: settings.kube_context.clone(),
         objects: data,
+        claim_prefixes,
         runtime_selector: scope.map(|(key, prefix)| format!("managed-by=runtime,{key}={prefix}")),
         report: None,
     })
+}
+
+/// Stop claim creation before the final inventory. Orphan deletion preserves data
+/// regardless of the StatefulSet's PVC retention policy; the Helm hook stops pods.
+async fn stop_claim_controllers(settings: &SiteSide, inventory: &DeletionInventory) -> Result<()> {
+    let Some(selector) = &inventory.runtime_selector else {
+        return Ok(());
+    };
+    let mut get = kubectl(settings.kube_context.as_deref());
+    get.args([
+        "get",
+        "statefulsets",
+        "-n",
+        &inventory.namespace,
+        "-l",
+        selector,
+        "-o",
+        "json",
+    ]);
+    let sets: serde_json::Value =
+        serde_json::from_slice(&run(get, "reading claim controllers").await?)
+            .into_alien_error()
+            .context(config_error("parsing claim controllers"))?;
+    let sets = sets["items"]
+        .as_array()
+        .ok_or_else(|| AlienError::new(config_error("missing StatefulSet list")))?;
+    let work = tempfile::tempdir()
+        .into_alien_error()
+        .context(config_error("preparing controller cleanup"))?;
+    for set in sets {
+        let name = set["metadata"]["name"]
+            .as_str()
+            .ok_or_else(|| AlienError::new(config_error("StatefulSet has no name")))?;
+        let uid = set["metadata"]["uid"]
+            .as_str()
+            .ok_or_else(|| AlienError::new(config_error("StatefulSet has no UID")))?;
+        // Retain claims while scaling down, then remove the controller so an HPA
+        // cannot start creating claims again between the inventory and Helm cleanup.
+        let patch = serde_json::json!([
+            {"op":"test", "path":"/metadata/uid", "value":uid},
+            {"op":"add", "path":"/spec/persistentVolumeClaimRetentionPolicy", "value":{"whenDeleted":"Retain","whenScaled":"Retain"}},
+            {"op":"add", "path":"/spec/replicas", "value":0}
+        ]);
+        let mut stop = kubectl(settings.kube_context.as_deref());
+        stop.args([
+            "patch",
+            "statefulset",
+            name,
+            "-n",
+            &inventory.namespace,
+            "--type=json",
+            "-p",
+            &patch.to_string(),
+        ]);
+        run(stop, "stopping claim creation").await?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            let mut get = kubectl(settings.kube_context.as_deref());
+            get.args([
+                "get",
+                "statefulset",
+                name,
+                "-n",
+                &inventory.namespace,
+                "-o",
+                "json",
+            ]);
+            let current: serde_json::Value =
+                serde_json::from_slice(&run(get, "waiting for claim creation to stop").await?)
+                    .into_alien_error()
+                    .context(config_error("parsing stopped controller"))?;
+            if current["metadata"]["uid"] != uid || current["spec"]["replicas"] != 0 {
+                return Err(AlienError::new(config_error(
+                    "StatefulSet changed while stopping claim creation; retry deletion",
+                )));
+            }
+            if current["status"]["observedGeneration"]
+                .as_u64()
+                .unwrap_or(0)
+                >= current["metadata"]["generation"].as_u64().unwrap_or(1)
+                && current["status"]["replicas"].as_u64().unwrap_or(0) == 0
+            {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(AlienError::new(config_error(
+                    "StatefulSet did not stop before the data inventory deadline",
+                )));
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        let options = work.path().join("delete.json");
+        std::fs::write(&options, serde_json::json!({"apiVersion":"v1", "kind":"DeleteOptions", "propagationPolicy":"Orphan", "preconditions":{"uid":uid}}).to_string())
+            .into_alien_error().context(config_error("writing controller deletion precondition"))?;
+        let mut delete = kubectl(settings.kube_context.as_deref());
+        delete
+            .args([
+                "delete",
+                "--raw",
+                &format!(
+                    "/apis/apps/v1/namespaces/{}/statefulsets/{name}",
+                    inventory.namespace
+                ),
+                "-f",
+            ])
+            .arg(options);
+        run(delete, "removing stopped claim controller").await?;
+        let mut wait = kubectl(settings.kube_context.as_deref());
+        wait.args([
+            "wait",
+            "--for=delete",
+            &format!("statefulset/{name}"),
+            "-n",
+            &inventory.namespace,
+            "--timeout=120s",
+        ]);
+        run(wait, "waiting for claim controller deletion").await?;
+    }
+    Ok(())
 }
 
 async fn erase_inventory(settings: &SiteSide, inventory: &DeletionInventory) -> Result<()> {
@@ -1963,9 +2113,36 @@ async fn uninstall_site(
     }
     // This receipt stays on the site machine, outside the carried folder.
     // It survives Helm removal and never authorizes deletion of a replacement UID.
-    if machine.deletion_inventory.is_none() && values.is_some() {
-        machine.deletion_inventory =
-            Some(deletion_inventory(settings, &manifest.stack_id, &namespace).await?);
+    if values.is_some() {
+        // Save template ownership before removing controllers, including on retries
+        // that already have an inventory from an interrupted scale-up.
+        machine.deletion_inventory = Some(
+            deletion_inventory_with_previous(
+                settings,
+                &manifest.stack_id,
+                &namespace,
+                machine.deletion_inventory.as_ref(),
+            )
+            .await?,
+        );
+        save_machine(&site.deployment_id, &machine)?;
+        stop_claim_controllers(
+            settings,
+            machine
+                .deletion_inventory
+                .as_ref()
+                .expect("saved inventory"),
+        )
+        .await?;
+        machine.deletion_inventory = Some(
+            deletion_inventory_with_previous(
+                settings,
+                &manifest.stack_id,
+                &namespace,
+                machine.deletion_inventory.as_ref(),
+            )
+            .await?,
+        );
         save_machine(&site.deployment_id, &machine)?;
     }
     if policy == DeletionPolicy::Erase && machine.deletion_inventory.is_none() {
@@ -3972,6 +4149,7 @@ stringData:
                     uid: "old-uid".into(),
                     volume: None,
                 }],
+                claim_prefixes: Vec::new(),
                 runtime_selector: None,
                 report: None,
             }),
@@ -4455,18 +4633,25 @@ metadata:
     #[tokio::test]
     #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
     async fn signed_erase_removes_only_owned_data() {
-        signed_cleanup_preserves_unowned_claims("erase").await;
+        signed_cleanup_preserves_unowned_claims("erase", false).await;
     }
 
     #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
     async fn signed_retain_preserves_statefulset_claims() {
-        signed_cleanup_preserves_unowned_claims("retain").await;
+        signed_cleanup_preserves_unowned_claims("retain", false).await;
     }
 
     #[cfg(unix)]
-    async fn signed_cleanup_preserves_unowned_claims(policy: &str) {
+    #[tokio::test]
+    #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT"]
+    async fn signed_erase_includes_claims_created_after_interrupted_inventory() {
+        signed_cleanup_preserves_unowned_claims("erase", true).await;
+    }
+
+    #[cfg(unix)]
+    async fn signed_cleanup_preserves_unowned_claims(policy: &str, late_claim: bool) {
         let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
         let namespace = format!("sync-{policy}-{}", std::process::id());
         let (folder, mut site) = folder_with_report();
@@ -4668,6 +4853,58 @@ stringData:
         let recorded_data = deletion_inventory(&settings, "app", &namespace)
             .await
             .unwrap();
+        let claims_before = if late_claim {
+            let mut machine = load_machine(&site.deployment_id).unwrap();
+            machine.deletion_inventory = Some(recorded_data.clone());
+            save_machine(&site.deployment_id, &machine).unwrap();
+            let mut scale = kubectl(Some(&context));
+            scale.args([
+                "scale",
+                "statefulset/app-data",
+                "--replicas=2",
+                "-n",
+                &namespace,
+            ]);
+            run(scale, "resuming interrupted scale-up").await.unwrap();
+            let mut wait = kubectl(Some(&context));
+            wait.args([
+                "rollout",
+                "status",
+                "statefulset/app-data",
+                "-n",
+                &namespace,
+                "--timeout=120s",
+            ]);
+            run(wait, "creating the late claim").await.unwrap();
+            let mut get = kubectl(Some(&context));
+            get.args(["get", "pvc", "-n", &namespace, "-o", "json"]);
+            let claims =
+                serde_json::from_slice(&run(get, "recording late claim").await.unwrap()).unwrap();
+            // Keep the controller metadata; the production deletion must stop it.
+            let mut scale = kubectl(Some(&context));
+            scale.args([
+                "scale",
+                "statefulset/app-data",
+                "--replicas=0",
+                "-n",
+                &namespace,
+            ]);
+            run(scale, "releasing fixture volume mounts").await.unwrap();
+            let mut wait = kubectl(Some(&context));
+            wait.args([
+                "wait",
+                "pods",
+                "--all",
+                "--for=delete",
+                "-n",
+                &namespace,
+                "--timeout=120s",
+            ]);
+            run(wait, "waiting for fixture mounts").await.unwrap();
+            claims
+        } else {
+            claims_before.clone()
+        };
 
         let bundle = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -4724,6 +4961,9 @@ stringData:
         std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
         std::fs::write(bundle.path().join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
         airgap::pack(bundle.path(), &pending).unwrap();
+        let expected_current_data = deletion_inventory(&settings, "app", &namespace)
+            .await
+            .unwrap();
         let target = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(target.path(), br#"{"releaseInfo":{"releaseId":"rel_new"}}"#).unwrap();
         write_target(&settings, "app", &namespace, target.path(), 3, 0)
@@ -4746,7 +4986,7 @@ stringData:
             .unwrap();
         assert_eq!(
             serde_json::to_value(&unchanged).unwrap(),
-            serde_json::to_value(&recorded_data).unwrap()
+            serde_json::to_value(&expected_current_data).unwrap()
         );
         // A current signed request can still complete the same cleanup.
         signed_manifest["sequence"] = 4.into();
@@ -4795,7 +5035,9 @@ stringData:
         for original_claim in claims_before["items"].as_array().unwrap() {
             let name = original_claim["metadata"]["name"].as_str().unwrap();
             let found = remaining.iter().find(|v| v["metadata"]["name"] == name);
-            if policy == "erase" && matches!(name, "database" | "data-app-data-0") {
+            if policy == "erase"
+                && matches!(name, "database" | "data-app-data-0" | "data-app-data-1")
+            {
                 assert!(found.is_none(), "erase left claim {name}");
             } else {
                 let found = found.unwrap_or_else(|| panic!("lost claim {name}"));
