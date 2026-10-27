@@ -500,6 +500,9 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
         &site.name,
     )
     .await?;
+    let mut machine = load_machine(&site.deployment_id)?;
+    machine.deletion_inventory = None;
+    save_machine(&site.deployment_id, &machine)?;
     let attempt = write_target(
         &settings,
         &record.stack_id,
@@ -3640,6 +3643,166 @@ mod tests {
     use std::os::unix::fs::MetadataExt as _;
 
     use super::*;
+
+    /// Rollback changes chart-owned data even if the subsequent rollout is interrupted.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
+    async fn rollback_discards_interrupted_deletion_inventory() {
+        let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("sync-rollback-inventory-{}", std::process::id());
+        let (folder, mut site) = folder_with_report();
+        site.deployment_id = format!("dep_rollback_inventory_{}", std::process::id());
+        save_site(folder.path(), &site).unwrap();
+        let key = BundleSigningKey::from_seed([7; 32]);
+        let chart = tempfile::tempdir().unwrap();
+        std::fs::create_dir(chart.path().join("templates")).unwrap();
+        std::fs::write(
+            chart.path().join("Chart.yaml"),
+            "apiVersion: v2\nname: app\nversion: 0.1.0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            chart.path().join("templates/data.yaml"),
+            r#"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: restored-database
+  labels:
+    app.kubernetes.io/instance: app
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    helm.sh/resource-policy: keep
+stringData:
+  password: fixture
+"#,
+        )
+        .unwrap();
+        for (sequence, release) in [(1, "previous"), (2, "latest")] {
+            let installed = folder
+                .path()
+                .join(TO_SITE)
+                .join(INSTALLED)
+                .join(format!("{sequence}-{release}"));
+            std::fs::create_dir_all(&installed).unwrap();
+            let mut package = Command::new("helm");
+            package
+                .arg("package")
+                .arg(chart.path())
+                .arg("--destination")
+                .arg(&installed);
+            run(package, "packaging rollback fixture").await.unwrap();
+            std::fs::write(installed.join(airgap::TARGET_FILE), b"{}").unwrap();
+            let manifest = BundleManifest {
+                format_version: airgap::FORMAT_VERSION,
+                deployment_id: site.deployment_id.clone(),
+                deployment_name: site.name.clone(),
+                release_id: release.into(),
+                sequence,
+                created_at: chrono::Utc::now().to_rfc3339(),
+                stack_id: "app".into(),
+                images: vec![airgap::BundleImage {
+                    source: "registry.example.com/operator:fixture".into(),
+                    repository: "operator".into(),
+                    tag: Some("fixture".into()),
+                    digest: format!("sha256:{}", "a".repeat(64)),
+                    media_type: "application/vnd.oci.image.manifest.v1+json".into(),
+                }],
+                chart_images: BTreeMap::from([(
+                    "runtime.image".into(),
+                    "registry.example.com/operator:fixture".into(),
+                )]),
+                chart: "app-0.1.0.tgz".into(),
+                files: airgap::checksums(&installed).await.unwrap(),
+                omitted_blobs: BTreeSet::new(),
+                telemetry_ack: None,
+                deletion_policy: None,
+            };
+            let bytes = serde_json::to_vec(&manifest).unwrap();
+            std::fs::write(installed.join(airgap::MANIFEST_FILE), &bytes).unwrap();
+            std::fs::write(installed.join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
+            let mut record =
+                installed_record(&manifest, "registry.example.com/site", BTreeSet::new()).unwrap();
+            record.rollout_succeeded = true;
+            std::fs::write(
+                installed.join("install.json"),
+                serde_json::to_vec(&record).unwrap(),
+            )
+            .unwrap();
+        }
+        let mut install = Command::new("helm");
+        install.args(["install", "app"]).arg(chart.path()).args([
+            "--namespace",
+            &namespace,
+            "--create-namespace",
+            "--kube-context",
+            &context,
+            "--set-string",
+            &format!("airgapped.bundleSigningKey={}", key.public_key()),
+            "--set-string",
+            &format!("management.deploymentId={}", site.deployment_id),
+        ]);
+        run(install, "installing rollback fixture").await.unwrap();
+        let machine = MachineState {
+            registry: Some("registry.example.com/site".into()),
+            namespace: Some(namespace.clone()),
+            kube_context: Some(context.clone()),
+            deletion_inventory: Some(DeletionInventory {
+                namespace: namespace.clone(),
+                stack_id: "app".into(),
+                kube_context: Some(context.clone()),
+                objects: vec![DeletionObject {
+                    resource: "secret".into(),
+                    name: "restored-database".into(),
+                    uid: "old-uid".into(),
+                    volume: None,
+                }],
+                runtime_selector: None,
+                report: None,
+            }),
+            ..Default::default()
+        };
+        save_machine(&site.deployment_id, &machine).unwrap();
+        let settings = SiteSide::from_state(&machine, Some(context.clone()))
+            .unwrap()
+            .unwrap();
+        // Observe the real rollback's written target, then interrupt its readiness wait.
+        // Inventory must already be invalidated, even when readiness never completes.
+        let result = {
+            let rollback = rollback_command(RollbackArgs {
+                folder: Some(folder.path().into()),
+                kube_context: Some(context.clone()),
+            });
+            tokio::pin!(rollback);
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    tokio::select! {
+                        result = &mut rollback => panic!("rollback ended before target observation: {result:?}"),
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                            if target_sequence(&settings, "app", &namespace).await.unwrap().is_some() { break; }
+                        }
+                    }
+                }
+            }).await
+        };
+        let after = load_machine(&site.deployment_id).unwrap();
+        let fresh = deletion_inventory(&settings, "app", &namespace)
+            .await
+            .unwrap();
+        let mut delete = kubectl(Some(&context));
+        delete.args(["delete", "namespace", &namespace]);
+        run(delete, "removing rollback fixture").await.unwrap();
+        result.expect("rollback must write a target");
+        assert!(fresh
+            .objects
+            .iter()
+            .any(|object| object.name == "restored-database" && object.uid != "old-uid"));
+        assert!(
+            after.deletion_inventory.is_none(),
+            "rollback kept the previous deletion's object UIDs"
+        );
+    }
 
     #[test]
     fn rollback_skips_consecutive_failed_rollouts() {
