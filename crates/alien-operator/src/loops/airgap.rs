@@ -78,6 +78,7 @@ pub async fn run_airgap_status_loop(
         },
         Err(_) => DEFAULT_TELEMETRY_BUFFER_BYTES,
     };
+    let mut pending_refresh = None;
     loop {
         match state.db.prune_telemetry(buffer_bytes).await {
             Ok(0) => {}
@@ -87,7 +88,19 @@ pub async fn run_airgap_status_loop(
             ),
             Err(e) => warn!(error = %e, "Air-gapped: failed to prune telemetry"),
         }
-        if let Err(e) = write_status(&state, &secret_name, &export_token).await {
+        let refresh = match state.db.get_deployment_state().await {
+            Ok(deployment) => {
+                let resource_count = deployment
+                    .and_then(|deployment| deployment.stack_state)
+                    .map_or(0, |stack| stack.resources.len());
+                tokio::select! {
+                    _ = state.cancel.cancelled() => break,
+                    result = poll_health_refresh(&mut pending_refresh, resource_count, || super::deployment::refresh_airgap_deployment(&state)) => result,
+                }
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(e) = write_status(&state, &secret_name, &export_token, refresh).await {
             warn!(error = %e, "Air-gapped: failed to write status");
         }
         tokio::select! {
@@ -292,36 +305,44 @@ fn target_hash(target: &TargetDeployment) -> Result<String> {
 }
 
 /// Allow one minute per resource, up to nine minutes, within the CLI rollout wait.
-/// A deadline leaves the last checkpoint intact; only an observed error fails health.
+/// A deadline yields to status export; the caller retains the unfinished pass.
 async fn bounded_health_refresh(
     resource_count: usize,
     refresh: impl std::future::Future<Output = Result<()>>,
-) -> Result<()> {
+) -> Result<bool> {
     let timeout = Duration::from_secs(60).saturating_mul(resource_count.clamp(1, 9) as u32);
     match tokio::time::timeout(timeout, refresh).await {
-        Ok(result) => result,
+        Ok(result) => result.map(|()| true),
         Err(_) => {
             warn!(
                 resource_count,
-                "Health refresh deadline reached; exporting last checkpoint"
+                "Health refresh still running; exporting last checkpoint"
             );
-            Ok(())
+            Ok(false)
         }
     }
 }
 
-async fn write_status(state: &OperatorState, secret_name: &str, export_token: &str) -> Result<()> {
-    let resource_count = state
-        .db
-        .get_deployment_state()
-        .await?
-        .and_then(|deployment| deployment.stack_state)
-        .map_or(0, |stack| stack.resources.len());
-    let refresh = bounded_health_refresh(
-        resource_count,
-        super::deployment::refresh_airgap_deployment(state),
-    )
-    .await;
+async fn poll_health_refresh<F: std::future::Future<Output = Result<()>>>(
+    pending: &mut Option<std::pin::Pin<Box<F>>>,
+    resource_count: usize,
+    start: impl FnOnce() -> F,
+) -> Result<()> {
+    let refresh = pending.get_or_insert_with(|| Box::pin(start()));
+    let result = bounded_health_refresh(resource_count, refresh.as_mut()).await;
+    if !matches!(result, Ok(false)) {
+        // Completed passes (including failures) must not be polled again.
+        *pending = None;
+    }
+    result.map(|_| ())
+}
+
+async fn write_status(
+    state: &OperatorState,
+    secret_name: &str,
+    export_token: &str,
+    refresh: Result<()>,
+) -> Result<()> {
     let (deployment_state, sequence, attempt) = state.db.airgap_status_snapshot().await?;
     let Some(mut deployment_state) = deployment_state else {
         return Ok(());
@@ -754,5 +775,26 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("observed resource failure"));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn long_refresh_keeps_progress_until_checkpoint() {
+        let starts = std::sync::atomic::AtomicUsize::new(0);
+        let checkpoint = std::sync::atomic::AtomicUsize::new(0);
+        let mut pending = None;
+        let start = || async {
+            starts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut observed = 0;
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                observed += 1;
+            }
+            checkpoint.store(observed, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        };
+        poll_health_refresh(&mut pending, 20, start).await.unwrap();
+        assert_eq!(checkpoint.load(std::sync::atomic::Ordering::SeqCst), 0);
+        poll_health_refresh(&mut pending, 20, start).await.unwrap();
+        assert_eq!(checkpoint.load(std::sync::atomic::Ordering::SeqCst), 20);
+        assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
