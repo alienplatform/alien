@@ -8966,7 +8966,7 @@ mod tests {
             .unwrap();
             let rendered = crate::test_utils::helm_template(
                 &chart.files,
-                Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n"),
+                Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n"),
             );
             rendered.assert_ok("database quantities");
             let docs = parse_manifest_docs(&rendered.stdout);
@@ -8997,6 +8997,70 @@ mod tests {
     }
 
     #[test]
+    fn postgres_offline_render_keeps_the_recorded_image() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let mut values = serde_json::json!({"postgres":{"database":{
+            "enabled":true,"existingPasswordSecret":"database-credentials",
+            "recordedImage":"pgvector/pgvector:pg17-bookworm",
+            "image":{"tag":"pg18-bookworm"}
+        }}});
+        let changed = crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(&values.to_string()),
+            "app",
+        );
+        assert!(
+            !changed.is_ok(),
+            "offline render must not change the recorded database image"
+        );
+        assert!(changed.stderr.contains("recordedImage"));
+        values["postgres"]["database"]["image"]["tag"] = "pg17-bookworm".into();
+        crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(&values.to_string()),
+            "app",
+        )
+        .assert_ok("offline rendering with the installed image pin");
+        values["postgres"]["database"]["image"]["tag"] =
+            format!("pg17-bookworm@sha256:{}", "b".repeat(64)).into();
+        crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(&values.to_string()),
+            "app",
+        )
+        .assert_ok("same image tag with a refreshed digest");
+        values["postgres"]["database"]
+            .as_object_mut()
+            .unwrap()
+            .remove("recordedImage");
+        let missing = crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(&values.to_string()),
+            "app",
+        );
+        assert!(
+            !missing.is_ok(),
+            "offline render needs an explicit recorded image"
+        );
+        assert!(missing.stderr.contains("recordedImage"));
+    }
+
+    #[test]
     fn postgres_offline_render_requires_stable_credentials() {
         let stack = Stack::new("database-stack".into())
             .add(
@@ -9024,7 +9088,7 @@ mod tests {
             "offline renders must not rotate database credentials"
         );
         assert!(missing.stderr.contains("existingPasswordSecret"));
-        let values = "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n";
+        let values = "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n";
         let first = crate::test_utils::helm_template_for_release(&chart.files, Some(values), "app");
         first.assert_ok("explicit database credentials");
         let docs = parse_manifest_docs(&first.stdout);
@@ -9056,7 +9120,7 @@ mod tests {
             },
         )
         .unwrap();
-        let values = "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n";
+        let values = "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n";
         let first = crate::test_utils::helm_template_for_release(&chart.files, Some(values), "app");
         first.assert_ok("database chart");
         let docs = parse_manifest_docs(&first.stdout);
@@ -9206,7 +9270,7 @@ mod tests {
         ] {
             let rendered = crate::test_utils::helm_template_for_release(
                 &chart.files,
-                Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n"),
+                Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n"),
                 release,
             );
             rendered.assert_ok("long database release");
@@ -9290,7 +9354,7 @@ mod tests {
         .unwrap();
         let rendered = crate::test_utils::helm_template(
             &chart.files,
-            Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n"),
+            Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n"),
         );
         rendered.assert_ok("database chart");
         let docs = parse_manifest_docs(&rendered.stdout);

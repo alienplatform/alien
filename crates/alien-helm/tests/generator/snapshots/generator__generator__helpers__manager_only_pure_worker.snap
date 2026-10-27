@@ -2922,6 +2922,12 @@ spec:
 {{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
   {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
 {{- end }}
+{{- if and $database.existingPasswordSecret (not (lookup "v1" "Namespace" "" $.Release.Namespace)) }}
+  {{- $recordedImage := required (printf "Cannot verify the installed Postgres image offline; set postgres.%s.recordedImage to the retained PVC alien.dev/postgres-image annotation (for a fresh database, pin the initial image)" $id) $database.recordedImage }}
+  {{- if ne (first (splitList "@" $recordedImage)) (first (splitList "@" $desiredImage)) }}
+    {{- fail (printf "Postgres image differs from postgres.%s.recordedImage; retain the recorded image or migrate the database before changing the pin" $id) }}
+  {{- end }}
+{{- end }}
 {{- $credentials := default $name $database.existingPasswordSecret }}
 {{- if not $database.existingPasswordSecret }}
 {{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}

@@ -12,6 +12,7 @@ pub(crate) fn values(stack: &Stack) -> Value {
         Some((id.clone(), json!({
             "enabled": false,
             "existingPasswordSecret": "",
+            "recordedImage": "",
             "image": {"repository": "pgvector/pgvector", "tag": format!("pg{}-bookworm", database.version)},
             "storage": kubernetes_size(&database.storage, false),
             "storageClassName": "",
@@ -83,6 +84,12 @@ pub(crate) const TEMPLATE: &str = r#"{{- range $id, $database := .Values.postgre
 {{- end }}
 {{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
   {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
+{{- end }}
+{{- if and $database.existingPasswordSecret (not (lookup "v1" "Namespace" "" $.Release.Namespace)) }}
+  {{- $recordedImage := required (printf "Cannot verify the installed Postgres image offline; set postgres.%s.recordedImage to the retained PVC alien.dev/postgres-image annotation (for a fresh database, pin the initial image)" $id) $database.recordedImage }}
+  {{- if ne (first (splitList "@" $recordedImage)) (first (splitList "@" $desiredImage)) }}
+    {{- fail (printf "Postgres image differs from postgres.%s.recordedImage; retain the recorded image or migrate the database before changing the pin" $id) }}
+  {{- end }}
 {{- end }}
 {{- $credentials := default $name $database.existingPasswordSecret }}
 {{- if not $database.existingPasswordSecret }}
@@ -209,7 +216,7 @@ pub(crate) const README: &str = r#"
 
 Set `postgres.<resource>.enabled: true` to provision a Frozen Postgres resource as a single-instance StatefulSet with pgvector and a persistent volume. Database provisioning is off by default so existing database bindings remain in use. Enable it only when no database is supplied by your installation or management configuration. Helm owns these databases; application releases do not replace them. The cluster needs a default StorageClass, or set `postgres.<resource>.storageClassName` before installing. Storage encryption comes from that StorageClass. For high availability or a separately managed encryption key, use your own database.
 
-Create the installation namespace before using Helm. Helm generates a password once in a retained Kubernetes Secret and reuses it on upgrades. For GitOps or offline rendering, set `postgres.<resource>.existingPasswordSecret` to a customer-managed Secret with a `password` key; create that Secret before the database starts. The chart never rewrites a supplied credentials Secret. Keep the same Secret and password while retaining the database volume. Image changes require a database upgrade plan; the chart records the image on the retained PVC and refuses to change it automatically, including after uninstall. For older volumes without this annotation, upgrade the chart while the original StatefulSet still exists; if it has already been removed, restore the `alien.dev/postgres-image` PVC annotation from the original installation before reinstalling.
+Create the installation namespace before using Helm. Helm generates a password once in a retained Kubernetes Secret and reuses it on upgrades. For GitOps or offline rendering, set `postgres.<resource>.existingPasswordSecret` to a customer-managed Secret with a `password` key; create that Secret before the database starts. Offline renders also require `postgres.<resource>.recordedImage`: copy the retained PVC’s `alien.dev/postgres-image` annotation into this value and keep it unchanged across releases. For a fresh database, pin the initial `repository:tag`. The desired image must match this pin (digest-only refreshes of the same tag remain allowed). Offline rendering cannot verify the cluster, so changing both the image and its pin is an explicit administrative override, not a database migration. The chart never rewrites a supplied credentials Secret. Keep the same Secret and password while retaining the database volume. Image changes require a database upgrade plan; the chart records the image on the retained PVC and refuses to change it automatically, including after uninstall. For older volumes without this annotation, upgrade the chart while the original StatefulSet still exists; if it has already been removed, restore the `alien.dev/postgres-image` PVC annotation from the original installation before reinstalling.
 
 To use your own PostgreSQL, create its password Secret in the installation namespace first, then set an external binding:
 
