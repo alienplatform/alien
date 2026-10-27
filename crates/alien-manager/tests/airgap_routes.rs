@@ -43,7 +43,11 @@ use alien_manager::traits::{
 
 /// Records every batch the manager passes on, after `delay`.
 #[derive(Default)]
-struct CapturedTelemetry(Mutex<Vec<(TelemetrySignal, Option<String>)>>, Duration);
+struct CapturedTelemetry(
+    Mutex<Vec<(TelemetrySignal, Option<String>)>>,
+    Duration,
+    tokio::sync::Notify,
+);
 
 #[async_trait]
 impl TelemetryBackend for CapturedTelemetry {
@@ -53,6 +57,7 @@ impl TelemetryBackend for CapturedTelemetry {
         caller: &TelemetryCaller,
         _data: bytes::Bytes,
     ) -> Result<(), AlienError> {
+        self.2.notify_one();
         tokio::time::sleep(self.1).await;
         self.0
             .lock()
@@ -87,10 +92,14 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
-    fixture_with_backend_delay(Duration::ZERO).await
+    fixture_with_mode(Duration::ZERO, true).await
 }
 
 async fn fixture_with_backend_delay(delay: Duration) -> Fixture {
+    fixture_with_mode(delay, true).await
+}
+
+async fn fixture_with_mode(delay: Duration, airgapped: bool) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("manager.db");
     let db = Arc::new(
@@ -146,7 +155,10 @@ async fn fixture_with_backend_delay(delay: Duration) -> Fixture {
                     deployment_group_id: group.id.clone(),
                     platform: Platform::Kubernetes,
                     base_platform: None,
-                    stack_settings: StackSettings::default(),
+                    stack_settings: StackSettings {
+                        airgapped,
+                        ..Default::default()
+                    },
                     stack_state: StackState::new(Platform::Kubernetes),
                     environment_info: None,
                     runtime_metadata: RuntimeMetadata::default(),
@@ -192,7 +204,11 @@ async fn fixture_with_backend_delay(delay: Duration) -> Fixture {
     );
     let command_dispatcher: Arc<dyn CommandDispatcher> = Arc::new(NullCommandDispatcher);
     let command_registry: Arc<dyn CommandRegistry> = Arc::new(InMemoryCommandRegistry::default());
-    let telemetry = Arc::new(CapturedTelemetry(Mutex::default(), delay));
+    let telemetry = Arc::new(CapturedTelemetry(
+        Mutex::default(),
+        delay,
+        tokio::sync::Notify::new(),
+    ));
     std::mem::forget(tmp);
 
     let state = AppState {
@@ -289,6 +305,7 @@ async fn report(
             "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         },
         "telemetry": telemetry,
+        "writtenAt": "2026-01-01T00:00:00Z",
     });
     let request = Request::builder()
         .method("POST")
@@ -318,6 +335,20 @@ async fn the_sites_own_token_reports_state_and_telemetry() {
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["telemetryAccepted"], 1);
+    let stored = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap()
+        .unwrap();
+    let receipt = stored.runtime_metadata.unwrap().airgapped_report.unwrap();
+    assert_eq!(
+        receipt.written_at.unwrap().to_rfc3339(),
+        "2026-01-01T00:00:00+00:00"
+    );
+    assert!((chrono::Utc::now() - receipt.received_at).num_seconds() < 10);
+
     assert_eq!(
         *fixture.telemetry.0.lock().unwrap(),
         vec![(TelemetrySignal::Logs, Some(fixture.deployment.clone()))],
@@ -460,4 +491,323 @@ async fn a_client_that_disconnects_mid_report_does_not_cause_duplicates() {
         ids.len(),
         "each batch reached the backend once"
     );
+}
+
+#[tokio::test]
+async fn deletion_target_stays_scoped_and_final_report_drains_logs_first() {
+    let fixture = fixture_with_backend_delay(Duration::from_millis(200)).await;
+    fixture
+        .state
+        .deployment_store
+        .set_delete_pending(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap();
+    for (token, expected) in [
+        (&fixture.site_token, StatusCode::OK),
+        (&fixture.other_token, StatusCode::FORBIDDEN),
+    ] {
+        let response = alien_manager::routes::airgap::router()
+            .with_state(fixture.state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/deployments/{}/target", fixture.deployment))
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let body: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["action"], "delete");
+        }
+    }
+    let body = serde_json::json!({
+        "state": {"status":"deleted", "platform":"kubernetes", "protocolVersion":CURRENT_DEPLOYMENT_PROTOCOL_VERSION},
+        "telemetry":[{"id":1,"signal":"logs","data":base64::engine::general_purpose::STANDARD.encode(b"final logs")}]
+    });
+    let router = alien_manager::routes::airgap::router().with_state(fixture.state.clone());
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/v1/deployments/{}/status-report",
+            fixture.deployment
+        ))
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", fixture.site_token),
+        )
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let sending = tokio::spawn(async move { router.oneshot(request).await.unwrap() });
+    fixture.telemetry.2.notified().await;
+    let during = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(during.status, "delete-pending");
+    assert_eq!(sending.await.unwrap().status(), StatusCode::OK);
+    assert_eq!(fixture.telemetry.0.lock().unwrap().len(), 1);
+    let after = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.status, "deleted");
+}
+
+#[tokio::test]
+async fn delete_target_carries_the_accepted_data_policy() {
+    for policy in [
+        alien_core::DeletionPolicy::Erase,
+        alien_core::DeletionPolicy::Retain,
+    ] {
+        let fixture = fixture().await;
+        fixture
+            .state
+            .deployment_store
+            .set_delete_pending_with_policy(&Subject::system(), &fixture.deployment, policy)
+            .await
+            .unwrap();
+        let response = alien_manager::routes::airgap::router()
+            .with_state(fixture.state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/deployments/{}/target", fixture.deployment))
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", fixture.site_token),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["action"], "delete");
+        assert_eq!(
+            body["deletionPolicy"],
+            serde_json::to_value(policy).unwrap()
+        );
+    }
+}
+
+#[tokio::test]
+async fn deletion_signing_requires_the_accepted_policy() {
+    let mut fixture = fixture().await;
+    fixture.state.bundle_signing_key =
+        Some(alien_core::bundle_signature::BundleSigningKey::from_seed([9; 32]).into());
+    fixture
+        .state
+        .deployment_store
+        .set_delete_pending_with_policy(
+            &Subject::system(),
+            &fixture.deployment,
+            alien_core::DeletionPolicy::Retain,
+        )
+        .await
+        .unwrap();
+    for (policy, expected) in [
+        ("erase", StatusCode::BAD_REQUEST),
+        ("retain", StatusCode::OK),
+    ] {
+        let manifest = serde_json::json!({"deploymentId":fixture.deployment,"releaseId":"delete","deletionPolicy":policy});
+        let body = serde_json::json!({"manifest": base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&manifest).unwrap())});
+        let response = alien_manager::routes::airgap::router()
+            .with_state(fixture.state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/deployments/{}/bundle-signature",
+                        fixture.deployment
+                    ))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", fixture.site_token),
+                    )
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
+#[tokio::test]
+async fn retained_report_keeps_recovery_state_and_is_replayable() {
+    let fixture = fixture().await;
+    fixture
+        .state
+        .deployment_store
+        .set_delete_pending_with_policy(
+            &Subject::system(),
+            &fixture.deployment,
+            alien_core::DeletionPolicy::Retain,
+        )
+        .await
+        .unwrap();
+    let body = serde_json::json!({"state": {"status":"retained", "platform":"kubernetes", "protocolVersion":CURRENT_DEPLOYMENT_PROTOCOL_VERSION, "runtimeMetadata":{"deletionPolicy":"retain"}}, "telemetry":[]});
+    for _ in 0..2 {
+        let response = alien_manager::routes::airgap::router()
+            .with_state(fixture.state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/deployments/{}/status-report",
+                        fixture.deployment
+                    ))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", fixture.site_token),
+                    )
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+    let record = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.status, "retained");
+    let response = alien_manager::routes::airgap::router()
+        .with_state(fixture.state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/deployments/{}/target", fixture.deployment))
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", fixture.site_token),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let target: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(target["action"], "retained");
+}
+
+#[tokio::test]
+async fn connected_sites_use_the_sync_routes() {
+    let mut fixture = fixture_with_mode(Duration::ZERO, false).await;
+    fixture.state.bundle_signing_key =
+        Some(alien_core::bundle_signature::BundleSigningKey::from_seed([9; 32]).into());
+    let before = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap()
+        .unwrap();
+    for (method, route, body) in [
+        ("GET", "target", serde_json::json!({})),
+        (
+            "GET",
+            "bundle-sources?releaseId=release",
+            serde_json::json!({}),
+        ),
+        (
+            "POST",
+            "bundle-signature",
+            serde_json::json!({"manifest":base64::engine::general_purpose::STANDARD.encode(serde_json::json!({"deploymentId":fixture.deployment,"releaseId":"rel_1"}).to_string())}),
+        ),
+    ] {
+        let response = alien_manager::routes::airgap::router()
+            .with_state(fixture.state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(format!("/v1/deployments/{}/{}", fixture.deployment, route))
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", fixture.site_token),
+                    )
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{route}");
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("not configured for air-gapped sync"),
+            "{route}"
+        );
+    }
+    let (status, _) = report(&fixture, &fixture.site_token, false).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(fixture.telemetry.0.lock().unwrap().is_empty());
+    let after = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), &fixture.deployment)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.status, before.status);
+    assert!(after.runtime_metadata.unwrap().airgapped_report.is_none());
+}
+
+#[tokio::test]
+async fn deletion_signing_requires_a_current_deletion_request() {
+    let mut fixture = fixture().await;
+    fixture.state.bundle_signing_key =
+        Some(alien_core::bundle_signature::BundleSigningKey::from_seed([9; 32]).into());
+    let manifest = serde_json::json!({"deploymentId":fixture.deployment,"releaseId":"delete","deletionPolicy":"retain"});
+    let body = serde_json::json!({"manifest":base64::engine::general_purpose::STANDARD.encode(manifest.to_string())});
+    let response = alien_manager::routes::airgap::router()
+        .with_state(fixture.state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/deployments/{}/bundle-signature",
+                    fixture.deployment
+                ))
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", fixture.site_token),
+                )
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("accepted deletion request"));
 }

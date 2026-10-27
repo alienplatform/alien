@@ -67,6 +67,18 @@ pub enum DeletionPolicy {
     Erase,
 }
 
+/// When an air-gapped site's latest status was written and received.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AirgappedReportMetadata {
+    /// Site clock time; absent for reports from older clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Manager clock time when the report was accepted.
+    pub received_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Runtime metadata for deployment
 ///
 /// Stores deployment state that needs to persist across step calls.
@@ -77,6 +89,10 @@ pub struct RuntimeMetadata {
     /// User-authorized data disposition, persisted before deletion starts.
     #[serde(default)]
     pub deletion_policy: DeletionPolicy,
+
+    /// Most recent air-gapped report accepted by the manager.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airgapped_report: Option<AirgappedReportMetadata>,
 
     /// Bounded credential retry state shared by all deployment drivers.
     #[serde(default, skip_serializing_if = "Option::is_none")]

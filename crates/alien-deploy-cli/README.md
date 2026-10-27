@@ -10,7 +10,7 @@ Deployment CLI for customer admins. Deploys, manages, and tears down Alien appli
 - **`alien-deploy list`** — List all tracked deployments.
 - **`alien-deploy agent`** — Manage the alien-operator background service (install, start, stop, uninstall, status).
 - **`alien-deploy sync`** — Keep an air-gapped Kubernetes deployment up to date through one transfer folder. Online, it sends the site's reports to the manager and downloads the next signed update (only the image layers the site doesn't have). Inside the site, it checks the signature against the trusted key (`--trusted-key` on the first install, remembered after), pushes the images to the site's registry, installs or upgrades the chart, and writes a report with the deployment's state and telemetry. `--dry-run` previews; `--full` includes every layer.
-- **`alien-deploy rollback`** — Return an air-gapped deployment to the release it ran before the last sync.
+- **`alien-deploy rollback`** — Return an air-gapped deployment to an earlier release that completed rollout. Failed attempts remain available for reports and deletion, but are skipped by rollback. Older history without a success record becomes eligible when sync observes that release Running at the site.
 
 ## How It Works
 
@@ -64,3 +64,19 @@ For the same binding type and service, omitted fields keep their saved values; e
 The command preserves unrelated target settings, saves explicit choices, follows the returned operation ID, and verifies the acquired target before setup runs. It never initializes a new deployment. If setup is interrupted after saving, resume with the operation ID printed by the command; the old operation ID is deliberately refused. Explicit non-secret `--input` choices and `[inputs]` values are saved through the deployment input API with the same operation check before bindings are prepared. Deployer secret values are refused through `--input`, `--secret-input`, and `[secretInputs]`; write them directly into the deployment's configured secret store. Setup reports missing secrets until they are available. Existing gate answers remain fixed by setup policy, and omitted inputs retain their stored values.
 
 A successful setup command means the manager may continue provisioning. Verify the exact release reaches Running and exercise storage read/write from the workload before treating the update as complete.
+
+### Air-gapped deletion
+
+A signed deletion bundle carries the accepted data policy. `retain` removes the workloads and keeps their volumes and chart-managed database credentials; its report ends in `retained`. `erase` also removes the recorded, owned data and waits for dynamically provisioned volumes to disappear before reporting `deleted`. Customer-supplied Secrets and external infrastructure remain under their owner's control.
+
+Keep the site machine's sync configuration when retaining data. It records object identities outside the transfer folder, so a later signed erase can finish after Helm has been removed and retries cannot erase replacement objects. Erasing bound volumes requires permission to read and patch their PersistentVolumes. Static volumes need owner-managed cleanup; sync refuses to claim erasure for them. A failed or incomplete erase leaves the signed request pending for retry.
+
+Before stopping the Operator, sync stops new telemetry intake and exports every batch already accepted. That stop survives Operator restarts; a newer signed release opens intake again. Operators without this final-drain endpoint must be upgraded before deletion; sync leaves them installed instead of discarding accepted logs.
+
+## Air-gapped Kubernetes
+
+Hosted management requires the vendor's branded deploy CLI for air-gapped onboarding and sync. Use the CLI supplied with the product to prepare the site and carry signed updates and reports between the site and its manager.
+
+The manager accepts air-gapped exchange only for deployments whose stack settings explicitly set `airgapped: true`. Older air-gapped deployments without this setting need an administrator to update their saved settings before the next exchange. A Kubernetes deployment token alone does not identify an air-gapped site.
+
+If the site uses a chart-provisioned database, set `postgres.<resource>.enabled: true` in a values file and pass it with `sync -f values.yaml` both when downloading each update online and when installing at the site. Online sync uses these values to include only the database images the chart will run. Existing external database bindings do not download an unused database image. Keep the database choice consistent on both sides; supply a stable `existingPasswordSecret` for offline Helm rendering.

@@ -91,6 +91,7 @@ windows-service = "0.8"
 fs2 = "0.4"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 alien-bindings = { workspace = true }
 alien-infra = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }

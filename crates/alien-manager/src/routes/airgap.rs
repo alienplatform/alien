@@ -16,7 +16,9 @@
 use std::{future::ready, sync::Arc, time::Duration};
 
 use alien_bindings::traits::Kv;
-use alien_core::{sync::TargetDeployment, DeploymentState, Platform};
+use alien_core::{
+    sync::TargetDeployment, AirgappedReportMetadata, DeploymentState, Platform, ResourceHeartbeat,
+};
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -65,7 +67,7 @@ async fn airgapped_deployment(
             return Err(alien_error::AlienError::new(ErrorData::DeploymentNotFound {
                 deployment_id: id.to_string(),
             })
-            .into_response())
+            .into_response());
         }
         Err(e) => return Err(e.into_response()),
     };
@@ -87,6 +89,16 @@ async fn airgapped_deployment(
         return Err(
             ErrorData::bad_request("Air-gapped sync is for Kubernetes deployments").into_response(),
         );
+    }
+    if !deployment
+        .stack_settings
+        .as_ref()
+        .is_some_and(|settings| settings.airgapped)
+    {
+        return Err(ErrorData::bad_request(
+            "This deployment is not configured for air-gapped sync",
+        )
+        .into_response());
     }
     Ok((subject, deployment))
 }
@@ -135,10 +147,34 @@ async fn target(
         Ok(found) => found,
         Err(response) => return response,
     };
-    let release = match release(&state, &subject, &deployment, query.release_id.as_deref()).await {
+    if deployment.status == "retained" {
+        return Json(serde_json::json!({"action": "retained"})).into_response();
+    }
+    let deleting = matches!(
+        deployment.status.as_str(),
+        "delete-pending" | "deleting" | "delete-failed" | "teardown-required" | "teardown-failed"
+    );
+    let release_id = if deleting {
+        deployment.current_release_id.as_deref()
+    } else {
+        query.release_id.as_deref()
+    };
+    let release = match release(&state, &subject, &deployment, release_id).await {
         Ok(release) => release,
         Err(response) => return response,
     };
+    if deleting {
+        let Some(stack) = release.stacks.get(&deployment.platform) else {
+            return ErrorData::bad_request("The installed release has no stack for this platform")
+                .into_response();
+        };
+        return Json(serde_json::json!({
+            "action": "delete",
+            "deletionPolicy": deployment.runtime_metadata.as_ref().map(|m| m.deletion_policy).unwrap_or_default(),
+            "releaseInfo": {"releaseId": release.id, "stack": {"id": stack.id()}},
+        }))
+        .into_response();
+    }
     // No token: the environment pulls from its own registry and never calls
     // the manager. Bundles are applied by Operators that support air-gapped
     // mode, which all understand tunnels.
@@ -235,7 +271,7 @@ async fn bundle_signature(
     Path(id): Path<String>,
     Json(body): Json<BundleSignatureRequest>,
 ) -> Response {
-    let (_, deployment) = match airgapped_deployment(&state, &headers, &id).await {
+    let (subject, deployment) = match airgapped_deployment(&state, &headers, &id).await {
         Ok(found) => found,
         Err(response) => return response,
     };
@@ -246,17 +282,82 @@ async fn bundle_signature(
     let Ok(manifest) = base64::engine::general_purpose::STANDARD.decode(&body.manifest) else {
         return ErrorData::bad_request("manifest must be base64").into_response();
     };
+    let value: serde_json::Value = match serde_json::from_slice(&manifest) {
+        Ok(value) => value,
+        Err(_) => return ErrorData::bad_request("manifest must be JSON").into_response(),
+    };
+    if value["releaseId"] == "delete" {
+        let policy: alien_core::DeletionPolicy = match serde_json::from_value(
+            value
+                .get("deletionPolicy")
+                .cloned()
+                .unwrap_or_else(|| "retain".into()),
+        ) {
+            Ok(policy) => policy,
+            Err(_) => return ErrorData::bad_request("invalid deletion policy").into_response(),
+        };
+        let accepted = deployment
+            .runtime_metadata
+            .as_ref()
+            .map(|m| m.deletion_policy)
+            .unwrap_or_default();
+        if !matches!(
+            deployment.status.as_str(),
+            "delete-pending"
+                | "deleting"
+                | "delete-failed"
+                | "teardown-required"
+                | "teardown-failed"
+        ) || policy != accepted
+        {
+            return ErrorData::bad_request(
+                "The deletion manifest must match the accepted deletion request",
+            )
+            .into_response();
+        }
+    }
+    sign_bundle_manifest(
+        state.deployment_store.as_ref(),
+        &subject,
+        &deployment.id,
+        &key,
+        &manifest,
+    )
+    .await
+}
+
+async fn sign_bundle_manifest(
+    store: &dyn crate::traits::DeploymentStore,
+    subject: &Subject,
+    deployment_id: &str,
+    key: &alien_core::bundle_signature::BundleSigningKey,
+    manifest: &[u8],
+) -> Response {
     // Sign only manifests for this deployment, so a signature can't be
     // reused to install another deployment's bundle.
-    let manifest_deployment = serde_json::from_slice::<serde_json::Value>(&manifest)
-        .ok()
-        .and_then(|value| value.get("deploymentId")?.as_str().map(str::to_string));
-    if manifest_deployment.as_deref() != Some(deployment.id.as_str()) {
+    let manifest_value = serde_json::from_slice::<serde_json::Value>(manifest).ok();
+    let manifest_deployment = manifest_value
+        .as_ref()
+        .and_then(|value| value.get("deploymentId")?.as_str());
+    if manifest_deployment != Some(deployment_id) {
         return ErrorData::bad_request("The manifest is not a bundle manifest for this deployment")
             .into_response();
     }
+    let signature = key.sign(manifest);
+    if let Some(release_id) = manifest_value
+        .as_ref()
+        .and_then(|value| value.get("releaseId")?.as_str())
+        .filter(|id| !id.trim().is_empty() && *id != "delete")
+    {
+        if let Err(error) = store
+            .record_airgapped_bundle_signed(subject, deployment_id, release_id)
+            .await
+        {
+            return error.into_response();
+        }
+    }
     Json(BundleSignatureResponse {
-        signature: key.sign(&manifest),
+        signature,
         public_key: key.public_key(),
     })
     .into_response()
@@ -266,9 +367,15 @@ async fn bundle_signature(
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StatusReport {
+    /// Site clock time when the report was written. Older clients omit it.
+    #[serde(default)]
+    pub written_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Deployment state as the environment's Operator last recorded it.
     #[cfg_attr(feature = "openapi", schema(value_type = std::collections::HashMap<String, serde_json::Value>))]
     pub state: DeploymentState,
+    /// Resource observations captured by the Operator alongside this state.
+    #[serde(default)]
+    pub heartbeats: Vec<ResourceHeartbeat>,
     /// Telemetry the Operator buffered, as the OTLP batches it received.
     #[serde(default)]
     pub telemetry: Vec<ReportedTelemetry>,
@@ -317,7 +424,7 @@ async fn status_report(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(report): Json<StatusReport>,
+    Json(mut report): Json<StatusReport>,
 ) -> Response {
     let (subject, deployment) = match airgapped_deployment(&state, &headers, &id).await {
         Ok(found) => found,
@@ -334,7 +441,7 @@ async fn status_report(
             "traces" => TelemetrySignal::Traces,
             other => {
                 return ErrorData::bad_request(format!("Unknown telemetry signal '{other}'"))
-                    .into_response()
+                    .into_response();
             }
         };
         // The same rule live telemetry from this deployment follows.
@@ -351,31 +458,41 @@ async fn status_report(
         batches.push((batch.id, signal, data));
     }
 
+    report
+        .state
+        .runtime_metadata
+        .get_or_insert_with(Default::default)
+        .airgapped_report = Some(AirgappedReportMetadata {
+        written_at: report.written_at,
+        received_at: chrono::Utc::now(),
+    });
+
     let status = serde_json::to_value(&report.state.status)
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_default();
-    if let Err(e) = state
-        .deployment_store
-        .reconcile(
+    let deleting = matches!(
+        report.state.status,
+        alien_core::DeploymentStatus::Deleted | alien_core::DeploymentStatus::Retained
+    );
+    if deleting && report.telemetry.iter().any(|batch| batch.id.is_none()) {
+        return ErrorData::bad_request("Final deletion reports require telemetry batch IDs")
+            .into_response();
+    }
+    let last_batch = report.telemetry.iter().filter_map(|batch| batch.id).max();
+    let report_state = report.state.clone();
+    if !deleting {
+        if let Err(error) = reconcile_report(
+            state.deployment_store.as_ref(),
             &subject,
-            ReconcileData {
-                deployment_id: deployment.id.clone(),
-                session: "airgap-status-report".to_string(),
-                state: report.state,
-                update_heartbeat: true,
-                suggested_delay_ms: None,
-                heartbeats: Vec::new(),
-                observed_inventory_batches: Vec::new(),
-                capabilities: Vec::new(),
-                operator_version: None,
-                execution_claim: None,
-                operations_report: None,
-            },
+            &deployment.id,
+            report.state,
+            report.heartbeats.clone(),
         )
         .await
-    {
-        return e.into_response();
+        {
+            return error.into_response();
+        }
     }
 
     // The same attribution live telemetry from this deployment gets.
@@ -404,6 +521,27 @@ async fn status_report(
         Err(e) => return ErrorData::internal(format!("forwarding telemetry: {e}")).into_response(),
     };
 
+    // Retained data is a completed checkpoint. A repeated report can finish
+    // acknowledging telemetry without replacing that checkpoint.
+    let retained_replay = deployment.status == "retained"
+        && report_state.status == alien_core::DeploymentStatus::Retained;
+    if deleting
+        && !retained_replay
+        && last_batch.is_none_or(|last| forwarded.through.is_some_and(|mark| mark >= last))
+    {
+        if let Err(error) = reconcile_report(
+            state.deployment_store.as_ref(),
+            &subject,
+            &deployment.id,
+            report_state,
+            report.heartbeats,
+        )
+        .await
+        {
+            return error.into_response();
+        }
+    }
+
     (
         StatusCode::OK,
         Json(StatusReportResponse {
@@ -413,6 +551,34 @@ async fn status_report(
         }),
     )
         .into_response()
+}
+
+async fn reconcile_report(
+    store: &dyn crate::traits::DeploymentStore,
+    subject: &Subject,
+    deployment_id: &str,
+    report: DeploymentState,
+    heartbeats: Vec<ResourceHeartbeat>,
+) -> Result<(), alien_error::AlienError> {
+    store
+        .reconcile(
+            subject,
+            ReconcileData {
+                deployment_id: deployment_id.to_string(),
+                session: "airgap-status-report".to_string(),
+                state: report,
+                update_heartbeat: true,
+                suggested_delay_ms: None,
+                heartbeats,
+                observed_inventory_batches: Vec::new(),
+                capabilities: Vec::new(),
+                operator_version: None,
+                execution_claim: None,
+                operations_report: None,
+            },
+        )
+        .await
+        .map(|_| ())
 }
 
 /// How long a status report spends forwarding telemetry before it answers.
@@ -537,6 +703,121 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+
+    #[tokio::test]
+    async fn signed_release_records_the_authenticated_download() {
+        let key = alien_core::bundle_signature::BundleSigningKey::from_seed([7; 32]);
+        let manifest = br#"{"deploymentId":"dep_1","releaseId":"rel_1","chart":"chart.tgz"}"#;
+        let mut subject = Subject::system();
+        subject.workspace_id = "download-workspace".into();
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store
+            .expect_record_airgapped_bundle_signed()
+            .times(1)
+            .withf(|caller, deployment, release| {
+                caller.workspace_id == "download-workspace"
+                    && deployment == "dep_1"
+                    && release == "rel_1"
+            })
+            .returning(|_, _, _| Ok(()));
+        let response = sign_bundle_manifest(&store, &subject, "dep_1", &key, manifest).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let signed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        alien_core::bundle_signature::verify(
+            &key.public_key(),
+            manifest,
+            signed["signature"].as_str().unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn signing_failure_is_returned_when_download_recording_fails() {
+        let key = alien_core::bundle_signature::BundleSigningKey::from_seed([7; 32]);
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store
+            .expect_record_airgapped_bundle_signed()
+            .times(1)
+            .returning(|_, _, _| Err(ErrorData::internal("recording failed").into_generic()));
+        let response = sign_bundle_manifest(
+            &store,
+            &Subject::system(),
+            "dep_1",
+            &key,
+            br#"{"deploymentId":"dep_1","releaseId":"rel_1"}"#,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn signing_does_not_record_deletions_or_invalid_manifests() {
+        let key = alien_core::bundle_signature::BundleSigningKey::from_seed([7; 32]);
+        let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+        store.expect_record_airgapped_bundle_signed().times(0);
+        for (manifest, expected) in [
+            (
+                br#"{"deploymentId":"dep_1","releaseId":"delete","chart":""}"#.as_slice(),
+                StatusCode::OK,
+            ),
+            (
+                br#"{"deploymentId":"dep_1","releaseId":""}"#.as_slice(),
+                StatusCode::OK,
+            ),
+            (
+                br#"{"deploymentId":"dep_other","releaseId":"rel_1"}"#.as_slice(),
+                StatusCode::BAD_REQUEST,
+            ),
+            (b"invalid json".as_slice(), StatusCode::BAD_REQUEST),
+        ] {
+            let response =
+                sign_bundle_manifest(&store, &Subject::system(), "dep_1", &key, manifest).await;
+            assert_eq!(response.status(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn report_reconcile_preserves_heartbeats_and_accepts_old_reports() {
+        let heartbeat = serde_json::json!({
+         "deploymentId": "dep_1", "resourceId": "web", "resourceType": "container",
+         "controllerPlatform": "kubernetes", "backend": "kubernetes", "observedAt": "2026-01-01T00:00:00Z",
+         "data": {"resourceType": "container", "data": {"backend": "kubernetes", "namespace": "site", "name": "web",
+         "workloadKind": "deployment", "status": {"health": "healthy", "lifecycle": "running", "stale": false, "partial": false, "collectionIssues": []},
+         "replicas": {"desired": 7, "current": 7, "ready": 7, "available": 7, "updated": 7}, "pods": [], "events": []}}, "raw": []
+        });
+        for heartbeats in [None, Some(serde_json::json!([heartbeat]))] {
+            let mut body = serde_json::json!({"state": {"status": "running", "platform": "kubernetes", "protocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION}});
+            if let Some(heartbeats) = heartbeats {
+                body["heartbeats"] = heartbeats;
+            }
+            let report: StatusReport = serde_json::from_value(body.clone()).unwrap();
+            let expected: Vec<ResourceHeartbeat> = serde_json::from_value(
+                body.get("heartbeats")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([])),
+            )
+            .unwrap();
+            let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
+            store
+                .expect_reconcile()
+                .times(1)
+                .withf(move |_, data| data.deployment_id == "dep_1" && data.heartbeats == expected)
+                .returning(|_, _| Err(ErrorData::internal("store reached").into_generic()));
+            let error = reconcile_report(
+                &store,
+                &Subject::system(),
+                "dep_1",
+                report.state,
+                report.heartbeats,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("store reached"));
+        }
+    }
 
     /// A backend that, like one acknowledging a write only once it is
     /// flushed, takes a while per batch. Records the id each batch carries

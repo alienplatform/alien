@@ -221,8 +221,48 @@ export function createCommandReceiver(options?: CommandReceiverOptions): Command
 export function createCommandReceiver(
   options: CommandReceiverOptions | HostedCommandReceiverOptions = {},
 ): CommandReceiver {
+  if (!("deploymentId" in options || "apiKey" in options || "target" in options)) {
+    const env = options.env ?? (typeof process !== "undefined" ? process.env : {})
+    if (env.ALIEN_COMMANDS_DISABLED === "true") return new DisabledCommandReceiver()
+  }
   const { connectionProvider, runtimeConfig } = resolveReceiverConfig(options)
   return new PullCommandReceiver(connectionProvider, runtimeConfig, options)
+}
+
+/** Disconnected workloads keep running without contacting a command service. */
+class DisabledCommandReceiver implements CommandReceiver {
+  private readonly shutdown = new AbortController()
+
+  command<Schema extends StandardSchema>(
+    _name: string,
+    _schemaOrHandler: Schema | CommandHandler<unknown>,
+    _validatedHandler?: CommandHandler<StandardSchemaOutput<Schema>>,
+  ): CommandReceiver {
+    return this
+  }
+
+  handleRaw(_name: string, _handler: RawCommandHandler): CommandReceiver {
+    return this
+  }
+
+  async run(): Promise<void> {
+    if (this.shutdown.signal.aborted) return
+    await new Promise<void>(resolve => {
+      const timer = setInterval(() => undefined, 60_000)
+      this.shutdown.signal.addEventListener(
+        "abort",
+        () => {
+          clearInterval(timer)
+          resolve()
+        },
+        { once: true },
+      )
+    })
+  }
+
+  stop(): void {
+    this.shutdown.abort()
+  }
 }
 
 interface ActiveLease {

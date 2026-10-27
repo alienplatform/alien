@@ -22,6 +22,9 @@ use turso::{Builder, Connection, Database, EncryptionOpts};
 use crate::error::{ErrorData, Result};
 use crate::workload_observation::{is_settled, workload_identity};
 
+mod airgap;
+pub(crate) use airgap::AirgapReceipt;
+
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;
 const MAX_QUEUED_POD_LOG_BYTES: i64 = 64 * 1024 * 1024;
@@ -1168,6 +1171,7 @@ impl OperatorDb {
     /// Store telemetry for later push
     pub async fn store_telemetry(&self, telemetry_type: &str, data: &[u8]) -> Result<()> {
         let conn = self.conn.lock().await;
+        Self::ensure_telemetry_writable(&conn).await?;
 
         conn.execute(
             "INSERT INTO telemetry (type, data, created_at) VALUES (?, ?, datetime('now'))",
@@ -1374,6 +1378,7 @@ impl OperatorDb {
         data: &[u8],
     ) -> Result<()> {
         let conn = self.conn.lock().await;
+        Self::ensure_telemetry_writable(&conn).await?;
         conn.execute("BEGIN IMMEDIATE", ())
             .await
             .into_alien_error()

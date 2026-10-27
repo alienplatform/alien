@@ -15,8 +15,8 @@ const value: models.BuildHeartbeatDataAwsCodeBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -41,8 +41,8 @@ const value: models.BuildHeartbeatDataGcpCloudBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -66,8 +66,8 @@ const value: models.BuildHeartbeatDataAzureContainerApps = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -97,8 +97,8 @@ const value: models.BuildHeartbeatDataKubernetesJob = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -110,4 +110,3 @@ const value: models.BuildHeartbeatDataKubernetesJob = {
   backend: "kubernetesJob",
 };
 ```
-

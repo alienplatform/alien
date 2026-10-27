@@ -8,14 +8,14 @@
 ```typescript
 const value: models.KeyHeartbeatDataAwsKms = {
   data: {
-    enabled: true,
+    enabled: false,
     keyArn: "<value>",
     keySpec: "<value>",
     keyState: "<value>",
     keyUsage: "<value>",
     status: {
-      health: "healthy",
-      lifecycle: "running",
+      health: "unknown",
+      lifecycle: "deleted",
     },
   },
   provider: "aws-kms",
@@ -30,8 +30,8 @@ const value: models.KeyHeartbeatDataGcpCloudKms = {
     cryptoKeyName: "<value>",
     purpose: "<value>",
     status: {
-      health: "healthy",
-      lifecycle: "running",
+      health: "unknown",
+      lifecycle: "deleted",
     },
   },
   provider: "gcp-cloud-kms",
@@ -49,8 +49,8 @@ const value: models.KeyHeartbeatDataAzureKeyVault = {
     ],
     keyType: "<value>",
     status: {
-      health: "healthy",
-      lifecycle: "running",
+      health: "unknown",
+      lifecycle: "deleted",
     },
   },
   provider: "azure-key-vault",

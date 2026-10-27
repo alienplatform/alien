@@ -15,8 +15,8 @@ const value: models.VaultHeartbeatDataAwsParameterStore = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -41,8 +41,8 @@ const value: models.VaultHeartbeatDataGcpSecretManager = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -71,8 +71,8 @@ const value: models.VaultHeartbeatDataAzureKeyVault = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -96,8 +96,8 @@ const value: models.VaultHeartbeatDataKubernetesSecret = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -121,8 +121,8 @@ const value: models.VaultHeartbeatDataLocal = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -134,4 +134,3 @@ const value: models.VaultHeartbeatDataLocal = {
   backend: "local",
 };
 ```
-

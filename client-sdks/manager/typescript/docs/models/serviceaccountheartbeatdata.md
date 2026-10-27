@@ -31,8 +31,8 @@ const value: models.ServiceAccountHeartbeatDataAwsIamRole = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -65,8 +65,8 @@ const value: models.ServiceAccountHeartbeatDataGcpServiceAccount = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -102,8 +102,8 @@ const value: models.ServiceAccountHeartbeatDataAzureManagedIdentity = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -126,8 +126,8 @@ const value: models.ServiceAccountHeartbeatDataLocal = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
@@ -139,4 +139,3 @@ const value: models.ServiceAccountHeartbeatDataLocal = {
   backend: "local",
 };
 ```
-

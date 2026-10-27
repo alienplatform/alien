@@ -426,6 +426,11 @@ pub(crate) fn stack_settings_for_platform(
     stack_settings: Option<StackSettings>,
 ) -> Result<StackSettings, alien_error::AlienError<ErrorData>> {
     let mut stack_settings = stack_settings.unwrap_or_default();
+    if stack_settings.airgapped && platform != Platform::Kubernetes {
+        return Err(ErrorData::bad_request(
+            "Air-gapped delivery requires Kubernetes",
+        ));
+    }
     let Some(expected) = required_deployment_model_for_platform(platform) else {
         return Ok(stack_settings);
     };
@@ -2290,6 +2295,26 @@ mod tests {
             .expect("kubernetes defaults should be valid");
 
         assert_eq!(settings.deployment_model, DeploymentModel::Pull);
+    }
+
+    #[test]
+    fn carried_delivery_keeps_kubernetes_pull_execution() {
+        let requested = StackSettings {
+            airgapped: true,
+            ..Default::default()
+        };
+        let settings =
+            stack_settings_for_platform(Platform::Kubernetes, Some(requested.clone())).unwrap();
+        assert!(settings.airgapped);
+        assert_eq!(settings.deployment_model, DeploymentModel::Pull);
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Local,
+        ] {
+            assert!(stack_settings_for_platform(platform, Some(requested.clone())).is_err());
+        }
     }
 
     #[test]

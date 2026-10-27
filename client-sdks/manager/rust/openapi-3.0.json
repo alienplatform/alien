@@ -17385,6 +17385,10 @@
         "type": "object",
         "description": "User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager's ServiceAccount).",
         "properties": {
+          "airgapped": {
+            "type": "boolean",
+            "description": "Deliver Kubernetes updates and reports as carried bundles instead of a live connection.\nThe Operator still executes deployments with the pull model."
+          },
           "compute": {
             "nullable": true,
             "description": "Deployment-time compute selections for Alien-managed compute pools.\n\nThis is where provider machine names such as EC2 instance types, GCE\nmachine types, or Azure VM SKUs belong. Application source should\ndeclare portable requirements instead.",
@@ -17506,6 +17510,13 @@
           "state"
         ],
         "properties": {
+          "heartbeats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceHeartbeat"
+            },
+            "description": "Resource observations captured by the Operator alongside this state."
+          },
           "state": {
             "type": "object",
             "description": "Deployment state as the environment's Operator last recorded it.",
@@ -17517,6 +17528,12 @@
               "$ref": "#/components/schemas/ReportedTelemetry"
             },
             "description": "Telemetry the Operator buffered, as the OTLP batches it received."
+          },
+          "writtenAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Site clock time when the report was written. Older clients omit it.",
+            "nullable": true
           }
         }
       },

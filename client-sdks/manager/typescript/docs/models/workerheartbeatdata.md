@@ -14,13 +14,13 @@ const value: models.WorkerHeartbeatDataAwsLambda = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -38,13 +38,13 @@ const value: models.WorkerHeartbeatDataGcpCloudRun = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -67,13 +67,13 @@ const value: models.WorkerHeartbeatDataAzureContainerApps = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -99,13 +99,13 @@ const value: models.WorkerHeartbeatDataKubernetes = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -133,13 +133,13 @@ const value: models.WorkerHeartbeatDataLocal = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -147,4 +147,3 @@ const value: models.WorkerHeartbeatDataLocal = {
   backend: "local",
 };
 ```
-

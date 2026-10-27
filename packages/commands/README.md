@@ -84,3 +84,8 @@ environment variables and call `createCommandReceiver()`.
 
 Both hosted APIs accept `platformUrl` when the Alien Platform API is not at
 `https://api.alien.dev`.
+
+A disconnected installation sets `ALIEN_COMMANDS_DISABLED=true` for command-capable
+workloads. The receiver accepts handler registration and waits until `stop()` without
+making network requests. Without this explicit setting, missing receiver configuration
+still fails at startup.

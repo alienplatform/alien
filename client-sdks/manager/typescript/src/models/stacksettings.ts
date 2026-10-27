@@ -80,6 +80,13 @@ import {
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type StackSettings = {
+  /**
+   * Deliver Kubernetes updates and reports as carried bundles instead of a live connection.
+   *
+   * @remarks
+   * The Operator still executes deployments with the pull model.
+   */
+  airgapped?: boolean | undefined;
   compute?: ComputeSettings | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
@@ -132,6 +139,7 @@ export type StackSettings = {
 /** @internal */
 export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
   .object({
+    airgapped: z.boolean().optional(),
     compute: z.nullable(ComputeSettings$inboundSchema).optional(),
     deploymentModel: DeploymentModel$inboundSchema.optional(),
     domains: z.nullable(DomainSettings$inboundSchema).optional(),
@@ -152,6 +160,7 @@ export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
   });
 /** @internal */
 export type StackSettings$Outbound = {
+  airgapped?: boolean | undefined;
   compute?: ComputeSettings$Outbound | null | undefined;
   deploymentModel?: string | undefined;
   domains?: DomainSettings$Outbound | null | undefined;
@@ -175,6 +184,7 @@ export const StackSettings$outboundSchema: z.ZodType<
   StackSettings$Outbound,
   StackSettings
 > = z.object({
+  airgapped: z.boolean().optional(),
   compute: z.nullable(ComputeSettings$outboundSchema).optional(),
   deploymentModel: DeploymentModel$outboundSchema.optional(),
   domains: z.nullable(DomainSettings$outboundSchema).optional(),

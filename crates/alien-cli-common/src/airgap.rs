@@ -25,6 +25,7 @@ use std::{
 use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use oci_client::{
     client::{Client as OciClient, ClientConfig, ClientProtocol},
+    errors::{OciDistributionError, OciErrorCode},
     manifest::{
         IMAGE_MANIFEST_LIST_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE, OCI_IMAGE_INDEX_MEDIA_TYPE,
         OCI_IMAGE_MEDIA_TYPE,
@@ -115,6 +116,9 @@ pub struct BundleManifest {
     /// Operator frees everything up to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry_ack: Option<i64>,
+    /// Accepted deletion intent. Old bundles retain data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletion_policy: Option<alien_core::DeletionPolicy>,
 }
 
 /// One image in the bundle's OCI layout.
@@ -381,6 +385,44 @@ pub async fn import_images(
         client
             .store_auth_if_needed(target.resolve_registry(), &access.auth)
             .await;
+        let by_digest = Reference::with_digest(
+            target.registry().to_string(),
+            target.repository().to_string(),
+            image.digest.clone(),
+        );
+        match client.fetch_manifest_digest(&by_digest, &access.auth).await {
+            Ok(digest) if digest == image.digest => continue,
+            Ok(_) => {
+                return Err(AlienError::new(copy_failed(
+                    &image.source,
+                    "registry returned a different manifest digest",
+                )));
+            }
+            // A registry may hide an absent repository behind an auth response.
+            // Try the authorized push; a real permission failure still propagates.
+            Err(OciDistributionError::ServerError {
+                code: 401 | 403 | 404,
+                ..
+            })
+            | Err(OciDistributionError::UnauthorizedError { .. }) => {}
+            Err(OciDistributionError::RegistryError { envelope, .. })
+                if !envelope.errors.is_empty()
+                    && envelope.errors.iter().all(|error| {
+                        matches!(
+                            error.code,
+                            OciErrorCode::ManifestUnknown
+                                | OciErrorCode::NameUnknown
+                                | OciErrorCode::Unauthorized
+                                | OciErrorCode::Denied
+                        )
+                    }) => {}
+            Err(error) => {
+                return Err(error).into_alien_error().context(copy_failed(
+                    &image.source,
+                    "checking the destination manifest",
+                ));
+            }
+        }
         push_manifest_tree(&client, &target, layout, &image.digest, true).await?;
     }
     Ok(site_references(images, registry_prefix))
@@ -462,7 +504,14 @@ async fn push_manifest_tree(
         .parse()
         .into_alien_error()
         .context(copy_failed(&image, "invalid manifest media type"))?;
-    let destination = if tag_it { target } else { &by_digest };
+    // Some registries omit Location after a successful upload. The OCI client
+    // handles that response for tags, so give child manifests a content-based tag.
+    let child_tag = Reference::with_tag(
+        target.registry().to_string(),
+        target.repository().to_string(),
+        digest.replace(':', "-"),
+    );
+    let destination = if tag_it { target } else { &child_tag };
     client
         .push_manifest_raw(destination, manifest, content_type)
         .await
@@ -600,8 +649,9 @@ pub fn chart_images(
             break;
         }
     }
+    // Helm permits charts without defaults; installation values still apply.
     let mut values: serde_yaml::Value = serde_yaml::from_str(
-        &values.ok_or_else(|| AlienError::new(invalid("the chart has no values.yaml")))?,
+        &values.unwrap_or_else(|| "{}".to_string()),
     )
     .into_alien_error()
     .context(invalid("the chart's values.yaml is not valid YAML"))?;
@@ -909,6 +959,185 @@ mod tests {
         apply_package_defaults, generate_helm_chart, package_chart, HelmOptions, HelmRegistry,
         LogCollectorDefault, OperatorImageDefault, PackageDefaults,
     };
+    use httpmock::prelude::*;
+
+    #[tokio::test]
+    async fn imports_nested_manifests_when_registry_omits_location() {
+        let registry = MockServer::start_async().await;
+        let _ping = registry
+            .mock_async(|when, then| {
+                when.method(GET).path("/v2/");
+                then.status(200);
+            })
+            .await;
+        let child = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2, "mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE, "manifests": []
+        }))
+        .unwrap();
+        let child_digest = format!("sha256:{}", sha256_hex(&child));
+        let parent = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2, "mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE,
+            "manifests": [{"mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE,
+                "digest": child_digest, "size": child.len()}]
+        }))
+        .unwrap();
+        let parent_digest = format!("sha256:{}", sha256_hex(&parent));
+        let missing = registry
+            .mock_async(|when, then| {
+                when.path(format!("/v2/site/image/manifests/{parent_digest}"));
+                then.status(404).json_body(serde_json::json!({
+                    "errors": [{"code": "MANIFEST_UNKNOWN", "message": "not found"}]
+                }));
+            })
+            .await;
+        let child_push = registry
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path_matches(
+                        httpmock::Regex::new(&format!(
+                            "^/v2/site/image/manifests/sha256[:-]{}$",
+                            &child_digest[7..]
+                        ))
+                        .unwrap(),
+                    )
+                    .body(String::from_utf8(child.clone()).unwrap());
+                then.status(201);
+            })
+            .await;
+        let parent_push = registry
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/v2/site/image/manifests/v1")
+                    .body(String::from_utf8(parent.clone()).unwrap());
+                then.status(201);
+            })
+            .await;
+        let layout = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(layout.path().join("blobs/sha256")).unwrap();
+        std::fs::write(blob_path(layout.path(), &child_digest).unwrap(), child).unwrap();
+        std::fs::write(blob_path(layout.path(), &parent_digest).unwrap(), parent).unwrap();
+        let source = "source.example.com/image:v1";
+        let images = [BundleImage {
+            source: source.into(),
+            repository: "image".into(),
+            tag: Some("v1".into()),
+            digest: parent_digest.clone(),
+            media_type: OCI_IMAGE_INDEX_MEDIA_TYPE.into(),
+        }];
+        let prefix = format!("{}/site", registry.address());
+        let mapping = import_images(
+            layout.path(),
+            &images,
+            &prefix,
+            &RegistryAccess {
+                auth: RegistryAuth::Anonymous,
+                insecure: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(mapping[source], format!("{prefix}/image@{parent_digest}"));
+        assert!(missing.hits_async().await >= 1);
+        child_push.assert_async().await;
+        parent_push.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn existing_digest_skips_writes_and_missing_repository_can_be_pushed() {
+        let registry = MockServer::start_async().await;
+        let _ping = registry
+            .mock_async(|when, then| {
+                when.method(GET).path("/v2/");
+                then.status(200);
+            })
+            .await;
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2, "mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE, "manifests": []
+        }))
+        .unwrap();
+        let digest = format!("sha256:{}", sha256_hex(&manifest));
+        let path = format!("/v2/site/image/manifests/{digest}");
+        let mut existing = registry
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD).path(&path);
+                then.status(200).header("Docker-Content-Digest", &digest);
+            })
+            .await;
+        let mut writes = registry
+            .mock_async(|when, then| {
+                when.method(PUT);
+                then.status(201);
+            })
+            .await;
+        let layout = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(layout.path().join("blobs/sha256")).unwrap();
+        std::fs::write(blob_path(layout.path(), &digest).unwrap(), manifest).unwrap();
+        let images = [BundleImage {
+            source: "source.example.com/image:v1".into(),
+            repository: "image".into(),
+            tag: Some("v1".into()),
+            digest: digest.clone(),
+            media_type: OCI_IMAGE_INDEX_MEDIA_TYPE.into(),
+        }];
+        let prefix = format!("{}/site", registry.address());
+        let access = RegistryAccess {
+            auth: RegistryAuth::Anonymous,
+            insecure: true,
+        };
+        let mapping = import_images(layout.path(), &images, &prefix, &access)
+            .await
+            .unwrap();
+        assert_eq!(
+            mapping[&images[0].source],
+            format!("{prefix}/image@{digest}")
+        );
+        existing.assert_async().await;
+        writes.assert_hits_async(0).await;
+        existing.delete_async().await;
+        for (index, status) in [401, 403].into_iter().enumerate() {
+            let mut missing = registry
+                .mock_async(|when, then| {
+                    when.path(&path);
+                    then.status(status);
+                })
+                .await;
+            // Registries may hide nonexistent repositories from read requests but
+            // accept the authorized first push that creates the repository.
+            import_images(layout.path(), &images, &prefix, &access)
+                .await
+                .unwrap();
+            writes.assert_hits_async(index + 1).await;
+            missing.delete_async().await;
+        }
+        let mut unavailable = registry
+            .mock_async(|when, then| {
+                when.path(&path);
+                then.status(500);
+            })
+            .await;
+        assert!(import_images(layout.path(), &images, &prefix, &access)
+            .await
+            .is_err());
+        writes.assert_hits_async(2).await;
+        unavailable.delete_async().await;
+        writes.delete_async().await;
+        let _missing = registry
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::HEAD).path(&path);
+                then.status(403);
+            })
+            .await;
+        let denied_write = registry
+            .mock_async(|when, then| {
+                when.method(PUT);
+                then.status(403);
+            })
+            .await;
+        assert!(import_images(layout.path(), &images, &prefix, &access)
+            .await
+            .is_err());
+        denied_write.assert_hits_async(1).await;
+    }
 
     #[test]
     fn finds_and_rewrites_image_references() {
@@ -1065,6 +1294,7 @@ mod tests {
             files: checksums(dir.path()).await.unwrap(),
             omitted_blobs: BTreeSet::new(),
             telemetry_ack: None,
+            deletion_policy: None,
         };
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         tokio::fs::write(dir.path().join(MANIFEST_FILE), &manifest_bytes)
@@ -1135,6 +1365,7 @@ mod tests {
             files: checksums(dir.path()).await.unwrap(),
             omitted_blobs: BTreeSet::new(),
             telemetry_ack: None,
+            deletion_policy: None,
         };
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         let key = BundleSigningKey::from_seed([5; 32]);
@@ -1197,6 +1428,7 @@ mod tests {
             files: checksums(dir.path()).await.unwrap(),
             omitted_blobs: BTreeSet::new(),
             telemetry_ack: None,
+            deletion_policy: None,
         };
         let key = BundleSigningKey::from_seed([5; 32]);
         let signature = key.sign(&serde_json::to_vec(&manifest).unwrap());

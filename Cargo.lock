@@ -533,6 +533,7 @@ dependencies = [
  "clap",
  "flate2",
  "hex",
+ "httpmock",
  "oci-client",
  "serde",
  "serde_json",

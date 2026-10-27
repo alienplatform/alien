@@ -23,13 +23,13 @@ const value: models.ContainerHeartbeatDataHorizonPlatform = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -55,13 +55,13 @@ const value: models.ContainerHeartbeatDataKubernetes = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -82,17 +82,16 @@ const value: models.ContainerHeartbeatDataLocal = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
   backend: "local",
 };
 ```
-

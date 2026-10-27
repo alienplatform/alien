@@ -399,8 +399,13 @@ pub(crate) async fn run_deployment_continuously(
                     state.db.set_applied_operation_id(operation_id).await?;
                 }
             }
-            debug!("Deployment synced, clearing deployment config");
-            state.db.clear_deployment_config().await?;
+            // A disconnected Operator needs the installed config for health refreshes.
+            if state.config.airgap_target_secret.is_none()
+                || loop_result.final_status != DeploymentStatus::Running
+            {
+                debug!("Deployment synced, clearing deployment config");
+                state.db.clear_deployment_config().await?;
+            }
         }
 
         info!(
@@ -425,6 +430,85 @@ pub(crate) async fn run_deployment_continuously(
         Duration::ZERO
     };
     Ok((steps_executed, delay))
+}
+
+/// Refresh an installed disconnected deployment before exporting its status.
+pub(super) async fn refresh_airgap_deployment(state: &OperatorState) -> Result<()> {
+    let Some(mut current) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    if current.target_release.is_some()
+        || !matches!(
+            current.status,
+            DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+        )
+    {
+        return Ok(());
+    }
+    let Some(release) = current.current_release.as_ref() else {
+        return Ok(());
+    };
+    let Some(config) = state.db.get_deployment_config().await? else {
+        if state.db.get_airgap_receipt().await?.is_none()
+            && state.db.get_airgap_sequence().await?.is_some()
+        {
+            // Completed older installations discarded config. Preserve their status
+            // until a newer verified target provides enough context to refresh.
+            return Ok(());
+        }
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "The installed deployment config is unavailable for health refresh"
+                .to_string(),
+        }));
+    };
+    let mut config = enrich_config(
+        config,
+        &state.config,
+        current.platform,
+        &state.db,
+        Some(&release.stack),
+    )
+    .await?;
+    let client_config = resolve_client_config(
+        current.platform,
+        config.base_platform.or(state.config.base_platform),
+        &state.config.data_dir,
+        state.config.namespace.clone(),
+        state.config.sync.as_ref(),
+    )
+    .await?;
+    let deployment_id = state.db.get_deployment_id().await?.ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "The deployment identity is unavailable for health refresh".to_string(),
+        })
+    })?;
+    let transport = OperatorTransport {
+        db: Arc::clone(&state.db),
+        operator_config: state.config.clone(),
+        platform: current.platform,
+        suggested_delay_ms: AtomicU64::new(0),
+        observed_from: Some(tokio::sync::Mutex::new(current.clone())),
+        superseded: AtomicBool::new(false),
+    };
+    let policy = RunnerPolicy {
+        max_steps: 100,
+        operation: LoopOperation::Deploy,
+        delay_strategy: alien_deployment::runner::DelayStrategy::Yield,
+    };
+    match run_maintenance_refresh(
+        state,
+        &mut current,
+        &mut config,
+        &client_config,
+        &deployment_id,
+        &policy,
+        &transport,
+    )
+    .await
+    {
+        Err(_) if transport.superseded.load(Ordering::Relaxed) => Ok(()),
+        result => result.map(|_| ()),
+    }
 }
 
 /// One Running refresh pass over the installed release.
@@ -534,6 +618,26 @@ async fn enrich_config(
     // endpoint. Cloud-native Worker transports authenticate through their
     // platform instead.
     let needs_http_push_auth = matches!(platform, Platform::Kubernetes | Platform::Local);
+
+    if operator_config.airgap_target_secret.is_some() {
+        if let Some(stack) = stack {
+            config.environment_variables.variables.extend(
+                stack
+                    .command_targets()
+                    .into_iter()
+                    .filter(|target| {
+                        target.resource_type
+                            != alien_core::commands_types::CommandTargetType::Worker
+                    })
+                    .map(|target| EnvironmentVariable {
+                        name: "ALIEN_COMMANDS_DISABLED".to_string(),
+                        value: "true".to_string(),
+                        var_type: EnvironmentVariableType::Plain,
+                        target_resources: Some(vec![target.resource_id]),
+                    }),
+            );
+        }
+    }
 
     if needs_http_push_auth {
         if let Some(ref sync_config) = operator_config.sync {
@@ -1348,5 +1452,175 @@ mod tests {
                     && var.value == resource_id
             }));
         }
+    }
+    #[tokio::test]
+    async fn disconnected_commands_are_disabled_only_for_command_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), key)
+            .await
+            .unwrap();
+        let operator = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .airgap_target_secret("site-target")
+            .encryption_key(key)
+            .build();
+        let mut stack = alien_core::Stack::new("app".into()).build();
+        for (id, enabled) in [("setup", true), ("ordinary", false)] {
+            let daemon = alien_core::Daemon::new(id.into())
+                .code(alien_core::DaemonCode::Image {
+                    image: "app:1".into(),
+                })
+                .commands_enabled(enabled)
+                .build();
+            stack.resources.insert(
+                id.into(),
+                alien_core::ResourceEntry {
+                    config: alien_core::Resource::new(daemon),
+                    display_name: None,
+                    description: None,
+                    lifecycle: alien_core::ResourceLifecycle::Live,
+                    dependencies: vec![],
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+        }
+        let config = enrich_config(
+            test_deployment_config(),
+            &operator,
+            Platform::Kubernetes,
+            &db,
+            Some(&stack),
+        )
+        .await
+        .unwrap();
+        let variables = config.environment_variables.variables;
+        let disabled: Vec<_> = variables
+            .iter()
+            .filter(|v| v.name == "ALIEN_COMMANDS_DISABLED")
+            .collect();
+        assert_eq!(disabled.len(), 1);
+        assert_eq!(disabled[0].value, "true");
+        assert_eq!(disabled[0].target_resources, Some(vec!["setup".into()]));
+        assert!(!variables
+            .iter()
+            .any(|v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN
+                || v.name == alien_core::ENV_ALIEN_COMMANDS_URL));
+    }
+
+    #[tokio::test]
+    async fn disconnected_health_refresh_observes_failure_and_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_site").await.unwrap();
+        let worker = alien_core::Worker::new("worker".into())
+            .code(alien_core::WorkerCode::Image {
+                image: "test:1".into(),
+            })
+            .permissions("default".into())
+            .environment(HashMap::from([
+                ("SIMULATE_OBSERVED_URL_REFRESH".into(), "true".into()),
+                ("SIMULATE_OBSERVED_REFRESH_FAIL_ONCE".into(), "true".into()),
+            ]))
+            .build();
+        let mut stack =
+            alien_core::Stack::new("site".into()).add(worker, alien_core::ResourceLifecycle::Live);
+        for index in 0..8 {
+            let worker = alien_core::Worker::new(format!("healthy-{index}"))
+                .code(alien_core::WorkerCode::Image {
+                    image: "test:1".into(),
+                })
+                .permissions("default".into())
+                .build();
+            stack = stack.add(worker, alien_core::ResourceLifecycle::Live);
+        }
+        let mut stack = stack.build();
+        stack
+            .permissions
+            .profiles
+            .insert("default".into(), alien_core::PermissionProfile::new());
+        let release = alien_core::ReleaseInfo {
+            release_id: Some("rel_1".into()),
+            version: Some("1.0.0".into()),
+            description: None,
+            stack,
+        };
+        db.set_deployment_state(&DeploymentState {
+            status: DeploymentStatus::Pending,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: Some(release),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        })
+        .await
+        .unwrap();
+        db.set_deployment_config(&test_deployment_config())
+            .await
+            .unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(directory.path().to_str().unwrap())
+                .airgap_target_secret("site-target")
+                .encryption_key(key)
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        for _ in 0..20 {
+            run_deployment_continuously(&state).await.unwrap();
+            if state
+                .db
+                .get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .status
+                == DeploymentStatus::Running
+            {
+                break;
+            }
+        }
+        let installed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(installed.status, DeploymentStatus::Running);
+        assert!(state.db.get_deployment_config().await.unwrap().is_some());
+        refresh_airgap_deployment(&state).await.unwrap();
+        let failed = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(failed.status, DeploymentStatus::RefreshFailed);
+        assert_eq!(
+            failed.stack_state.as_ref().unwrap().resources["worker"].status,
+            alien_core::ResourceStatus::RefreshFailed
+        );
+        assert_eq!(failed.current_release, installed.current_release);
+        refresh_airgap_deployment(&state).await.unwrap();
+        let recovered = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(recovered.status, DeploymentStatus::Running);
+        let resources = &recovered.stack_state.as_ref().unwrap().resources;
+        // Preflights add the shared secrets vault and default service account.
+        assert_eq!(resources.len(), 11);
+        assert!(resources.contains_key("secrets"));
+        assert!(resources.contains_key("default-sa"));
+        assert!(resources.contains_key("worker"));
+        for index in 0..8 {
+            assert!(resources.contains_key(&format!("healthy-{index}")));
+        }
+        assert!(resources
+            .values()
+            .all(|resource| resource.status == alien_core::ResourceStatus::Running));
+        assert_eq!(recovered.current_release, installed.current_release);
+        assert!(recovered.target_release.is_none());
+        assert!(state.db.get_deployment_config().await.unwrap().is_some());
     }
 }

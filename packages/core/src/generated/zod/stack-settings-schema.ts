@@ -20,7 +20,8 @@ import { UpdatesModeSchema } from "./updates-mode-schema.js";
  * @description User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager\'s ServiceAccount).
  */
 export const StackSettingsSchema = z.object({
-    get "compute"(){
+    "airgapped": z.optional(z.boolean().describe("Deliver Kubernetes updates and reports as carried bundles instead of a live connection.\nThe Operator still executes deployments with the pull model.")),
+get "compute"(){
                 return z.union([ComputeSettingsSchema, z.null()]).optional()
               },
 get "deploymentModel"(){

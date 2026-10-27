@@ -13,13 +13,13 @@ let value: WorkerHeartbeatDataAwsLambda = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },

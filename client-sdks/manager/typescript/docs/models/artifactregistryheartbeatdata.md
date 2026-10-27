@@ -24,8 +24,15 @@ const value: models.ArtifactRegistryHeartbeatDataAwsEcr = {
   repositoryCount: 952265,
   repositoryPrefix: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
     lifecycle: "scaling",
     partial: true,
     stale: false,
@@ -52,8 +59,15 @@ const value: models.ArtifactRegistryHeartbeatDataGcpArtifactRegistry = {
   projectId: "<id>",
   repositoryId: "<id>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
     lifecycle: "scaling",
     partial: true,
     stale: false,
@@ -83,8 +97,15 @@ const value: models.ArtifactRegistryHeartbeatDataAzureContainerRegistry = {
   resourceGroup: "<value>",
   skuName: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
     lifecycle: "scaling",
     partial: true,
     stale: false,
@@ -101,8 +122,15 @@ const value: models.ArtifactRegistryHeartbeatDataLocal = {
   reachable: true,
   registryUrl: "https://which-devastation.com",
   status: {
-    collectionIssues: [],
-    health: "unknown",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
     lifecycle: "scaling",
     partial: true,
     stale: false,
@@ -110,4 +138,3 @@ const value: models.ArtifactRegistryHeartbeatDataLocal = {
   backend: "local",
 };
 ```
-

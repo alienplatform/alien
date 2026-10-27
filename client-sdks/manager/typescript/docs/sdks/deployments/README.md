@@ -1076,6 +1076,53 @@ const alienManager = new AlienManager({
 
 async function run() {
   const result = await alienManager.deployments.importDeploymentStatus("<id>", {
+    heartbeats: [
+      {
+        backend: "kubernetes",
+        controllerPlatform: "azure",
+        data: {
+          data: {
+            accountName: "<value>",
+            availability: {
+              catalogRevision: "<value>",
+              models: [
+                {
+                  accessTest: "failed",
+                  availability: "unknown",
+                  blockers: [
+                    "observation-failed",
+                  ],
+                  clientApis: [],
+                  publicModelId: "<id>",
+                },
+              ],
+              source: "azure-foundry",
+            },
+            status: {
+              collectionIssues: [],
+              health: "degraded",
+              lifecycle: "deleting",
+              partial: false,
+              stale: false,
+            },
+            backend: "azureFoundry",
+          },
+          resourceType: "ai",
+        },
+        observedAt: new Date("2026-03-14T06:47:13.904Z"),
+        raw: [
+          {
+            body: "<value>",
+            collectedAt: new Date("2025-11-21T18:44:28.466Z"),
+            format: "yaml",
+            source: "<value>",
+            truncated: true,
+          },
+        ],
+        resourceId: "<id>",
+        resourceType: "worker",
+      },
+    ],
     state: {
 
     },
@@ -1104,6 +1151,53 @@ const alienManager = new AlienManagerCore({
 
 async function run() {
   const res = await deploymentsImportDeploymentStatus(alienManager, "<id>", {
+    heartbeats: [
+      {
+        backend: "kubernetes",
+        controllerPlatform: "azure",
+        data: {
+          data: {
+            accountName: "<value>",
+            availability: {
+              catalogRevision: "<value>",
+              models: [
+                {
+                  accessTest: "failed",
+                  availability: "unknown",
+                  blockers: [
+                    "observation-failed",
+                  ],
+                  clientApis: [],
+                  publicModelId: "<id>",
+                },
+              ],
+              source: "azure-foundry",
+            },
+            status: {
+              collectionIssues: [],
+              health: "degraded",
+              lifecycle: "deleting",
+              partial: false,
+              stale: false,
+            },
+            backend: "azureFoundry",
+          },
+          resourceType: "ai",
+        },
+        observedAt: new Date("2026-03-14T06:47:13.904Z"),
+        raw: [
+          {
+            body: "<value>",
+            collectedAt: new Date("2025-11-21T18:44:28.466Z"),
+            format: "yaml",
+            source: "<value>",
+            truncated: true,
+          },
+        ],
+        resourceId: "<id>",
+        resourceType: "worker",
+      },
+    ],
     state: {
 
     },
