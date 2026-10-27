@@ -72,3 +72,11 @@ A signed deletion bundle carries the accepted data policy. `retain` removes the 
 Keep the site machine's sync configuration when retaining data. It records object identities outside the transfer folder, so a later signed erase can finish after Helm has been removed and retries cannot erase replacement objects. Erasing bound volumes requires permission to read and patch their PersistentVolumes. Static volumes need owner-managed cleanup; sync refuses to claim erasure for them. A failed or incomplete erase leaves the signed request pending for retry.
 
 Before stopping the Operator, sync stops new telemetry intake and exports every batch already accepted. That stop survives Operator restarts; a newer signed release opens intake again. Operators without this final-drain endpoint must be upgraded before deletion; sync leaves them installed instead of discarding accepted logs.
+
+## Air-gapped Kubernetes
+
+Hosted management requires the vendor's branded deploy CLI for air-gapped onboarding and sync. Use the CLI supplied with the product to prepare the site and carry signed updates and reports between the site and its manager.
+
+The manager accepts air-gapped exchange only for deployments whose stack settings explicitly set `airgapped: true`. Older air-gapped deployments without this setting need an administrator to update their saved settings before the next exchange. A Kubernetes deployment token alone does not identify an air-gapped site.
+
+If the site uses a chart-provisioned database, set `postgres.<resource>.enabled: true` in a values file and pass it with `sync -f values.yaml` both when downloading each update online and when installing at the site. Online sync uses these values to include only the database images the chart will run. Existing external database bindings do not download an unused database image. Keep the database choice consistent on both sides; supply a stable `existingPasswordSecret` for offline Helm rendering.

@@ -291,13 +291,13 @@ fn target_hash(target: &TargetDeployment) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
-/// Allow one minute per resource, including sequential dependency checks.
+/// Allow one minute per resource, up to nine minutes, within the CLI rollout wait.
 /// A deadline leaves the last checkpoint intact; only an observed error fails health.
 async fn bounded_health_refresh(
     resource_count: usize,
     refresh: impl std::future::Future<Output = Result<()>>,
 ) -> Result<()> {
-    let timeout = Duration::from_secs(60).saturating_mul(resource_count.max(1) as u32);
+    let timeout = Duration::from_secs(60).saturating_mul(resource_count.clamp(1, 9) as u32);
     match tokio::time::timeout(timeout, refresh).await {
         Ok(result) => result,
         Err(_) => {
@@ -720,6 +720,23 @@ mod tests {
         .unwrap();
         assert_eq!(checked, 9);
         assert_eq!(started.elapsed(), Duration::from_secs(90));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn large_stack_refresh_exports_before_the_site_wait_expires() {
+        let started = tokio::time::Instant::now();
+        let mut checked = 0;
+        bounded_health_refresh(100, async {
+            for _ in 0..100 {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                checked += 1;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert!(checked > 0);
+        assert!(started.elapsed() < Duration::from_secs(600));
     }
 
     #[tokio::test(start_paused = true)]

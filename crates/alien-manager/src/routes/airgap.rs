@@ -90,6 +90,16 @@ async fn airgapped_deployment(
             ErrorData::bad_request("Air-gapped sync is for Kubernetes deployments").into_response(),
         );
     }
+    if !deployment
+        .stack_settings
+        .as_ref()
+        .is_some_and(|settings| settings.airgapped)
+    {
+        return Err(ErrorData::bad_request(
+            "This deployment is not configured for air-gapped sync",
+        )
+        .into_response());
+    }
     Ok((subject, deployment))
 }
 

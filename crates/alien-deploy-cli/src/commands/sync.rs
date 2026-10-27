@@ -289,8 +289,15 @@ pub async fn sync_command(
     let mut unsent_reports = None;
     if online {
         let token = token.as_ref().expect("online implies a stored token");
-        unsent_reports =
-            exchange_online(&folder, &mut site, token, args.full, args.dry_run, &args.values).await?;
+        unsent_reports = exchange_online(
+            &folder,
+            &mut site,
+            token,
+            args.full,
+            args.dry_run,
+            &args.values,
+        )
+        .await?;
     }
     if let Some(settings) = &site_side {
         install_pending(&folder, &mut site, settings, &args).await?;
@@ -2420,6 +2427,14 @@ async fn install_pending(
         )));
     }
     if deleting {
+        if target_sequence(settings, &manifest.stack_id, &namespace)
+            .await?
+            .is_some_and(|sequence| sequence > manifest.sequence)
+        {
+            return Err(AlienError::new(config_error(
+                "the deletion bundle is older than the installed target; download the current deletion request",
+            )));
+        }
         return uninstall_site(folder, site, settings, &manifest, args.dry_run).await;
     }
     let observation = read_status(settings, &manifest.stack_id, &namespace).await?;
@@ -4215,6 +4230,36 @@ stringData:
             .await
             .unwrap()
             .is_some());
+        std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
+        std::fs::write(bundle.path().join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
+        airgap::pack(bundle.path(), &pending).unwrap();
+        let target = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(target.path(), br#"{"releaseInfo":{"releaseId":"rel_new"}}"#).unwrap();
+        write_target(&settings, "app", &namespace, target.path(), 3, 0)
+            .await
+            .unwrap();
+        let error = install_pending(folder.path(), &mut site, &settings, &args)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("older than the installed target"));
+        assert!(pending.exists());
+        assert!(snapshot.exists());
+        assert!(release_values(&settings, "app", &namespace)
+            .await
+            .unwrap()
+            .is_some());
+        let unchanged = deletion_inventory(&settings, "app", &namespace)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&unchanged).unwrap(),
+            serde_json::to_value(&recorded_data).unwrap()
+        );
+        // A current signed request can still complete the same cleanup.
+        signed_manifest["sequence"] = 4.into();
+        let bytes = serde_json::to_vec(&signed_manifest).unwrap();
         std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
         std::fs::write(bundle.path().join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
         airgap::pack(bundle.path(), &pending).unwrap();
