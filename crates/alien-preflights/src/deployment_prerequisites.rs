@@ -5,13 +5,14 @@
 //! during `alien build`, because build should validate stack shape without
 //! requiring deployment-environment state.
 
-use crate::error::Result;
+use crate::error::{ErrorData, Result};
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
     validate_binding_type, ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig,
     EndpointAccess, EnvironmentVariable, ExposeProtocol, KubernetesCluster, PermissionProfile,
     PermissionSet, Platform, ResourceEntry, ResourceLifecycle, Stack, StackState, Worker,
 };
+use alien_error::AlienError;
 use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
 };
@@ -43,7 +44,7 @@ impl DeploymentPrerequisiteCheck for KubernetesBaseDomainCheck {
     async fn check(
         &self,
         stack: &Stack,
-        _state: &StackState,
+        state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<CheckResult> {
         let Some(alien_core::KubernetesExposureSettings::CustomBaseDomain {
@@ -67,8 +68,26 @@ impl DeploymentPrerequisiteCheck for KubernetesBaseDomainCheck {
             alien_core::KubernetesCertificateMode::None => {},
             _ => failures.push("Kubernetes customBaseDomain requires one existing TLS Secret covering all endpoint hostnames, or certificate mode none".to_string()),
         }
+        let (answers, still_frozen_gating) = alien_core::surviving_frozen_gate_answers(stack);
+        let declined = alien_core::declined_live_resources(
+            stack,
+            &config.input_values,
+            &answers,
+            &still_frozen_gating,
+            state.platform,
+        )
+        .map_err(|message| {
+            AlienError::new(ErrorData::DeploymentPrerequisiteCheckFailed {
+                check_name: self.description().to_string(),
+                message,
+                platform: Some(state.platform.to_string()),
+            })
+        })?;
         let mut hosts = std::collections::HashSet::new();
         for (resource_id, entry) in stack.resources() {
+            if declined.contains(resource_id) {
+                continue;
+            }
             let endpoints = entry
                 .config
                 .downcast_ref::<Container>()
@@ -995,6 +1014,76 @@ mod tests {
         assert!(
             !check
                 .check(&duplicate_stack, &state, &config)
+                .await
+                .unwrap()
+                .success
+        );
+    }
+
+    #[tokio::test]
+    async fn kubernetes_base_domain_ignores_declined_live_endpoints() {
+        let mut alternative = create_public_function_entry("alternative");
+        alternative.enabled_when = Some("alternativeEnabled".into());
+        let mut stack = create_stack(IndexMap::from([
+            ("primary".into(), create_public_function_entry("primary")),
+            ("alternative".into(), alternative),
+        ]));
+        stack.inputs = vec![alien_core::StackInputDefinition::deployer_boolean(
+            "alternativeEnabled",
+            "Alternative",
+            "Enable the alternative",
+            Some(false),
+        )];
+        let state = stack_state(Platform::Kubernetes);
+        let mut config = deployment_config();
+        config.stack_settings.kubernetes = Some(
+            serde_json::from_value(serde_json::json!({
+                "exposure": {
+                    "mode": "customBaseDomain", "baseDomain": "example.com",
+                    "route": {"routeApi": "ingress", "ingressClassName": "nginx"},
+                    "certificate": {"mode": "none"}
+                }
+            }))
+            .unwrap(),
+        );
+        for value in [
+            None,
+            Some(serde_json::json!(false)),
+            Some(serde_json::json!("false")),
+        ] {
+            config.input_values = value
+                .map(|value| HashMap::from([("alternativeEnabled".into(), value)]))
+                .unwrap_or_default();
+            let result = KubernetesBaseDomainCheck
+                .check(&stack, &state, &config)
+                .await
+                .unwrap();
+            assert!(
+                result.success,
+                "declined endpoint must not collide: {result:?}"
+            );
+        }
+        config
+            .input_values
+            .insert("alternativeEnabled".into(), serde_json::json!(true));
+        assert!(
+            !KubernetesBaseDomainCheck
+                .check(&stack, &state, &config)
+                .await
+                .unwrap()
+                .success
+        );
+        config
+            .input_values
+            .insert("alternativeEnabled".into(), serde_json::json!("invalid"));
+        assert!(KubernetesBaseDomainCheck
+            .check(&stack, &state, &config)
+            .await
+            .is_err());
+        stack.inputs[0].platforms = Some(vec![Platform::Aws]);
+        assert!(
+            KubernetesBaseDomainCheck
+                .check(&stack, &state, &config)
                 .await
                 .unwrap()
                 .success
