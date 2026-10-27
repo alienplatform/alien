@@ -272,8 +272,12 @@ fn to_manager_api_observed_inventory_batches(
 const MAX_ACQUIRE_ATTEMPTS: usize = 60;
 /// Maximum number of setup delete handoff attempts (1,350 × 2s = 45 minutes).
 const MAX_SETUP_DELETE_ACQUIRE_ATTEMPTS: usize = 1_350;
-/// Delay between acquire attempts in seconds.
-const ACQUIRE_RETRY_DELAY_SECS: u64 = 2;
+/// Delay between acquire attempts.
+#[cfg(not(test))]
+const ACQUIRE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+// The mocked manager answers at once, so a unit test only pays for the attempts it counts.
+#[cfg(test)]
+const ACQUIRE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Result of waiting for setup-owned deletion work.
 pub enum SetupDeleteAcquireOutcome {
@@ -646,7 +650,7 @@ pub async fn acquire_setup_delete_deployment(
             status = %deployment.status,
             "Waiting for runtime cleanup handoff before setup teardown"
         );
-        tokio::time::sleep(std::time::Duration::from_secs(ACQUIRE_RETRY_DELAY_SECS)).await;
+        tokio::time::sleep(ACQUIRE_RETRY_DELAY).await;
     }
 
     unreachable!()
@@ -711,7 +715,7 @@ async fn acquire_deployment_with_statuses(
             max = MAX_ACQUIRE_ATTEMPTS,
             "Waiting for deployment lock"
         );
-        tokio::time::sleep(std::time::Duration::from_secs(ACQUIRE_RETRY_DELAY_SECS)).await;
+        tokio::time::sleep(ACQUIRE_RETRY_DELAY).await;
     }
 
     unreachable!()
