@@ -29,6 +29,15 @@ get "route"(){
 get "route"(){
                 return KubernetesRouteProfileSchema.describe("Kubernetes route API selected for public endpoints.")
               }
+    }), z.object({
+    "baseDomain": z.string().describe("DNS name without a wildcard or URL scheme, for example `app.example.com`."),
+get "certificate"(){
+                return KubernetesCertificateModeSchema.describe("Certificate publication or reference mode for Kubernetes public endpoints.")
+              },
+"mode": z.enum(["customBaseDomain"]),
+get "route"(){
+                return KubernetesRouteProfileSchema.describe("Kubernetes route API selected for public endpoints.")
+              }
     })]).describe("Kubernetes public HTTPS exposure mode.")
 
 export type KubernetesExposureSettings = z.infer<typeof KubernetesExposureSettingsSchema>

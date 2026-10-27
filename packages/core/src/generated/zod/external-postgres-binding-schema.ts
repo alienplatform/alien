@@ -6,6 +6,8 @@
 import * as z from "zod";
 import { BindingValueStringSchema } from "./binding-value-string-schema.js";
 import { BindingValueU16Schema } from "./binding-value-u16-schema.js";
+import { ExternalPasswordSecretKeyRefSchema } from "./external-password-secret-key-ref-schema.js";
+import { ExternalPasswordSecretRefSchema } from "./external-password-secret-ref-schema.js";
 import { ExternalPostgresSslModeSchema } from "./external-postgres-ssl-mode-schema.js";
 
 /**
@@ -18,7 +20,9 @@ export const ExternalPostgresBindingSchema = z.object({
 get "host"(){
                 return BindingValueStringSchema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
               },
-"password": z.string().describe("Connection password as a concrete value, never an unresolved `SecretRef`: the platform\nmaterializes the Kubernetes secret into the pod env. The cloud variants carry a secret\nlocator instead."),
+get "password"(){
+                return z.union([ExternalPasswordSecretRefSchema, ExternalPasswordSecretKeyRefSchema, z.string()]).describe("Connection password or Kubernetes Secret reference. Kubernetes workloads resolve\nthe reference through secretKeyRef before the application loads its binding.")
+              },
 get "port"(){
                 return BindingValueU16Schema.describe("Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret")
               },

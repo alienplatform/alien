@@ -20,6 +20,25 @@ import {
 } from "./kubernetesrouteprofile.js";
 
 /**
+ * Give each named public endpoint a hostname below a customer-owned base domain.
+ */
+export type KubernetesExposureSettingsCustomBaseDomain = {
+  /**
+   * DNS name without a wildcard or URL scheme, for example `app.example.com`.
+   */
+  baseDomain: string;
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate: KubernetesCertificateMode;
+  mode: "customBaseDomain";
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: KubernetesRouteProfile;
+};
+
+/**
  * Use a customer hostname and customer-owned certificate reference.
  */
 export type KubernetesExposureSettingsCustom = {
@@ -66,7 +85,62 @@ export type KubernetesExposureSettingsDisabled = {
 export type KubernetesExposureSettings =
   | KubernetesExposureSettingsDisabled
   | KubernetesExposureSettingsGenerated
-  | KubernetesExposureSettingsCustom;
+  | KubernetesExposureSettingsCustom
+  | KubernetesExposureSettingsCustomBaseDomain;
+
+/** @internal */
+export const KubernetesExposureSettingsCustomBaseDomain$inboundSchema:
+  z.ZodType<KubernetesExposureSettingsCustomBaseDomain, unknown> = z.object({
+    baseDomain: z.string(),
+    certificate: KubernetesCertificateMode$inboundSchema,
+    mode: z.literal("customBaseDomain"),
+    route: KubernetesRouteProfile$inboundSchema,
+  });
+/** @internal */
+export type KubernetesExposureSettingsCustomBaseDomain$Outbound = {
+  baseDomain: string;
+  certificate: KubernetesCertificateMode$Outbound;
+  mode: "customBaseDomain";
+  route: KubernetesRouteProfile$Outbound;
+};
+
+/** @internal */
+export const KubernetesExposureSettingsCustomBaseDomain$outboundSchema:
+  z.ZodType<
+    KubernetesExposureSettingsCustomBaseDomain$Outbound,
+    KubernetesExposureSettingsCustomBaseDomain
+  > = z.object({
+    baseDomain: z.string(),
+    certificate: KubernetesCertificateMode$outboundSchema,
+    mode: z.literal("customBaseDomain"),
+    route: KubernetesRouteProfile$outboundSchema,
+  });
+
+export function kubernetesExposureSettingsCustomBaseDomainToJSON(
+  kubernetesExposureSettingsCustomBaseDomain:
+    KubernetesExposureSettingsCustomBaseDomain,
+): string {
+  return JSON.stringify(
+    KubernetesExposureSettingsCustomBaseDomain$outboundSchema.parse(
+      kubernetesExposureSettingsCustomBaseDomain,
+    ),
+  );
+}
+export function kubernetesExposureSettingsCustomBaseDomainFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  KubernetesExposureSettingsCustomBaseDomain,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      KubernetesExposureSettingsCustomBaseDomain$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'KubernetesExposureSettingsCustomBaseDomain' from JSON`,
+  );
+}
 
 /** @internal */
 export const KubernetesExposureSettingsCustom$inboundSchema: z.ZodType<
@@ -210,12 +284,14 @@ export const KubernetesExposureSettings$inboundSchema: z.ZodType<
   z.lazy(() => KubernetesExposureSettingsDisabled$inboundSchema),
   z.lazy(() => KubernetesExposureSettingsGenerated$inboundSchema),
   z.lazy(() => KubernetesExposureSettingsCustom$inboundSchema),
+  z.lazy(() => KubernetesExposureSettingsCustomBaseDomain$inboundSchema),
 ]);
 /** @internal */
 export type KubernetesExposureSettings$Outbound =
   | KubernetesExposureSettingsDisabled$Outbound
   | KubernetesExposureSettingsGenerated$Outbound
-  | KubernetesExposureSettingsCustom$Outbound;
+  | KubernetesExposureSettingsCustom$Outbound
+  | KubernetesExposureSettingsCustomBaseDomain$Outbound;
 
 /** @internal */
 export const KubernetesExposureSettings$outboundSchema: z.ZodType<
@@ -225,6 +301,7 @@ export const KubernetesExposureSettings$outboundSchema: z.ZodType<
   z.lazy(() => KubernetesExposureSettingsDisabled$outboundSchema),
   z.lazy(() => KubernetesExposureSettingsGenerated$outboundSchema),
   z.lazy(() => KubernetesExposureSettingsCustom$outboundSchema),
+  z.lazy(() => KubernetesExposureSettingsCustomBaseDomain$outboundSchema),
 ]);
 
 export function kubernetesExposureSettingsToJSON(

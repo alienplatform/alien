@@ -112,6 +112,12 @@ const bindings = [
     password: "demo-only",
     sslMode: "verify-full",
   },
+  {
+    type: "postgres",
+    service: "external",
+    ...postgres,
+    password: { secretRef: { name: "database-credentials", key: "password" } },
+  },
   { type: "postgres", service: "local-postgres", ...postgres, password: "demo-only" },
   { type: "ai", provider: "openai", apiKey: { secretRef: { name: "demo", key: "api-key" } } },
 ] satisfies ExternalBinding[]
@@ -155,6 +161,40 @@ describe("StackSettings external bindings", () => {
     { type: "storage", service: "s3", bucketName: "demo", forcePathStyle: "true" },
     { type: "ai", provider: 42, apiKey: "demo-only" },
     { type: "postgres", service: "external", ...postgres, password: 42 },
+    { type: "postgres", service: "external", ...postgres, password: false },
+    { type: "postgres", service: "external", ...postgres, password: null },
+    { type: "postgres", service: "external", ...postgres, password: [] },
+    { type: "postgres", service: "external", ...postgres, password: {} },
+    {
+      type: "postgres",
+      service: "external",
+      ...postgres,
+      password: { secretKeyRef: { name: "credentials" } },
+    },
+    {
+      type: "postgres",
+      service: "external",
+      ...postgres,
+      password: [{ name: "credentials", key: "password" }],
+    },
+    {
+      type: "postgres",
+      service: "external",
+      ...postgres,
+      password: { secretRef: ["credentials", "password"] },
+    },
+    {
+      type: "postgres",
+      service: "external",
+      ...postgres,
+      password: { secretRef: { name: "credentials" } },
+    },
+    {
+      type: "postgres",
+      service: "external",
+      ...postgres,
+      password: { secretRef: { key: "password" } },
+    },
     {
       type: "postgres",
       service: "external",

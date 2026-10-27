@@ -255,6 +255,9 @@ persistentStorage:
 ephemeralStorage:
   nodeSelector: {}
 
+# Frozen databases. An infrastructure binding overrides the corresponding database.
+postgres: {}
+
 === values.schema.json ===
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
@@ -778,6 +781,9 @@ ephemeralStorage:
       "type": "string"
     },
     "persistentStorage": {
+      "type": "object"
+    },
+    "postgres": {
       "type": "object"
     },
     "publicEndpoints": {
@@ -1322,6 +1328,24 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 {{- end -}}
 
+{{- /* Keep the immutable cleanup authority when upgrading an existing release. */ -}}
+{{- define "deployment.runtimeLabelValue" -}}
+{{- if .Values.logCollector.scope.deploymentLabelValue -}}
+{{- .Values.logCollector.scope.deploymentLabelValue -}}
+{{- else -}}
+{{- $scopeName := include "deployment.releaseScopedName" (dict "root" . "suffix" "-runtime-scope") -}}
+{{- $existing := lookup "v1" "ConfigMap" .Release.Namespace $scopeName -}}
+{{- if $existing -}}
+{{- required "The existing runtime cleanup scope has no labelValue." (index (default dict $existing.data) "labelValue") -}}
+{{- /* The stack ConfigMap name is stable across chart versions. */ -}}
+{{- else if and .Release.IsUpgrade (not (lookup "v1" "ConfigMap" .Release.Namespace (include "deployment.fullname" .))) -}}
+{{- fail "Cannot discover the existing runtime cleanup scope. Set logCollector.scope.deploymentLabelValue=<current label> to keep this install's scope when rendering an upgrade without cluster lookup (helm template --is-upgrade or GitOps). Read <current label> from the installed runtime-scope ConfigMap data.labelValue if present; for older charts without that ConfigMap, use the deployment label on the existing runtime workloads." -}}
+{{- else -}}
+{{- include "deployment.serviceAccountPrefix" . -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "deployment.serviceAccountName" -}}
 {{- $prefix := include "deployment.serviceAccountPrefix" .root -}}
 {{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
@@ -1444,7 +1468,7 @@ different namespaces of one cluster from colliding. */ -}}
 
 === templates/serviceaccount.yaml ===
 {{- $runtimeLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
-{{- $runtimeLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $runtimeLabelValue := include "deployment.runtimeLabelValue" . -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -1630,7 +1654,7 @@ roleRef:
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector .Values.inputValues }}
+{{- if or $createManagementSecret $createEncryptionSecret (ne (include "deployment.infrastructure" .) "{}") $nodeCollector .Values.inputValues }}
 {{- $collectorToken := .Values.logCollector.token -}}
 {{- if and $nodeCollector (empty $collectorToken) -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
@@ -1655,8 +1679,8 @@ stringData:
   {{- if $createEncryptionSecret }}
   encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
   {{- end }}
-  {{- if .Values.infrastructure }}
-  external-bindings.json: {{ toJson .Values.infrastructure | quote }}
+  {{- if ne (include "deployment.infrastructure" .) "{}" }}
+  external-bindings.json: {{ include "deployment.infrastructure" . | quote }}
   {{- end }}
   {{- if $nodeCollector }}
   collector-token: {{ $collectorToken | quote }}
@@ -1847,7 +1871,7 @@ spec:
             - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY
               value: {{ default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey | quote }}
             - name: ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE
-              value: {{ default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue | quote }}
+              value: {{ include "deployment.runtimeLabelValue" . | quote }}
             {{- if .Values.logCollector.scope.legacyDeploymentLabelKey }}
             - name: ALIEN_RUNTIME_LEGACY_DEPLOYMENT_LABEL_KEY
               value: {{ .Values.logCollector.scope.legacyDeploymentLabelKey | quote }}
@@ -1874,9 +1898,13 @@ spec:
             {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
-            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
+            {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
+            {{- end }}
+            {{- if ne (include "deployment.chartDefaultBindings" .) "{}" }}
+            - name: CHART_DEFAULT_BINDINGS
+              value: {{ include "deployment.chartDefaultBindings" . | quote }}
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
@@ -1899,7 +1927,7 @@ spec:
             - name: OPERATOR_POD_LOG_LABEL_KEY
               value: {{ default .Values.logCollector.scope.deploymentLabelKey $podLabelKey | quote }}
             - name: OPERATOR_POD_LOG_LABEL_VALUE
-              value: {{ default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue | quote }}
+              value: {{ default (include "deployment.serviceAccountPrefix" .) $podLabelValue | quote }}
             - name: OPERATOR_POD_LOG_LEGACY_DAEMONSET
               value: {{ include "deployment.logCollectorName" . | quote }}
             - name: OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET
@@ -1951,7 +1979,7 @@ spec:
               mountPath: /etc/deployment/secrets/encryption-key
               subPath: {{ include "deployment.encryptionSecretKey" . }}
               readOnly: true
-            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
+            {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
             - name: external-bindings
               mountPath: /etc/deployment/secrets/external-bindings.json
               subPath: external-bindings.json
@@ -1995,7 +2023,7 @@ spec:
           secret:
             secretName: {{ include "deployment.encryptionSecretName" . }}
             defaultMode: 384
-        {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
+        {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
         - name: external-bindings
           secret:
             secretName: {{ default (include "deployment.fullname" .) .Values.infrastructureExistingSecret }}
@@ -2080,7 +2108,7 @@ subjects:
   {{- fail "logCollector.scope.podLabelKey and podLabelValue must be set together" -}}
 {{- end -}}
 {{- $logLabelKey := default .Values.logCollector.scope.deploymentLabelKey $podLabelKey -}}
-{{- $logLabelValue := default (default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue) $podLabelValue -}}
+{{- $logLabelValue := default (include "deployment.serviceAccountPrefix" .) $podLabelValue -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -2273,7 +2301,7 @@ spec:
 {{- $scopeName := include "deployment.releaseScopedName" (dict "root" . "suffix" "-runtime-scope") -}}
 {{- $requestedLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $requestedLegacyLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $requestedLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $requestedLabelValue := include "deployment.runtimeLabelValue" . -}}
 {{- if not (hasSuffix "/deployment" $requestedLabelKey) -}}
   {{- fail "The runtime cleanup deployment label key must end in '/deployment' because runtime ownership labels are domain-qualified." -}}
 {{- end -}}
@@ -2345,7 +2373,7 @@ data:
 {{- $firstSafeRevision := .Release.Revision -}}
 {{- $migrationLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $migrationLegacyLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $migrationLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $migrationLabelValue := include "deployment.runtimeLabelValue" . -}}
 {{- if $existingScope -}}
   {{- $scopeData := default dict $existingScope.data -}}
   {{- $firstSafeRevision = index $scopeData "firstSafeRevision" -}}
@@ -2561,7 +2589,7 @@ spec:
 {{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
 {{- $cleanupLabelKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}
 {{- $legacyCleanupLabelKey := default "" .Values.logCollector.scope.legacyDeploymentLabelKey -}}
-{{- $cleanupLabelValue := default (include "deployment.fullname" .) .Values.logCollector.scope.deploymentLabelValue -}}
+{{- $cleanupLabelValue := include "deployment.runtimeLabelValue" . -}}
 {{- $cleanupResourceLabelKey := printf "%s/resource" (trimSuffix "/deployment" $cleanupLabelKey) -}}
 {{- $legacyCleanupResourceLabelKey := "" -}}
 {{- if $legacyCleanupLabelKey -}}
@@ -3278,6 +3306,178 @@ spec:
   egress:
     - {}
   {{- end }}
+{{- end }}
+
+=== templates/_infrastructure.tpl ===
+
+{{- define "deployment.postgresName" -}}
+{{- printf "%s-pg-%s" (include "deployment.fullname" .root | trunc 28 | trimSuffix "-") (.id | trunc 20 | trimSuffix "-") -}}-{{ printf "%s/%s/%s" .root.Release.Namespace .root.Release.Name .id | sha256sum | trunc 8 }}
+{{- end -}}
+
+{{- define "deployment.infrastructure" -}}
+{{- default dict .Values.infrastructure | toJson -}}
+{{- end -}}
+
+{{- define "deployment.chartDefaultBindings" -}}
+{{- $bindings := dict -}}
+{{- if not .Values.infrastructureExistingSecret -}}
+{{- range $id, $database := .Values.postgres -}}
+  {{- if and $database.enabled (not (hasKey (default dict $.Values.infrastructure) $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) -}}
+    {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) -}}
+    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" (default $name $database.existingPasswordSecret) "key" "password")) "sslMode" "disable") -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $bindings | toJson -}}
+{{- end -}}
+
+=== templates/postgres.yaml ===
+{{- range $id, $database := .Values.postgres }}
+{{- if and $database.enabled (not $.Values.infrastructureExistingSecret) (not (hasKey (default dict $.Values.infrastructure) $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) }}
+{{- if $database.highAvailability }}{{ fail "In-cluster Postgres is single-instance; supply an external binding for high availability" }}{{ end }}
+{{- if $database.encryptionKey }}{{ fail "In-cluster Postgres uses StorageClass encryption; supply an external binding for an explicit database encryption key" }}{{ end }}
+{{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) }}
+{{- $labels := include "deployment.labels" $ | fromYaml }}
+{{- $_ := set $labels "app.kubernetes.io/name" $name }}
+{{- $installed := lookup "apps/v1" "StatefulSet" $.Release.Namespace $name }}
+{{- $volume := lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $name }}
+{{- $desiredImage := printf "%s:%s" $database.image.repository $database.image.tag }}
+{{- $previousImage := "" }}
+{{- if $volume }}
+  {{- $previousImage = get (default dict $volume.metadata.annotations) "alien.dev/postgres-image" | default "" }}
+{{- end }}
+{{- if and (empty $previousImage) $installed }}
+  {{- $previousImage = (index $installed.spec.template.spec.containers 0).image }}
+{{- end }}
+{{- if and $volume (empty $previousImage) }}
+  {{- fail "Postgres data has no recorded image; restore the original alien.dev/postgres-image PVC annotation before installing" }}
+{{- end }}
+{{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
+  {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
+{{- end }}
+{{- if and $database.existingPasswordSecret (not (lookup "v1" "Secret" $.Release.Namespace "")) }}
+  {{- $recordedImage := required (printf "Cannot verify the installed Postgres image offline; set postgres.%s.recordedImage to the retained PVC alien.dev/postgres-image annotation (for a fresh database, pin the initial image)" $id) $database.recordedImage }}
+  {{- if ne (first (splitList "@" $recordedImage)) (first (splitList "@" $desiredImage)) }}
+    {{- fail (printf "Postgres image differs from postgres.%s.recordedImage; retain the recorded image or migrate the database before changing the pin" $id) }}
+  {{- end }}
+{{- end }}
+{{- $credentials := default $name $database.existingPasswordSecret }}
+{{- if not $database.existingPasswordSecret }}
+{{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}
+{{- $password := "" }}
+{{- if $existing }}
+  {{- $password = required "Existing Postgres Secret has no password; restore its original password" (index $existing.data "password") }}
+{{- else }}
+  {{- if lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $name }}
+    {{- fail "Postgres data exists but its credentials Secret is missing; restore the original Secret before installing" }}
+  {{- end }}
+  {{- if not (lookup "v1" "Secret" $.Release.Namespace "") }}
+    {{- fail "Cannot read Secrets in the database namespace; create the namespace before installing, or set postgres.<resource>.existingPasswordSecret to a Secret containing the password key for offline rendering" }}
+  {{- end }}
+  {{- $password = randAlphaNum 48 | b64enc }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- $labels | toYaml | nindent 4 }}
+type: Opaque
+data:
+  password: {{ $password | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/resource-policy: keep
+    alien.dev/postgres-image: {{ $desiredImage | quote }}
+  labels:
+    {{- $labels | toYaml | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if $database.storageClassName }}
+  storageClassName: {{ $database.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $database.storage | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- $labels | toYaml | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: {{ $name }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- $labels | toYaml | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: {{ $name }}
+        app.kubernetes.io/name: {{ $name }}
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with $.Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: postgres
+          image: {{ printf "%s:%s" $database.image.repository $database.image.tag | quote }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ $id | quote }}
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $credentials }}
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, postgres, -d, {{ $id | quote }}]
+            periodSeconds: 5
+          resources:
+            {{- toYaml $database.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}
+{{- end }}
 {{- end }}
 
 === examples/eks.yaml ===

@@ -1157,6 +1157,18 @@ mod tests {
         });
         let exposures = [
             (
+                KubernetesExposureSettings::CustomBaseDomain {
+                    base_domain: "example.test".into(),
+                    route: route.clone(),
+                    certificate: KubernetesCertificateMode::TlsSecretRef(KubernetesTlsSecretRef {
+                        secret_name: "site-tls".into(),
+                        namespace: None,
+                    }),
+                },
+                "https://login.example.test",
+                "login.example.test",
+            ),
+            (
                 KubernetesExposureSettings::Custom {
                     domain: "acm.example.test".into(),
                     route: route.clone(),
@@ -1191,6 +1203,10 @@ mod tests {
             ),
         ];
         for (exposure, url, host) in exposures {
+            let is_base_domain = matches!(
+                &exposure,
+                KubernetesExposureSettings::CustomBaseDomain { .. }
+            );
             harness.deployment_config_mut().stack_settings.kubernetes = Some(KubernetesSettings {
                 cluster: None,
                 exposure: Some(exposure),
@@ -1201,12 +1217,14 @@ mod tests {
                 .build();
             let endpoints: serde_json::Value =
                 serde_json::from_str(&environment[ENV_ALIEN_PUBLIC_ENDPOINTS_JSON]).unwrap();
-            assert_eq!(
-                endpoints,
-                json!({"auth": {
-                    "url": url, "host": host, "wildcardHost": format!("*.{host}")
-                }})
-            );
+            let mut expected = json!({"auth": {
+                "url": url, "host": host, "wildcardHost": format!("*.{host}")
+            }});
+            if is_base_domain {
+                expected["metrics"] =
+                    json!({"url":"https://metrics.example.test", "host":"metrics.example.test"});
+            }
+            assert_eq!(endpoints, expected);
         }
     }
 }

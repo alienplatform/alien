@@ -54,6 +54,8 @@ pub(crate) struct KubernetesPublicEndpointState {
     #[serde(default)]
     pub(crate) managed_acm_region: Option<String>,
     pub(crate) public_url: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub(crate) named_public_endpoints: HashMap<String, alien_core::PublicEndpointOutput>,
     pub(crate) load_balancer_endpoint: Option<LoadBalancerEndpoint>,
     pub(crate) published_certificate_id: Option<String>,
     pub(crate) published_certificate_issued_at: Option<String>,
@@ -82,6 +84,7 @@ pub(crate) struct KubernetesPublicEndpointTarget<'a> {
     pub(crate) public: bool,
     pub(crate) wildcard_subdomains: bool,
     pub(crate) deployment_labels: BTreeMap<String, String>,
+    pub(crate) public_endpoints: Vec<alien_core::PublicEndpoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,8 +95,8 @@ pub(crate) enum KubernetesEndpointAction {
 
 #[derive(Debug, Clone)]
 struct EndpointPlan {
-    // Generated metadata already includes endpoint aliases and wildcard names.
-    managed_hostnames: Option<Vec<String>>,
+    // Complete route hostnames, including endpoint aliases and wildcard names.
+    hostnames: Option<Vec<String>>,
     hostname: Option<String>,
     public_url: Option<String>,
     route: KubernetesRouteProfile,
@@ -157,6 +160,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
             )
             .await?;
             state.public_url = None;
+            state.named_public_endpoints.clear();
             state.load_balancer_endpoint = None;
             return Ok(KubernetesEndpointAction::Ready);
         }
@@ -461,6 +465,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
 
     let Some(endpoint) = endpoint else {
         state.public_url = None;
+        state.named_public_endpoints.clear();
         state.load_balancer_endpoint = None;
         return Ok(KubernetesEndpointAction::Waiting {
             suggested_delay: ENDPOINT_WAIT,
@@ -469,6 +474,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
 
     if !load_balancer_endpoint_dns_resolves(&endpoint).await {
         state.public_url = None;
+        state.named_public_endpoints.clear();
         state.load_balancer_endpoint = None;
         return Ok(KubernetesEndpointAction::Waiting {
             suggested_delay: ENDPOINT_WAIT,
@@ -483,6 +489,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
     if let Some(health_check_path) = target.health_check_path.as_deref() {
         if !public_endpoint_health_check_succeeds(&public_url, health_check_path).await {
             state.public_url = None;
+            state.named_public_endpoints.clear();
             state.load_balancer_endpoint = None;
             return Ok(KubernetesEndpointAction::Waiting {
                 suggested_delay: ENDPOINT_WAIT,
@@ -490,6 +497,38 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
         }
     }
 
+    state.named_public_endpoints.clear();
+    if let Some(KubernetesExposureSettings::CustomBaseDomain { base_domain, .. }) = ctx
+        .deployment_config
+        .stack_settings
+        .kubernetes
+        .as_ref()
+        .and_then(|settings| settings.exposure.as_ref())
+    {
+        let scheme = if matches!(plan.certificate, EndpointCertificate::None) {
+            "http"
+        } else {
+            "https"
+        };
+        for definition in target
+            .public_endpoints
+            .iter()
+            .filter(|definition| definition.protocol == alien_core::ExposeProtocol::Http)
+        {
+            let host = endpoint_base_hostname(definition, base_domain);
+            state.named_public_endpoints.insert(
+                definition.name.clone(),
+                alien_core::PublicEndpointOutput {
+                    url: format!("{scheme}://{host}"),
+                    wildcard_host: definition.wildcard_subdomains.then(|| format!("*.{host}")),
+                    host,
+                    protocol: alien_core::ExposeProtocol::Http,
+                    port: if scheme == "https" { 443 } else { 80 },
+                    load_balancer_endpoint: Some(endpoint.clone()),
+                },
+            );
+        }
+    }
     state.public_url = Some(public_url);
     state.load_balancer_endpoint = Some(endpoint);
 
@@ -773,6 +812,7 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
     delete_managed_acm_certificate(ctx, resource_id, state).await?;
 
     state.public_url = None;
+    state.named_public_endpoints.clear();
     state.load_balancer_endpoint = None;
     state.published_certificate_id = None;
     state.published_certificate_issued_at = None;
@@ -1280,7 +1320,7 @@ pub(crate) fn worker_public_endpoint_target<'a>(
     workload_name: &'a str,
     namespace: &'a str,
     selector: BTreeMap<String, String>,
-    public: bool,
+    public_endpoints: &[alien_core::WorkerPublicEndpoint],
     health_check_path: Option<&str>,
 ) -> KubernetesPublicEndpointTarget<'a> {
     KubernetesPublicEndpointTarget {
@@ -1292,7 +1332,17 @@ pub(crate) fn worker_public_endpoint_target<'a>(
         service_port: 80,
         target_port: 8080,
         health_check_path: health_check_path.map(ToString::to_string),
-        public,
+        public: !public_endpoints.is_empty(),
+        public_endpoints: public_endpoints
+            .iter()
+            .map(|endpoint| alien_core::PublicEndpoint {
+                name: endpoint.name.clone(),
+                port: 80,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: endpoint.host_label.clone(),
+                wildcard_subdomains: endpoint.wildcard_subdomains,
+            })
+            .collect(),
         wildcard_subdomains: false,
         deployment_labels: BTreeMap::new(),
     }
@@ -1323,6 +1373,7 @@ pub(crate) fn daemon_public_endpoint_target<'a>(
         target_port: http_port.unwrap_or(80),
         health_check_path: health_check_path.map(ToString::to_string),
         public: http_port.is_some(),
+        public_endpoints: public_endpoints.to_vec(),
         wildcard_subdomains: public_endpoints.iter().any(|endpoint| {
             endpoint.protocol == alien_core::ExposeProtocol::Http
                 && Some(endpoint.port) == http_port
@@ -1355,6 +1406,7 @@ pub(crate) fn container_public_endpoint_target<'a>(
         target_port: http_port.unwrap_or(80),
         health_check_path: health_check_path.map(ToString::to_string),
         public: http_port.is_some(),
+        public_endpoints: public_endpoints.to_vec(),
         wildcard_subdomains: public_endpoints.iter().any(|endpoint| {
             endpoint.protocol == alien_core::ExposeProtocol::Http
                 && Some(endpoint.port) == http_port
@@ -1364,18 +1416,23 @@ pub(crate) fn container_public_endpoint_target<'a>(
     })
 }
 
-/// Configured custom addresses are available before workload or endpoint readiness.
+/// Configured addresses are available before workload or endpoint readiness.
 pub(crate) fn configured_public_endpoint_urls(
     exposure: &KubernetesExposureSettings,
     endpoints: &[alien_core::PublicEndpoint],
 ) -> Option<HashMap<String, String>> {
-    let KubernetesExposureSettings::Custom {
-        domain,
-        certificate,
-        ..
-    } = exposure
-    else {
-        return None;
+    let (certificate, domain, is_base_domain) = match exposure {
+        KubernetesExposureSettings::CustomBaseDomain {
+            base_domain,
+            certificate,
+            ..
+        } => (certificate, base_domain.as_str(), true),
+        KubernetesExposureSettings::Custom {
+            domain,
+            certificate,
+            ..
+        } => (certificate, domain.as_str(), false),
+        _ => return None,
     };
     let scheme = match certificate {
         KubernetesCertificateMode::None => "http",
@@ -1386,9 +1443,16 @@ pub(crate) fn configured_public_endpoint_urls(
     Some(
         endpoints
             .iter()
-            .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
-            .into_iter()
-            .map(|endpoint| (endpoint.name.clone(), format!("{scheme}://{domain}")))
+            .filter(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
+            .take(if is_base_domain { usize::MAX } else { 1 })
+            .map(|endpoint| {
+                let host = if is_base_domain {
+                    endpoint_base_hostname(endpoint, domain)
+                } else {
+                    domain.to_string()
+                };
+                (endpoint.name.clone(), format!("{scheme}://{host}"))
+            })
             .collect(),
     )
 }
@@ -1428,7 +1492,7 @@ fn resolve_endpoint_plan(
             let Some(domain) = domain else {
                 if matches!(certificate, KubernetesCertificateMode::None) {
                     return Ok(EndpointPlanResolution::Ready(EndpointPlan {
-                        managed_hostnames: None,
+                        hostnames: None,
                         hostname: None,
                         public_url: None,
                         route: route.clone(),
@@ -1459,7 +1523,7 @@ fn resolve_endpoint_plan(
                 && matches!(certificate, KubernetesCertificateMode::None)
             {
                 return Ok(EndpointPlanResolution::Ready(EndpointPlan {
-                    managed_hostnames: Some(
+                    hostnames: Some(
                         std::iter::once(domain.fqdn.clone())
                             .chain(domain.aliases.iter().map(|alias| alias.fqdn.clone()))
                             .collect(),
@@ -1558,7 +1622,7 @@ fn resolve_endpoint_plan(
             };
 
             Ok(EndpointPlanResolution::Ready(EndpointPlan {
-                managed_hostnames: Some(
+                hostnames: Some(
                     std::iter::once(domain.fqdn.clone())
                         .chain(domain.aliases.iter().map(|alias| alias.fqdn.clone()))
                         .collect(),
@@ -1571,6 +1635,11 @@ fn resolve_endpoint_plan(
         }
         KubernetesExposureSettings::Custom {
             domain,
+            route,
+            certificate,
+        }
+        | KubernetesExposureSettings::CustomBaseDomain {
+            base_domain: domain,
             route,
             certificate,
         } => {
@@ -1590,20 +1659,56 @@ fn resolve_endpoint_plan(
                     }));
                 }
             };
-            let public_url = if matches!(certificate, EndpointCertificate::None) {
-                format!("http://{}", domain)
+            let hostnames = if matches!(
+                exposure,
+                KubernetesExposureSettings::CustomBaseDomain { .. }
+            ) {
+                Some(base_domain_hostnames(target, domain))
             } else {
-                format!("https://{}", domain)
+                None
+            };
+            let hostname = hostnames
+                .as_ref()
+                .and_then(|hosts| hosts.first())
+                .unwrap_or(domain)
+                .clone();
+            let public_url = if matches!(certificate, EndpointCertificate::None) {
+                format!("http://{hostname}")
+            } else {
+                format!("https://{hostname}")
             };
             Ok(EndpointPlanResolution::Ready(EndpointPlan {
-                managed_hostnames: None,
-                hostname: Some(domain.clone()),
+                hostnames: hostnames,
+                hostname: Some(hostname),
                 public_url: Some(public_url),
                 route: route.clone(),
                 certificate,
             }))
         }
     }
+}
+
+fn endpoint_base_hostname(endpoint: &alien_core::PublicEndpoint, base_domain: &str) -> String {
+    match endpoint.effective_host_label() {
+        alien_core::APEX_HOST_LABEL => base_domain.to_string(),
+        label => format!("{label}.{base_domain}"),
+    }
+}
+
+fn base_domain_hostnames(
+    target: &KubernetesPublicEndpointTarget<'_>,
+    base_domain: &str,
+) -> Vec<String> {
+    target
+        .public_endpoints
+        .iter()
+        .filter(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
+        .flat_map(|endpoint| {
+            let host = endpoint_base_hostname(endpoint, base_domain);
+            let wildcard = endpoint.wildcard_subdomains.then(|| format!("*.{host}"));
+            std::iter::once(host).chain(wildcard)
+        })
+        .collect()
 }
 
 fn build_service(target: &KubernetesPublicEndpointTarget<'_>, service_name: &str) -> Service {
@@ -1654,7 +1759,7 @@ fn endpoint_hostnames(
     target: &KubernetesPublicEndpointTarget<'_>,
     plan: &EndpointPlan,
 ) -> Vec<String> {
-    if let Some(hostnames) = &plan.managed_hostnames {
+    if let Some(hostnames) = &plan.hostnames {
         return hostnames.clone();
     }
     let Some(hostname) = &plan.hostname else {
@@ -2806,6 +2911,127 @@ mod tests {
     use alien_core::{ExposeProtocol, PublicEndpoint};
     use httpmock::prelude::*;
 
+    #[test]
+    fn custom_base_domain_routes_named_endpoints_with_one_certificate() {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use alien_core::{Container, ContainerCode, KubernetesSettings, Resource};
+        let endpoints = vec![
+            PublicEndpoint {
+                name: "portal".into(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            },
+            PublicEndpoint {
+                name: "git".into(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some("code".into()),
+                wildcard_subdomains: false,
+            },
+        ];
+        let container = Container::new("web".into())
+            .code(ContainerCode::Image {
+                image: "nginx:latest".into(),
+            })
+            .permissions("web".into())
+            .cpu(alien_core::ResourceSpec {
+                min: "100m".into(),
+                desired: "100m".into(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "128Mi".into(),
+                desired: "128Mi".into(),
+            })
+            .build();
+        let mut harness = KubernetesManifestTestHarness::new(Resource::new(container), vec![]);
+        let route = KubernetesIngressRouteProfile {
+            ingress_class_name: "nginx".into(),
+            ..Default::default()
+        };
+        let tls = KubernetesTlsSecretRef {
+            secret_name: "customer-tls".into(),
+            namespace: None,
+        };
+        harness.deployment_config_mut().stack_settings.kubernetes = Some(KubernetesSettings {
+            cluster: None,
+            exposure: Some(KubernetesExposureSettings::CustomBaseDomain {
+                base_domain: "app.example.com".into(),
+                route: KubernetesRouteProfile::Ingress(route.clone()),
+                certificate: KubernetesCertificateMode::TlsSecretRef(tls.clone()),
+            }),
+        });
+        let target = container_public_endpoint_target(
+            "web",
+            "web",
+            "app",
+            BTreeMap::new(),
+            &endpoints,
+            None,
+        )
+        .unwrap();
+        let EndpointPlanResolution::Ready(plan) =
+            resolve_endpoint_plan(&harness.ctx(), &target).unwrap()
+        else {
+            panic!("expected ready route plan")
+        };
+        let ingress = build_ingress(
+            &target,
+            &plan,
+            &route,
+            "web-public",
+            "web-ingress",
+            Some(&tls),
+        )
+        .unwrap();
+        let spec = ingress.spec.unwrap();
+        let hosts: Vec<_> = spec
+            .rules
+            .unwrap()
+            .into_iter()
+            .map(|rule| {
+                assert_eq!(
+                    rule.http.unwrap().paths[0]
+                        .backend
+                        .service
+                        .as_ref()
+                        .unwrap()
+                        .name,
+                    "web-public"
+                );
+                rule.host.unwrap()
+            })
+            .collect();
+        assert_eq!(hosts, ["portal.app.example.com", "code.app.example.com"]);
+        let certificates = spec.tls.unwrap();
+        assert_eq!(certificates.len(), 1);
+        assert_eq!(certificates[0].secret_name.as_deref(), Some("customer-tls"));
+        assert_eq!(certificates[0].hosts.as_ref().unwrap(), &hosts);
+        assert_eq!(
+            plan.public_url.as_deref(),
+            Some("https://portal.app.example.com")
+        );
+        // A single literal hostname retains its existing behavior.
+        harness
+            .deployment_config_mut()
+            .stack_settings
+            .kubernetes
+            .as_mut()
+            .unwrap()
+            .exposure = Some(KubernetesExposureSettings::Custom {
+            domain: "legacy.example.com".into(),
+            route: KubernetesRouteProfile::Ingress(route),
+            certificate: KubernetesCertificateMode::TlsSecretRef(tls),
+        });
+        let EndpointPlanResolution::Ready(plan) =
+            resolve_endpoint_plan(&harness.ctx(), &target).unwrap()
+        else {
+            panic!("expected ready route plan")
+        };
+        assert_eq!(endpoint_hostnames(&target, &plan), ["legacy.example.com"]);
+    }
+
     fn endpoint_target() -> KubernetesPublicEndpointTarget<'static> {
         KubernetesPublicEndpointTarget {
             resource_id: "api",
@@ -2817,6 +3043,7 @@ mod tests {
             target_port: 8080,
             health_check_path: None,
             public: true,
+            public_endpoints: Vec::new(),
             wildcard_subdomains: false,
             deployment_labels: BTreeMap::from([(
                 "alien.dev/deployment".to_string(),
@@ -2899,7 +3126,7 @@ mod tests {
         assert!(target.wildcard_subdomains);
         assert!(daemon.wildcard_subdomains);
         let mut plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: Some("*.example.com".to_string()),
             public_url: None,
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile::default()),
@@ -2912,7 +3139,7 @@ mod tests {
             "apps.example.com".to_string(),
             "*.apps.example.com".to_string(),
         ];
-        plan.managed_hostnames = Some(managed.clone());
+        plan.hostnames = Some(managed.clone());
         assert_eq!(endpoint_hostnames(&target, &plan), managed);
         let gateway_profile = KubernetesGatewayRouteProfile {
             gateway_class_name: "shared-gateway".to_string(),
@@ -2986,7 +3213,7 @@ mod tests {
                 ..Default::default()
             };
             let plan = EndpointPlan {
-                managed_hostnames: None,
+                hostnames: None,
                 hostname: Some("api.example.com".to_string()),
                 public_url: Some("https://api.example.com".to_string()),
                 route: KubernetesRouteProfile::Ingress(ingress_profile.clone()),
@@ -3065,7 +3292,7 @@ mod tests {
         );
         profile_labels.insert("custom".to_string(), "kept".to_string());
         let plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: Some("api.example.com".to_string()),
             public_url: Some("https://api.example.com".to_string()),
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
@@ -3112,7 +3339,7 @@ mod tests {
         let mut target = endpoint_target();
         target.health_check_path = Some("/ready".to_string());
         let plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
@@ -3153,7 +3380,7 @@ mod tests {
         let mut target = endpoint_target();
         target.health_check_path = Some("/ready".to_string());
         let plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
@@ -3186,7 +3413,7 @@ mod tests {
     fn azure_gateway_provider_sets_alb_reference_annotations() {
         let target = endpoint_target();
         let plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
@@ -3225,7 +3452,7 @@ mod tests {
         let mut target = endpoint_target();
         target.health_check_path = Some("/ready".to_string());
         let plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
@@ -3270,7 +3497,7 @@ mod tests {
     fn gke_gateway_without_declared_health_check_does_not_invent_policy() {
         let target = endpoint_target();
         let plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
@@ -3294,7 +3521,7 @@ mod tests {
     fn aws_alb_ingress_without_declared_health_check_does_not_invent_path() {
         let target = endpoint_target();
         let plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
@@ -3403,7 +3630,7 @@ mod tests {
         let mut target = endpoint_target();
         target.health_check_path = Some("/ready".to_string());
         let plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
@@ -3450,7 +3677,7 @@ mod tests {
     fn ingress_without_hostname_omits_host_rule_and_tls() {
         let target = endpoint_target();
         let plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: None,
             public_url: None,
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
@@ -3476,7 +3703,7 @@ mod tests {
     fn gateway_with_byo_tls_secret_uses_same_namespace_certificate_ref() {
         let target = endpoint_target();
         let plan = EndpointPlan {
-            managed_hostnames: None,
+            hostnames: None,
             hostname: Some("api.example.com".to_string()),
             public_url: Some("https://api.example.com".to_string()),
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {

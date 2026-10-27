@@ -45,3 +45,19 @@ const value: models.KubernetesExposureSettingsCustom = {
 };
 ```
 
+### `models.KubernetesExposureSettingsCustomBaseDomain`
+
+```typescript
+const value: models.KubernetesExposureSettingsCustomBaseDomain = {
+  baseDomain: "<value>",
+  certificate: {
+    mode: "none",
+  },
+  mode: "customBaseDomain",
+  route: {
+    gatewayClassName: "<value>",
+    listenerPort: 745747,
+    routeApi: "gateway",
+  },
+};
+```

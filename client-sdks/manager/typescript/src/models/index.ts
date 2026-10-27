@@ -104,6 +104,8 @@ export * from "./environmentvariabletype.js";
 export * from "./executionclaim.js";
 export * from "./exposeprotocol.js";
 export * from "./externalbindingunion.js";
+export * from "./externalpasswordsecretkeyref.js";
+export * from "./externalpasswordsecretref.js";
 export * from "./externalpostgressslmode.js";
 export * from "./failuredomainselection.js";
 export * from "./gcpcloudkmskeyheartbeatdata.js";

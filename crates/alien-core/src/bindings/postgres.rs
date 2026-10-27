@@ -107,13 +107,74 @@ pub struct ExternalPostgresBinding {
     pub port: BindingValue<u16>,
     pub database: BindingValue<String>,
     pub username: BindingValue<String>,
-    /// Connection password as a concrete value, never an unresolved `SecretRef`: the platform
-    /// materializes the Kubernetes secret into the pod env. The cloud variants carry a secret
-    /// locator instead.
-    pub password: String,
+    /// Connection password or Kubernetes Secret reference. Kubernetes workloads resolve
+    /// the reference through secretKeyRef before the application loads its binding.
+    #[serde(deserialize_with = "deserialize_external_password")]
+    #[cfg_attr(feature = "openapi", schema(value_type = ExternalPasswordInput, inline))]
+    #[cfg_attr(feature = "jsonschema", schemars(with = "ExternalPasswordInput"))]
+    pub password: BindingValue<String>,
     /// Explicit TLS policy. Missing legacy configuration defaults to verified TLS.
     #[serde(default)]
     pub ssl_mode: ExternalPostgresSslMode,
+}
+
+// Password references extend the old string contract without accepting numeric,
+// boolean, null, or array passwords through BindingValue's expression fallback.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+enum ExternalPasswordInput {
+    Literal(String),
+    Reference(ExternalPasswordSecretRef),
+    ChartReference(ExternalPasswordSecretKeyRef),
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExternalPasswordSecretRef {
+    secret_ref: super::SecretReference,
+}
+
+// Chart-provisioned passwords use a distinct reference so projection can preserve
+// the published format for existing Secret references.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExternalPasswordSecretKeyRef {
+    secret_key_ref: super::SecretReference,
+}
+
+fn deserialize_external_password<'de, D>(deserializer: D) -> Result<BindingValue<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if !value.is_string()
+        && !["secretRef", "secretKeyRef"]
+            .iter()
+            .any(|key| value.get(key).is_some_and(serde_json::Value::is_object))
+    {
+        return Err(serde::de::Error::custom(
+            "expected a password string or a Secret reference with name and key",
+        ));
+    }
+    match serde_json::from_value::<ExternalPasswordInput>(value)
+        .map_err(serde::de::Error::custom)?
+    {
+        ExternalPasswordInput::Literal(value) => Ok(BindingValue::Value(value)),
+        ExternalPasswordInput::Reference(reference) => Ok(BindingValue::SecretRef {
+            secret_ref: reference.secret_ref,
+        }),
+        ExternalPasswordInput::ChartReference(reference) => {
+            Ok(BindingValue::Expression(serde_json::json!({
+                "secretKeyRef": {"name": reference.secret_key_ref.name, "key": reference.secret_key_ref.key}
+            })))
+        }
+    }
 }
 
 /// Local embedded Postgres binding.
@@ -188,7 +249,7 @@ impl PostgresBinding {
             port: BindingValue::value(port),
             database: database.into(),
             username: username.into(),
-            password: password.into(),
+            password: BindingValue::value(password.into()),
             ssl_mode: ExternalPostgresSslMode::default(),
         })
     }
@@ -197,6 +258,31 @@ impl PostgresBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_password_rejects_non_string_literals() {
+        for password in [
+            serde_json::json!(42),
+            serde_json::json!(false),
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!({}),
+            serde_json::json!([{"name":"credentials", "key":"password"}]),
+            serde_json::json!({"secretRef":["credentials", "password"]}),
+            serde_json::json!({"secretKeyRef":{"name":"credentials"}}),
+            serde_json::json!({"secretKeyRef":{"key":"password"}}),
+            serde_json::json!({"secretRef": {"name": "credentials"}}),
+            serde_json::json!({"secretRef": {"key": "password"}}),
+            serde_json::json!({"secretRef": {"name": 4, "key": "password"}}),
+            serde_json::json!({"envRef": "PASSWORD"}),
+        ] {
+            let binding = serde_json::json!({
+                "service": "external", "host": "db.internal", "port": 5432,
+                "database": "app", "username": "app", "password": password
+            });
+            assert!(serde_json::from_value::<PostgresBinding>(binding).is_err());
+        }
+    }
 
     #[test]
     fn local_binding_uses_local_postgres_tag() {
@@ -216,6 +302,34 @@ mod tests {
         let deserialized: PostgresBinding =
             serde_json::from_str(&json).expect("external binding deserializes");
         assert_eq!(binding, deserialized);
+    }
+
+    #[test]
+    fn chart_password_reference_keeps_its_projection_mode() {
+        let input = serde_json::json!({"service":"external", "host":"database", "port":5432,
+            "database":"app", "username":"app", "password":{"secretKeyRef":{"name":"database", "key":"password"}}});
+        let binding: PostgresBinding = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(binding).unwrap()["password"],
+            input["password"]
+        );
+    }
+
+    #[test]
+    fn external_binding_preserves_kubernetes_password_reference() {
+        let json = serde_json::json!({
+            "service": "external",
+            "host": "database",
+            "port": 5432,
+            "database": "app",
+            "username": "app",
+            "password": {"secretRef": {"name": "database-credentials", "key": "password"}},
+            "sslMode": "disable"
+        });
+        let binding: PostgresBinding = serde_json::from_value(json.clone())
+            .expect("external binding accepts a Kubernetes password reference");
+        assert_eq!(serde_json::to_value(&binding).unwrap(), json);
+        assert!(!format!("{binding:?}").contains("database-credentials"));
     }
 
     #[test]

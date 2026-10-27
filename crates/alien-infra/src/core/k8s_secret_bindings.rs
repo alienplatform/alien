@@ -9,34 +9,8 @@ pub struct BindingSecretExtraction {
     pub resolved_binding_json: String,
 }
 
-/// Extract SecretRef fields from a binding JSON and replace with $(VAR) placeholders
-///
-/// This function is Kubernetes-specific and handles the conversion of SecretRef objects
-/// to environment variable placeholders that Kubernetes will expand at pod startup.
-///
-/// Process:
-/// 1. Walks the JSON tree to find SecretRef objects (`{secretRef: {name, key}}`)
-/// 2. Replaces each SecretRef with a placeholder like `$(ALIEN_BINDING_CACHE_PASSWORD)`
-/// 3. Escapes existing user-provided `$(VAR)` patterns to `$$(VAR)` to prevent unwanted expansion
-/// 4. Returns the modified JSON and a list of secret env vars to create as Kubernetes secretKeyRef
-///
-/// Example:
-/// ```json
-/// // Input:
-/// {
-///   "connectionUrl": "redis://$(REDIS_HOST):6379",
-///   "password": {"secretRef": {"name": "redis-creds", "key": "password"}}
-/// }
-///
-/// // Output JSON:
-/// {
-///   "connectionUrl": "redis://$$(REDIS_HOST):6379",  // User's var escaped
-///   "password": "$(ALIEN_BINDING_CACHE_PASSWORD)"    // Our placeholder
-/// }
-///
-/// // Output secret_env_vars:
-/// [("ALIEN_BINDING_CACHE_PASSWORD", "redis-creds", "password")]
-/// ```
+/// Project existing SecretRef bindings as Kubernetes string substitutions.
+/// Chart-provisioned SecretKeyRef bindings resolve in the SDK after JSON parsing.
 pub fn extract_binding_secrets(
     binding_name: &str,
     binding_json: &serde_json::Value,
@@ -112,6 +86,25 @@ fn extract_secrets_recursive(
 ) -> Result<()> {
     match value {
         serde_json::Value::Object(map) => {
+            // Chart-provisioned databases opt into SDK resolution after JSON parsing.
+            // Existing secretRef bindings retain their published string representation.
+            if let Some(reference) = map.get("secretKeyRef") {
+                if let (Some(name), Some(key)) = (
+                    reference.get("name").and_then(|value| value.as_str()),
+                    reference.get("key").and_then(|value| value.as_str()),
+                ) {
+                    let field_name = path.split('.').last().unwrap_or(path);
+                    let env_name = format!(
+                        "{}{}",
+                        env_var_prefix,
+                        field_name.to_uppercase().replace('-', "_")
+                    );
+                    extractions.push((env_name.clone(), name.to_string(), key.to_string()));
+                    *value = serde_json::json!({"envRef": env_name});
+                    return Ok(());
+                }
+            }
+
             // Check if this object is a SecretRef
             if let Some(secret_ref_obj) = map.get("secretRef") {
                 if let (Some(name), Some(key)) = (
@@ -201,6 +194,42 @@ mod tests {
                 vec![(env.to_string(), "credentials".into(), "value".into())]
             );
         }
+    }
+
+    #[test]
+    fn projected_password_preserves_json_characters() {
+        let password = "quote\"slash\\newline\n$(OTHER)";
+        let binding = json!({
+            "service": "external", "host": "database", "port": 5432,
+            "database": "app", "username": "app", "sslMode": "disable",
+            "password": {"secretKeyRef": {"name": "credentials", "key": "password"}}
+        });
+        let projected = extract_binding_secrets("database", &binding).unwrap();
+        assert_eq!(
+            projected.secret_env_vars,
+            vec![(
+                "ALIEN_BINDING_DATABASE_PASSWORD".into(),
+                "credentials".into(),
+                "password".into()
+            )]
+        );
+        // The kubelet expands previously declared env vars without JSON escaping.
+        let kubelet_json = projected
+            .resolved_binding_json
+            .replace("$(ALIEN_BINDING_DATABASE_PASSWORD)", password);
+        let env = std::collections::HashMap::from([
+            ("ALIEN_DATABASE_BINDING".into(), kubelet_json),
+            ("ALIEN_BINDING_DATABASE_PASSWORD".into(), password.into()),
+        ]);
+        let loaded: alien_core::bindings::PostgresBinding =
+            alien_core::bindings::parse_binding_from_env(&env, "database").unwrap();
+        let alien_core::bindings::PostgresBinding::External(loaded) = loaded else {
+            panic!("expected external binding");
+        };
+        assert_eq!(
+            loaded.password.into_value("database", "password").unwrap(),
+            password
+        );
     }
 
     #[test]

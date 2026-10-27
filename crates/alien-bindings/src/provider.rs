@@ -275,12 +275,18 @@ impl BindingsProvider {
                     .unwrap()
                     .to_lowercase()
                     .replace('_', "-");
-                let parsed: serde_json::Value = serde_json::from_str(value)
+                let mut parsed: serde_json::Value = serde_json::from_str(value)
                     .into_alien_error()
                     .context(ErrorData::BindingConfigInvalid {
                         env_var: key.clone(),
                         binding_name: binding_name.clone(),
                         reason: "Failed to parse binding JSON".to_string(),
+                    })?;
+                alien_core::bindings::resolve_binding_env_refs(&mut parsed, env, &binding_name)
+                    .context(ErrorData::BindingConfigInvalid {
+                        env_var: key.clone(),
+                        binding_name: binding_name.clone(),
+                        reason: "Failed to resolve binding environment references".to_string(),
                     })?;
                 bindings.insert(binding_name, parsed);
             }
@@ -2379,6 +2385,34 @@ mod tests {
         assert_eq!(error.retryable, expected.retryable);
         assert_eq!(error.internal, expected.internal);
         assert_eq!(error.http_status_code, expected.http_status_code);
+    }
+
+    #[tokio::test]
+    async fn projected_postgres_password_loads_without_json_expansion() {
+        let password = "quote\"slash\\newline\n$(OTHER)";
+        let mut env = HashMap::from([
+            (
+                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                Platform::Test.as_str().to_string(),
+            ),
+            (
+                "ALIEN_DATABASE_BINDING".into(),
+                serde_json::json!({
+                    "service": "external", "host": "database", "port": 5432,
+                    "database": "app", "username": "app", "sslMode": "disable",
+                    "password": {"envRef": "ALIEN_BINDING_DATABASE_PASSWORD"}
+                })
+                .to_string(),
+            ),
+            ("ALIEN_BINDING_DATABASE_PASSWORD".into(), password.into()),
+        ]);
+        let provider = BindingsProvider::from_env_lazy(env.clone()).unwrap();
+        let database = provider.load_postgres("database").await.unwrap();
+        assert_eq!(database.connection_params().password, password);
+        env.remove("ALIEN_BINDING_DATABASE_PASSWORD");
+        let error = BindingsProvider::from_env_lazy(env).unwrap_err();
+        assert_eq!(error.code, "BINDING_CONFIG_INVALID");
+        assert!(!format!("{error:?}").contains(password));
     }
 
     /// The construction-time binding-JSON parse is load-bearing: `select`

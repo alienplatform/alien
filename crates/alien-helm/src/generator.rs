@@ -366,6 +366,15 @@ fn generate_helm_chart_internal(
             .or_insert(notes);
     }
 
+    files.insert(
+        "templates/_infrastructure.tpl".into(),
+        infrastructure_helpers_tpl(),
+    );
+    files.insert(
+        "templates/postgres.yaml".into(),
+        crate::postgres::TEMPLATE.into(),
+    );
+
     // Per-resource extra templates contributed by emitters.
     for (path, contents) in &analysis.extra_templates {
         files.insert(format!("templates/{path}"), contents.clone());
@@ -392,6 +401,14 @@ fn generate_helm_chart_internal(
         bootstrap_values_example(),
     );
     let mut readme = readme_md(&chart_name);
+    if analysis
+        .postgres
+        .as_object()
+        .is_some_and(|databases| !databases.is_empty())
+    {
+        readme.push_str(crate::postgres::README);
+    }
+
     if has_remote_operator {
         readme.push_str(
             "\n## Runtime cleanup and Helm history\n\nRuntime cleanup and Pod log collection default to the deployment resource prefix (`serviceAccountPrefix`). Helm upgrades automatically preserve the existing immutable cleanup scope. Pod log collection follows the resource prefix independently. For GitOps or offline rendering, set `logCollector.scope.deploymentLabelValue` to the installed cleanup ConfigMap’s `data.labelValue` before upgrading, and render upgrades with `helm template --is-upgrade`; without cluster lookup an upgrade with no explicit scope is refused. Renderers that do not identify upgrades must preserve this value explicitly. Use `logCollector.scope.podLabelKey` and `podLabelValue` to override workload log selection. An older mismatched cleanup scope does not remove those workloads; they require separately scoped cleanup.\n\nRuntime cleanup uses the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set `runtime.cleanup.onUninstall.helmHistoryBackend=configmap`. The SQL and memory backends are unsupported because the chart cannot verify and prune unsafe rollback history.\n\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Install or upgrade the chart once with it disabled, then enable it in a second upgrade with `remoteOperator.bootstrapIdentity=true`; this proves that Helm uses a supported Kubernetes history backend before any durable identity is created. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Protected upgrades use the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set both `runtime.cleanup.onUninstall.helmHistoryBackend=configmap` and `remoteOperator.helmHistoryBackend=configmap`. Before identity creation, a credential-free one-shot Job mounts the exact pending Helm record from that backend and verifies a render-specific proof, so stale records cannot authorize an upgrade. The SQL and memory storage backends are rejected because the chart cannot verify or prune their rollback history. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
@@ -3739,6 +3756,7 @@ struct ChartAnalysis {
     service_accounts: BTreeSet<String>,
     service_account_rbac: BTreeMap<String, Vec<KubernetesRoleRule>>,
     infrastructure: Vec<InfrastructureValue>,
+    postgres: serde_json::Value,
     services: Vec<ServiceValue>,
     extra_templates: IndexMap<String, String>,
     /// The stack has a Sandbox, so application pods must reach the session broker the
@@ -3755,7 +3773,10 @@ struct KubernetesRoleRule {
 
 impl ChartAnalysis {
     fn from_stack(stack: &Stack, registry: &HelmRegistry) -> Result<Self> {
-        let mut analysis = Self::default();
+        let mut analysis = Self {
+            postgres: crate::postgres::values(stack),
+            ..Self::default()
+        };
         if let Some(access) = crate::emitters::sandbox_gateway_access::template(stack)? {
             analysis
                 .extra_templates
@@ -4206,6 +4227,15 @@ ephemeralStorage:
   nodeSelector: {}
 "#,
     );
+    yaml.push_str("\n# Frozen databases. An infrastructure binding overrides the corresponding database.\npostgres: ");
+    yaml.push_str(
+        &serde_json::to_string(&analysis.postgres)
+            .into_alien_error()
+            .context(ErrorData::JsonSerializationFailed {
+                reason: "serializing Postgres chart defaults".into(),
+            })?,
+    );
+    yaml.push('\n');
     Ok(yaml)
 }
 
@@ -4989,6 +5019,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
       },
       "additionalProperties": true
     },
+    "postgres": { "type": "object" },
     "infrastructure": { "type": ["object", "null"] },
     "infrastructureExistingSecret": { "type": "string" },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
@@ -5806,6 +5837,10 @@ data:
     .to_string()
 }
 
+fn infrastructure_helpers_tpl() -> String {
+    crate::postgres::HELPERS.into()
+}
+
 fn secret_tpl() -> String {
     r#"{{- if .Release.IsUpgrade -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
@@ -5825,7 +5860,7 @@ fn secret_tpl() -> String {
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
 {{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure $nodeCollector .Values.inputValues }}
+{{- if or $createManagementSecret $createEncryptionSecret (ne (include "deployment.infrastructure" .) "{}") $nodeCollector .Values.inputValues }}
 {{- $collectorToken := .Values.logCollector.token -}}
 {{- if and $nodeCollector (empty $collectorToken) -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
@@ -5850,8 +5885,8 @@ stringData:
   {{- if $createEncryptionSecret }}
   encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
   {{- end }}
-  {{- if .Values.infrastructure }}
-  external-bindings.json: {{ toJson .Values.infrastructure | quote }}
+  {{- if ne (include "deployment.infrastructure" .) "{}" }}
+  external-bindings.json: {{ include "deployment.infrastructure" . | quote }}
   {{- end }}
   {{- if $nodeCollector }}
   collector-token: {{ $collectorToken | quote }}
@@ -6734,9 +6769,13 @@ spec:
             {{- end }}
             - name: PUBLIC_ENDPOINTS_FILE
               value: /etc/deployment/config/public-endpoints.json
-            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
+            {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
             - name: EXTERNAL_BINDINGS_FILE
               value: /etc/deployment/secrets/external-bindings.json
+            {{- end }}
+            {{- if ne (include "deployment.chartDefaultBindings" .) "{}" }}
+            - name: CHART_DEFAULT_BINDINGS
+              value: {{ include "deployment.chartDefaultBindings" . | quote }}
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
@@ -6811,7 +6850,7 @@ spec:
               mountPath: /etc/deployment/secrets/encryption-key
               subPath: {{ include "deployment.encryptionSecretKey" . }}
               readOnly: true
-            {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
+            {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
             - name: external-bindings
               mountPath: /etc/deployment/secrets/external-bindings.json
               subPath: external-bindings.json
@@ -6855,7 +6894,7 @@ spec:
           secret:
             secretName: {{ include "deployment.encryptionSecretName" . }}
             defaultMode: 384
-        {{- if or .Values.infrastructure .Values.infrastructureExistingSecret }}
+        {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
         - name: external-bindings
           secret:
             secretName: {{ default (include "deployment.fullname" .) .Values.infrastructureExistingSecret }}
@@ -8767,6 +8806,757 @@ mod tests {
             },
         )
         .expect("product chart should render")
+    }
+
+    /// Exercises Helm lookup against retained objects in a disposable cluster.
+    #[test]
+    #[ignore = "requires ALIEN_HELM_TEST_CONTEXT and a disposable Kubernetes cluster"]
+    fn postgres_reinstall_keeps_the_retained_volume_image() {
+        let context = std::env::var("ALIEN_HELM_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("postgres-reinstall-{}", std::process::id());
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        for (name, content) in chart.files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        let created = std::process::Command::new("kubectl")
+            .args(["--context", &context, "create", "namespace", &namespace])
+            .output()
+            .unwrap();
+        assert!(created.status.success());
+        struct TestNamespace<'a> {
+            context: &'a str,
+            name: &'a str,
+        }
+        impl Drop for TestNamespace<'_> {
+            fn drop(&mut self) {
+                let result = std::process::Command::new("kubectl")
+                    .args([
+                        "--context",
+                        self.context,
+                        "delete",
+                        "namespace",
+                        self.name,
+                        "--ignore-not-found",
+                        "--wait=false",
+                    ])
+                    .output();
+                if !result.as_ref().is_ok_and(|output| output.status.success()) {
+                    eprintln!(
+                        "Could not clean up test namespace {}: {result:?}",
+                        self.name
+                    );
+                }
+            }
+        }
+        let _namespace = TestNamespace {
+            context: &context,
+            name: &namespace,
+        };
+        let helm = |args: &[&str]| {
+            std::process::Command::new("helm")
+                .args(["--kube-context", &context, "--namespace", &namespace])
+                .args(args)
+                .args(if args.first() == Some(&"upgrade") {
+                    vec!["--set", "postgres.database.enabled=true"]
+                } else {
+                    Vec::new()
+                })
+                .output()
+                .unwrap()
+        };
+        let chart_path = directory.path().to_str().unwrap();
+        assert!(helm(&["upgrade", "--install", "database", chart_path])
+            .status
+            .success());
+        assert!(helm(&["uninstall", "database"]).status.success());
+        let digest_refresh = helm(&[
+            "upgrade",
+            "--install",
+            "database",
+            chart_path,
+            "--dry-run=server",
+            "--set",
+            "postgres.database.image.tag=pg17-bookworm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ]);
+        let same = helm(&[
+            "upgrade",
+            "--install",
+            "database",
+            chart_path,
+            "--dry-run=server",
+        ]);
+        let changed = helm(&[
+            "upgrade",
+            "--install",
+            "database",
+            chart_path,
+            "--dry-run=server",
+            "--set",
+            "postgres.database.image.tag=pg99-bookworm",
+        ]);
+        let deleted = std::process::Command::new("kubectl")
+            .args([
+                "--context",
+                &context,
+                "delete",
+                "namespace",
+                &namespace,
+                "--wait=true",
+            ])
+            .output()
+            .unwrap();
+        assert!(deleted.status.success());
+        assert!(same.status.success(), "same image must reuse retained data");
+        assert!(
+            digest_refresh.status.success(),
+            "same tag with a new digest must reuse retained data: {}",
+            String::from_utf8_lossy(&digest_refresh.stderr)
+        );
+        assert!(
+            !changed.status.success(),
+            "different image must not mount retained data"
+        );
+        assert!(String::from_utf8_lossy(&changed.stderr).contains("image changes require"));
+    }
+
+    #[test]
+    fn postgres_sizes_keep_their_meaning_in_kubernetes() {
+        for (memory, storage, memory_bytes, storage_bytes) in [
+            ("8", "20GiB", 8_589_934_592_u64, 21_474_836_480_u64),
+            ("8GiB", "20GB", 8_589_934_592, 20_000_000_000),
+            ("512Mi", "20Gi", 536_870_912, 21_474_836_480),
+            ("1.5", "500M", 1_610_612_736, 500_000_000),
+        ] {
+            let stack = Stack::new("database-stack".into())
+                .add(
+                    alien_core::Postgres::new("database".into())
+                        .memory(memory.to_string())
+                        .storage(storage.to_string())
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let registry = HelmRegistry::built_in();
+            let chart = generate_helm_chart(
+                &stack,
+                HelmOptions {
+                    registry: &registry,
+                    stack_settings: StackSettings::default(),
+                    chart_name: "database-stack".into(),
+                },
+            )
+            .unwrap();
+            let rendered = crate::test_utils::helm_template(
+                &chart.files,
+                Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n"),
+            );
+            rendered.assert_ok("database quantities");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let database = &docs_by_kind(&docs, "StatefulSet")[0];
+            let pvc = docs_by_kind(&docs, "PersistentVolumeClaim")
+                .into_iter()
+                .find(|pvc| pvc["metadata"]["name"].as_str().unwrap().contains("-pg-"))
+                .unwrap();
+            for (quantity, expected) in [
+                (
+                    &database["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"]
+                        ["memory"],
+                    memory_bytes,
+                ),
+                (
+                    &pvc["spec"]["resources"]["requests"]["storage"],
+                    storage_bytes,
+                ),
+            ] {
+                let quantity = quantity.as_str().unwrap();
+                assert_eq!(
+                    alien_core::instance_catalog::parse_memory_bytes(quantity).unwrap(),
+                    expected,
+                    "{memory} memory and {storage} storage must retain their byte counts"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires ALIEN_HELM_TEST_CONTEXT and a disposable Kubernetes cluster"]
+    fn postgres_install_and_upgrade_with_namespace_permissions() {
+        let context = std::env::var("ALIEN_HELM_TEST_CONTEXT").expect("explicit test context");
+        let namespace = format!("postgres-scoped-{}", std::process::id());
+        let user = format!("system:serviceaccount:{namespace}:installer");
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        for (name, content) in chart.files {
+            let path = directory.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        let kubectl = |args: &[&str]| {
+            std::process::Command::new("kubectl")
+                .args(["--context", &context, "-n", &namespace])
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(kubectl(&["create", "namespace", &namespace])
+            .status
+            .success());
+        let result = std::panic::catch_unwind(|| {
+            assert!(kubectl(&["create", "serviceaccount", "installer"])
+                .status
+                .success());
+            assert!(kubectl(&[
+                "create",
+                "role",
+                "installer",
+                "--verb=*",
+                "--resource=secrets,persistentvolumeclaims,services,configmaps,serviceaccounts,pods,pods/log,events,deployments.apps,statefulsets.apps,replicasets.apps,jobs.batch,roles.rbac.authorization.k8s.io,rolebindings.rbac.authorization.k8s.io"
+            ])
+            .status
+            .success());
+            assert!(kubectl(&[
+                "create",
+                "rolebinding",
+                "installer",
+                "--role=installer",
+                &format!("--serviceaccount={namespace}:installer")
+            ])
+            .status
+            .success());
+            assert!(!kubectl(&["--as", &user, "get", "namespace", &namespace])
+                .status
+                .success());
+            assert!(kubectl(&[
+                "create",
+                "secret",
+                "generic",
+                "database-credentials",
+                "--from-literal=password=fixture"
+            ])
+            .status
+            .success());
+            let chart_path = directory.path().to_str().unwrap();
+            for credentials in ["database-credentials", ""] {
+                let release = if credentials.is_empty() {
+                    "generated"
+                } else {
+                    "supplied"
+                };
+                let values = directory.path().join("test-values.json");
+                std::fs::write(
+                    &values,
+                    serde_json::json!({
+                        "heartbeat":{"collection":{"nodes":{"enabled":false}}},
+                        "runtime":{"encryption":{"key":"a".repeat(64)}},
+                        "postgres":{"database":{
+                        "enabled":true, "existingPasswordSecret":credentials,
+                        "recordedImage":"pgvector/pgvector:pg17-bookworm"
+                    }}})
+                    .to_string(),
+                )
+                .unwrap();
+                if !credentials.is_empty() {
+                    for action in ["lint", "template"] {
+                        let output = std::process::Command::new("helm")
+                            .args([
+                                "--kube-context",
+                                &context,
+                                "-n",
+                                &namespace,
+                                action,
+                                chart_path,
+                                "-f",
+                            ])
+                            .arg(&values)
+                            .output()
+                            .unwrap();
+                        assert!(
+                            output.status.success(),
+                            "{action}: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                }
+                for action in ["install", "upgrade"] {
+                    eprintln!("namespace-only Role: helm {action} {release}, context={context}, namespace={namespace}, user={user}");
+                    let output = std::process::Command::new("helm")
+                        .args([
+                            "--kube-context",
+                            &context,
+                            "--kube-as-user",
+                            &user,
+                            "-n",
+                            &namespace,
+                            action,
+                            release,
+                            chart_path,
+                            "-f",
+                        ])
+                        .arg(&values)
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                // The live PVC annotation remains authoritative even with a supplied pin.
+                let changed = std::process::Command::new("helm")
+                    .args([
+                        "--kube-context",
+                        &context,
+                        "--kube-as-user",
+                        &user,
+                        "-n",
+                        &namespace,
+                        "upgrade",
+                        release,
+                        chart_path,
+                        "-f",
+                    ])
+                    .arg(&values)
+                    .args(["--set", "postgres.database.image.tag=pg18-bookworm"])
+                    .output()
+                    .unwrap();
+                assert!(!changed.status.success());
+                assert!(
+                    String::from_utf8_lossy(&changed.stderr).contains("explicit database upgrade")
+                );
+            }
+        });
+        assert!(
+            kubectl(&["delete", "namespace", &namespace, "--wait=false"])
+                .status
+                .success()
+        );
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+    }
+
+    #[test]
+    fn postgres_offline_render_keeps_the_recorded_image() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let mut values = serde_json::json!({"postgres":{"database":{
+            "enabled":true,"existingPasswordSecret":"database-credentials",
+            "recordedImage":"pgvector/pgvector:pg17-bookworm",
+            "image":{"tag":"pg18-bookworm"}
+        }}});
+        let changed = crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(&values.to_string()),
+            "app",
+        );
+        assert!(
+            !changed.is_ok(),
+            "offline render must not change the recorded database image"
+        );
+        assert!(changed.stderr.contains("recordedImage"));
+        values["postgres"]["database"]["image"]["tag"] = "pg17-bookworm".into();
+        crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(&values.to_string()),
+            "app",
+        )
+        .assert_ok("offline rendering with the installed image pin");
+        values["postgres"]["database"]["image"]["tag"] =
+            format!("pg17-bookworm@sha256:{}", "b".repeat(64)).into();
+        crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(&values.to_string()),
+            "app",
+        )
+        .assert_ok("same image tag with a refreshed digest");
+        values["postgres"]["database"]
+            .as_object_mut()
+            .unwrap()
+            .remove("recordedImage");
+        let missing = crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(&values.to_string()),
+            "app",
+        );
+        assert!(
+            !missing.is_ok(),
+            "offline render needs an explicit recorded image"
+        );
+        assert!(missing.stderr.contains("recordedImage"));
+    }
+
+    #[test]
+    fn postgres_offline_render_requires_stable_credentials() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let missing = crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some("postgres:\n  database:\n    enabled: true\n"),
+            "app",
+        );
+        assert!(
+            !missing.is_ok(),
+            "offline renders must not rotate database credentials"
+        );
+        assert!(missing.stderr.contains("existingPasswordSecret"));
+        let values = "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n";
+        let first = crate::test_utils::helm_template_for_release(&chart.files, Some(values), "app");
+        first.assert_ok("explicit database credentials");
+        let docs = parse_manifest_docs(&first.stdout);
+        let first_template = docs_by_kind(&docs, "StatefulSet")[0]["spec"]["template"].clone();
+        assert_eq!(
+            first_template["spec"]["containers"][0]["env"][2]["valueFrom"]["secretKeyRef"]["name"],
+            "database-credentials"
+        );
+        assert!(docs_by_kind(&docs, "Secret")
+            .iter()
+            .all(|s| s["data"]["password"].is_null()));
+    }
+
+    #[test]
+    fn postgres_chart_version_does_not_restart_the_database() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let mut chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let values = "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n";
+        let first = crate::test_utils::helm_template_for_release(&chart.files, Some(values), "app");
+        first.assert_ok("database chart");
+        let docs = parse_manifest_docs(&first.stdout);
+        let first_template = docs_by_kind(&docs, "StatefulSet")[0]["spec"]["template"].clone();
+        let metadata = chart.files.get_mut("Chart.yaml").unwrap();
+        let mut value: serde_yaml::Value = serde_yaml::from_str(metadata).unwrap();
+        value["version"] = "99.0.0".into();
+        *metadata = serde_yaml::to_string(&value).unwrap();
+        let upgraded =
+            crate::test_utils::helm_template_for_release(&chart.files, Some(values), "app");
+        upgraded.assert_ok("chart version upgrade");
+        let docs = parse_manifest_docs(&upgraded.stdout);
+        assert_eq!(
+            docs_by_kind(&docs, "StatefulSet")[0]["spec"]["template"],
+            first_template
+        );
+    }
+
+    #[test]
+    fn postgres_requires_opt_in_and_preserves_stack_settings_bindings() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let bindings = serde_json::json!({
+            "database":{"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":"existing-password"},
+            "bucket":{"type":"storage","service":"s3","bucketName":"existing-bucket"}
+        });
+        for values in [
+            serde_json::json!({
+                "infrastructure":null, "stackSettings":{"externalBindings":bindings},
+                "postgres":{"database":{"enabled":true,"highAvailability":true,"encryptionKey":"existing-key"}}
+            }),
+            serde_json::json!({}),
+        ] {
+            let rendered = crate::test_utils::helm_template_for_release(
+                &chart.files,
+                Some(&serde_yaml::to_string(&values).unwrap()),
+                "app",
+            );
+            rendered.assert_ok("supplied database");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            assert!(docs_by_kind(&docs, "StatefulSet").is_empty());
+            assert!(docs_by_kind(&docs, "PersistentVolumeClaim")
+                .iter()
+                .all(|p| !p["metadata"]["name"].as_str().unwrap().contains("-pg-")));
+            assert!(docs_by_kind(&docs, "Secret")
+                .iter()
+                .all(|p| !p["metadata"]["name"].as_str().unwrap().contains("-pg-")));
+            if values["stackSettings"].is_object() {
+                let settings = docs_by_kind(&docs, "ConfigMap")
+                    .into_iter()
+                    .find(|d| d["data"]["stack-settings.json"].is_string())
+                    .unwrap();
+                let settings: serde_json::Value =
+                    serde_json::from_str(settings["data"]["stack-settings.json"].as_str().unwrap())
+                        .unwrap();
+                assert_eq!(settings["externalBindings"], bindings);
+            }
+        }
+    }
+
+    #[test]
+    fn postgres_overrides_render_without_cluster_lookups() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        for binding in [
+            serde_json::json!({"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":"existing-password"}),
+            serde_json::json!({"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":{"secretRef":{"name":"existing-credentials","key":"password"}}}),
+            serde_json::json!({"type":"postgres","service":"aurora","clusterEndpoint":"db.example.com","port":5432,"database":"app","username":"app","passwordSecretArn":"arn:aws:secretsmanager:us-east-1:123456789012:secret:database"}),
+            serde_json::json!({"type":"postgres","service":"cloud-sql","host":"db.example.com","port":5432,"database":"app","username":"app","serverCaCertificates":["ca"],"passwordSecretName":"database"}),
+            serde_json::json!({"type":"postgres","service":"flexible-server","host":"db.example.com","port":5432,"database":"app","username":"app","passwordSecretUri":"https://example.vault.azure.net/secrets/database"}),
+        ] {
+            let values =
+                serde_yaml::to_string(&serde_json::json!({"infrastructure":{"database":binding}}))
+                    .unwrap();
+            let rendered =
+                crate::test_utils::helm_template_for_release(&chart.files, Some(&values), "app");
+            rendered.assert_ok("existing Postgres override");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            assert!(docs_by_kind(&docs, "StatefulSet").is_empty());
+            assert!(docs_by_kind(&docs, "PersistentVolumeClaim")
+                .iter()
+                .all(|pvc| !pvc["metadata"]["name"].as_str().unwrap().contains("-pg-")));
+            let binding_secret = docs_by_kind(&docs, "Secret")
+                .into_iter()
+                .find(|secret| secret["stringData"]["external-bindings.json"].is_string())
+                .unwrap();
+            let actual: serde_json::Value = serde_json::from_str(
+                binding_secret["stringData"]["external-bindings.json"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(actual["database"], binding);
+        }
+    }
+
+    #[test]
+    fn postgres_names_and_bindings_distinguish_long_release_names() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let mut names = Vec::new();
+        for release in [
+            "acme-production-installation-one",
+            "acme-production-installation-two",
+        ] {
+            let rendered = crate::test_utils::helm_template_for_release(
+                &chart.files,
+                Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n"),
+                release,
+            );
+            rendered.assert_ok("long database release");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let databases = docs_by_kind(&docs, "StatefulSet");
+            assert_eq!(databases.len(), 1);
+            let database = &databases[0];
+            let name = database["metadata"]["name"].as_str().unwrap();
+            assert!(name.len() <= 63);
+            let pod = &database["spec"]["template"]["spec"];
+            assert_eq!(database["spec"]["serviceName"].as_str(), Some(name));
+            assert_eq!(
+                pod["volumes"][0]["persistentVolumeClaim"]["claimName"].as_str(),
+                Some(name)
+            );
+            let password = pod["containers"][0]["env"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .find(|env| env["name"] == "POSTGRES_PASSWORD")
+                .unwrap();
+            assert_eq!(
+                password["valueFrom"]["secretKeyRef"]["name"].as_str(),
+                Some("existing-credentials")
+            );
+            for kind in ["PersistentVolumeClaim", "Service"] {
+                let matching: Vec<_> = docs_by_kind(&docs, kind)
+                    .into_iter()
+                    .filter(|doc| doc["metadata"]["name"].as_str() == Some(name))
+                    .collect();
+                assert_eq!(matching.len(), 1, "{kind} must use database identity");
+                if kind == "Service" {
+                    assert_eq!(
+                        matching[0]["spec"]["selector"],
+                        database["spec"]["selector"]["matchLabels"]
+                    );
+                }
+            }
+            let operator = docs_by_kind(&docs, "Deployment")
+                .into_iter()
+                .next()
+                .unwrap();
+            let defaults = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .find(|env| env["name"] == "CHART_DEFAULT_BINDINGS")
+                .unwrap();
+            let bindings: serde_json::Value =
+                serde_json::from_str(defaults["value"].as_str().unwrap()).unwrap();
+            assert_eq!(bindings["database"]["host"], format!("{name}.default.svc"));
+            assert_eq!(
+                bindings["database"]["password"]["secretKeyRef"]["name"],
+                "existing-credentials"
+            );
+            names.push(name.to_string());
+        }
+        assert_ne!(
+            names[0], names[1],
+            "different full release names must not share database resources"
+        );
+    }
+
+    #[test]
+    fn postgres_pods_do_not_match_the_operator_selector() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let rendered = crate::test_utils::helm_template(
+            &chart.files,
+            Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: existing-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n"),
+        );
+        rendered.assert_ok("database chart");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let database = docs_by_kind(&docs, "StatefulSet")
+            .into_iter()
+            .next()
+            .unwrap();
+        let labels = database["spec"]["template"]["metadata"]["labels"]
+            .as_mapping()
+            .unwrap();
+        let operators = docs_by_kind(&docs, "Deployment");
+        assert!(!operators.is_empty());
+        for operator in operators {
+            let selector = operator["spec"]["selector"]["matchLabels"]
+                .as_mapping()
+                .unwrap();
+            assert!(
+                !selector
+                    .iter()
+                    .all(|(key, value)| labels.get(key) == Some(value)),
+                "database pod must not match Operator {}",
+                operator["metadata"]["name"].as_str().unwrap()
+            );
+        }
+        let selector = database["spec"]["selector"]["matchLabels"]
+            .as_mapping()
+            .unwrap();
+        assert!(selector
+            .iter()
+            .all(|(key, value)| labels.get(key) == Some(value)));
     }
 
     #[test]
@@ -10872,11 +11662,9 @@ remoteOperator:
                 assert_eq!(docs[0]["data"]["value"], expected);
             } else {
                 assert!(!rendered.is_ok());
-                assert!(
-                    rendered
-                        .stderr
-                        .contains("Set logCollector.scope.deploymentLabelValue=<current label>")
-                );
+                assert!(rendered
+                    .stderr
+                    .contains("Set logCollector.scope.deploymentLabelValue=<current label>"));
             }
         }
     }
@@ -11143,7 +11931,8 @@ remoteOperator:
                     })
                     .collect();
                 assert_eq!(
-                    selected.len(), 1,
+                    selected.len(),
+                    1,
                     "{}/{} must select exactly its intended workload, remote enabled={remote_enabled}",
                     doc["kind"].as_str().unwrap(),
                     doc["metadata"]["name"].as_str().unwrap(),
@@ -11180,11 +11969,13 @@ logCollector:
             daemonsets[0]["spec"]["template"]["spec"]["containers"][0]["image"],
             "fluent/fluent-bit:3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
         );
-        assert!(docs_by_kind(&docs, "Role").iter().all(|role| !role["rules"]
-            .as_sequence()
-            .is_some_and(|rules| rules
-                .iter()
-                .any(|rule| rule["resources"] == serde_yaml::to_value(["pods/log"]).unwrap()))));
+        assert!(docs_by_kind(&docs, "Role").iter().all(|role| {
+            !role["rules"].as_sequence().is_some_and(|rules| {
+                rules
+                    .iter()
+                    .any(|rule| rule["resources"] == serde_yaml::to_value(["pods/log"]).unwrap())
+            })
+        }));
         let remote = docs_by_kind(&docs, "Deployment")
             .into_iter()
             .find(|deployment| operator_env_value(deployment, "COLLECTOR_TOKEN_FILE").is_some())

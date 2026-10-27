@@ -16,6 +16,7 @@ mod emitter;
 mod emitters;
 mod generator;
 mod package;
+mod postgres;
 mod registry;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

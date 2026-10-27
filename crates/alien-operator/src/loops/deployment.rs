@@ -497,16 +497,24 @@ async fn enrich_config(
         config.public_endpoints = operator_config.public_endpoints.clone();
     }
 
+    // Chart-created databases are defaults; explicit bindings always win.
+    if let Some(defaults) = &operator_config.chart_default_bindings {
+        for (id, binding) in &defaults.0 {
+            if !config.external_bindings.has(id) {
+                config.external_bindings.insert(id.clone(), binding.clone());
+            }
+        }
+    }
     // Installation-provided bindings take precedence over manager-provided ones.
     if let Some(ref stack_settings) = operator_config.stack_settings {
         if let Some(ref bindings) = stack_settings.external_bindings {
-            for (resource_id, binding) in &bindings.0 {
-                config
-                    .external_bindings
-                    .insert(resource_id.clone(), binding.clone());
-            }
+            config.external_bindings.0.extend(bindings.0.clone());
         }
         config.stack_settings = stack_settings.clone();
+    }
+    if operator_config.stack_settings.is_some() || operator_config.chart_default_bindings.is_some()
+    {
+        config.stack_settings.external_bindings = Some(config.external_bindings.clone());
     }
     if config.base_platform.is_none() {
         config.base_platform = operator_config.base_platform;
@@ -1013,6 +1021,88 @@ mod tests {
         assert_eq!(
             enriched.external_bindings.get("shared"),
             installation_bindings.get("shared")
+        );
+    }
+
+    #[tokio::test]
+    async fn enrich_config_keeps_supplied_database_ahead_of_chart_defaults() {
+        let temp = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        let supplied: ExternalBindings = serde_json::from_value(serde_json::json!({
+            "database":{"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":"existing-password"},
+            "bucket":{"type":"storage","service":"s3","bucketName":"existing-bucket"}
+        })).unwrap();
+        let defaults: ExternalBindings = serde_json::from_value(serde_json::json!({
+            "database":{"type":"postgres","service":"external","host":"new-db.site.svc","port":5432,"database":"app","username":"postgres","password":{"secretKeyRef":{"name":"new-db","key":"password"}}}
+        })).unwrap();
+        let operator = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .chart_default_bindings(defaults.clone())
+            .encryption_key(encryption_key)
+            .build();
+        let mut config = test_deployment_config();
+        config.external_bindings = supplied.clone();
+        let enriched = enrich_config(config, &operator, Platform::Kubernetes, &db, None)
+            .await
+            .unwrap();
+        assert_eq!(enriched.external_bindings, supplied);
+        assert_eq!(enriched.stack_settings.external_bindings, Some(supplied));
+        let enriched = enrich_config(
+            test_deployment_config(),
+            &operator,
+            Platform::Kubernetes,
+            &db,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            enriched.external_bindings.get("database"),
+            defaults.get("database")
+        );
+        assert_eq!(
+            enriched.stack_settings.external_bindings,
+            Some(enriched.external_bindings.clone())
+        );
+    }
+
+    #[tokio::test]
+    async fn enrich_config_honors_customer_secret_key_reference() {
+        let temp = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        let supplied: ExternalBindings = serde_json::from_value(serde_json::json!({
+            "database":{"type":"postgres","service":"external","host":"db.example.com","port":5432,"database":"app","username":"app","password":"existing-password"},
+            "bucket":{"type":"storage","service":"s3","bucketName":"existing-bucket"}
+        })).unwrap();
+        let defaults: ExternalBindings = serde_json::from_value(serde_json::json!({
+            "database":{"type":"postgres","service":"external","host":"new-db.site.svc","port":5432,"database":"app","username":"postgres","password":{"secretKeyRef":{"name":"new-db","key":"password"}}}
+        })).unwrap();
+        let operator = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .stack_settings(StackSettings {
+                external_bindings: Some(defaults.clone()),
+                ..Default::default()
+            })
+            .encryption_key(encryption_key)
+            .build();
+        let mut config = test_deployment_config();
+        config.external_bindings = supplied.clone();
+        let enriched = enrich_config(config, &operator, Platform::Kubernetes, &db, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            enriched.external_bindings.get("database"),
+            defaults.get("database")
+        );
+        assert_eq!(
+            enriched.external_bindings.get("bucket"),
+            supplied.get("bucket")
         );
     }
 

@@ -6,10 +6,9 @@ use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
     delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
     kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, linked_bindings,
-    pod_template_annotations,
-    projected_env_vars, reconcile_environment_secret_with_additional_secrets,
-    EnvSecretRotationTracker, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
-    ResourceControllerContext,
+    pod_template_annotations, projected_env_vars,
+    reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
+    EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -309,9 +308,13 @@ impl KubernetesDaemonController {
             DAEMON_CONTAINER_NAME,
         ) {
             let config = ctx.desired_resource_config::<Daemon>()?;
-            let drifted =
-                linked_bindings::kubernetes_linked_binding_drift(ctx, &config.links, &config.id, env)
-                    .await?;
+            let drifted = linked_bindings::kubernetes_linked_binding_drift(
+                ctx,
+                &config.links,
+                &config.id,
+                env,
+            )
+            .await?;
             if !drifted.is_empty() {
                 // Names only: binding values can carry secrets.
                 info!(
@@ -911,26 +914,29 @@ impl KubernetesDaemonController {
             ResourceOutputs::new(DaemonOutputs {
                 daemon_name: daemon_set_name.clone(),
                 running: true,
-                public_endpoints: self
-                    .public_endpoint
-                    .effective_public_url()
-                    .map(|url| {
-                        std::collections::HashMap::from([(
-                            "default".to_string(),
-                            PublicEndpointOutput {
-                                host: public_url_host(&url).unwrap_or_default(),
-                                protocol: alien_core::ExposeProtocol::Http,
-                                port: alien_core::public_url_port(&url).unwrap_or(443),
-                                url,
-                                wildcard_host: None,
-                                load_balancer_endpoint: self
-                                    .public_endpoint
-                                    .load_balancer_endpoint
-                                    .clone(),
-                            },
-                        )])
-                    })
-                    .unwrap_or_default(),
+                public_endpoints: if self.public_endpoint.named_public_endpoints.is_empty() {
+                    self.public_endpoint
+                        .effective_public_url()
+                        .map(|url| {
+                            std::collections::HashMap::from([(
+                                "default".to_string(),
+                                PublicEndpointOutput {
+                                    host: public_url_host(&url).unwrap_or_default(),
+                                    protocol: alien_core::ExposeProtocol::Http,
+                                    port: alien_core::public_url_port(&url).unwrap_or(443),
+                                    url,
+                                    wildcard_host: None,
+                                    load_balancer_endpoint: self
+                                        .public_endpoint
+                                        .load_balancer_endpoint
+                                        .clone(),
+                                },
+                            )])
+                        })
+                        .unwrap_or_default()
+                } else {
+                    self.public_endpoint.named_public_endpoints.clone()
+                },
             })
         })
     }
@@ -985,7 +991,10 @@ impl KubernetesDaemonController {
     }
 
     /// The live DaemonSet, or `None` when it does not exist.
-    async fn read_daemonset(&self, ctx: &ResourceControllerContext<'_>) -> Result<Option<DaemonSet>> {
+    async fn read_daemonset(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<Option<DaemonSet>> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
         let daemon_set_name = self.daemon_set_name.as_ref().ok_or_else(|| {

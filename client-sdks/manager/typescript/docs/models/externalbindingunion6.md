@@ -93,9 +93,14 @@ const value: models.ExternalBindingExternal = {
     },
   },
   host: "yellow-handover.net",
-  password: "csxvGxoxE7DCD9A",
-  port: "<value>",
-  username: "Prudence_Gottlieb93",
+  password: {
+    secretKeyRef: {
+      key: "<key>",
+      name: "<value>",
+    },
+  },
+  port: 106185,
+  username: "Wiley_Ortiz",
   service: "external",
   type: "postgres",
 };

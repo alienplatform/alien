@@ -92,7 +92,7 @@ pub struct SyncArgs {
     /// Namespace (defaults to the application name)
     #[arg(long, short = 'n')]
     pub namespace: Option<String>,
-    /// Helm values for the site (infrastructure, inputs). Remembered.
+    /// Helm values for image selection online and installation at the site. Remembered at the site.
     #[arg(long = "values", short = 'f')]
     pub values: Vec<PathBuf>,
     /// Kubernetes context (defaults to the current one). Remembered.
@@ -265,7 +265,7 @@ pub async fn sync_command(args: SyncArgs) -> Result<()> {
     if online {
         let token = token.as_ref().expect("online implies a stored token");
         unsent_reports =
-            exchange_online(&folder, &mut site, token, args.full, args.dry_run).await?;
+            exchange_online(&folder, &mut site, token, args.full, args.dry_run, &args.values).await?;
     }
     if let Some(settings) = &site_side {
         install_pending(&folder, &mut site, settings, &args).await?;
@@ -309,12 +309,13 @@ async fn exchange_online(
     token: &ManagerAccess,
     full: bool,
     dry_run: bool,
+    values: &[PathBuf],
 ) -> Result<Option<AlienError<ErrorData>>> {
     let unsent_reports = send_reports(folder, site, token, dry_run).await.err();
     if let Some(e) = &unsent_reports {
         eprintln!("Couldn't send the site's reports ({e}); downloading the update anyway.");
     }
-    download_update(folder, site, token, full, dry_run).await?;
+    download_update(folder, site, token, full, dry_run, values).await?;
     save_site(folder, site)?;
     Ok(unsent_reports)
 }
@@ -865,6 +866,7 @@ async fn download_update(
     token: &ManagerAccess,
     full: bool,
     dry_run: bool,
+    values: &[PathBuf],
 ) -> Result<()> {
     let manager = &token.url;
     let target: serde_json::Value = manager_get(
@@ -974,7 +976,24 @@ async fn download_update(
         .await
         .context(config_error("downloading the chart"))?;
     // The chart names the images it runs itself: the Operator and its hooks.
-    let chart_images = airgap::chart_images(&dir.join(&chart))
+    let values = values
+        .iter()
+        .map(|path| {
+            let bytes = std::fs::read(path)
+                .into_alien_error()
+                .context(config_error(format!(
+                    "reading Helm values {}",
+                    path.display()
+                )))?;
+            serde_yaml::from_slice(&bytes)
+                .into_alien_error()
+                .context(config_error(format!(
+                    "parsing Helm values {}",
+                    path.display()
+                )))
+        })
+        .collect::<Result<Vec<serde_yaml::Value>>>()?;
+    let chart_images = airgap::chart_images(&dir.join(&chart), &target, &values)
         .context(config_error("reading the chart's images"))?;
 
     let mut images = airgap::image_references(&target);
@@ -2304,7 +2323,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(TO_SITE)).unwrap();
         std::fs::write(dir.path().join(TO_SITE).join("2-rel_new.bundle"), b"x").unwrap();
 
-        let unsent = exchange_online(dir.path(), &mut site, &access(&server), false, false)
+        let unsent = exchange_online(dir.path(), &mut site, &access(&server), false, false, &[])
             .await
             .expect("the update step runs");
 

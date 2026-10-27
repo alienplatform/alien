@@ -2,7 +2,9 @@
 //!
 //! Configuration can be built from CLI arguments or programmatically via the builder.
 
-use alien_core::{Platform, PublicEndpointUrls, StackSettings, TelemetryMode, UpdatesMode};
+use alien_core::{
+    ExternalBindings, Platform, PublicEndpointUrls, StackSettings, TelemetryMode, UpdatesMode,
+};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
@@ -115,6 +117,10 @@ pub struct OperatorConfig {
 
     /// Stack settings for deployment customization.
     pub stack_settings: Option<StackSettings>,
+
+    /// Defaults for databases provisioned by the installation chart.
+    /// Explicit installation and manager bindings take precedence.
+    pub chart_default_bindings: Option<ExternalBindings>,
 
     /// Operations declared through `OPERATOR_OPERATIONS`, for an Operator
     /// installed without a release.
