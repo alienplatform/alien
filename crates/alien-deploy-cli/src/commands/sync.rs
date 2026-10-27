@@ -1786,7 +1786,12 @@ async fn uninstall_site(
         )
         .into_alien_error()
         .context(config_error("parsing final telemetry receipt"))?;
-        sequence == manifest.sequence
+        // A fresh deletion does not reopen telemetry. Only an install or rollback
+        // with a target newer than the completed drain can do that.
+        sequence <= manifest.sequence
+            && target_sequence(settings, &manifest.stack_id, &namespace)
+                .await?
+                .is_none_or(|target| target <= sequence)
     } else {
         false
     };
@@ -2724,6 +2729,40 @@ async fn current_ack(settings: &SiteSide, stack_id: &str, namespace: &str) -> Re
         .parse()
         .into_alien_error()
         .context(config_error("parsing the telemetry acknowledgement"))
+}
+
+/// The target Secret also covers rollback and installs from another transfer folder.
+async fn target_sequence(
+    settings: &SiteSide,
+    stack_id: &str,
+    namespace: &str,
+) -> Result<Option<u64>> {
+    let mut cmd = kubectl(settings.kube_context.as_deref());
+    cmd.args([
+        "get",
+        "secret",
+        &format!("{stack_id}-airgap-target"),
+        "-n",
+        namespace,
+        "-o",
+        "jsonpath={.data.sequence}",
+        "--ignore-not-found",
+    ]);
+    let output = run(cmd, "reading the installed target sequence").await?;
+    let encoded = String::from_utf8_lossy(&output);
+    if encoded.trim().is_empty() {
+        return Ok(None);
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .into_alien_error()
+        .context(config_error("decoding the installed target sequence"))?;
+    String::from_utf8_lossy(&decoded)
+        .trim()
+        .parse()
+        .map(Some)
+        .into_alien_error()
+        .context(config_error("parsing the installed target sequence"))
 }
 
 /// Release the Operator last reported running, from its status Secret.
@@ -3721,16 +3760,28 @@ mod tests {
         assert_ne!(report.state["status"], "running");
     }
 
-    /// Retry a signed deletion after a cleanup hook has removed the Operator.
+    /// Resume signed deletion after the Operator stops, unless another install reopens telemetry.
     #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires Helm, kubectl and ALIEN_SYNC_TEST_CONTEXT for a disposable Kind cluster"]
     async fn signed_uninstall_resumes_without_operator_deployment() {
-        for stopped in [false, true] {
+        for (stopped, deletion_sequence, target_sequence) in [
+            (false, 2, 1),
+            (true, 2, 1),
+            (true, 3, 1),
+            (true, 4, 3),
+            (true, 5, 0),
+        ] {
             let context = std::env::var("ALIEN_SYNC_TEST_CONTEXT").expect("explicit test context");
-            let namespace = format!("sync-delete-retry-{}-{stopped}", std::process::id());
+            let namespace = format!(
+                "sync-delete-retry-{}-{stopped}-{deletion_sequence}",
+                std::process::id()
+            );
             let (folder, mut site) = folder_with_report();
-            site.deployment_id = format!("dep_retry_{}_{stopped}", std::process::id());
+            site.deployment_id = format!(
+                "dep_retry_{}_{stopped}_{deletion_sequence}",
+                std::process::id()
+            );
             let snapshot = folder.path().join("deleting-report.json");
             std::fs::rename(report_path(folder.path()), &snapshot).unwrap();
             let mut original: SiteReport =
@@ -3802,6 +3853,23 @@ metadata:
                     .await
                     .unwrap();
             }
+            if target_sequence != 0 {
+                let target = tempfile::NamedTempFile::new().unwrap();
+                std::fs::write(target.path(), b"{}").unwrap();
+                write_target(
+                    &settings,
+                    "app",
+                    &namespace,
+                    target.path(),
+                    target_sequence,
+                    0,
+                )
+                .await
+                .unwrap();
+            }
+            println!(
+                "Retry: stopped={stopped}, deletion={deletion_sequence}, target={target_sequence}"
+            );
             assert!(release_values(&settings, "app", &namespace)
                 .await
                 .unwrap()
@@ -3818,7 +3886,7 @@ metadata:
                 deployment_id: site.deployment_id.clone(),
                 deployment_name: site.name.clone(),
                 release_id: "delete".into(),
-                sequence: 2,
+                sequence: deletion_sequence,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 stack_id: "app".into(),
                 images: Vec::new(),
@@ -3834,10 +3902,43 @@ metadata:
             std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &bytes).unwrap();
             std::fs::write(bundle.path().join(airgap::SIGNATURE_FILE), key.sign(&bytes)).unwrap();
             std::fs::create_dir_all(folder.path().join(TO_SITE)).unwrap();
-            let pending = folder.path().join(TO_SITE).join("2-delete.bundle");
+            let pending = folder
+                .path()
+                .join(TO_SITE)
+                .join(format!("{deletion_sequence}-delete.bundle"));
             airgap::pack(bundle.path(), &pending).unwrap();
             let args =
                 SyncArgs::try_parse_from(["sync", "--trusted-key", &key.public_key()]).unwrap();
+            if target_sequence > 2 {
+                // An intervening install can accept more logs, even from another folder.
+                // Without an export credential, deletion must stop rather than skip its drain.
+                let error = install_pending(folder.path(), &mut site, &settings, &args)
+                    .await
+                    .unwrap_err();
+                assert!(error
+                    .to_string()
+                    .contains("export credential is unavailable"));
+                assert!(snapshot.exists());
+                assert!(pending.exists());
+                assert!(release_values(&settings, "app", &namespace)
+                    .await
+                    .unwrap()
+                    .is_some());
+                let mut uninstall = Command::new("helm");
+                uninstall.args([
+                    "uninstall",
+                    "app",
+                    "--namespace",
+                    &namespace,
+                    "--kube-context",
+                    &context,
+                ]);
+                run(uninstall, "removing test release").await.unwrap();
+                let mut delete = kubectl(Some(&context));
+                delete.args(["delete", "namespace", &namespace]);
+                run(delete, "removing test namespace").await.unwrap();
+                continue;
+            }
             install_pending(folder.path(), &mut site, &settings, &args)
                 .await
                 .unwrap();
