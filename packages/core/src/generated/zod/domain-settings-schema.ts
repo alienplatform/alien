@@ -8,7 +8,7 @@ import { CustomDomainConfigSchema } from "./custom-domain-config-schema.js";
 import { PublicEndpointTargetSettingsSchema } from "./public-endpoint-target-settings-schema.js";
 
 /**
- * @description Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains and certificates. Otherwise, Alien auto-generates domains.
+ * @description Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
  */
 export const DomainSettingsSchema = z.object({
     "customDomains": z.object({
@@ -17,6 +17,6 @@ export const DomainSettingsSchema = z.object({
 get "publicEndpointTarget"(){
                 return z.union([PublicEndpointTargetSettingsSchema, z.null()]).optional()
               }
-    }).describe("Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains and certificates. Otherwise, Alien auto-generates domains.")
+    }).describe("Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains with supplied or managed certificates. Otherwise, Alien auto-generates domains.")
 
 export type DomainSettings = z.infer<typeof DomainSettingsSchema>

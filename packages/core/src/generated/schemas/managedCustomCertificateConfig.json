@@ -1,0 +1,1 @@
+{"type":"object","description":"Managed certificate issuance settings.","additionalProperties":false,"x-readme-ref-name":"ManagedCustomCertificateConfig"}
