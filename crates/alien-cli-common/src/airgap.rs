@@ -35,6 +35,7 @@ use oci_client::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt as _;
 
 /// Errors while writing or applying a bundle.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
@@ -286,6 +287,36 @@ pub async fn export_images(
     Ok((exported, omitted))
 }
 
+async fn pull_blob_to_file(
+    client: &OciClient,
+    reference: &Reference,
+    digest: &str,
+    path: &Path,
+) -> Result<()> {
+    let mut file = tokio::fs::File::create(path)
+        .await
+        .into_alien_error()
+        .context(file_failed("creating a blob file"))?;
+    client
+        .pull_blob(reference, digest, &mut file)
+        .await
+        .into_alien_error()
+        .context(copy_failed(
+            &reference.whole(),
+            format!("pulling blob {digest}"),
+        ))?;
+    // Tokio file writes may still be pending when the registry stream ends.
+    file.flush()
+        .await
+        .into_alien_error()
+        .context(file_failed("flushing a blob file"))?;
+    file.sync_all()
+        .await
+        .into_alien_error()
+        .context(file_failed("syncing a blob file"))?;
+    Ok(())
+}
+
 /// Store a manifest, and everything it references, as blobs.
 async fn write_manifest_tree(
     client: &OciClient,
@@ -342,15 +373,7 @@ async fn write_manifest_tree(
         if tokio::fs::try_exists(&path).await.unwrap_or(false) {
             continue;
         }
-        let mut file = tokio::fs::File::create(&path)
-            .await
-            .into_alien_error()
-            .context(file_failed("creating a blob file"))?;
-        client
-            .pull_blob(reference, blob.as_str(), &mut file)
-            .await
-            .into_alien_error()
-            .context(copy_failed(&image, format!("pulling blob {blob}")))?;
+        pull_blob_to_file(client, reference, &blob, &path).await?;
         let bytes = tokio::fs::read(&path)
             .await
             .into_alien_error()
@@ -584,15 +607,7 @@ pub async fn pull_chart(dir: &Path, reference: &str, access: &RegistryAccess) ->
         .into_alien_error()
         .context(file_failed("creating the chart directory"))?;
     let file = format!("{CHART_DIR}/{name}-{version}.tgz");
-    let mut out = tokio::fs::File::create(dir.join(&file))
-        .await
-        .into_alien_error()
-        .context(file_failed("creating the chart file"))?;
-    client
-        .pull_blob(&parsed, layer.as_str(), &mut out)
-        .await
-        .into_alien_error()
-        .context(copy_failed(reference, "downloading the chart"))?;
+    pull_blob_to_file(&client, &parsed, &layer, &dir.join(&file)).await?;
     Ok(file)
 }
 
@@ -650,11 +665,10 @@ pub fn chart_images(
         }
     }
     // Helm permits charts without defaults; installation values still apply.
-    let mut values: serde_yaml::Value = serde_yaml::from_str(
-        &values.unwrap_or_else(|| "{}".to_string()),
-    )
-    .into_alien_error()
-    .context(invalid("the chart's values.yaml is not valid YAML"))?;
+    let mut values: serde_yaml::Value =
+        serde_yaml::from_str(&values.unwrap_or_else(|| "{}".to_string()))
+            .into_alien_error()
+            .context(invalid("the chart's values.yaml is not valid YAML"))?;
 
     for override_values in overrides {
         merge_chart_values(&mut values, override_values);
@@ -960,6 +974,72 @@ mod tests {
         LogCollectorDefault, OperatorImageDefault, PackageDefaults,
     };
     use httpmock::prelude::*;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn downloaded_blob_reports_pending_write_errors() {
+        let registry = MockServer::start_async().await;
+        let digest = format!("sha256:{}", sha256_hex(b"x"));
+        let download = registry
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(format!("/v2/test/image/blobs/{digest}"));
+                then.status(200).body("x");
+            })
+            .await;
+        let access = RegistryAccess {
+            auth: RegistryAuth::Anonymous,
+            insecure: true,
+        };
+        let client = client(&access);
+        let reference = format!("{}/test/image:latest", registry.address())
+            .parse()
+            .unwrap();
+        // A single buffered write can finish before the filesystem reports the error.
+        let error = pull_blob_to_file(&client, &reference, &digest, Path::new("/dev/full"))
+            .await
+            .expect_err("a failed file write must fail the download");
+        assert_eq!(error.code, "AIRGAP_FILE_FAILED");
+        assert!(
+            error.to_string().contains("No space left on device"),
+            "{error}"
+        );
+        download.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn downloaded_blob_is_complete_before_returning() {
+        let registry = MockServer::start_async().await;
+        let bytes: Vec<u8> = (0..8 * 1024 * 1024 + 123)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let digest = format!("sha256:{}", sha256_hex(&bytes));
+        let download = registry
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(format!("/v2/test/image/blobs/{digest}"));
+                then.status(200).body(bytes.clone());
+            })
+            .await;
+        let access = RegistryAccess {
+            auth: RegistryAuth::Anonymous,
+            insecure: true,
+        };
+        let client = client(&access);
+        let reference = format!("{}/test/image:latest", registry.address())
+            .parse()
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blob");
+        pull_blob_to_file(&client, &reference, &digest, &path)
+            .await
+            .unwrap();
+        // Read synchronously so a later filesystem task cannot finish a pending write for us.
+        let downloaded = std::fs::read(&path).unwrap();
+        assert_eq!(downloaded.len(), bytes.len());
+        assert_eq!(format!("sha256:{}", sha256_hex(&downloaded)), digest);
+        download.assert_async().await;
+    }
 
     #[tokio::test]
     async fn imports_nested_manifests_when_registry_omits_location() {
