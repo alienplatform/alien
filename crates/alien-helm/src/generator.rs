@@ -5442,9 +5442,9 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- $existing := lookup "v1" "ConfigMap" .Release.Namespace $scopeName -}}
 {{- if $existing -}}
 {{- required "The existing runtime cleanup scope has no labelValue." (index (default dict $existing.data) "labelValue") -}}
-{{- /* Releases older than the cleanup scope still have their manager ServiceAccount. */ -}}
-{{- else if and .Release.IsUpgrade (not (lookup "v1" "ServiceAccount" .Release.Namespace (include "deployment.managerServiceAccountName" .))) -}}
-{{- fail "Cannot discover the existing runtime cleanup scope. Set logCollector.scope.deploymentLabelValue=<current label> to keep this install's scope when rendering an upgrade without cluster lookup (helm template --is-upgrade or GitOps). Read <current label> from the installed runtime-scope ConfigMap data.labelValue." -}}
+{{- /* The stack ConfigMap name is stable across chart versions. */ -}}
+{{- else if and .Release.IsUpgrade (not (lookup "v1" "ConfigMap" .Release.Namespace (include "deployment.fullname" .))) -}}
+{{- fail "Cannot discover the existing runtime cleanup scope. Set logCollector.scope.deploymentLabelValue=<current label> to keep this install's scope when rendering an upgrade without cluster lookup (helm template --is-upgrade or GitOps). Read <current label> from the installed runtime-scope ConfigMap data.labelValue if present; for older charts without that ConfigMap, use the deployment label on the existing runtime workloads." -}}
 {{- else -}}
 {{- include "deployment.serviceAccountPrefix" . -}}
 {{- end -}}
@@ -10522,7 +10522,7 @@ remoteOperator:
 
     #[test]
     fn runtime_scope_preserves_the_installed_value_unless_explicit() {
-        for (explicit, installed, upgrade, manager_exists, expected) in [
+        for (explicit, installed, upgrade, stack_exists, expected) in [
             ("", "", false, false, Some("prepared001")),
             ("", "original-release", true, true, Some("original-release")),
             (
@@ -10562,9 +10562,9 @@ remoteOperator:
                 *helpers = helpers.replace("(dict \"data\" (dict \"labelValue\" \"\"))", "dict");
             }
             *helpers = helpers.replace(
-                "lookup \"v1\" \"ServiceAccount\" .Release.Namespace (include \"deployment.managerServiceAccountName\" .)",
-                if manager_exists {
-                    "(dict \"metadata\" (dict \"name\" \"prepared001-manager-sa\"))"
+                "lookup \"v1\" \"ConfigMap\" .Release.Namespace (include \"deployment.fullname\" .)",
+                if stack_exists {
+                    "(dict \"metadata\" (dict \"name\" \"test-release\"))"
                 } else {
                     "dict"
                 },
