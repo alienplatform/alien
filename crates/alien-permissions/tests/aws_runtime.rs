@@ -677,7 +677,8 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
                 assert!(grant.not_resource.is_empty());
                 assert!(grant.condition.is_none());
             }
-            // The existing service-linked-role bootstrap is the only IAM write.
+            // Manual management still cannot write profiles. Provision additionally
+            // owns the runtime compute profiles; neither set gains role-policy writes.
             for action in policy
                 .statement
                 .iter()
@@ -692,7 +693,16 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
                                 | "iam:GetRole"
                                 | "iam:PassRole"
                                 | "iam:CreateServiceLinkedRole"
-                        ),
+                        ) || (id == "compute-cluster/provision"
+                            && matches!(
+                                action.as_str(),
+                                "iam:CreateInstanceProfile"
+                                    | "iam:TagInstanceProfile"
+                                    | "iam:ListInstanceProfileTags"
+                                    | "iam:AddRoleToInstanceProfile"
+                                    | "iam:RemoveRoleFromInstanceProfile"
+                                    | "iam:DeleteInstanceProfile"
+                            )),
                         "unexpected IAM action: {id} / {target} / {action}"
                     );
                 }
