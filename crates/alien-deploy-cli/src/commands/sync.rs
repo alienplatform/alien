@@ -1865,13 +1865,16 @@ async fn uninstall_site(
         let deployment = run(get, "checking for the Operator").await?;
         if !deployment.is_empty() {
             if !telemetry_sealed {
-                let (_, export_token) = read_status(settings, &manifest.stack_id, &namespace)
+                let (status, export_token) = read_status(settings, &manifest.stack_id, &namespace)
                     .await?
                     .ok_or_else(|| {
                         AlienError::new(config_error(
                             "the Operator export credential is unavailable before deletion",
                         ))
                     })?;
+                // An intervening install or rollback makes the saved recovery state stale.
+                // Keep its buffered logs, but report the state of the current installation.
+                report.state = status["state"].clone();
                 let after = report
                     .telemetry
                     .iter()
@@ -3758,6 +3761,80 @@ mod tests {
         let report: SiteReport =
             serde_json::from_slice(&std::fs::read(&reports[0].1).unwrap()).unwrap();
         assert_ne!(report.state["status"], "running");
+    }
+
+    /// Supply a signed retain request after an interrupted deletion and a newer install.
+    #[tokio::test]
+    #[ignore = "requires ALIEN_SYNC_RETAIN_TEST_ARGS for a disposable site with a stale deletion snapshot"]
+    async fn signed_retain_refreshes_recovery_state_after_another_install() {
+        let arguments: Vec<String> = serde_json::from_str(
+            &std::env::var("ALIEN_SYNC_RETAIN_TEST_ARGS").expect("site arguments as JSON"),
+        )
+        .unwrap();
+        let args =
+            SyncArgs::try_parse_from(std::iter::once("sync".to_string()).chain(arguments)).unwrap();
+        assert!(
+            args.kube_context.is_some(),
+            "explicit disposable context required"
+        );
+        let (folder, mut site) = open_folder(&args).await.unwrap();
+        let mut machine = load_machine(&site.deployment_id).unwrap();
+        let settings = site_side_settings(&args, &mut machine).unwrap().unwrap();
+        let snapshot: SiteReport =
+            serde_json::from_slice(&std::fs::read(folder.join("deleting-report.json")).unwrap())
+                .unwrap();
+        let (_, installed) = installed_bundles(&folder)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let record = read_installed(&installed).unwrap();
+        let (status, _) = read_status(
+            &settings,
+            &record.stack_id,
+            &settings.namespace(&record.stack_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_ne!(
+            snapshot.state["currentRelease"],
+            status["state"]["currentRelease"]
+        );
+        let old_batches: Vec<_> = snapshot.telemetry.iter().map(|batch| batch.id).collect();
+        install_pending(&folder, &mut site, &settings, &args)
+            .await
+            .unwrap();
+        let reports = by_sequence(&folder.join(FROM_SITE), Some(REPORT_EXTENSION)).unwrap();
+        assert_eq!(reports.len(), 1);
+        let report: SiteReport =
+            serde_json::from_slice(&std::fs::read(&reports[0].1).unwrap()).unwrap();
+        assert_eq!(report.state["status"], "retained");
+        assert_eq!(
+            report.state["currentRelease"],
+            status["state"]["currentRelease"]
+        );
+        assert_eq!(
+            report.state["stackState"]["resources"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            status["state"]["stackState"]["resources"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+        );
+        for id in old_batches {
+            assert!(
+                report.telemetry.iter().any(|batch| batch.id == id),
+                "lost buffered batch {id}"
+            );
+        }
+        let machine = load_machine(&site.deployment_id).unwrap();
+        let saved = machine.deletion_inventory.unwrap().report.unwrap();
+        assert_eq!(saved["state"], report.state);
     }
 
     /// Resume signed deletion after the Operator stops, unless another install reopens telemetry.
