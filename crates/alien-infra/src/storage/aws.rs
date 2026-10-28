@@ -2974,10 +2974,11 @@ mod tests {
         run.step().await.unwrap();
         run.run_until_terminal().await.unwrap();
         assert_eq!(run.status(), ResourceStatus::Running);
-        let policies = applied.lock().unwrap();
-        assert_eq!(policies.len(), 2);
-        assert_eq!(policies[0], policies[1]);
-        drop(policies);
+        {
+            let policies = applied.lock().unwrap();
+            assert_eq!(policies.len(), 2);
+            assert_eq!(policies[0], policies[1]);
+        }
         run.delete().unwrap();
         run.run_until_terminal().await.unwrap();
         assert_eq!(run.status(), ResourceStatus::Deleted);
@@ -2997,7 +2998,7 @@ mod tests {
             .platform(Platform::Aws)
             .resource_lifecycle(ResourceLifecycle::Frozen)
             .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
-            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .service_provider(setup_mock_service_provider(Arc::new(MockS3Api::new())))
             .with_test_dependencies()
             .build()
             .await
