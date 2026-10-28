@@ -101,6 +101,7 @@ test-context = { workspace = true }
 regex = { workspace = true }
 httpmock = { version = "0.7" }
 rstest = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
+tokio = { workspace = true, features = ["net"] }
 mockall = { workspace = true }
 tracing-subscriber = { workspace = true }

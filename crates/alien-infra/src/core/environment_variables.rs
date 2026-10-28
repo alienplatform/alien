@@ -20,6 +20,40 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
+/// Fails with `DependencyNotReady` unless every linked resource is Running, the only state in
+/// which its binding can be read into a workload's environment.
+///
+/// During an update the executor steps a workload whose dependency is itself still updating,
+/// and the dependency-not-ready wait is what orders them. A flow that will read its links calls
+/// this before its first write, so that wait costs no cloud calls and changes nothing.
+pub fn ensure_linked_resources_running(
+    links: &[ResourceRef],
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Result<()> {
+    for link in links {
+        running_linked_resource(link, ctx, resource_id)?;
+    }
+    Ok(())
+}
+
+fn running_linked_resource<'a>(
+    link: &ResourceRef,
+    ctx: &'a ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Result<&'a alien_core::StackResourceState> {
+    ctx.state
+        .resources
+        .get(link.id())
+        .filter(|dependency| dependency.status == ResourceStatus::Running)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: resource_id.to_string(),
+                dependency_id: link.id().to_string(),
+            })
+        })
+}
+
 pub const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
 pub const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
 
@@ -606,23 +640,7 @@ impl EnvironmentVariableBuilder {
     ) -> Result<Self> {
         for link in links {
             let binding_name = link.id();
-
-            // Get the dependency's state
-            let resource_state = ctx.state.resources.get(binding_name).ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: resource_id_for_errors.to_string(),
-                    dependency_id: binding_name.to_string(),
-                })
-            })?;
-
-            // Ensure the dependency is actually in a stable state that can provide environment variables
-            let dependency_status = resource_state.status;
-            if !matches!(dependency_status, ResourceStatus::Running) {
-                return Err(AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: resource_id_for_errors.to_string(),
-                    dependency_id: binding_name.to_string(),
-                }));
-            }
+            let resource_state = running_linked_resource(link, ctx, resource_id_for_errors)?;
 
             // Synced binding coordinates only (Local Postgres strips its password here); the linked
             // workload's compute-target manager delivers any runtime-only secret at process start.

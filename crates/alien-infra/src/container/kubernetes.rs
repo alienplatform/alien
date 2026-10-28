@@ -1176,6 +1176,11 @@ impl KubernetesContainerController {
         let namespace_owned = namespace.clone();
         let namespace = &namespace_owned;
 
+        // The pod spec reads every link's binding. Wait for them before the first write, so a
+        // dependent stepped while its dependency updates neither calls the API nor changes its
+        // Secrets and Services ahead of its workload.
+        crate::core::ensure_linked_resources_running(&config.links, ctx, &config.id)?;
+
         let workload_type = if self.is_stateful {
             "StatefulSet"
         } else {
@@ -4332,3 +4337,7 @@ mod tests {
             .expect("needs_update"));
     }
 }
+
+#[cfg(test)]
+#[path = "kubernetes_update_tests.rs"]
+mod update_tests;

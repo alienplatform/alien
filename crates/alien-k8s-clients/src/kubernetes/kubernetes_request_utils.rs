@@ -202,9 +202,22 @@ impl RetriableKubernetesRequestBuilder {
         self
     }
 
-    /// Determine if a given error is retry-able using the retryable field.
+    /// Whether sending the same request again can get a different answer.
+    ///
+    /// A 404 or 409 is the API server's answer from its current state: the object is missing, it
+    /// already exists, or the request carries a stale `resourceVersion`. The same request gets
+    /// the same answer until the caller acts on it, which callers do (they create what is
+    /// missing, or read and update what exists). Resending only made them wait out the back-off,
+    /// 7 to 14 seconds per call. The error keeps its `retryable` flag for the caller's retries.
     fn is_retryable_error(e: &AlienError<ErrorData>) -> bool {
         e.retryable
+            && !matches!(
+                e.error,
+                Some(
+                    ErrorData::RemoteResourceNotFound { .. }
+                        | ErrorData::RemoteResourceConflict { .. }
+                )
+            )
     }
 
     /// Execute the request, applying retries, and parse the body as JSON.
@@ -505,7 +518,95 @@ pub async fn sign_send_no_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use httpmock::{Method::GET, Method::POST, MockServer};
     use std::io::{Seek, Write};
+    use std::time::Duration;
+
+    /// The default back-off without its waits, so the test counts attempts instead of sleeping.
+    fn no_wait_backoff() -> ExponentialBuilder {
+        alien_client_core::request_utils::default_retry_backoff().with_min_delay(Duration::ZERO)
+    }
+
+    fn kubernetes_status(code: u16, reason: &str) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "Status",
+            "apiVersion": "v1",
+            "status": "Failure",
+            "reason": reason,
+            "code": code,
+            "details": {"name": "web", "kind": "services"},
+        })
+    }
+
+    /// The API server's answer to a missing or existing object does not change by asking again,
+    /// so the request is sent once and the caller gets the error, still marked retryable for the
+    /// caller's own retries. An unavailable API server is still asked again.
+    #[tokio::test]
+    async fn only_answers_that_can_change_are_resent() {
+        let server = MockServer::start_async().await;
+        let missing = server.mock(|when, then| {
+            when.method(GET)
+                .path("/api/v1/namespaces/ns/services/missing");
+            then.status(404)
+                .json_body(kubernetes_status(404, "NotFound"));
+        });
+        let existing = server.mock(|when, then| {
+            when.method(POST).path("/api/v1/namespaces/ns/services");
+            then.status(409)
+                .json_body(kubernetes_status(409, "AlreadyExists"));
+        });
+        let unavailable = server.mock(|when, then| {
+            when.method(GET).path("/api/v1/namespaces/ns/services/busy");
+            then.status(503).body("etcdserver: leader changed");
+        });
+        let client = reqwest::Client::new();
+
+        let error = client
+            .get(server.url("/api/v1/namespaces/ns/services/missing"))
+            .with_retry()
+            .backoff(no_wait_backoff())
+            .send_json::<serde_json::Value>()
+            .await
+            .expect_err("a missing object is an error");
+        assert!(matches!(
+            error.error,
+            Some(ErrorData::RemoteResourceNotFound { .. })
+        ));
+        assert!(error.retryable, "the caller may still retry");
+        assert_eq!(missing.hits_async().await, 1);
+
+        let error = client
+            .post(server.url("/api/v1/namespaces/ns/services"))
+            .json(&serde_json::json!({"metadata": {"name": "web"}}))
+            .with_retry()
+            .backoff(no_wait_backoff())
+            .send_no_response()
+            .await
+            .expect_err("creating an existing object is an error");
+        assert!(matches!(
+            error.error,
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+        assert!(error.retryable, "the caller may still retry");
+        assert_eq!(existing.hits_async().await, 1);
+
+        let error = client
+            .get(server.url("/api/v1/namespaces/ns/services/busy"))
+            .with_retry()
+            .backoff(no_wait_backoff())
+            .send_json::<serde_json::Value>()
+            .await
+            .expect_err("an unavailable API server is an error");
+        assert!(matches!(
+            error.error,
+            Some(ErrorData::RemoteServiceUnavailable { .. })
+        ));
+        assert_eq!(
+            unavailable.hits_async().await,
+            4,
+            "one attempt and three retries"
+        );
+    }
 
     fn auth_config_with_token_file(token_file: String) -> KubernetesAuthConfig {
         KubernetesAuthConfig {
