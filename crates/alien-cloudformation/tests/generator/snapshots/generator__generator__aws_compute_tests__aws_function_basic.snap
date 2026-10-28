@@ -75,7 +75,9 @@ Parameters:
     AllowedValues:
     - "off"
     - "on"
-Resources: {}
+Resources:
+  RegistrationHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
 Outputs:
   DeploymentSourceKind:
     Value: cloudformation
