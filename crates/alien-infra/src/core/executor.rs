@@ -1830,6 +1830,20 @@ impl StackExecutor {
     async fn step_inner(&self, state: StackState, apply_plan: bool) -> Result<StepResult> {
         validate_stack_controller_state_versions(&state)?;
 
+        // Setup must be able to repair the installed ceiling. An empty desired stack
+        // only tears resources down and does not introduce new workload permissions.
+        #[cfg(feature = "aws")]
+        if self.initial_setup_authority != InitialSetupAuthority::DirectSetup
+            && !self.desired_stack.resources.is_empty()
+        {
+            super::aws_permissions_boundary::validate_installed_aws_permissions_boundary(
+                &self.desired_stack,
+                &state,
+                &self.client_config,
+                &self.deployment_config,
+            )?;
+        }
+
         let mut state = state;
         // Repair checkpoints written before interrupted controllers were settled, including
         // ones whose interruption error was overwritten by a rejected update transition.

@@ -23,7 +23,9 @@ pub(crate) mod aws_ownership;
 #[cfg(feature = "aws")]
 mod aws_permissions_boundary;
 #[cfg(feature = "aws")]
-pub use aws_permissions_boundary::aws_permissions_boundary_for_stack;
+pub use aws_permissions_boundary::{
+    aws_permissions_boundary_for_stack, validate_installed_aws_permissions_boundary,
+};
 #[cfg(feature = "aws")]
 pub(crate) mod aws_tag_scoped;
 

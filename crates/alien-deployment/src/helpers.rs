@@ -764,6 +764,20 @@ pub async fn sync_secrets_to_vault(
     config: &DeploymentConfig,
     runtime_metadata: &mut alien_core::RuntimeMetadata,
 ) -> Result<bool> {
+    // Secret synchronization precedes the executor, so enforce the same setup
+    // compatibility check before its first possible cloud write as well.
+    if runtime_metadata.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+        alien_infra::validate_installed_aws_permissions_boundary(
+            stack,
+            stack_state,
+            client_config,
+            config,
+        )
+        .context(ErrorData::StackExecutionFailed {
+            message: "Installed setup does not cover the deployment's runtime permissions"
+                .to_string(),
+        })?;
+    }
     runtime_metadata.vault_credentials_revoked = false;
 
     let desired_secrets = desired_vault_secrets(stack, client_config.platform(), config);
@@ -2351,6 +2365,70 @@ mod tests {
         let mut hasher = Sha256::new();
         hasher.update(config.environment_variables.hash.as_bytes());
         format!("{:x}", hasher.finalize())
+    }
+
+    #[tokio::test]
+    async fn boundary_freshness_precedes_secret_sync_and_metadata_changes() {
+        let management = alien_core::RemoteStackManagement::new("management".to_string()).build();
+        let stack = Stack::new("boundary".to_string())
+            .add(management.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let mut saved = StackResourceState::new_pending(
+            "remote-stack-management".to_string(),
+            Resource::new(management),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        saved.status = ResourceStatus::Running;
+        saved
+            .set_internal_controller(Some(Box::new(
+                alien_infra::AwsRemoteStackManagementController::mock_ready("management"),
+            )))
+            .unwrap();
+        saved.internal_state.as_mut().unwrap()["permissionsBoundaryArn"] =
+            serde_json::json!("arn:aws:iam::123456789012:policy/test-permissions-boundary");
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert("management".to_string(), saved);
+        let client = ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: alien_core::AwsCredentials::AccessKeys {
+                access_key_id: "test".to_string(),
+                secret_access_key: "test".to_string(),
+                session_token: None,
+            },
+            service_overrides: None,
+        }));
+        let config = make_config(make_snapshot(&[], &[]));
+        let mut metadata = RuntimeMetadata::default();
+        metadata.initial_setup_authority = alien_core::InitialSetupAuthority::ImportedHandoff;
+        metadata.vault_credentials_revoked = true;
+        let before = serde_json::to_value(&metadata).unwrap();
+        let error = sync_secrets_to_vault(&stack, &state, &client, &config, &mut metadata)
+            .await
+            .unwrap_err();
+        assert!(alien_infra::requires_setup_rerun(&error.into_generic()));
+        assert_eq!(serde_json::to_value(&metadata).unwrap(), before);
+
+        metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+        assert!(
+            !sync_secrets_to_vault(&stack, &state, &client, &config, &mut metadata)
+                .await
+                .unwrap()
+        );
+        metadata.initial_setup_authority = alien_core::InitialSetupAuthority::ImportedHandoff;
+        state
+            .resources
+            .get_mut("management")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()["permissionsBoundaryArn"] = serde_json::Value::Null;
+        assert!(
+            !sync_secrets_to_vault(&stack, &state, &client, &config, &mut metadata)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

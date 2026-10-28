@@ -1,11 +1,13 @@
 //! Resolve boundary grants using the same names as AWS workload policy writers.
 
 use alien_core::{
-    KubernetesCluster, Platform, ResourceStatus, Stack, StackResourceState, StackState,
+    ClientConfig, DeploymentConfig, KubernetesCluster, ManagementConfig, Platform,
+    RemoteStackManagement, ResourceStatus, Stack, StackResourceState, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    aws_resource_policies::aws_prefixed_resource_name, generators::aws_stack_permissions_boundary,
+    aws_resource_policies::aws_prefixed_resource_name,
+    generators::{aws_permissions_boundary_covers, aws_stack_permissions_boundary},
     ErrorData as PermissionErrorData, PermissionContext,
 };
 use serde::de::DeserializeOwned;
@@ -13,10 +15,11 @@ use serde_json::Value;
 
 use crate::{
     build::AwsBuildController,
-    core::ResourcePermissionsHelper,
+    core::{state_utils::StackResourceStateExt, ResourcePermissionsHelper},
     error::{ErrorData, Result},
     kv::AwsKvController,
     queue::aws::AwsQueueController,
+    remote_stack_management::AwsRemoteStackManagementController,
     storage::AwsStorageController,
     vault::AwsVaultController,
     worker::AwsWorkerController,
@@ -49,6 +52,79 @@ pub fn aws_permissions_boundary_for_stack(
         operation: Some("generate_permissions_boundary".to_string()),
         resource_id: None,
     })
+}
+
+/// Refuse runtime reconciliation when setup's installed ceiling cannot cover this stack.
+pub fn validate_installed_aws_permissions_boundary(
+    stack: &Stack,
+    state: &StackState,
+    client_config: &ClientConfig,
+    deployment_config: &DeploymentConfig,
+) -> Result<()> {
+    let Some(aws) = client_config.aws_config() else {
+        return Ok(());
+    };
+    for (id, saved) in &state.resources {
+        if saved.resource_type != RemoteStackManagement::RESOURCE_TYPE.as_ref() {
+            continue;
+        }
+        let setup_required = |message: String| ErrorData::SetupRerunRequired {
+            resource_id: id.clone(),
+            message,
+        };
+        let controller = saved.get_internal_controller().context(setup_required(
+            "Cannot read the installed AWS permissions boundary; regenerate and rerun setup"
+                .to_string(),
+        ))?;
+        let controller = controller
+            .as_ref()
+            .and_then(|controller| controller.as_any().downcast_ref::<AwsRemoteStackManagementController>())
+            .ok_or_else(|| AlienError::new(setup_required(
+                "The installed AWS management controller is missing or has the wrong type; regenerate and rerun setup".to_string(),
+            )))?;
+        let Some(arn) = &controller.permissions_boundary_arn else {
+            continue;
+        };
+        let installed = controller.permissions_boundary_document.as_ref().ok_or_else(|| {
+            AlienError::new(setup_required(format!(
+                "Installed permissions boundary '{arn}' has no recorded policy document; regenerate and rerun setup"
+            )))
+        })?;
+        let mut context = PermissionContext::new()
+            .with_stack_prefix(state.resource_prefix.clone())
+            .with_aws_account_id(aws.account_id.clone())
+            .with_aws_region(aws.region.clone());
+        context.aws_permissions_boundary_arn = Some(arn.clone());
+        match &deployment_config.management_config {
+            Some(ManagementConfig::Aws(management)) => {
+                context = context.with_managing_role_arn(management.managing_role_arn.clone());
+                context.managing_account_id = PermissionContext::extract_account_id_from_role_arn(
+                    &management.managing_role_arn,
+                );
+            }
+            None => {}
+            Some(_) => {
+                return Err(AlienError::new(setup_required(
+                    "The AWS boundary requires an AWS management configuration".to_string(),
+                )));
+            }
+        }
+        let required = aws_permissions_boundary_for_stack(stack, state, &context)
+            .context(setup_required(format!(
+                "Cannot resolve the permissions required by boundary '{arn}'; regenerate and rerun setup"
+            )))?;
+        let covered = aws_permissions_boundary_covers(installed, &required).context(
+            setup_required(format!(
+                "Cannot compare installed permissions boundary '{arn}'; regenerate and rerun setup"
+            )),
+        )?;
+        if !covered {
+            return Err(AlienError::new(setup_required(format!(
+                "Installed permissions boundary '{arn}' does not cover this stack's runtime permissions; regenerate and rerun setup"
+            ))));
+        }
+    }
+    Ok(())
 }
 
 fn boundary_grant_context(
