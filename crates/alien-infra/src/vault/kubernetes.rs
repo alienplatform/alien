@@ -8,7 +8,7 @@ use alien_core::{
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus, Vault, VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 
@@ -412,6 +412,57 @@ mod tests {
         controller.delete_start(&harness.ctx()).await.unwrap();
         assert!(controller.namespace.is_none());
         assert!(controller.vault_prefix.is_none());
+    }
+
+    #[rstest::rstest]
+    #[case::namespace_missing(true)]
+    #[case::access_denied(false)]
+    #[tokio::test]
+    async fn list_failure_only_completes_cleanup_when_namespace_is_missing(#[case] missing: bool) {
+        let mut secrets = MockSecretsApi::new();
+        secrets
+            .expect_list_secrets()
+            .withf(|ns, selector, field| {
+                ns == "test-ns"
+                    && selector.as_deref() == Some("managed-by=operator,vault-prefix=test-vault")
+                    && field.is_none()
+            })
+            .times(1)
+            .return_once(move |_, _, _| {
+                Err(AlienError::new(if missing {
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "Namespace".into(),
+                        resource_name: "test-ns".into(),
+                    }
+                } else {
+                    alien_client_core::ErrorData::AuthenticationError {
+                        message: "list denied".into(),
+                    }
+                }))
+            });
+        secrets.expect_delete_secret().times(0);
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .times(1)
+            .return_once(move |_| Ok(secrets));
+        let harness = KubernetesManifestTestHarness::new(
+            Resource::new(Vault::new("vault".into()).build()),
+            vec![],
+        )
+        .with_service_provider(Arc::new(provider));
+        let mut controller = ready("test-ns");
+        let result = controller.delete_start(&harness.ctx()).await;
+        if missing {
+            result.unwrap();
+            assert!(controller.namespace.is_none());
+            assert!(controller.vault_prefix.is_none());
+        } else {
+            assert!(result.unwrap_err().to_string().contains("test-ns"));
+            assert_eq!(controller.namespace.as_deref(), Some("test-ns"));
+            assert_eq!(controller.vault_prefix.as_deref(), Some("test-vault"));
+        }
     }
 
     /// Run against an empty disposable namespace:
