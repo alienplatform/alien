@@ -38,8 +38,12 @@ pub struct AwsRemoteStackManagementController {
     /// The name of the created IAM role.
     pub(crate) role_name: Option<String>,
     /// Setup-owned permissions boundary, absent on older deployments.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) aws_permissions_boundary_arn: Option<String>,
+    #[serde(
+        default,
+        alias = "awsPermissionsBoundaryArn",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) permissions_boundary_arn: Option<String>,
     /// Whether management permissions have been applied
     pub(crate) management_permissions_applied: bool,
     /// Revision of the management permissions last applied. Missing on
@@ -500,7 +504,7 @@ impl AwsRemoteStackManagementController {
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(role_arn), Some(_role_name)) = (&self.role_arn, &self.role_name) {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
-                aws_permissions_boundary_arn: self.aws_permissions_boundary_arn.clone(),
+                aws_permissions_boundary_arn: self.permissions_boundary_arn.clone(),
                 management_resource_id: role_arn.clone(),
                 access_configuration: role_arn.clone(),
                 legacy_remote_bindings_access: None,
@@ -594,6 +598,8 @@ impl AwsRemoteStackManagementController {
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_aws_region(aws_config.region.clone())
             .with_aws_account_id(aws_config.account_id.clone());
+
+        permission_context.aws_permissions_boundary_arn = self.permissions_boundary_arn.clone();
 
         // Add managing role ARN from stack settings for cross-account access (required)
         let aws_management = ctx.get_aws_management_config()?
@@ -1111,7 +1117,7 @@ impl AwsRemoteStackManagementController {
             role_name: Some(role_name.to_string()),
             management_permissions_applied: true,
             management_permissions_revision: None,
-            aws_permissions_boundary_arn: None,
+            permissions_boundary_arn: None,
             _internal_stay_count: None,
         }
     }

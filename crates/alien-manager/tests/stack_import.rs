@@ -300,7 +300,7 @@ fn aws_s3_import_request(
                 id: "management".to_string(),
                 resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
                 import_data: serde_json::to_value(AwsRemoteStackManagementImportData {
-                    aws_permissions_boundary_arn: None,
+                    permissions_boundary_arn: None,
                     role_name: "AlienManager".to_string(),
                     role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
                     management_permissions_applied: true,
@@ -377,7 +377,7 @@ fn aws_remote_management_import_request(
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
             import_data: serde_json::to_value(AwsRemoteStackManagementImportData {
-                aws_permissions_boundary_arn: None,
+                permissions_boundary_arn: None,
                 role_name: format!("{deployment_name}-management"),
                 role_arn: format!("arn:aws:iam::{account_id}:role/{deployment_name}-management"),
                 remote_bindings_role_arn: None,
@@ -466,7 +466,7 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
                 id: "management".to_string(),
                 resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
                 import_data: serde_json::to_value(AwsRemoteStackManagementImportData {
-                    aws_permissions_boundary_arn: None,
+                    permissions_boundary_arn: None,
                     role_name: format!("{deployment_name}-management"),
                     role_arn: format!(
                         "arn:aws:iam::123456789012:role/{deployment_name}-management"

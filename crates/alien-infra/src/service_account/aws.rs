@@ -102,13 +102,16 @@ impl AwsServiceAccountController {
             )
             .build();
 
-        let created_role = IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .create(role_request)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create IAM role '{}'", role_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let created_role = IamRoleWriter::new(
+            client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .create(role_request)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create IAM role '{}'", role_name),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         let role_arn = created_role.create_role_result.role.arn;
 
@@ -272,13 +275,16 @@ impl AwsServiceAccountController {
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
         let role_name = self.role_name.as_ref().unwrap();
-        IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(role_name, ctx.resource_prefix, &config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to prepare service account IAM role '{role_name}'"),
-                resource_id: Some(config.id.clone()),
-            })?;
+        IamRoleWriter::new(
+            client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare service account IAM role '{role_name}'"),
+            resource_id: Some(config.id.clone()),
+        })?;
         client
             .update_assume_role_policy(role_name, &policy)
             .await
@@ -359,9 +365,12 @@ impl AwsServiceAccountController {
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
-        match IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(role_name, ctx.resource_prefix, &config.id)
-            .await
+        match IamRoleWriter::new(
+            client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+        .await
         {
             Ok(()) => {}
             Err(error)
@@ -757,13 +766,16 @@ impl AwsServiceAccountController {
                 .get(&config.id)
                 .is_some_and(|state| state.previous_config.is_some())
         {
-            IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
-                .prepare_existing(role_name, ctx.resource_prefix, &config.id)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to prepare service account IAM role '{role_name}'"),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            IamRoleWriter::new(
+                client.as_ref(),
+                ctx.aws_permissions_boundary_arn()?.as_deref(),
+            )
+            .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare service account IAM role '{role_name}'"),
+                resource_id: Some(config.id.clone()),
+            })?;
         }
 
         if !policy_document.is_empty() {
@@ -901,13 +913,16 @@ impl AwsServiceAccountController {
                 !kept.contains(name) && names_aws_resource_grant(name, set_ids.iter().copied())
             });
         for policy_name in dropped {
-            IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
-                .prepare_existing(role_name, ctx.resource_prefix, &config.id)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to prepare service account IAM role '{role_name}'"),
-                    resource_id: Some(config.id.clone()),
-                })?;
+            IamRoleWriter::new(
+                client.as_ref(),
+                ctx.aws_permissions_boundary_arn()?.as_deref(),
+            )
+            .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare service account IAM role '{role_name}'"),
+                resource_id: Some(config.id.clone()),
+            })?;
             match client.delete_role_policy(role_name, &policy_name).await {
                 Ok(()) => info!(
                     role_name = %role_name,
@@ -1214,6 +1229,8 @@ impl AwsServiceAccountController {
             .with_aws_region(aws_config.region.clone())
             .with_aws_account_id(aws_config.account_id.clone());
 
+        permission_context.aws_permissions_boundary_arn = ctx.aws_permissions_boundary_arn()?;
+
         // Add managing account ID from stack settings if available
         if let Some(aws_management) = ctx.get_aws_management_config()? {
             permission_context =
@@ -1475,7 +1492,7 @@ mod tests {
                 "test-management",
             );
         if bounded {
-            management.aws_permissions_boundary_arn = Some(BOUNDARY.to_string());
+            management.permissions_boundary_arn = Some(BOUNDARY.to_string());
         }
         SingleControllerExecutor::builder()
             .resource(account)

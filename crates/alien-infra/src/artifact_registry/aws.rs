@@ -217,13 +217,16 @@ impl AwsArtifactRegistryController {
         // Create policy document for ECR pull permissions
         let policy_document = self.generate_ecr_pull_policy(ctx, &config.id)?;
 
-        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&pull_role_name, ctx.resource_prefix, &config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
-                resource_id: Some(config.id.clone()),
-            })?;
+        IamRoleWriter::new(
+            iam_client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .prepare_existing(&pull_role_name, ctx.resource_prefix, &config.id)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
+            resource_id: Some(config.id.clone()),
+        })?;
         iam_client
             .put_role_policy(&pull_role_name, policy_name, &policy_document)
             .await
@@ -302,13 +305,16 @@ impl AwsArtifactRegistryController {
         // Create policy document for ECR push+pull permissions
         let policy_document = self.generate_ecr_push_policy(ctx, &config.id)?;
 
-        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&push_role_name, ctx.resource_prefix, &config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
-                resource_id: Some(config.id.clone()),
-            })?;
+        IamRoleWriter::new(
+            iam_client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .prepare_existing(&push_role_name, ctx.resource_prefix, &config.id)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
+            resource_id: Some(config.id.clone()),
+        })?;
         iam_client
             .put_role_policy(&push_role_name, policy_name, &policy_document)
             .await
@@ -423,13 +429,16 @@ impl AwsArtifactRegistryController {
         // Generate updated trust policy (allow service account roles)
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
-        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&pull_role_name, ctx.resource_prefix, &config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
-                resource_id: Some(config.id.clone()),
-            })?;
+        IamRoleWriter::new(
+            iam_client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .prepare_existing(&pull_role_name, ctx.resource_prefix, &config.id)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
+            resource_id: Some(config.id.clone()),
+        })?;
         iam_client
             .update_assume_role_policy(&pull_role_name, &assume_role_policy)
             .await
@@ -472,13 +481,16 @@ impl AwsArtifactRegistryController {
         // Always update the policy to ensure it's correct
         let policy_document = self.generate_ecr_pull_policy(ctx, &config.id)?;
 
-        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&pull_role_name, ctx.resource_prefix, &config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
-                resource_id: Some(config.id.clone()),
-            })?;
+        IamRoleWriter::new(
+            iam_client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .prepare_existing(&pull_role_name, ctx.resource_prefix, &config.id)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
+            resource_id: Some(config.id.clone()),
+        })?;
         iam_client
             .put_role_policy(&pull_role_name, policy_name, &policy_document)
             .await
@@ -517,13 +529,16 @@ impl AwsArtifactRegistryController {
         // Generate updated trust policy (allow service account roles)
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
-        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&push_role_name, ctx.resource_prefix, &config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
-                resource_id: Some(config.id.clone()),
-            })?;
+        IamRoleWriter::new(
+            iam_client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .prepare_existing(&push_role_name, ctx.resource_prefix, &config.id)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
+            resource_id: Some(config.id.clone()),
+        })?;
         iam_client
             .update_assume_role_policy(&push_role_name, &assume_role_policy)
             .await
@@ -566,13 +581,16 @@ impl AwsArtifactRegistryController {
         // Always update the policy to ensure it's correct
         let policy_document = self.generate_ecr_push_policy(ctx, &config.id)?;
 
-        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&push_role_name, ctx.resource_prefix, &config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
-                resource_id: Some(config.id.clone()),
-            })?;
+        IamRoleWriter::new(
+            iam_client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .prepare_existing(&push_role_name, ctx.resource_prefix, &config.id)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
+            resource_id: Some(config.id.clone()),
+        })?;
         iam_client
             .put_role_policy(&push_role_name, policy_name, &policy_document)
             .await
@@ -1058,13 +1076,14 @@ impl AwsArtifactRegistryController {
             )
             .build();
 
-        let error = match IamRoleWriter::new(iam_client, ctx.aws_permissions_boundary_arn())
-            .create(request)
-            .await
-        {
-            Ok(response) => return Ok(response.create_role_result.role.arn),
-            Err(error) => error,
-        };
+        let error =
+            match IamRoleWriter::new(iam_client, ctx.aws_permissions_boundary_arn()?.as_deref())
+                .create(request)
+                .await
+            {
+                Ok(response) => return Ok(response.create_role_result.role.arn),
+                Err(error) => error,
+            };
         let create_failed = |error: AlienError<alien_client_core::ErrorData>| {
             error.context(ErrorData::CloudPlatformError {
                 message: format!("Failed to create role '{}'", role_name),
@@ -1098,7 +1117,7 @@ impl AwsArtifactRegistryController {
         role_label: &str,
         resource_id: &str,
     ) -> Result<()> {
-        match IamRoleWriter::new(iam_client, ctx.aws_permissions_boundary_arn())
+        match IamRoleWriter::new(iam_client, ctx.aws_permissions_boundary_arn()?.as_deref())
             .prepare_existing(role_name, ctx.resource_prefix, resource_id)
             .await
         {
@@ -1612,7 +1631,7 @@ mod tests {
             crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(
                 "test-management",
             );
-        controller.aws_permissions_boundary_arn = Some(TEST_BOUNDARY.to_string());
+        controller.permissions_boundary_arn = Some(TEST_BOUNDARY.to_string());
         controller
     }
 

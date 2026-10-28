@@ -272,11 +272,13 @@ impl ResourcePermissionsHelper {
             .and_then(|cloud| cloud.region.clone())
             .unwrap_or_else(|| aws_config.region.clone());
 
-        Ok(PermissionContext::new()
+        let mut permission_context = PermissionContext::new()
             .with_aws_account_id(aws_account_id)
             .with_aws_region(aws_region)
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_resource_name(cluster_name))
+            .with_resource_name(cluster_name);
+        permission_context.aws_permissions_boundary_arn = ctx.aws_permissions_boundary_arn()?;
+        Ok(permission_context)
     }
 
     pub fn gcp_kubernetes_cluster_permission_context(
@@ -1333,6 +1335,7 @@ impl ResourcePermissionsHelper {
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_id(resource_id.to_string())
             .with_resource_name(resource_name.to_string());
+        permission_context.aws_permissions_boundary_arn = ctx.aws_permissions_boundary_arn()?;
 
         if let Some(aws_management) = ctx.get_aws_management_config()? {
             permission_context =
@@ -1462,9 +1465,10 @@ impl ResourcePermissionsHelper {
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
 
-        let preparation = IamRoleWriter::new(iam.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&role_name, ctx.resource_prefix, bindings_id)
-            .await;
+        let preparation =
+            IamRoleWriter::new(iam.as_ref(), ctx.aws_permissions_boundary_arn()?.as_deref())
+                .prepare_existing(&role_name, ctx.resource_prefix, bindings_id)
+                .await;
         match preparation {
             Ok(()) => {}
             Err(error)
@@ -1694,9 +1698,12 @@ impl ResourcePermissionsHelper {
                 .collect();
             // Setup owns the management identity itself; it must remain unbounded.
             if !stale.is_empty() && management_role_name.as_deref() != Some(role_name.as_str()) {
-                match IamRoleWriter::new(iam.as_ref(), ctx.aws_permissions_boundary_arn())
-                    .prepare_existing(&role_name, ctx.resource_prefix, &owner_resource_id)
-                    .await
+                match IamRoleWriter::new(
+                    iam.as_ref(),
+                    ctx.aws_permissions_boundary_arn()?.as_deref(),
+                )
+                .prepare_existing(&role_name, ctx.resource_prefix, &owner_resource_id)
+                .await
                 {
                     Ok(()) => {}
                     Err(error)
@@ -1899,13 +1906,22 @@ impl ResourcePermissionsHelper {
         )?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         if !policies.is_empty() {
-            IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-                .prepare_existing(&service_account_role_name, ctx.resource_prefix, &format!("{profile_name}-sa"))
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to prepare IAM role '{service_account_role_name}' for resource grants"),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
+            IamRoleWriter::new(
+                iam_client.as_ref(),
+                ctx.aws_permissions_boundary_arn()?.as_deref(),
+            )
+            .prepare_existing(
+                &service_account_role_name,
+                ctx.resource_prefix,
+                &format!("{profile_name}-sa"),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to prepare IAM role '{service_account_role_name}' for resource grants"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?;
         }
         let existing =
             Self::aws_inline_policy_names(&iam_client, &service_account_role_name, resource_id)

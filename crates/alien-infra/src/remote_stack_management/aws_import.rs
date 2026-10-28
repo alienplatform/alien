@@ -28,7 +28,7 @@ impl ResourceImporter for AwsRemoteStackManagementImporter {
             role_arn: Some(data.role_arn),
             role_name: Some(data.role_name),
             management_permissions_applied: data.management_permissions_applied,
-            aws_permissions_boundary_arn: data.aws_permissions_boundary_arn,
+            permissions_boundary_arn: data.permissions_boundary_arn,
             // Setup was applied by an external engine, which refreshes it itself.
             management_permissions_revision: None,
             _internal_stay_count: None,

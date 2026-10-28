@@ -39,28 +39,31 @@ impl AwsRemoteBindingsController {
             .service_provider
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
-        let response = IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .create(
-                CreateRoleRequest::builder()
-                    .role_name(role_name.clone())
-                    .assume_role_policy_document(trust_policy(&management.managing_role_arn))
-                    .description(format!(
-                        "Application access identity. Resource prefix: {}.",
-                        ctx.resource_prefix
-                    ))
-                    .tags(
-                        standard_resource_tags(ctx.resource_prefix, &config.id)
-                            .into_iter()
-                            .map(|(key, value)| CreateRoleTag { key, value })
-                            .collect(),
-                    )
-                    .build(),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create Remote Bindings IAM role '{role_name}'"),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let response = IamRoleWriter::new(
+            client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .create(
+            CreateRoleRequest::builder()
+                .role_name(role_name.clone())
+                .assume_role_policy_document(trust_policy(&management.managing_role_arn))
+                .description(format!(
+                    "Application access identity. Resource prefix: {}.",
+                    ctx.resource_prefix
+                ))
+                .tags(
+                    standard_resource_tags(ctx.resource_prefix, &config.id)
+                        .into_iter()
+                        .map(|(key, value)| CreateRoleTag { key, value })
+                        .collect(),
+                )
+                .build(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create Remote Bindings IAM role '{role_name}'"),
+            resource_id: Some(config.id.clone()),
+        })?;
         self.role_arn = Some(response.create_role_result.role.arn);
         self.role_name = Some(role_name);
         Ok(HandlerAction::Continue {
@@ -99,13 +102,16 @@ impl AwsRemoteBindingsController {
             .service_provider
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
-        IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(role_name, ctx.resource_prefix, &resource_id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to prepare Remote Bindings IAM role '{role_name}'"),
-                resource_id: Some(resource_id.clone()),
-            })?;
+        IamRoleWriter::new(
+            client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .prepare_existing(role_name, ctx.resource_prefix, &resource_id)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare Remote Bindings IAM role '{role_name}'"),
+            resource_id: Some(resource_id.clone()),
+        })?;
         client
             .update_assume_role_policy(role_name, &trust_policy(&management.managing_role_arn))
             .await
@@ -128,9 +134,12 @@ impl AwsRemoteBindingsController {
                 .service_provider
                 .get_aws_iam_client(ctx.get_aws_config()?)
                 .await?;
-            match IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
-                .prepare_existing(role_name, ctx.resource_prefix, &resource_id)
-                .await
+            match IamRoleWriter::new(
+                client.as_ref(),
+                ctx.aws_permissions_boundary_arn()?.as_deref(),
+            )
+            .prepare_existing(role_name, ctx.resource_prefix, &resource_id)
+            .await
             {
                 Ok(()) => {}
                 Err(error)
@@ -304,7 +313,7 @@ mod tests {
                 "test-management",
             );
         if bounded {
-            management.aws_permissions_boundary_arn = Some(BOUNDARY.to_string());
+            management.permissions_boundary_arn = Some(BOUNDARY.to_string());
         }
         SingleControllerExecutor::builder()
             .resource(RemoteBindings::new("access".to_string()).build())

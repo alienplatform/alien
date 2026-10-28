@@ -1260,19 +1260,20 @@ fn deserialize_controller_by_tag(
 
 // Add the new helper method implementation
 impl ResourceControllerContext<'_> {
-    /// Boundary recorded by setup; missing on deployments using an older setup.
-    pub fn aws_permissions_boundary_arn(&self) -> Option<&str> {
-        self.state
-            .resources
-            .values()
-            .filter(|state| {
-                state.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
-            })
-            .filter_map(|state| state.outputs.as_ref())
-            .filter_map(|outputs| {
-                outputs.downcast_ref::<alien_core::RemoteStackManagementOutputs>()
-            })
-            .find_map(|outputs| outputs.aws_permissions_boundary_arn.as_deref())
+    /// Read setup's boundary from durable controller state, including during deletion.
+    /// Missing or malformed controller state must not disable boundary enforcement.
+    #[cfg(feature = "aws")]
+    pub fn aws_permissions_boundary_arn(&self) -> Result<Option<String>> {
+        let Some((id, _)) = self.state.resources.iter().find(|(_, state)| {
+            state.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
+        }) else {
+            return Ok(None);
+        };
+        let controller = self
+            .require_dependency::<crate::remote_stack_management::AwsRemoteStackManagementController>(
+                &ResourceRef::new(alien_core::RemoteStackManagement::RESOURCE_TYPE, id.clone()),
+            )?;
+        Ok(controller.permissions_boundary_arn)
     }
 
     /// Human-facing deployment name for cloud console metadata.
@@ -1493,6 +1494,143 @@ impl ResourceControllerContext<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn aws_boundary_uses_saved_controller_state_without_outputs() {
+        use crate::{
+            core::{controller_test::SingleControllerExecutor, ResourcePermissionsHelper},
+            remote_stack_management::AwsRemoteStackManagementController,
+            service_account::AwsServiceAccountController,
+        };
+        use alien_core::{KubernetesCluster, RemoteStackManagement, ServiceAccount};
+
+        let boundary = "arn:aws:iam::123456789012:policy/test-permissions-boundary";
+        let mut management = AwsRemoteStackManagementController::mock_ready("test-management");
+        management.permissions_boundary_arn = Some(boundary.to_string());
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(ServiceAccount::new("test-sa".to_string()).build())
+            .controller(AwsServiceAccountController::default())
+            .platform(Platform::Aws)
+            .with_dependency(
+                RemoteStackManagement::new("management".to_string()).build(),
+                management,
+            )
+            .build()
+            .await
+            .unwrap();
+        let mut saved = executor.stack_state().resources["management"].clone();
+        saved.outputs = None;
+        executor.insert_saved_resource("management", saved.clone());
+        executor.with_context(|ctx| {
+            assert_eq!(
+                ctx.aws_permissions_boundary_arn().unwrap().as_deref(),
+                Some(boundary)
+            );
+            let context = ResourcePermissionsHelper::aws_kubernetes_cluster_permission_context(
+                ctx,
+                &KubernetesCluster::new("cluster".to_string())
+                    .provider(alien_core::KubernetesClusterProvider::Eks)
+                    .ownership(alien_core::KubernetesClusterOwnership::Existing)
+                    .namespace("default".to_string())
+                    .heartbeat_mode(alien_core::KubernetesHeartbeatMode::KubernetesApi)
+                    .build(),
+            )
+            .unwrap();
+            let policy = alien_permissions::generators::AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    alien_permissions::get_permission_set("service-account/provision").unwrap(),
+                    alien_permissions::BindingTarget::Stack,
+                    &context,
+                )
+                .unwrap();
+            let policy = serde_json::to_value(policy).unwrap();
+            for statement in policy["Statement"].as_array().unwrap() {
+                if statement["Action"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a == "iam:CreateRole")
+                {
+                    assert_eq!(
+                        statement["Condition"]["StringEquals"]["iam:PermissionsBoundary"],
+                        boundary
+                    );
+                    return;
+                }
+            }
+            panic!("service account policy must grant CreateRole");
+        });
+
+        // A resource removed from the desired stack still needs its saved boundary for deletion.
+        let mut deletion = SingleControllerExecutor::builder()
+            .resource(ServiceAccount::new("test-sa".to_string()).build())
+            .controller(AwsServiceAccountController::default())
+            .platform(Platform::Aws)
+            .build()
+            .await
+            .unwrap();
+        deletion.insert_saved_resource("management", saved.clone());
+        assert_eq!(
+            deletion
+                .with_context(|ctx| ctx.aws_permissions_boundary_arn())
+                .unwrap()
+                .as_deref(),
+            Some(boundary)
+        );
+
+        // Accept the earlier field spelling when restoring in-flight state.
+        let internal = saved
+            .internal_state
+            .as_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        let arn = internal.remove("permissionsBoundaryArn").unwrap();
+        internal.insert("awsPermissionsBoundaryArn".to_string(), arn);
+        deletion.insert_saved_resource("management", saved.clone());
+        assert_eq!(
+            deletion
+                .with_context(|ctx| ctx.aws_permissions_boundary_arn())
+                .unwrap()
+                .as_deref(),
+            Some(boundary)
+        );
+
+        saved
+            .internal_state
+            .as_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("awsPermissionsBoundaryArn");
+        deletion.insert_saved_resource("management", saved.clone());
+        assert_eq!(
+            deletion
+                .with_context(|ctx| ctx.aws_permissions_boundary_arn())
+                .unwrap(),
+            None
+        );
+
+        saved.internal_state.as_mut().unwrap()["permissionsBoundaryArn"] = serde_json::json!(17);
+        deletion.insert_saved_resource("management", saved.clone());
+        assert_eq!(
+            deletion
+                .with_context(|ctx| ctx.aws_permissions_boundary_arn())
+                .unwrap_err()
+                .code,
+            "CONTROLLER_STATE_TYPE_MISMATCH"
+        );
+        saved.internal_state = None;
+        deletion.insert_saved_resource("management", saved);
+        assert_eq!(
+            deletion
+                .with_context(|ctx| ctx.aws_permissions_boundary_arn())
+                .unwrap_err()
+                .code,
+            "DEPENDENCY_NOT_READY"
+        );
+    }
 
     fn assert_controller_state_round_trips<T>(controller: T)
     where

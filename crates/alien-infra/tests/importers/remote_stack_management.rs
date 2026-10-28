@@ -21,7 +21,7 @@ use super::*;
 fn aws_remote_stack_management_import_preserves_setup_ownership() {
     let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
     let data = AwsRemoteStackManagementImportData {
-        aws_permissions_boundary_arn: None,
+        permissions_boundary_arn: None,
         role_arn: "arn:aws:iam::123456789012:role/alien-stack-mgmt".to_string(),
         role_name: "alien-stack-mgmt".to_string(),
         remote_bindings_role_arn: Some(
@@ -63,9 +63,16 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
 #[test]
 fn aws_boundary_survives_import_and_controller_restore() {
     let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
-    for boundary in [
-        None,
-        Some("arn:aws:iam::123456789012:policy/test-permissions-boundary"),
+    for (field, boundary) in [
+        ("permissionsBoundaryArn", None),
+        (
+            "permissionsBoundaryArn",
+            Some("arn:aws:iam::123456789012:policy/test-permissions-boundary"),
+        ),
+        (
+            "awsPermissionsBoundaryArn",
+            Some("arn:aws:iam::123456789012:policy/test-permissions-boundary"),
+        ),
     ] {
         let mut data = json!({
             "roleName": "test-management",
@@ -74,7 +81,7 @@ fn aws_boundary_survives_import_and_controller_restore() {
             "futureSetupField": "ignored"
         });
         if let Some(arn) = boundary {
-            data["awsPermissionsBoundaryArn"] = json!(arn);
+            data[field] = json!(arn);
         }
         let state = run_through_registry(
             &RemoteStackManagement::RESOURCE_TYPE,
@@ -102,7 +109,7 @@ fn aws_boundary_survives_import_and_controller_restore() {
             outputs
         );
         assert_eq!(
-            internal_state(&state)["awsPermissionsBoundaryArn"],
+            internal_state(&state)["permissionsBoundaryArn"],
             json!(boundary)
         );
     }
