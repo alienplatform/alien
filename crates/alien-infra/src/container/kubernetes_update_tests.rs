@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -44,6 +44,9 @@ struct FakeApi {
     objects: BTreeMap<String, Value>,
     calls: Vec<Call>,
     step: usize,
+    /// A workload path whose next update finds the object changed since the controller read it,
+    /// as when the workload controller writes its status in between.
+    changed_before_next_update: Option<String>,
 }
 
 fn status(code: u16, reason: &str, name: &str) -> Value {
@@ -106,6 +109,16 @@ impl FakeApi {
                 (201, object)
             }
             Method::PUT => {
+                if self.changed_before_next_update.as_deref() == Some(path) {
+                    self.changed_before_next_update = None;
+                    let stored = self.objects.get_mut(path).expect("changed object exists");
+                    let version = stored["metadata"]["resourceVersion"]
+                        .as_str()
+                        .expect("stored object has a resourceVersion")
+                        .parse::<u64>()
+                        .expect("numeric resourceVersion");
+                    stored["metadata"]["resourceVersion"] = (version + 1).to_string().into();
+                }
                 let Some(stored) = self.objects.get(path) else {
                     return (404, status(404, "NotFound", &name));
                 };
@@ -293,13 +306,32 @@ async fn run_steps(
     (state, step)
 }
 
-#[tokio::test]
-async fn a_release_of_a_container_chain_waits_on_dependencies_without_api_calls() {
+/// What one release of the chain did, from the first update step on.
+struct Release {
+    state: StackState,
+    calls: Vec<Call>,
+    objects: BTreeMap<String, Value>,
+    /// Each Container's status at the start of each step.
+    statuses: BTreeMap<usize, BTreeMap<String, ResourceStatus>>,
+    steps: usize,
+    elapsed: Duration,
+}
+
+fn deployment_path(id: &str) -> String {
+    format!(
+        "/apis/apps/v1/namespaces/test-ns/deployments/{}",
+        kubernetes_resource_name("test", id)
+    )
+}
+
+/// Installs release 1, then steps release 2 with the options a deployment update uses. When
+/// `changed_before_update` names a Container, its workload changes between the controller's
+/// read and its update.
+async fn install_and_release(changed_before_update: Option<&str>) -> Release {
     let (url, api) = start_fake_api().await;
     let config = deployment_config();
     let mut statuses = BTreeMap::new();
 
-    // Install release 1 so the API holds the objects the controller made.
     let installed = stack("1");
     let install = StackExecutor::builder(&installed, client_config(&url))
         .deployment_config(&config)
@@ -315,8 +347,8 @@ async fn a_release_of_a_container_chain_waits_on_dependencies_without_api_calls(
         &mut statuses,
     )
     .await;
+    api.lock().unwrap().changed_before_next_update = changed_before_update.map(deployment_path);
 
-    // Release 2, stepped with the options a deployment update uses.
     let release = stack("2");
     let update = StackExecutor::builder(&release, client_config(&url))
         .deployment_config(&config)
@@ -331,31 +363,44 @@ async fn a_release_of_a_container_chain_waits_on_dependencies_without_api_calls(
     let elapsed = started.elapsed();
 
     let api = api.lock().unwrap();
-    let calls: Vec<&Call> = api
-        .calls
-        .iter()
-        .filter(|call| call.step >= update_start)
-        .collect();
-
+    assert_eq!(
+        api.changed_before_next_update, None,
+        "the changed workload was updated"
+    );
     // Every Container runs release 2, and the API holds it.
     for id in CHAIN {
-        let resource = &state.resources[id];
-        assert_eq!(resource.status, ResourceStatus::Running, "'{id}'");
-        let workload = kubernetes_resource_name("test", id);
-        let deployment =
-            &api.objects[&format!("/apis/apps/v1/namespaces/test-ns/deployments/{workload}")];
         assert_eq!(
-            deployment["spec"]["template"]["spec"]["containers"][0]["image"],
+            state.resources[id].status,
+            ResourceStatus::Running,
+            "'{id}'"
+        );
+        assert_eq!(
+            api.objects[&deployment_path(id)]["spec"]["template"]["spec"]["containers"][0]["image"],
             format!("registry.example.com/{id}:2"),
             "'{id}' runs release 2"
         );
     }
+    Release {
+        state,
+        calls: api
+            .calls
+            .iter()
+            .filter(|call| call.step >= update_start)
+            .cloned()
+            .collect(),
+        objects: api.objects.clone(),
+        statuses: statuses.split_off(&update_start),
+        steps: update_end - update_start,
+        elapsed,
+    }
+}
 
-    // A request answered 404 or 409 is not sent again in the same step. Within a step each
-    // Container steps once, so the same request twice there is a resend of the transport.
+/// Requests answered 404 or 409 that were sent again in the same step. Within a step each
+/// Container steps once, so the same request twice there is a resend of the transport.
+fn resends(calls: &[Call]) -> usize {
     let mut resends = 0;
     let mut answered = BTreeSet::new();
-    for call in &calls {
+    for call in calls {
         let key = (
             call.step,
             call.method.clone(),
@@ -369,6 +414,14 @@ async fn a_release_of_a_container_chain_waits_on_dependencies_without_api_calls(
             answered.insert(key);
         }
     }
+    resends
+}
+
+#[tokio::test]
+async fn a_release_of_a_container_chain_waits_on_dependencies_without_api_calls() {
+    let release = install_and_release(None).await;
+    let calls = &release.calls;
+    let resends = resends(calls);
 
     // A Container rolls its workload out only once the Container it links is Running, and in
     // the steps it waits it writes nothing: no Secret, Service or workload of it changes ahead
@@ -384,19 +437,15 @@ async fn a_release_of_a_container_chain_waits_on_dependencies_without_api_calls(
         ];
         let rollout = calls
             .iter()
-            .find(|call| {
-                call.method == Method::PUT
-                    && call.path
-                        == format!("/apis/apps/v1/namespaces/test-ns/deployments/{workload}")
-            })
+            .find(|call| call.method == Method::PUT && call.path == deployment_path(id))
             .unwrap_or_else(|| panic!("'{id}' is rolled out"));
         assert_eq!(
-            statuses[&rollout.step][dependency],
+            release.statuses[&rollout.step][dependency],
             ResourceStatus::Running,
             "'{id}' rolls out after '{dependency}' is Running"
         );
-        for call in &calls {
-            let waiting = statuses[&call.step][dependency] != ResourceStatus::Running;
+        for call in calls {
+            let waiting = release.statuses[&call.step][dependency] != ResourceStatus::Running;
             if waiting && call.method != Method::GET && names.contains(&FakeApi::object_name(call))
             {
                 waiting_writes.push(format!(
@@ -413,12 +462,12 @@ async fn a_release_of_a_container_chain_waits_on_dependencies_without_api_calls(
         .count();
     eprintln!(
         "update: {} executor steps, {} API requests, {} answered 404/409, {} resent, {} writes while waiting, {:.1}s",
-        update_end - update_start,
+        release.steps,
         calls.len(),
         errors,
         resends,
         waiting_writes.len(),
-        elapsed.as_secs_f64()
+        release.elapsed.as_secs_f64()
     );
     assert_eq!(resends, 0, "a 404 or 409 answer was resent {resends} times");
     assert!(
@@ -427,5 +476,49 @@ async fn a_release_of_a_container_chain_waits_on_dependencies_without_api_calls(
     );
     // Each Container takes three steps: submit its rollout, see it complete, publish its
     // endpoints (Running). Its dependent submits in the step after.
-    assert_eq!(update_end - update_start, 3 * CHAIN.len());
+    assert_eq!(release.steps, 3 * CHAIN.len());
+}
+
+/// An update carries the `resourceVersion` the controller read. When the workload changed in
+/// between, the API server answers 409, and sending the same update again gets 409 again. The
+/// conflict goes to the executor, which runs the update step again in its next step: it reads
+/// the workload afresh and the update goes through.
+#[tokio::test]
+async fn an_update_of_a_workload_changed_since_it_was_read_is_retried_by_the_executor() {
+    let release = install_and_release(Some("platform")).await;
+    let path = deployment_path("platform");
+    let updates: Vec<&Call> = release
+        .calls
+        .iter()
+        .filter(|call| call.method == Method::PUT && call.path == path)
+        .collect();
+    assert_eq!(
+        updates.iter().map(|call| call.status).collect::<Vec<_>>(),
+        [409, 200],
+        "one stale update, then one fresh one"
+    );
+    assert_eq!(
+        updates[1].step,
+        updates[0].step + 1,
+        "the executor retries in its next step"
+    );
+    let reads_before_retry = release
+        .calls
+        .iter()
+        .filter(|call| {
+            call.method == Method::GET && call.path == path && call.step == updates[1].step
+        })
+        .count();
+    assert!(
+        reads_before_retry >= 1,
+        "the retry reads the workload again"
+    );
+    assert_eq!(resends(&release.calls), 0);
+    assert_eq!(release.state.resources["platform"].retry_attempt, 0);
+    assert_eq!(
+        release.objects[&path]["metadata"]["generation"], 2,
+        "rolled out once"
+    );
+    // One step more than a release without the conflict.
+    assert_eq!(release.steps, 3 * CHAIN.len() + 1);
 }
