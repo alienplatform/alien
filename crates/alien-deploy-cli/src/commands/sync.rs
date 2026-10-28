@@ -7,7 +7,8 @@
 //!   wrote, then downloads the release the site should run as a signed
 //!   bundle into the folder. Only image layers the site doesn't have yet are
 //!   included.
-//! - **Inside the site** (a registry is configured and the cluster is
+//! - **Inside the site** (a registry is configured, from `--registry` or
+//!   `airgapped.registry` in the values file, and the cluster is
 //!   reachable): verifies the newest bundle against the key the install
 //!   trusts, pushes its images to the site's registry, installs or upgrades
 //!   the chart, waits for the rollout, and writes a report: the deployment's
@@ -66,8 +67,8 @@ const TOOLS_DIR: &str = "tools";
     # First run, on the online machine (token and URL from the vendor)
     alien-deploy sync --token ax_... --manager https://manager.example.com
 
-    # Inside the site, the first time
-    alien-deploy sync --registry registry.internal/vendor -f values.yaml --trusted-key ed25519:...
+    # Inside the site, the first time (the registry comes from airgapped.registry in values.yaml)
+    alien-deploy sync -f values.yaml --trusted-key ed25519:...
 
     # Every time after that, on either side
     alien-deploy sync
@@ -83,7 +84,7 @@ pub struct SyncArgs {
     /// Manager URL from the vendor. Branded CLIs discover it automatically.
     #[arg(long)]
     pub manager: Option<String>,
-    /// Site registry (and optional path) for the images. Needed once inside the site.
+    /// Site registry (and optional path) for the images. Overrides `airgapped.registry` in the values file.
     #[arg(long)]
     pub registry: Option<String>,
     #[arg(long, env = "AIRGAP_REGISTRY_USERNAME")]
@@ -102,7 +103,7 @@ pub struct SyncArgs {
     /// Kubernetes context (defaults to the current one). Remembered.
     #[arg(long)]
     pub kube_context: Option<String>,
-    /// The vendor's bundle key (`ed25519:...`). Needed for the first install.
+    /// The vendor's bundle key (`ed25519:...`). Needed for the first install, and marks this machine as the site.
     #[arg(long, env = "ALIEN_TRUSTED_KEY")]
     pub trusted_key: Option<String>,
     /// Show what would happen without installing or downloading anything
@@ -276,10 +277,10 @@ pub async fn sync_command(
             field: "sync".to_string(),
             message: match token {
                 Some(token) => format!(
-                    "Can't reach {} and no site registry is set, so there's nothing to do here. Online, check the connection; inside the site, pass --registry the first time.",
+                    "Can't reach {} and no site registry is set, so there's nothing to do here. Online, check the connection; inside the site, pass --trusted-key the first time.",
                     token.url
                 ),
-                None => "No manager token on this machine and no site registry set. Online, run `alien-deploy sync --token ... --manager ...` once; inside the site, pass --registry the first time.".to_string(),
+                None => "No manager token on this machine and no site registry set. Online, run `alien-deploy sync --token ... --manager ...` once; inside the site, pass --trusted-key the first time.".to_string(),
             },
         }));
     }
@@ -486,6 +487,7 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
     .into_alien_error()
     .context(config_error("writing the target"))?;
 
+    check_site_values(&settings.values)?;
     println!("Returning {} to {}", site.name, record.release_id);
     let sequence = chrono::Utc::now().timestamp_millis() as u64;
     let ack = current_ack(&settings, &record.stack_id, &namespace).await?;
@@ -1154,20 +1156,7 @@ async fn download_update(
     // The chart names the images it runs itself: the Operator and its hooks.
     let values = values
         .iter()
-        .map(|path| {
-            let bytes = std::fs::read(path)
-                .into_alien_error()
-                .context(config_error(format!(
-                    "reading Helm values {}",
-                    path.display()
-                )))?;
-            serde_yaml::from_slice(&bytes)
-                .into_alien_error()
-                .context(config_error(format!(
-                    "parsing Helm values {}",
-                    path.display()
-                )))
-        })
+        .map(|path| load_values_file(path))
         .collect::<Result<Vec<serde_yaml::Value>>>()?;
     let chart_images = airgap::chart_images(&dir.join(&chart), &target, &values)
         .context(config_error("reading the chart's images"))?;
@@ -2502,13 +2491,13 @@ impl SiteSide {
     }
 }
 
-/// Site settings from flags, remembered on this machine (except registry
-/// credentials). `None` on a machine that installs nothing.
+/// Site settings from flags and the values files, remembered on this machine
+/// (except registry credentials). `None` on a machine that installs nothing.
+///
+/// The online machine gets the same values file, so a registry in it does
+/// not make a machine the site: that takes `--trusted-key` (which the first
+/// install needs anyway) or an earlier site run on this machine.
 fn site_side_settings(args: &SyncArgs, site: &mut MachineState) -> Result<Option<SiteSide>> {
-    if let Some(registry) = &args.registry {
-        site.registry = Some(registry.clone());
-        site.insecure_registry = args.insecure_registry;
-    }
     if args.namespace.is_some() {
         site.namespace = args.namespace.clone();
     }
@@ -2522,6 +2511,25 @@ fn site_side_settings(args: &SyncArgs, site: &mut MachineState) -> Result<Option
             );
         }
         site.values = values;
+    }
+    if let Some(registry) = &args.registry {
+        site.registry = Some(registry.clone());
+        site.insecure_registry = args.insecure_registry;
+    } else if site.registry.is_some() || args.trusted_key.is_some() {
+        if let Some(registry) = values_registry(&site.values)? {
+            site.insecure_registry = args.insecure_registry
+                || (site.insecure_registry && site.registry.as_deref() == Some(registry.as_str()));
+            site.registry = Some(registry);
+        }
+    }
+    if args.trusted_key.is_some() && site.registry.is_none() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "registry".to_string(),
+            message: format!(
+                "No site registry to push the images to. Set {} in the values file (pass it with --values) or pass --registry.",
+                REGISTRY_VALUES_KEY.join(".")
+            ),
+        }));
     }
     if args.kube_context.is_some() {
         site.kube_context = args.kube_context.clone();
@@ -2540,6 +2548,163 @@ fn site_side_settings(args: &SyncArgs, site: &mut MachineState) -> Result<Option
         }
     };
     Ok(Some(settings))
+}
+
+/// Where a values file names the site registry. Sync reads it and removes it
+/// before Helm: it is a sync setting, not a chart value.
+const REGISTRY_VALUES_KEY: [&str; 2] = ["airgapped", "registry"];
+
+fn load_values_file(path: &Path) -> Result<serde_yaml::Value> {
+    let bytes = std::fs::read(path)
+        .into_alien_error()
+        .context(config_error(format!(
+            "reading Helm values {}",
+            path.display()
+        )))?;
+    serde_yaml::from_slice(&bytes)
+        .into_alien_error()
+        .context(config_error(format!(
+            "parsing Helm values {}",
+            path.display()
+        )))
+}
+
+/// The site registry the values files set, the last file winning as in Helm.
+fn values_registry(paths: &[PathBuf]) -> Result<Option<String>> {
+    let mut registry = None;
+    for path in paths {
+        let values = load_values_file(path)?;
+        let [section, key] = REGISTRY_VALUES_KEY;
+        match values.get(section).and_then(|section| section.get(key)) {
+            None | Some(serde_yaml::Value::Null) => {}
+            Some(serde_yaml::Value::String(value)) if value.trim().is_empty() => {}
+            Some(serde_yaml::Value::String(value)) => registry = Some(value.trim().to_string()),
+            Some(_) => {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: REGISTRY_VALUES_KEY.join("."),
+                    message: format!(
+                        "{} in {} must be a registry address, for example registry.example.internal/vendor",
+                        REGISTRY_VALUES_KEY.join("."),
+                        path.display()
+                    ),
+                }));
+            }
+        }
+    }
+    Ok(registry)
+}
+
+/// Whether `value` still holds a site-settings placeholder such as
+/// `<SITE_REGISTRY>`: `<`, an uppercase letter, uppercase letters, digits or
+/// underscores, then `>`.
+fn contains_placeholder(value: &str) -> bool {
+    value.match_indices('<').any(|(start, _)| {
+        let rest = &value[start + 1..];
+        let Some(end) = rest.find('>') else {
+            return false;
+        };
+        let name = &rest[..end];
+        name.starts_with(|c: char| c.is_ascii_uppercase())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    })
+}
+
+fn collect_placeholders(value: &serde_yaml::Value, path: &str, found: &mut Vec<String>) {
+    match value {
+        serde_yaml::Value::String(text) if contains_placeholder(text) => {
+            found.push(format!("{path}: {text}"));
+        }
+        serde_yaml::Value::Mapping(entries) => {
+            for (key, item) in entries {
+                let key = match key {
+                    serde_yaml::Value::String(key) => key.clone(),
+                    other => serde_yaml::to_string(other)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                };
+                let child = if path.is_empty() {
+                    key
+                } else {
+                    format!("{path}.{key}")
+                };
+                collect_placeholders(item, &child, found);
+            }
+        }
+        serde_yaml::Value::Sequence(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_placeholders(item, &format!("{path}[{index}]"), found);
+            }
+        }
+        serde_yaml::Value::Tagged(tagged) => collect_placeholders(&tagged.value, path, found),
+        _ => {}
+    }
+}
+
+/// Stop before anything is pushed or installed while a values file still has
+/// a site setting to fill in.
+fn check_site_values(paths: &[PathBuf]) -> Result<()> {
+    let mut problems = Vec::new();
+    for path in paths {
+        let mut found = Vec::new();
+        collect_placeholders(&load_values_file(path)?, "", &mut found);
+        if !found.is_empty() {
+            problems.push(format!(
+                "{}:\n{}",
+                path.display(),
+                found
+                    .iter()
+                    .map(|entry| format!("  {entry}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+    }
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "values".to_string(),
+        message: format!(
+            "Fill in the site settings before installing. These are still placeholders:\n{}\nEdit the values file and run sync again; nothing was installed.",
+            problems.join("\n")
+        ),
+    }))
+}
+
+/// The values files as Helm should see them: without the sync-only registry
+/// key, which charts don't declare.
+fn helm_values_files(paths: &[PathBuf], dir: &Path) -> Result<Vec<(PathBuf, serde_yaml::Value)>> {
+    let mut files = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        let mut values = load_values_file(path)?;
+        let [section, key] = REGISTRY_VALUES_KEY;
+        if let Some(section) = values
+            .get_mut(section)
+            .and_then(serde_yaml::Value::as_mapping_mut)
+        {
+            section.remove(key);
+        }
+        let helm_path = dir.join(format!("values-{index}.yaml"));
+        std::fs::write(
+            &helm_path,
+            serde_yaml::to_string(&values)
+                .into_alien_error()
+                .context(config_error(format!(
+                    "encoding Helm values {}",
+                    path.display()
+                )))?,
+        )
+        .into_alien_error()
+        .context(config_error(format!(
+            "writing Helm values for {}",
+            path.display()
+        )))?;
+        files.push((helm_path, values));
+    }
+    Ok(files)
 }
 
 async fn install_pending(
@@ -2631,6 +2796,7 @@ async fn install_pending(
         }
         return uninstall_site(folder, site, settings, &manifest, args.dry_run).await;
     }
+    check_site_values(&settings.values)?;
     let observation = read_status(settings, &manifest.stack_id, &namespace).await?;
     if !args.dry_run {
         if let Some((status, _)) = &observation {
@@ -3516,22 +3682,11 @@ async fn helm_upgrade(
                 .context(config_error("reading the installed Helm values"))?,
         );
     }
-    for path in &settings.values {
-        let bytes = std::fs::read(path)
-            .into_alien_error()
-            .context(config_error(format!(
-                "reading Helm values {}",
-                path.display()
-            )))?;
-        values.push(
-            serde_yaml::from_slice(&bytes)
-                .into_alien_error()
-                .context(config_error(format!(
-                    "parsing Helm values {}",
-                    path.display()
-                )))?,
-        );
-    }
+    let work = tempfile::tempdir()
+        .into_alien_error()
+        .context(config_error("creating a working directory"))?;
+    let helm_values = helm_values_files(&settings.values, work.path())?;
+    values.extend(helm_values.iter().map(|(_, file)| file.clone()));
     // Helm pins this image from the bundle even when chart defaults omit it.
     if let Some(image) = record.chart_images.get(airgap::CHART_IMAGE_VALUES[0]) {
         values.push(
@@ -3599,8 +3754,8 @@ async fn helm_upgrade(
             &format!("runtime.imagePullSecrets[0].name={secret}"),
         ]);
     }
-    for values in &settings.values {
-        cmd.arg("-f").arg(values);
+    for (path, _) in &helm_values {
+        cmd.arg("-f").arg(path);
     }
     if let Some(context) = &settings.kube_context {
         cmd.arg("--kube-context").arg(context);
@@ -6241,5 +6396,179 @@ stringData:
             .map(|(sequence, _)| sequence)
             .collect();
         assert_eq!(found, [300, 200, 100]);
+    }
+
+    fn site_values(dir: &Path, registry: &str) -> PathBuf {
+        let path = dir.join("values.yaml");
+        std::fs::write(
+            &path,
+            format!(
+                "airgapped:\n  registry: {registry:?}\nstackSettings:\n  kubernetes:\n    exposure:\n      mode: custom\n      domain: app.example.internal\n"
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    fn parse(args: &[&str]) -> SyncArgs {
+        SyncArgs::try_parse_from(std::iter::once("sync").chain(args.iter().copied())).unwrap()
+    }
+
+    #[test]
+    fn values_registry_does_not_make_the_online_machine_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let values = site_values(dir.path(), "registry.example.internal/vendor");
+        let mut machine = MachineState::default();
+
+        let settings =
+            site_side_settings(&parse(&["--values", values.to_str().unwrap()]), &mut machine)
+                .unwrap();
+
+        assert!(settings.is_none(), "the online machine must not install");
+        assert_eq!(machine.registry, None);
+        assert_eq!(machine.values, [std::fs::canonicalize(&values).unwrap()]);
+    }
+
+    #[test]
+    fn first_site_run_takes_the_registry_from_values_and_later_edits_win() {
+        let dir = tempfile::tempdir().unwrap();
+        let values = site_values(dir.path(), "registry.example.internal/vendor");
+        let mut machine = MachineState::default();
+
+        let first = site_side_settings(
+            &parse(&[
+                "--values",
+                values.to_str().unwrap(),
+                "--trusted-key",
+                "ed25519:fixture",
+            ]),
+            &mut machine,
+        )
+        .unwrap()
+        .expect("the site installs");
+        assert_eq!(first.registry, "registry.example.internal/vendor");
+        assert!(!first.insecure_registry);
+        assert_eq!(
+            machine.registry.as_deref(),
+            Some("registry.example.internal/vendor")
+        );
+
+        // A later run with no flags reads the remembered values file again.
+        site_values(dir.path(), "mirror.example.internal/vendor");
+        let later = site_side_settings(&parse(&[]), &mut machine)
+            .unwrap()
+            .expect("the site still installs");
+        assert_eq!(later.registry, "mirror.example.internal/vendor");
+
+        // --registry overrides the values file.
+        let flagged = site_side_settings(
+            &parse(&["--registry", "override.example.internal", "--insecure-registry"]),
+            &mut machine,
+        )
+        .unwrap()
+        .expect("the site still installs");
+        assert_eq!(flagged.registry, "override.example.internal");
+        assert!(flagged.insecure_registry);
+    }
+
+    #[test]
+    fn existing_site_without_a_values_registry_keeps_its_remembered_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let values = dir.path().join("values.yaml");
+        std::fs::write(&values, "postgres:\n  database:\n    enabled: true\n").unwrap();
+        let mut machine = MachineState {
+            registry: Some("registry.example.internal/vendor".into()),
+            insecure_registry: true,
+            values: vec![values.clone()],
+            ..MachineState::default()
+        };
+
+        let settings = site_side_settings(&parse(&[]), &mut machine)
+            .unwrap()
+            .expect("an installed site keeps installing");
+
+        assert_eq!(settings.registry, "registry.example.internal/vendor");
+        assert!(settings.insecure_registry);
+        assert_eq!(settings.values, [values]);
+    }
+
+    #[test]
+    fn first_site_run_without_any_registry_names_both_ways_to_set_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let values = dir.path().join("values.yaml");
+        std::fs::write(&values, "airgapped:\n  registry: \"\"\n").unwrap();
+
+        let error = site_side_settings(
+            &parse(&[
+                "--values",
+                values.to_str().unwrap(),
+                "--trusted-key",
+                "ed25519:fixture",
+            ]),
+            &mut MachineState::default(),
+        )
+        .expect_err("nowhere to push the images");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        let message = error.to_string();
+        assert!(message.contains("airgapped.registry"), "{message}");
+        assert!(message.contains("--registry"), "{message}");
+    }
+
+    #[test]
+    fn site_values_with_placeholders_stop_before_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let values = dir.path().join("values.yaml");
+        std::fs::write(
+            &values,
+            "airgapped:\n  registry: \"<SITE_REGISTRY>\"\nstackSettings:\n  kubernetes:\n    exposure:\n      mode: custom\n      domain: \"<HOSTNAME>\"\n      route:\n        routeApi: ingress\n        ingressClassName: nginx\n      certificate:\n        mode: tlsSecretRef\n        secretName: \"<TLS_SECRET>\"\ninputValues:\n  note: \"a <b> c\"\n  formula: \"1 < 2 > 0\"\n",
+        )
+        .unwrap();
+
+        let error = check_site_values(std::slice::from_ref(&values))
+            .expect_err("placeholders must stop the install");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        let message = error.to_string();
+        assert!(
+            message.contains("airgapped.registry: <SITE_REGISTRY>"),
+            "{message}"
+        );
+        assert!(
+            message.contains("stackSettings.kubernetes.exposure.domain: <HOSTNAME>"),
+            "{message}"
+        );
+        assert!(
+            message.contains("stackSettings.kubernetes.exposure.certificate.secretName: <TLS_SECRET>"),
+            "{message}"
+        );
+        assert!(!message.contains("ingressClassName"), "{message}");
+        assert!(!message.contains("inputValues"), "{message}");
+
+        std::fs::write(
+            &values,
+            "airgapped:\n  registry: registry.example.internal/vendor\nstackSettings:\n  kubernetes:\n    exposure:\n      mode: custom\n      domain: app.example.internal\n",
+        )
+        .unwrap();
+        check_site_values(&[values]).expect("filled values pass");
+    }
+
+    #[test]
+    fn helm_gets_values_without_the_sync_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let values = site_values(dir.path(), "registry.example.internal/vendor");
+        let work = tempfile::tempdir().unwrap();
+
+        let files = helm_values_files(&[values], work.path()).unwrap();
+
+        assert_eq!(files.len(), 1);
+        let written: serde_yaml::Value =
+            serde_yaml::from_slice(&std::fs::read(&files[0].0).unwrap()).unwrap();
+        assert_eq!(written, files[0].1);
+        assert!(written["airgapped"].get("registry").is_none());
+        assert_eq!(
+            written["stackSettings"]["kubernetes"]["exposure"]["domain"],
+            "app.example.internal"
+        );
     }
 }

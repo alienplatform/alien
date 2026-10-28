@@ -144,9 +144,11 @@ alien-deploy sync --token ax_... --manager https://manager.example.com
 
 # inside the site: verifies the signature, pushes images to the site's registry,
 # installs or upgrades the chart, writes a report for the trip back
-alien-deploy sync --registry registry.internal/vendor -f values.yaml \
+alien-deploy sync -f values.yaml \
   --trusted-key ed25519:...   # first install only; later updates must match it
 ```
+
+The site's own settings live in `values.yaml`: `airgapped.registry` names the registry the images go to (`--registry` overrides it), and the rest are ordinary chart values. Sync stops before pushing or installing anything while a value still holds a placeholder such as `<SITE_REGISTRY>`.
 
 After the first run, `alien-deploy sync` with no options does whatever the side it runs on can do. Updates carry only the image layers the site doesn't have, reports carry the site's state and logs (none are lost between trips), and `alien-deploy rollback` returns to the previous release. See [Air-gapped deployments](https://alien.dev/docs/deploying/air-gapped).
 
