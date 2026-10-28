@@ -3283,8 +3283,10 @@ async fn wait_for_rollout(
                 Err(error) => {
                     let config =
                         alien_core::embedded_config::load_embedded_config::<DeployCliConfig>()
-                            .into_alien_error()
-                            .context(config_error("reading CLI branding"))?;
+                            .unwrap_or_else(|error| {
+                                tracing::warn!(%error, "Could not read branding for the retry hint");
+                                None
+                            });
                     let invoked = std::env::args().next().unwrap_or_default();
                     let command = config
                         .as_ref()
