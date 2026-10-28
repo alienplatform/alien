@@ -1,3 +1,6 @@
+mod role_writer;
+pub use role_writer::IamRoleWriter;
+
 use std::fmt::Debug;
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
@@ -21,6 +24,11 @@ pub trait IamApi: Send + Sync + Debug {
     // Role Operations
     async fn create_role(&self, request: CreateRoleRequest) -> Result<CreateRoleResponse>;
     async fn get_role(&self, role_name: &str) -> Result<GetRoleResponse>;
+    async fn put_role_permissions_boundary(
+        &self,
+        role_name: &str,
+        permissions_boundary: &str,
+    ) -> Result<()>;
     async fn delete_role(&self, role_name: &str) -> Result<()>;
     async fn put_role_policy(
         &self,
@@ -367,6 +375,10 @@ impl IamApi for IamClient {
             params.push(("MaxSessionDuration".to_string(), max_session.to_string()));
         }
 
+        if let Some(ref boundary) = request.permissions_boundary {
+            params.push(("PermissionsBoundary".to_string(), boundary.clone()));
+        }
+
         // Handle tags array
         if let Some(ref tags) = request.tags {
             for (i, tag) in tags.iter().enumerate() {
@@ -383,6 +395,23 @@ impl IamApi for IamClient {
         let params = vec![("RoleName".to_string(), role_name.to_string())];
         let body = Self::build_form_body("GetRole", "2010-05-08", params);
         self.post_xml(body, "GetRole", role_name).await
+    }
+
+    async fn put_role_permissions_boundary(
+        &self,
+        role_name: &str,
+        permissions_boundary: &str,
+    ) -> Result<()> {
+        let params = vec![
+            ("RoleName".to_string(), role_name.to_string()),
+            (
+                "PermissionsBoundary".to_string(),
+                permissions_boundary.to_string(),
+            ),
+        ];
+        let body = Self::build_form_body("PutRolePermissionsBoundary", "2010-05-08", params);
+        self.post_no_response(body, "PutRolePermissionsBoundary", role_name)
+            .await
     }
 
     async fn delete_role(&self, role_name: &str) -> Result<()> {
@@ -721,6 +750,7 @@ struct IamErrorDetails {
 pub struct CreateRoleRequest {
     pub role_name: String,
     pub assume_role_policy_document: String,
+    pub permissions_boundary: Option<String>,
     pub path: Option<String>,
     pub description: Option<String>,
     pub max_session_duration: Option<i32>,

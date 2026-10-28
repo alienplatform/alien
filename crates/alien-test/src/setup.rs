@@ -215,6 +215,7 @@ async fn build_aws_scoped_config_with_policies(
             description: Some(role_description.to_string()),
             path: None,
             max_session_duration: None,
+            permissions_boundary: None,
             tags: None,
         })
         .await;
