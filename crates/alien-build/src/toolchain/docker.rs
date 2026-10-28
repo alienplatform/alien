@@ -1339,6 +1339,10 @@ fn rewrite_archive(
 mod builder_tests;
 
 #[cfg(test)]
+#[path = "docker_repro_tests.rs"]
+mod repro_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::BinaryTarget;
