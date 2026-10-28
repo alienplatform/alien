@@ -8,8 +8,8 @@ use alien_error::AlienError;
 use serde_json::{json, Value};
 
 use crate::{
-    get_permission_set, list_permission_set_ids, BindingTarget, ErrorData, PermissionContext,
-    Result,
+    aws_resource_policies::without_refs_the_stack_policy_grants, get_permission_set,
+    list_permission_set_ids, BindingTarget, ErrorData, PermissionContext, Result,
 };
 
 use super::{AwsIamStatement, AwsRuntimePermissionsGenerator};
@@ -23,6 +23,9 @@ const MANAGED_POLICY_LIMIT: usize = 6_144;
 /// resource names for resource scopes. It is called only for scopes with inline AWS
 /// permissions. Management permissions are deliberately not part of this ceiling.
 /// Named catalog grants are already included by [`aws_permissions_boundary`].
+/// Global inline sets also contribute their resource binding to matching resource
+/// types, just as workload policy writers do. Those calls resolve the physical
+/// resource context, even when the profile does not explicitly name the resource.
 pub fn aws_stack_permissions_boundary(
     stack: &Stack,
     context: &PermissionContext,
@@ -52,6 +55,46 @@ pub fn aws_stack_permissions_boundary(
                 statements.extend(
                     generator
                         .generate_policy(set, target, &grant_context)?
+                        .statement,
+                );
+            }
+        }
+        for (resource_id, entry) in stack.resources() {
+            let type_prefix = format!("{}/", entry.config.resource_type());
+            let references: Vec<_> = profile
+                .0
+                .get("*")
+                .into_iter()
+                .flatten()
+                .filter(|reference| {
+                    matches!(reference, PermissionSetReference::Inline(set)
+                        if set.platforms.aws.is_some() && set.id.starts_with(&type_prefix))
+                })
+                .cloned()
+                .collect();
+            if references.is_empty() {
+                continue;
+            }
+            let grant_context = resolve_context(profile_name, resource_id)?;
+            let references = without_refs_the_stack_policy_grants(
+                stack,
+                profile_name,
+                profile,
+                resource_id,
+                references,
+                &generator,
+                &grant_context,
+            )?;
+            for set in references
+                .into_iter()
+                .filter_map(|reference| match reference {
+                    PermissionSetReference::Inline(set) => Some(set),
+                    _ => None,
+                })
+            {
+                statements.extend(
+                    generator
+                        .generate_policy(&set, BindingTarget::Resource, &grant_context)?
                         .statement,
                 );
             }
@@ -420,6 +463,193 @@ mod tests {
             && s["Condition"]
                 == json!({"StringEquals": {"s3:ExistingObjectTag/profile": "uploads"}})));
         assert!(!boundary.to_string().contains("management-only"));
+    }
+
+    #[test]
+    fn global_inline_resource_grants_cover_imported_names_and_preserve_conditions() {
+        let mut profile = inline_profile("arn:aws:s3:::${stackPrefix}-*/*");
+        let PermissionSetReference::Inline(set) = &mut profile.0["*"][0] else {
+            unreachable!()
+        };
+        set.id = "storage/custom-read".to_string();
+        let set = set.clone();
+        let account = alien_core::ServiceAccount::from_permission_profile(
+            "reader-sa".to_string(),
+            &profile,
+            |_| None,
+        )
+        .unwrap();
+        let stack = Stack::new("test".to_string())
+            .permission("reader", profile.clone())
+            .add(account, alien_core::ResourceLifecycle::Frozen)
+            .add(
+                alien_core::Storage::new("uploads".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Storage::new("archive".to_string()).build(),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                alien_core::Queue::new("jobs".to_string()).build(),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+        let mut resolved = Vec::new();
+        let boundary = aws_stack_permissions_boundary(&stack, &context(), |name, scope| {
+            assert_eq!(name, "reader");
+            resolved.push(scope.to_string());
+            Ok(context()
+                .with_resource_id(scope)
+                .with_resource_name(format!("imported-{scope}")))
+        })
+        .unwrap();
+        assert_eq!(resolved, ["*", "uploads", "archive"]);
+        let generator = AwsRuntimePermissionsGenerator::new();
+        for id in ["uploads", "archive"] {
+            let resource_context = context()
+                .with_resource_id(id)
+                .with_resource_name(format!("imported-{id}"));
+            let selected = without_refs_the_stack_policy_grants(
+                &stack,
+                "reader",
+                &profile,
+                id,
+                vec![PermissionSetReference::Inline(set.clone())],
+                &generator,
+                &resource_context,
+            )
+            .unwrap();
+            assert_eq!(selected.len(), 1);
+            let required = serde_json::to_value(
+                generator
+                    .generate_policy(&set, BindingTarget::Resource, &resource_context)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(super::super::aws_permissions_boundary_covers(&boundary, &required).unwrap());
+            let mut unconditional = required.clone();
+            for statement in unconditional["Statement"].as_array_mut().unwrap() {
+                statement.as_object_mut().unwrap().remove("Condition");
+            }
+            assert!(
+                !super::super::aws_permissions_boundary_covers(&boundary, &unconditional).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn implicit_grants_reuse_runtime_redundancy_selection() {
+        let mut profile = inline_profile("arn:aws:s3:::${stackPrefix}-*/*");
+        let PermissionSetReference::Inline(set) = &mut profile.0["*"][0] else {
+            unreachable!()
+        };
+        set.id = "storage/custom-read".to_string();
+        let set = set.clone();
+        let account = alien_core::ServiceAccount::from_permission_profile(
+            "reader-sa".to_string(),
+            &profile,
+            |_| None,
+        )
+        .unwrap();
+        let mut stack = Stack::new("test".to_string())
+            .permission("reader", profile)
+            .add(account, alien_core::ResourceLifecycle::Frozen)
+            .add(
+                alien_core::Storage::new("uploads".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let render = |stack: &Stack| {
+            aws_stack_permissions_boundary(stack, &context(), |_, scope| {
+                Ok(context()
+                    .with_resource_id(scope)
+                    .with_resource_name(format!("{}-{scope}", context().stack_prefix.unwrap())))
+            })
+            .unwrap()
+        };
+        let globals = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(&set, BindingTarget::Stack, &context())
+            .unwrap();
+        let expected = aws_permissions_boundary(&context(), &globals.statement).unwrap();
+        assert_eq!(render(&stack), expected);
+        // Explicit grants are retained by runtime even when a global grant covers them.
+        stack
+            .permissions
+            .profiles
+            .get_mut("reader")
+            .unwrap()
+            .0
+            .insert(
+                "uploads".to_string(),
+                vec![PermissionSetReference::Inline(set)],
+            );
+        let explicit = render(&stack);
+        assert_ne!(explicit, expected);
+        assert!(super::super::aws_permissions_boundary_covers(&explicit, &expected).unwrap());
+        // The implicit and explicit copies of the conditional grant merge into one.
+        assert_eq!(
+            explicit["Statement"].as_array().unwrap().len(),
+            expected["Statement"].as_array().unwrap().len() + 1
+        );
+    }
+
+    #[test]
+    fn implicit_resource_grants_count_toward_the_boundary_size_limit() {
+        let mut profile = inline_profile("arn:aws:s3:::${stackPrefix}-*/*");
+        let PermissionSetReference::Inline(set) = &mut profile.0["*"][0] else {
+            unreachable!()
+        };
+        set.id = "storage/custom-read".to_string();
+        let mut stack = Stack::new("test".to_string()).permission("reader", profile);
+        for index in 0..24 {
+            let id = format!("uploads-{index}");
+            stack = stack.add(
+                alien_core::Storage::new(id).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            );
+        }
+        let stack = stack.build();
+        let error = aws_stack_permissions_boundary(&stack, &context(), |_, scope| {
+            Ok(context()
+                .with_resource_id(scope)
+                .with_resource_name(format!("imported-{scope}")))
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
+    }
+
+    #[test]
+    fn implicit_resource_context_failures_are_not_hidden_by_the_stack_binding() {
+        let mut profile = inline_profile("arn:aws:s3:::${stackPrefix}-*/*");
+        let PermissionSetReference::Inline(set) = &mut profile.0["*"][0] else {
+            unreachable!()
+        };
+        set.id = "storage/custom-read".to_string();
+        let stack = Stack::new("test".to_string())
+            .permission("reader", profile)
+            .add(
+                alien_core::Storage::new("uploads".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let error = aws_stack_permissions_boundary(&stack, &context(), |_, scope| {
+            if scope == "*" {
+                Ok(context())
+            } else {
+                Err(AlienError::new(ErrorData::VariableNotFound {
+                    variable: "importedBucketName".to_string(),
+                }))
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "VARIABLE_NOT_FOUND");
+        assert!(error.to_string().contains("importedBucketName"));
+        // A resolver that supplies no physical name must fail during interpolation too.
+        let error =
+            aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context())).unwrap_err();
+        assert_eq!(error.code, "VARIABLE_NOT_FOUND");
+        assert!(error.to_string().contains("resourceName"));
     }
 
     #[test]
