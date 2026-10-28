@@ -682,20 +682,34 @@ async fn forward_telemetry(
     let mark = through;
     let mut rejected = 0;
     // A failed request or lost response may have hidden an earlier warning.
-    // Repeat it until the client stops submitting that acknowledged batch ID.
-    for (id, _, _) in &batches {
-        if let Some(id) = id.filter(|id| mark.is_some_and(|mark| *id <= mark)) {
-            if kv
-                .exists(&format!("{mark_key}:rejected:{id}"))
-                .await
-                .map_err(|error| {
-                    ErrorData::internal(format!("reading telemetry rejection: {error}"))
-                        .into_response()
-                })?
-            {
-                rejected += 1;
-            }
+    // Only acknowledge replayed IDs after their saved warnings have been read.
+    let mut replayed_ids: Vec<_> = batches
+        .iter()
+        .filter_map(|(id, _, _)| id.filter(|id| mark.is_some_and(|mark| *id <= mark)))
+        .collect();
+    replayed_ids.sort_unstable();
+    replayed_ids.dedup();
+    let mut replayed_through = None;
+    for ids in replayed_ids.chunks(TELEMETRY_CONCURRENCY) {
+        let reads = ids.iter().map(|id| {
+            let key = format!("{mark_key}:rejected:{id}");
+            let kv = kv.clone();
+            async move { kv.exists(&key).await }
+        });
+        let Ok(results) = tokio::time::timeout_at(deadline, futures::future::join_all(reads)).await
+        else {
+            return Ok(Forwarded {
+                accepted: 0,
+                rejected,
+                through: replayed_through,
+            });
+        };
+        for result in results {
+            rejected += usize::from(result.map_err(|error| {
+                ErrorData::internal(format!("reading telemetry rejection: {error}")).into_response()
+            })?);
         }
+        replayed_through = ids.last().copied();
     }
     batches.retain(|(id, _, _)| !id.is_some_and(|id| mark.is_some_and(|mark| id <= mark)));
     batches.sort_by_key(|(id, _, _)| *id);
@@ -898,12 +912,16 @@ mod tests {
     use super::*;
 
     #[derive(Debug)]
-    struct RejectRecordWrites(Arc<dyn Kv>);
-    impl Binding for RejectRecordWrites {}
+    struct TestKv {
+        inner: Arc<dyn Kv>,
+        reject_record_writes: bool,
+        read_delay: Duration,
+    }
+    impl Binding for TestKv {}
     #[async_trait]
-    impl Kv for RejectRecordWrites {
+    impl Kv for TestKv {
         async fn get(&self, key: &str) -> alien_bindings::error::Result<Option<KvEntry>> {
-            self.0.get(key).await
+            self.inner.get(key).await
         }
         async fn put(
             &self,
@@ -911,7 +929,7 @@ mod tests {
             value: Vec<u8>,
             options: Option<PutOptions>,
         ) -> alien_bindings::error::Result<bool> {
-            if key.contains(":rejected:") {
+            if self.reject_record_writes && key.contains(":rejected:") {
                 return Err(AlienError::new(
                     alien_bindings::error::ErrorData::KvOperationFailed {
                         operation: "put".into(),
@@ -920,17 +938,18 @@ mod tests {
                     },
                 ));
             }
-            self.0.put(key, value, options).await
+            self.inner.put(key, value, options).await
         }
         async fn delete(
             &self,
             key: &str,
             version: Option<&str>,
         ) -> alien_bindings::error::Result<bool> {
-            self.0.delete(key, version).await
+            self.inner.delete(key, version).await
         }
         async fn exists(&self, key: &str) -> alien_bindings::error::Result<bool> {
-            self.0.exists(key).await
+            tokio::time::sleep(self.read_delay).await;
+            self.inner.exists(key).await
         }
         async fn scan_prefix(
             &self,
@@ -938,16 +957,18 @@ mod tests {
             limit: Option<usize>,
             cursor: Option<String>,
         ) -> alien_bindings::error::Result<ScanResult> {
-            self.0.scan_prefix(prefix, limit, cursor).await
+            self.inner.scan_prefix(prefix, limit, cursor).await
         }
     }
 
     #[tokio::test]
     async fn rejection_record_failure_keeps_the_batch_unacknowledged() {
         let tmp = tempfile::tempdir().unwrap();
-        let kv: Arc<dyn Kv> = Arc::new(RejectRecordWrites(Arc::new(
-            LocalKv::new(tmp.path().join("kv")).await.unwrap(),
-        )));
+        let kv: Arc<dyn Kv> = Arc::new(TestKv {
+            inner: Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap()),
+            reject_record_writes: true,
+            read_delay: Duration::ZERO,
+        });
         let backend = Arc::new(RejectMalformed {
             status: 400,
             delay: Duration::ZERO,
@@ -965,6 +986,62 @@ mod tests {
         assert_eq!(result.unwrap_err().status(), StatusCode::BAD_GATEWAY);
         assert!(kv.get("mark").await.unwrap().is_none());
         assert!(kv.get("mark:rejected:1").await.unwrap().is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn large_replays_read_warnings_in_parallel_and_return_partial_ack_at_deadline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(TestKv {
+            inner: Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap()),
+            reject_record_writes: false,
+            read_delay: Duration::from_millis(20),
+        });
+        kv.put("mark", b"4096".to_vec(), None).await.unwrap();
+        kv.put("mark:rejected:17", b"record".to_vec(), None)
+            .await
+            .unwrap();
+        let backend = Arc::new(RejectMalformed {
+            status: 400,
+            delay: Duration::ZERO,
+            received: Mutex::new(Vec::new()),
+        });
+        let start = Instant::now();
+        let partial = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            batches(1..=4096),
+            Duration::from_millis(50),
+        )
+        .await
+        .unwrap();
+        assert!(start.elapsed() <= Duration::from_millis(50));
+        assert_eq!(
+            (partial.accepted, partial.rejected, partial.through),
+            (0, 0, Some(16))
+        );
+        let start = Instant::now();
+        let remaining = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            batches(17..=4096),
+            TELEMETRY_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert!(start.elapsed() < Duration::from_secs(30));
+        assert_eq!(
+            (remaining.accepted, remaining.rejected, remaining.through),
+            (0, 1, Some(4096))
+        );
+        assert!(backend.received.lock().unwrap().is_empty());
+        assert_eq!(
+            read_telemetry_mark(kv.as_ref(), "mark").await.unwrap(),
+            Some(4096)
+        );
     }
 
     struct RejectMalformed {
