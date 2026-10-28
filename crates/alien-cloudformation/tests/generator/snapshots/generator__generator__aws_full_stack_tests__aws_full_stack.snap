@@ -371,6 +371,7 @@ Resources:
     - ManagementRole
     - ManagementRoleManagementPolicy1
     - ManagementRoleManagementPolicy2
+    - ManagementRoleManagementPolicy3
     - ManagementRoleManagedPermissions1
     - MailerRuleSetActivatorRole
     - RegistryPullRole
@@ -441,6 +442,7 @@ Resources:
     - ManagementRole
     - ManagementRoleManagementPolicy1
     - ManagementRoleManagementPolicy2
+    - ManagementRoleManagementPolicy3
     - ManagementRoleManagedPermissions1
     - MailerRuleSetActivatorRole
     - RegistryPullRole
@@ -511,6 +513,7 @@ Resources:
     - ManagementRole
     - ManagementRoleManagementPolicy1
     - ManagementRoleManagementPolicy2
+    - ManagementRoleManagementPolicy3
     - ManagementRoleManagedPermissions1
     - MailerRuleSetActivatorRole
     - RegistryPullRole
@@ -668,6 +671,7 @@ Resources:
     - ManagementRole
     - ManagementRoleManagementPolicy1
     - ManagementRoleManagementPolicy2
+    - ManagementRoleManagementPolicy3
     - ManagementRoleManagedPermissions1
     - MailerRuleSetActivatorRole
     - RegistryPullRole
@@ -878,8 +882,6 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
           Sid: PassLambdaExecutionRoles
         - Action:
-          - iam:GetRolePolicy
-          - iam:ListRolePolicies
           - iam:PutRolePolicy
           Condition:
             StringEquals:
@@ -890,6 +892,18 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
           Sid: AttachLambdaRuntimePolicies
+        - Action:
+          - iam:GetRolePolicy
+          - iam:ListRolePolicies
+          Condition:
+            StringEquals:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:ResourceTag/managed-by: runtime
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
+          Sid: ReadLambdaRuntimePolicies
         - Action:
           - ecr:GetAuthorizationToken
           Effect: Allow
@@ -939,6 +953,17 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
           Sid: ManageTlsCertificates
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
+  ManagementRoleManagementPolicy2:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Application management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
         - Action:
           - acm:DescribeCertificate
           Condition:
@@ -954,17 +979,6 @@ Resources:
           Resource:
           - '*'
           Sid: ListTlsCertificates
-      Roles:
-      - Ref: ManagementRole
-    DependsOn:
-    - ManagementRole
-  ManagementRoleManagementPolicy2:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      Description: Application management permissions
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
         - Action:
           - apigateway:POST
           - apigateway:PUT
@@ -1097,6 +1111,17 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
           Sid: CheckSqsQueueHealth
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
+  ManagementRoleManagementPolicy3:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Application management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
         - Action:
           - dynamodb:DescribeContinuousBackups
           - dynamodb:DescribeTable
@@ -2203,6 +2228,7 @@ Resources:
     - ManagementRole
     - ManagementRoleManagementPolicy1
     - ManagementRoleManagementPolicy2
+    - ManagementRoleManagementPolicy3
     - Assets
     - AssetsBucketPolicy
     - Jobs

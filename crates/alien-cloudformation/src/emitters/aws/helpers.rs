@@ -41,6 +41,9 @@ pub(crate) const CONDITION_NETWORK_MODE_HAS_NAMED_SUBNETS: &str = "NetworkModeHa
 
 pub const INLINE_POLICY_NAME: &str = "deployment-permissions";
 const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
+// Use the supported deployment prefix ceiling, not the shorter template token.
+const MAX_POLICY_STACK_NAME_LEN: usize = 40;
+const MAX_POLICY_REGION_LEN: usize = 16;
 
 /// Split IAM statements into documents below AWS's managed-policy size limit.
 pub(crate) fn chunk_managed_policy_statements(
@@ -91,7 +94,21 @@ fn managed_policy_document_size(statements: &[CfExpression]) -> Result<usize> {
             format: "CloudFormation IAM policy".to_string(),
             reason: "Failed to serialize IAM policy for size validation".to_string(),
         })
-        .map(|policy| policy.len())
+        .map(|policy| {
+            // Keep intrinsic syntax overhead as headroom, but never let its short
+            // placeholders hide growth when CloudFormation substitutes real values.
+            // Other dynamic references still need validation with resolved inputs.
+            let expansion = [
+                ("${AWS::StackName}", MAX_POLICY_STACK_NAME_LEN),
+                ("${AWS::Region}", MAX_POLICY_REGION_LEN),
+            ]
+            .into_iter()
+            .map(|(token, length)| {
+                policy.matches(token).count() * length.saturating_sub(token.len())
+            })
+            .sum::<usize>();
+            policy.len() + expansion
+        })
 }
 
 /// Downcast `ctx.resource.config` to the typed resource definition or return
@@ -668,6 +685,135 @@ mod tests {
 
         let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
         assert_eq!(keys, ["Action", "Effect", "Sid"]);
+    }
+
+    fn resolve_policy(value: JsonValue) -> JsonValue {
+        match value {
+            JsonValue::Object(mut values) if values.contains_key("Fn::Sub") => {
+                let substitution = values.remove("Fn::Sub").unwrap();
+                let template = match &substitution {
+                    JsonValue::String(template) => template,
+                    JsonValue::Array(parts) => parts[0].as_str().unwrap(),
+                    _ => panic!("unexpected substitution: {substitution}"),
+                };
+                let resolved = template
+                    .replace("${AWS::StackName}", &"s".repeat(40))
+                    .replace("${AWS::Region}", "ap-southeast-7")
+                    .replace("${AWS::AccountId}", "123456789012")
+                    .replace("${AWS::Partition}", "aws")
+                    .replace("${ManagingAccountId}", "210987654321")
+                    .replace("${!", "${");
+                assert!(!resolved.contains("${AWS::"), "{resolved}");
+                JsonValue::String(resolved)
+            }
+            JsonValue::Object(values) => JsonValue::Object(
+                values
+                    .into_iter()
+                    .map(|(key, value)| (key, resolve_policy(value)))
+                    .collect(),
+            ),
+            JsonValue::Array(values) => {
+                JsonValue::Array(values.into_iter().map(resolve_policy).collect())
+            }
+            other => other,
+        }
+    }
+
+    fn prefix_heavy_statement(index: usize, count: usize) -> CfExpression {
+        CfExpression::object([
+            ("Sid", CfExpression::from(format!("Read{index}"))),
+            ("Effect", CfExpression::from("Allow")),
+            ("Action", CfExpression::from("s3:GetObject")),
+            (
+                "Resource",
+                CfExpression::list((0..count).map(|resource| {
+                    CfExpression::sub(format!(
+                        "arn:aws:s3:::${{AWS::StackName}}-bucket-{index}-{resource}/*"
+                    ))
+                })),
+            ),
+        ])
+    }
+
+    #[test]
+    fn managed_policy_chunking_accounts_for_expanded_prefixes() {
+        let statements: Vec<_> = (0..5)
+            .map(|index| prefix_heavy_statement(index, 17))
+            .collect();
+        let original = managed_policy_document(statements.clone());
+        // The template fits, but the actual IAM document does not.
+        assert!(serde_json::to_string(&original).unwrap().len() < MAX_MANAGED_POLICY_BYTES);
+        let resolved = resolve_policy(serde_json::to_value(&original).unwrap());
+        assert!(serde_json::to_string(&resolved).unwrap().len() > 6_144);
+
+        let chunks = chunk_managed_policy_statements(statements).unwrap();
+        assert!(chunks.len() > 1);
+        let mut resolved_statements = Vec::new();
+        for chunk in chunks {
+            let chunk = resolve_policy(serde_json::to_value(chunk).unwrap());
+            assert!(serde_json::to_string(&chunk).unwrap().len() <= 6_144);
+            resolved_statements.extend(chunk["Statement"].as_array().unwrap().iter().cloned());
+        }
+        assert_eq!(
+            resolved_statements,
+            *resolved["Statement"].as_array().unwrap()
+        );
+    }
+
+    #[test]
+    fn managed_policy_chunking_rejects_statement_that_only_fits_before_expansion() {
+        let statement = prefix_heavy_statement(0, 87);
+        let template = managed_policy_document(vec![statement.clone()]);
+        assert!(serde_json::to_string(&template).unwrap().len() < MAX_MANAGED_POLICY_BYTES);
+        let resolved = resolve_policy(serde_json::to_value(template).unwrap());
+        assert!(serde_json::to_string(&resolved).unwrap().len() > 6_144);
+        let error = chunk_managed_policy_statements(vec![statement]).unwrap_err();
+        assert!(error.to_string().contains("too large for a managed policy"));
+    }
+
+    #[test]
+    fn bounded_catalog_management_policies_fit_after_substitution() {
+        let generator = alien_permissions::generators::AwsCloudFormationPermissionsGenerator::new();
+        let context = super::super::service_account::permission_context()
+            .with_aws_permissions_boundary_arn(
+                "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-permissions-boundary"
+                    .to_string(),
+            );
+        let mut statements = Vec::new();
+        for id in alien_permissions::list_permission_set_ids() {
+            if !id.ends_with("/provision") || id.starts_with("remote-stack-management/") {
+                continue;
+            }
+            let set = alien_permissions::get_permission_set(id).unwrap();
+            if set.platforms.aws.is_none() {
+                continue;
+            }
+            let policy = generator
+                .generate_policy(set, alien_permissions::BindingTarget::Stack, &context)
+                .unwrap();
+            for statement in policy.statement {
+                statements.push(cf_from_json(serde_json::to_value(statement).unwrap()).unwrap());
+            }
+        }
+        let statements = uniquify_iam_statement_sids(statements);
+        let expected = resolve_policy(
+            serde_json::to_value(managed_policy_document(statements.clone())).unwrap(),
+        );
+        let chunks = chunk_managed_policy_statements(statements).unwrap();
+        assert!(chunks.len() > 1);
+        assert!(
+            chunks.len() <= 20,
+            "{} managed policies exceed IAM attachment limit",
+            chunks.len()
+        );
+        let mut actual = Vec::new();
+        for chunk in chunks {
+            let resolved = resolve_policy(serde_json::to_value(chunk).unwrap());
+            let size = serde_json::to_string(&resolved).unwrap().len();
+            assert!(size <= 6_144, "expanded policy uses {size} bytes");
+            actual.extend(resolved["Statement"].as_array().unwrap().iter().cloned());
+        }
+        assert_eq!(actual, *expected["Statement"].as_array().unwrap());
     }
 
     #[test]
