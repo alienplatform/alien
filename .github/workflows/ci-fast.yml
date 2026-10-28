@@ -353,6 +353,23 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.platform_sdk == 'true'
         run: cargo test --locked -p alien-platform-api --features full-api
 
+      - name: Enable user namespaces for sandbox security tests
+        if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_agent == 'true'
+        # These tests exercise nested user namespaces after dropping privileges.
+        # Ubuntu's AppArmor restriction can deny uid_map before the assertions run.
+        # Change only this disposable CI host; keep every security assertion enabled.
+        run: |
+          uname -a
+          key=kernel.apparmor_restrict_unprivileged_userns
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sysctl "$key"
+            sudo sysctl -w "$key=0"
+            test "$(sysctl -n "$key")" = 0
+          else
+            echo "$key is unavailable on this kernel; running all security tests unchanged"
+          fi
+          sysctl user.max_user_namespaces
+
       - name: Sandbox agent privileged tests
         if: needs.changes.outputs.rust_mode != 'affected' || needs.changes.outputs.rust_agent == 'true'
         # The agent runs as root and drops to a different uid before every spawn.
