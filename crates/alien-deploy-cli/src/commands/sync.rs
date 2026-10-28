@@ -2657,6 +2657,11 @@ async fn install_pending(
         }
     }
     let installed = observation.and_then(|(status, _)| current_release(&status));
+    let repositories = super::sync_registry::repositories(&manifest.images, &settings.registry)?;
+    println!("Site image repositories:");
+    for repository in repositories.keys() {
+        println!("  {repository}");
+    }
 
     if args.dry_run {
         println!(
@@ -2706,6 +2711,7 @@ async fn install_pending(
             manifest.release_id
         );
     } else {
+        super::sync_registry::check(&repositories, &settings.registry_access()).await?;
         println!(
             "Installing update {} ({} images → {})",
             manifest.release_id,
