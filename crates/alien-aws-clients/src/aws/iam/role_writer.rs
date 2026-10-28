@@ -1,4 +1,5 @@
 use alien_client_core::{ErrorData, Result};
+use alien_core::standard_resource_tags;
 use alien_error::AlienError;
 
 use super::{CreateRoleRequest, CreateRoleResponse, IamApi};
@@ -27,13 +28,33 @@ impl<'a> IamRoleWriter<'a> {
         self.iam.create_role(request).await
     }
 
-    /// Adopts an unbounded role before the caller writes it. Errors prevent writes.
+    /// Verifies runtime ownership and adopts an unbounded role before a write.
+    /// Setup-owned roles and roles tagged for another deployment or resource are refused.
     /// With no deployment boundary, this performs no additional IAM calls.
-    pub async fn prepare_existing(&self, role_name: &str) -> Result<()> {
+    pub async fn prepare_existing(
+        &self,
+        role_name: &str,
+        deployment_prefix: &str,
+        resource_id: &str,
+    ) -> Result<()> {
         let Some(boundary) = self.permissions_boundary else {
             return Ok(());
         };
         let role = self.iam.get_role(role_name).await?.get_role_result.role;
+        let expected_tags = standard_resource_tags(deployment_prefix, resource_id);
+        let owned = role.tags.as_ref().is_some_and(|tags| {
+            expected_tags.iter().all(|(key, value)| {
+                tags.member
+                    .iter()
+                    .any(|tag| &tag.key == key && &tag.value == value)
+            })
+        });
+        if !owned {
+            return Err(AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
+                resource_id: resource_id.to_owned(),
+                object: format!("IAM role '{role_name}'"),
+            }));
+        }
         if let Some(attached) = role.permissions_boundary {
             if attached.permissions_boundary_arn.as_deref() == Some(boundary) {
                 return Ok(());

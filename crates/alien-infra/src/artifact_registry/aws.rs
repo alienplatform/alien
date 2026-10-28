@@ -218,7 +218,7 @@ impl AwsArtifactRegistryController {
         let policy_document = self.generate_ecr_pull_policy(ctx, &config.id)?;
 
         IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&pull_role_name)
+            .prepare_existing(&pull_role_name, ctx.resource_prefix, &config.id)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
@@ -303,7 +303,7 @@ impl AwsArtifactRegistryController {
         let policy_document = self.generate_ecr_push_policy(ctx, &config.id)?;
 
         IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&push_role_name)
+            .prepare_existing(&push_role_name, ctx.resource_prefix, &config.id)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
@@ -424,7 +424,7 @@ impl AwsArtifactRegistryController {
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
         IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&pull_role_name)
+            .prepare_existing(&pull_role_name, ctx.resource_prefix, &config.id)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
@@ -473,7 +473,7 @@ impl AwsArtifactRegistryController {
         let policy_document = self.generate_ecr_pull_policy(ctx, &config.id)?;
 
         IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&pull_role_name)
+            .prepare_existing(&pull_role_name, ctx.resource_prefix, &config.id)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
@@ -518,7 +518,7 @@ impl AwsArtifactRegistryController {
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
         IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&push_role_name)
+            .prepare_existing(&push_role_name, ctx.resource_prefix, &config.id)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
@@ -567,7 +567,7 @@ impl AwsArtifactRegistryController {
         let policy_document = self.generate_ecr_push_policy(ctx, &config.id)?;
 
         IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&push_role_name)
+            .prepare_existing(&push_role_name, ctx.resource_prefix, &config.id)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
@@ -1099,7 +1099,7 @@ impl AwsArtifactRegistryController {
         resource_id: &str,
     ) -> Result<()> {
         match IamRoleWriter::new(iam_client, ctx.aws_permissions_boundary_arn())
-            .prepare_existing(role_name)
+            .prepare_existing(role_name, ctx.resource_prefix, resource_id)
             .await
         {
             Ok(()) => {}
@@ -1668,9 +1668,7 @@ mod tests {
                 .returning(|name| {
                     Ok(GetRoleResponse {
                         get_role_result: GetRoleResult {
-                            role: create_successful_role_response(name)
-                                .create_role_result
-                                .role,
+                            role: role_named(name, &standard_resource_tags("test", "my-registry")),
                         },
                     })
                 });
@@ -1736,9 +1734,10 @@ mod tests {
                         } else {
                             Ok(GetRoleResponse {
                                 get_role_result: GetRoleResult {
-                                    role: create_successful_role_response(name)
-                                        .create_role_result
-                                        .role,
+                                    role: role_named(
+                                        name,
+                                        &standard_resource_tags("test", "my-registry"),
+                                    ),
                                 },
                             })
                         }
@@ -1808,14 +1807,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bounded_registry_refuses_foreign_roles_before_writes_and_cleanup() {
+        for state in [
+            AwsArtifactRegistryState::CreatingPullRolePolicy,
+            AwsArtifactRegistryState::CreatingPushRolePolicy,
+            AwsArtifactRegistryState::UpdatingPullRolePolicy,
+            AwsArtifactRegistryState::UpdatingPushRolePolicy,
+            AwsArtifactRegistryState::UpdatingPullRoleTrustPolicy,
+            AwsArtifactRegistryState::UpdatingPushRoleTrustPolicy,
+            AwsArtifactRegistryState::DeletingPullRolePolicy,
+            AwsArtifactRegistryState::DeletingPushRolePolicy,
+        ] {
+            let mut iam = MockIamApi::new();
+            iam.expect_get_role().once().returning(|name| {
+                Ok(GetRoleResponse {
+                    get_role_result: GetRoleResult {
+                        role: role_named(
+                            name,
+                            &standard_resource_tags("test-sibling", "my-registry"),
+                        ),
+                    },
+                })
+            });
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(basic_artifact_registry())
+                .controller(AwsArtifactRegistryController {
+                    state,
+                    pull_role_arn: Some("arn:aws:iam::123456789012:role/recorded-pull".into()),
+                    push_role_arn: Some("arn:aws:iam::123456789012:role/recorded-push".into()),
+                    ..Default::default()
+                })
+                .platform(Platform::Aws)
+                .with_dependency(
+                    alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                    bounded_management(),
+                )
+                .service_provider(setup_mock_service_provider(Arc::new(iam)))
+                .build()
+                .await
+                .unwrap();
+            let error = executor
+                .step()
+                .await
+                .expect_err("foreign roles must remain untouched");
+            assert!(
+                std::iter::successors(error.source.as_deref(), |cause| cause.source.as_deref())
+                    .any(|cause| cause.code == "EXISTING_CLOUD_RESOURCE_NOT_OWNED"),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn bounded_registry_refuses_unsupported_adoption_before_writing() {
         let mut iam = MockIamApi::new();
         iam.expect_get_role().times(1).returning(|name| {
             Ok(GetRoleResponse {
                 get_role_result: GetRoleResult {
-                    role: create_successful_role_response(name)
-                        .create_role_result
-                        .role,
+                    role: role_named(name, &standard_resource_tags("test", "my-registry")),
                 },
             })
         });

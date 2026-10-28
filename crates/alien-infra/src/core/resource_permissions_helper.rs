@@ -1424,30 +1424,38 @@ impl ResourcePermissionsHelper {
         let desired_bindings_entry = ctx.desired_stack.resources.iter().find(|(_, entry)| {
             entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE
         });
-        let role_name = if let Some((_, bindings_entry)) = desired_bindings_entry {
-            let controller = ctx
-                .require_dependency::<crate::remote_bindings::AwsRemoteBindingsController>(
-                    &(&bindings_entry.config).into(),
-                )?;
-            controller.role_name.clone().ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: resource_id.to_string(),
-                    dependency_id: "remote-bindings".to_string(),
+        let (bindings_id, role_name) =
+            if let Some((bindings_id, bindings_entry)) = desired_bindings_entry {
+                let controller = ctx
+                    .require_dependency::<crate::remote_bindings::AwsRemoteBindingsController>(
+                        &(&bindings_entry.config).into(),
+                    )?;
+                let role_name = controller.role_name.clone().ok_or_else(|| {
+                    AlienError::new(ErrorData::DependencyNotReady {
+                        resource_id: resource_id.to_string(),
+                        dependency_id: "remote-bindings".to_string(),
+                    })
+                })?;
+                (bindings_id.as_str(), role_name)
+            } else if let Some((bindings_id, role_name)) = ctx
+                .state
+                .resources
+                .iter()
+                .find(|(_, state)| {
+                    state.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref()
                 })
-            })?
-        } else if let Some(role_name) = ctx
-            .state
-            .resources
-            .values()
-            .find(|state| state.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref())
-            .and_then(|state| state.outputs.as_ref())
-            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>())
-            .and_then(|outputs| outputs.resource_id.rsplit('/').next())
-        {
-            role_name.to_string()
-        } else {
-            return Ok(());
-        };
+                .and_then(|(id, state)| {
+                    let outputs = state
+                        .outputs
+                        .as_ref()?
+                        .downcast_ref::<alien_core::RemoteBindingsOutputs>()?;
+                    Some((id.as_str(), outputs.resource_id.rsplit('/').next()?))
+                })
+            {
+                (bindings_id, role_name.to_string())
+            } else {
+                return Ok(());
+            };
         let current_name = aws_remote_access_policy_name(resource_id);
         let iam = ctx
             .service_provider
@@ -1455,7 +1463,7 @@ impl ResourcePermissionsHelper {
             .await?;
 
         let preparation = IamRoleWriter::new(iam.as_ref(), ctx.aws_permissions_boundary_arn())
-            .prepare_existing(&role_name)
+            .prepare_existing(&role_name, ctx.resource_prefix, bindings_id)
             .await;
         match preparation {
             Ok(()) => {}
@@ -1568,8 +1576,8 @@ impl ResourcePermissionsHelper {
             .filter(|id| id.starts_with(&type_prefix))
             .collect();
 
-        // (role, owned policy names, desired policy names)
-        let mut roles: Vec<(String, HashSet<String>, HashSet<String>)> = Vec::new();
+        // (role, owning resource, owned policy names, desired policy names)
+        let mut roles: Vec<(String, String, HashSet<String>, HashSet<String>)> = Vec::new();
         // A role may outlive its entire permission profile. Include retained
         // service accounts so deleting a profile also revokes its owned grants.
         let mut profile_names: HashSet<&str> = ctx
@@ -1608,7 +1616,7 @@ impl ResourcePermissionsHelper {
                 .iter()
                 .map(|r| aws_resource_policy_name(resource_id, r.id()))
                 .collect();
-            roles.push((role_name, owned, desired));
+            roles.push((role_name, format!("{profile_name}-sa"), owned, desired));
         }
         let management_role_name = Self::existing_aws_management_role_name(ctx)?;
         if let Some(role_name) = management_role_name.clone() {
@@ -1627,7 +1635,7 @@ impl ResourcePermissionsHelper {
                 .iter()
                 .map(|r| aws_management_resource_policy_name(resource_id, r.id()))
                 .collect();
-            roles.push((role_name, owned, desired));
+            roles.push((role_name, String::new(), owned, desired));
         }
         if roles.is_empty() {
             return Ok(());
@@ -1637,7 +1645,7 @@ impl ResourcePermissionsHelper {
             .service_provider
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
-        for (role_name, owned, desired) in roles {
+        for (role_name, owner_resource_id, owned, desired) in roles {
             let listed = match iam.list_role_policies(&role_name).await {
                 Ok(response) => response.list_role_policies_result,
                 Err(error)
@@ -1687,7 +1695,7 @@ impl ResourcePermissionsHelper {
             // Setup owns the management identity itself; it must remain unbounded.
             if !stale.is_empty() && management_role_name.as_deref() != Some(role_name.as_str()) {
                 match IamRoleWriter::new(iam.as_ref(), ctx.aws_permissions_boundary_arn())
-                    .prepare_existing(&role_name)
+                    .prepare_existing(&role_name, ctx.resource_prefix, &owner_resource_id)
                     .await
                 {
                     Ok(()) => {}
@@ -1892,7 +1900,7 @@ impl ResourcePermissionsHelper {
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         if !policies.is_empty() {
             IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
-                .prepare_existing(&service_account_role_name)
+                .prepare_existing(&service_account_role_name, ctx.resource_prefix, &format!("{profile_name}-sa"))
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to prepare IAM role '{service_account_role_name}' for resource grants"),

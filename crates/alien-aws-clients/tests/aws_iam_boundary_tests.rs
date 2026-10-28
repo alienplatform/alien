@@ -19,6 +19,11 @@ fn expect_role(iam: &mut MockIamApi, boundary: Option<&'static str>) {
         .returning(move |_| {
             let mut role = json!({"Path": "/", "RoleName": "test-role", "RoleId": "id",
             "Arn": "arn:aws:iam::123456789012:role/test-role", "CreateDate": "2026-01-01"});
+            role["Tags"] = json!({"member": [
+                {"Key": "deployment", "Value": "test"},
+                {"Key": "resource", "Value": "worker"},
+                {"Key": "managed-by", "Value": "runtime"}
+            ]});
             if let Some(boundary) = boundary {
                 role["PermissionsBoundary"] = json!({"PermissionsBoundaryArn": boundary});
             }
@@ -55,7 +60,7 @@ async fn adoption_completes_before_policy_write() {
         .in_sequence(&mut sequence)
         .returning(|_, _, _| Ok(()));
     IamRoleWriter::new(&iam, Some(BOUNDARY))
-        .prepare_existing("test-role")
+        .prepare_existing("test-role", "test", "worker")
         .await
         .unwrap();
     iam.put_role_policy("test-role", "runtime", "{}")
@@ -67,7 +72,7 @@ async fn adoption_completes_before_policy_write() {
 async fn legacy_setup_does_not_read_or_adopt_roles() {
     let iam = MockIamApi::new();
     IamRoleWriter::new(&iam, None)
-        .prepare_existing("test-role")
+        .prepare_existing("test-role", "test", "worker")
         .await
         .unwrap();
 }
@@ -77,9 +82,58 @@ async fn already_bounded_role_needs_no_adoption() {
     let mut iam = MockIamApi::new();
     expect_role(&mut iam, Some(BOUNDARY));
     IamRoleWriter::new(&iam, Some(BOUNDARY))
-        .prepare_existing("test-role")
+        .prepare_existing("test-role", "test", "worker")
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn foreign_and_setup_owned_roles_are_never_written_or_adopted() {
+    for boundary in [None, Some(BOUNDARY)] {
+        for tags in [
+            json!(null),
+            json!({"member": []}),
+            json!({"member": [
+                {"Key": "deployment", "Value": "test-sibling"},
+                {"Key": "resource", "Value": "worker"},
+                {"Key": "managed-by", "Value": "runtime"}
+            ]}),
+            json!({"member": [
+                {"Key": "deployment", "Value": "test"},
+                {"Key": "resource", "Value": "other"},
+                {"Key": "managed-by", "Value": "runtime"}
+            ]}),
+            json!({"member": [
+                {"Key": "deployment", "Value": "test"},
+                {"Key": "resource", "Value": "worker"},
+                {"Key": "managed-by", "Value": "setup"}
+            ]}),
+            json!({"member": [
+                {"Key": "deployment", "Value": "test"},
+                {"Key": "resource", "Value": "worker"}
+            ]}),
+        ] {
+            let mut iam = MockIamApi::new();
+            iam.expect_get_role().once().return_once(move |_| {
+                Ok(serde_json::from_value(json!({"GetRoleResult": {"Role": {
+                    "Path": "/", "RoleName": "test-role", "RoleId": "id",
+                    "Arn": "arn:aws:iam::123456789012:role/test-role",
+                    "CreateDate": "2026-01-01", "Tags": tags,
+                    "PermissionsBoundary": boundary.map(|arn| json!({"PermissionsBoundaryArn": arn}))
+                }}})).unwrap())
+            });
+            // No policy audit, adoption, or write may follow a failed ownership check.
+            let error = IamRoleWriter::new(&iam, Some(BOUNDARY))
+                .prepare_existing("test-role", "test", "worker")
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error.error,
+                Some(ErrorData::ExistingCloudResourceNotOwned { .. })
+            ));
+            assert!(!error.retryable);
+        }
+    }
 }
 
 #[tokio::test]
@@ -87,7 +141,7 @@ async fn different_boundary_is_not_overwritten() {
     let mut iam = MockIamApi::new();
     expect_role(&mut iam, Some("arn:aws:iam::123456789012:policy/other"));
     let error = IamRoleWriter::new(&iam, Some(BOUNDARY))
-        .prepare_existing("test-role")
+        .prepare_existing("test-role", "test", "worker")
         .await
         .unwrap_err();
     assert!(matches!(error.error, Some(ErrorData::InvalidInput { .. })));
@@ -104,7 +158,7 @@ async fn unsafe_or_incomplete_policy_audit_prevents_adoption() {
         expect_role(&mut iam, None);
         expect_policies(&mut iam, result);
         let error = IamRoleWriter::new(&iam, Some(BOUNDARY))
-            .prepare_existing("test-role")
+            .prepare_existing("test-role", "test", "worker")
             .await
             .unwrap_err();
         assert!(matches!(error.error, Some(ErrorData::InvalidInput { .. })));
@@ -125,7 +179,7 @@ async fn adoption_failure_is_returned_to_the_writer() {
             }))
         });
     let error = IamRoleWriter::new(&iam, Some(BOUNDARY))
-        .prepare_existing("test-role")
+        .prepare_existing("test-role", "test", "worker")
         .await
         .unwrap_err();
     assert!(error.to_string().contains("adoption denied"));
