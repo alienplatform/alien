@@ -574,7 +574,9 @@ fn chunk_iam_statements(
             continue;
         }
 
-        if current.is_empty() {
+        if current.is_empty()
+            || policy_document_size(std::slice::from_ref(&statement))? > max_policy_bytes
+        {
             return Err(AlienError::new(ErrorData::GenericError {
                 message: format!(
                     "AWS IAM statement '{}' is too large for a managed policy",
@@ -601,7 +603,13 @@ fn policy_document_size(statements: &[AwsIamStatement]) -> Result<usize> {
             format: "Terraform IAM policy".to_string(),
             reason: "Failed to serialize IAM policy".to_string(),
         })
-        .map(|policy| policy.len())
+        .map(|policy| {
+            // Prefix validation permits 40 characters. Keep template overhead
+            // as headroom, but account for growth from shorter placeholders.
+            // Other dynamic references still need validation with resolved inputs.
+            let token = "${local.resource_prefix}";
+            policy.len() + policy.matches(token).count() * (40 - token.len())
+        })
 }
 
 pub(crate) fn policy_document_expr(statements: Vec<AwsIamStatement>) -> Result<Expression> {
@@ -742,3 +750,7 @@ pub fn iam_role_managed_policy_attachment(
 pub fn nested_block(name: &str, body: Vec<Structure>) -> Structure {
     nested(block(name, body))
 }
+
+#[cfg(test)]
+#[path = "helpers_policy_tests.rs"]
+mod policy_tests;

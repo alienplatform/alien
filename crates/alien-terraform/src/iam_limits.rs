@@ -95,7 +95,7 @@ pub(crate) fn validate_role_policy_limits(fragments: &IndexMap<String, TfFragmen
             .count();
         let count = literal_count.max(arns.len() - literal_count);
         if count > 20 {
-            shortfalls.push(format!("IAM role '{role}' requires at least {count} managed-policy attachments; AWS allows at most 20 per role. Reduce the number of attached policies."));
+            shortfalls.push(format!("IAM role '{role}' requires at least {count} managed-policy attachments; generated setup supports the default quota of 20 per role. Reduce the number of attached policies."));
         }
     }
     if shortfalls.is_empty() {
@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn attachment_absolute_maximum_and_multiple_shortfalls() {
+    fn attachment_default_quota_and_multiple_shortfalls() {
         let mut blocks = vec![role(), policy("external", 10241)];
         for index in 0..20 {
             blocks.push(resource_block(
