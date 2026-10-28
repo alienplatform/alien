@@ -3339,9 +3339,12 @@ async fn wait_for_rollout(
                             Path::new(&invoked)
                                 .file_name()
                                 .and_then(|name| name.to_str())
-                        })
-                        .unwrap_or("sync");
-                    eprintln!("Run `{command} sync` to retry; `{command} rollback` returns to the previous release.");
+                        });
+                    if let Some(command) = command {
+                        eprintln!("Run `{command} sync` to retry; `{command} rollback` returns to the previous release.");
+                    } else {
+                        eprintln!("Run the sync command to retry; the rollback command returns to the previous release.");
+                    }
                     return Err(error);
                 }
             }
