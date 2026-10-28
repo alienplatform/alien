@@ -79,7 +79,7 @@ pub(super) async fn check(
     if !failures.is_empty() {
         let details = failures
             .iter()
-            .map(|error| error.message.as_str())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n  ");
         return Err(AlienError::new(ErrorData::RegistryPreflightFailed {
@@ -404,7 +404,12 @@ mod tests {
         .await
         .unwrap_err();
         let message = error.to_string();
-        for expected in ["site/app (HTTP 404)", "site/denied", "CREATE_ON_PUSH"] {
+        for expected in [
+            "site/app (HTTP 404)",
+            "site/denied",
+            "CREATE_ON_PUSH",
+            "push access denied",
+        ] {
             assert!(message.contains(expected), "{message}");
         }
         let failures = error.context.as_ref().unwrap()["failures"]
