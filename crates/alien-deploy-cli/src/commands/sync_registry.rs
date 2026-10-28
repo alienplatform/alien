@@ -74,14 +74,17 @@ pub(super) async fn check(
     let mut details = Vec::new();
     for (name, images) in repositories {
         if let Err(error) = check_repository(name, images, access, &oci, &http).await {
-            let message = match error.error.as_ref() {
+            let mut message = match error.error.as_ref() {
                 Some(ErrorData::RegistryPreflightFailed { message, .. }) => message.clone(),
                 _ => error.message.clone(),
             };
-            details.push(match error.source.as_ref() {
-                Some(source) => format!("{message}: {}", source.message),
-                None => message,
-            });
+            let mut cause = error.source.as_deref();
+            while let Some(source) = cause {
+                message.push_str(": ");
+                message.push_str(&source.message);
+                cause = source.source.as_deref();
+            }
+            details.push(message);
             failures.push(error.into_generic());
         }
     }
@@ -203,6 +206,29 @@ mod tests {
             digest: format!("sha256:{}", "a".repeat(64)),
             media_type: "application/vnd.oci.image.manifest.v1+json".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn preflight_reports_the_connection_failure_cause() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let destinations = repositories(&[image("app")], &format!("{address}/site")).unwrap();
+        let error = check(
+            &destinations,
+            &RegistryAccess {
+                auth: RegistryAuth::Anonymous,
+                insecure: true,
+            },
+        )
+        .await
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.to_lowercase().contains("connection refused"),
+            "{message}"
+        );
+        assert_eq!(message.matches("REGISTRY_PREFLIGHT_FAILED").count(), 1);
     }
 
     #[tokio::test]

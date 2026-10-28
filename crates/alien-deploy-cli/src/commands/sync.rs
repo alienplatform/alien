@@ -1088,13 +1088,16 @@ async fn download_update(
     }
 
     let pending = by_sequence(&folder.join(TO_SITE), Some(BUNDLE_EXTENSION))?;
-    let already_carried = pending.iter().any(|(_, path)| {
+    let already_carried = pending.iter().find(|(_, path)| {
         path.file_stem()
             .and_then(|stem| stem.to_str())
             .is_some_and(|stem| stem.ends_with(&format!("-{release_id}")))
     });
     let new_ack = site.uploaded_through > site.ack_sent;
-    if already_carried {
+    if let Some((_, carried)) = already_carried {
+        if !dry_run {
+            remove_superseded_bundles(&pending, carried)?;
+        }
         println!("Update {release_id} is already in the folder.");
         return Ok(());
     }
@@ -1268,12 +1271,7 @@ async fn download_update(
         AlienError::new(config_error("the manager returned no bundle signing key"))
     })?;
     write_update_bundle(dir, &file, folder, trusted_key).await?;
-    // A newer update replaces bundles that haven't been carried in yet.
-    for (_, path) in &pending {
-        std::fs::remove_file(path)
-            .into_alien_error()
-            .context(config_error("removing a superseded bundle"))?;
-    }
+    remove_superseded_bundles(&pending, &file)?;
 
     let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
     let mut delta = if omitted.is_empty() {
@@ -1288,6 +1286,18 @@ async fn download_update(
         "Downloaded {what} ({:.1} MB, signed{delta}).",
         size as f64 / 1_000_000.0
     );
+    Ok(())
+}
+
+/// Cleanup is safe to retry after the replacement was published.
+fn remove_superseded_bundles(pending: &[(u64, PathBuf)], carried: &Path) -> Result<()> {
+    for (_, path) in pending {
+        if path != carried {
+            std::fs::remove_file(path)
+                .into_alien_error()
+                .context(config_error("removing a superseded bundle"))?;
+        }
+    }
     Ok(())
 }
 
@@ -6069,6 +6079,60 @@ stringData:
             url: server.base_url(),
             token: "ax_deploy_test".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn carried_update_retries_failed_cleanup_without_downloading_again() {
+        let server = MockServer::start_async().await;
+        let target = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/dep_1/target");
+                then.status(200).json_body(serde_json::json!({
+                    "releaseInfo": {"releaseId": "rel_new", "stack": {"id": "app"}}
+                }));
+            })
+            .await;
+        let folder = tempfile::tempdir().unwrap();
+        let mut site = SiteState {
+            deployment_id: "dep_1".into(),
+            ..Default::default()
+        };
+        let pending = folder.path().join(TO_SITE);
+        std::fs::create_dir_all(&pending).unwrap();
+        let carried = pending.join("2-rel_new.bundle");
+        let obsolete = pending.join("1-rel_old.bundle");
+        std::fs::write(&carried, b"published update").unwrap();
+        // A directory at the old filename forces a removal error even as root.
+        std::fs::create_dir(&obsolete).unwrap();
+        download_update(folder.path(), &mut site, &access(&server), false, true, &[])
+            .await
+            .unwrap();
+        assert!(obsolete.is_dir(), "dry-run must leave the folder untouched");
+        assert!(download_update(
+            folder.path(),
+            &mut site,
+            &access(&server),
+            false,
+            false,
+            &[]
+        )
+        .await
+        .is_err());
+        std::fs::remove_dir(&obsolete).unwrap();
+        std::fs::write(&obsolete, b"obsolete update").unwrap();
+        download_update(
+            folder.path(),
+            &mut site,
+            &access(&server),
+            false,
+            false,
+            &[],
+        )
+        .await
+        .unwrap();
+        assert!(!obsolete.exists());
+        assert_eq!(std::fs::read(carried).unwrap(), b"published update");
+        target.assert_hits_async(3).await;
     }
 
     /// The first telemetry batch id in a status report.
