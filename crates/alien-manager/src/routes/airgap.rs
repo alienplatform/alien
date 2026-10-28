@@ -680,6 +680,23 @@ async fn forward_telemetry(
         .await
         .map_err(IntoResponse::into_response)?;
     let mark = through;
+    let mut rejected = 0;
+    // A failed request or lost response may have hidden an earlier warning.
+    // Repeat it until the client stops submitting that acknowledged batch ID.
+    for (id, _, _) in &batches {
+        if let Some(id) = id.filter(|id| mark.is_some_and(|mark| *id <= mark)) {
+            if kv
+                .exists(&format!("{mark_key}:rejected:{id}"))
+                .await
+                .map_err(|error| {
+                    ErrorData::internal(format!("reading telemetry rejection: {error}"))
+                        .into_response()
+                })?
+            {
+                rejected += 1;
+            }
+        }
+    }
     batches.retain(|(id, _, _)| !id.is_some_and(|id| mark.is_some_and(|mark| id <= mark)));
     batches.sort_by_key(|(id, _, _)| *id);
 
@@ -737,7 +754,6 @@ async fn forward_telemetry(
         .buffered(TELEMETRY_CONCURRENCY);
 
     let mut accepted = 0;
-    let mut rejected = 0;
     while let Some((id, completed_count, result)) = written.next().await {
         let rejected_count = match result {
             Ok(count) => count,
@@ -757,8 +773,9 @@ async fn forward_telemetry(
                         .into_response()
                     })?;
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                // Legacy batches precede identified batches and have already completed.
-                batches.retain(|(id, _, _)| id.is_some());
+                // Completed batches and their warnings are already counted above.
+                batches
+                    .retain(|(id, _, _)| id.is_some_and(|id| through.is_none_or(|mark| id > mark)));
                 let rest = Box::pin(forward_telemetry(
                     backend, kv, caller, mark_key, batches, remaining,
                 ))
@@ -1022,7 +1039,92 @@ mod tests {
         .unwrap();
         assert_eq!(
             (replay.accepted, replay.rejected, replay.through),
-            (0, 0, Some(200))
+            (0, 1, Some(200))
+        );
+    }
+
+    struct RejectThenUnavailable(std::sync::atomic::AtomicBool);
+
+    #[async_trait]
+    impl TelemetryBackend for RejectThenUnavailable {
+        async fn ingest(
+            &self,
+            _: TelemetrySignal,
+            _: &TelemetryCaller,
+            data: bytes::Bytes,
+        ) -> Result<(), AlienError> {
+            if data.starts_with(b"{") {
+                let mut error = ErrorData::bad_request("invalid telemetry").into_generic();
+                error.http_status_code = Some(400);
+                return Err(error);
+            }
+            if self.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                let mut error = ErrorData::bad_request("temporarily unavailable").into_generic();
+                error.http_status_code = Some(503);
+                return Err(error);
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn rejection_warning_survives_a_later_failure_and_lost_response() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+        kv.put("mark:individual-through", b"2".to_vec(), None)
+            .await
+            .unwrap();
+        let backend = Arc::new(RejectThenUnavailable(std::sync::atomic::AtomicBool::new(
+            true,
+        )));
+        let input = vec![
+            (Some(1), TelemetrySignal::Logs, b"{}".to_vec()),
+            (Some(2), TelemetrySignal::Logs, batch_data(2)),
+        ];
+        let error = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input.clone(),
+            TELEMETRY_BUDGET,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            read_telemetry_mark(kv.as_ref(), "mark").await.unwrap(),
+            Some(1)
+        );
+        for accepted in [1, 0] {
+            let result = forward_telemetry(
+                backend.clone(),
+                kv.clone(),
+                caller(),
+                "mark".into(),
+                input.clone(),
+                TELEMETRY_BUDGET,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                (result.accepted, result.rejected, result.through),
+                (accepted, 1, Some(2))
+            );
+        }
+        let result = forward_telemetry(
+            backend,
+            kv,
+            caller(),
+            "mark".into(),
+            batches(3..=3),
+            TELEMETRY_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (result.accepted, result.rejected, result.through),
+            (1, 0, Some(3))
         );
     }
 
@@ -1082,6 +1184,8 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(60));
             assert!(result.through.unwrap() > through);
             through = result.through.unwrap();
+            // The CLI no longer sends batch IDs after their response was acknowledged.
+            input.retain(|(id, _, _)| id.is_none_or(|id| id > through));
             rejected += result.rejected;
             if through == 200 {
                 break;
