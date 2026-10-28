@@ -13,7 +13,7 @@ use alien_core::{
     DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
 };
 use alien_error::{Context, IntoAlienError};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -23,7 +23,48 @@ use crate::error::{ErrorData, Result};
 use crate::workload_observation::{is_settled, workload_identity};
 
 mod airgap;
+mod automatic_retry;
 pub(crate) use airgap::AirgapReceipt;
+pub(crate) use automatic_retry::{approved_target_hash, AutomaticRetry};
+
+fn database_error(message: &str) -> ErrorData {
+    ErrorData::DatabaseError {
+        message: message.into(),
+    }
+}
+
+async fn read_json<T: DeserializeOwned>(conn: &Connection, key: &str) -> Result<Option<T>> {
+    let mut rows = conn
+        .query("SELECT value FROM state WHERE key = ?", (key,))
+        .await
+        .into_alien_error()
+        .context(database_error("Reading Operator state"))?;
+    let Some(row) = rows
+        .next()
+        .await
+        .into_alien_error()
+        .context(database_error("Reading Operator state row"))?
+    else {
+        return Ok(None);
+    };
+    let value: String = row
+        .get(0)
+        .into_alien_error()
+        .context(database_error("Reading Operator state value"))?;
+    serde_json::from_str(&value)
+        .map(Some)
+        .into_alien_error()
+        .context(database_error("Decoding Operator state"))
+}
+
+async fn write_json<T: Serialize>(conn: &Connection, key: &str, value: &T) -> Result<()> {
+    let value = serde_json::to_string(value)
+        .into_alien_error()
+        .context(database_error("Encoding Operator state"))?;
+    conn.execute("INSERT INTO state (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", (key, value)).await
+        .into_alien_error().context(database_error("Saving Operator state"))?;
+    Ok(())
+}
 
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;

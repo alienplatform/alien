@@ -772,7 +772,7 @@ pub trait ResourceController: Send + Sync + Debug {
     fn get_status(&self) -> ResourceStatus;
 
     /// Human-readable explanation of the current step. Consumers must not parse this text.
-    fn get_progress(&self) -> Option<&'static str> {
+    fn get_progress(&self) -> Option<&str> {
         None
     }
 

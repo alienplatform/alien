@@ -114,6 +114,24 @@ fn first_declared_container_port(config: &Container) -> Option<u16> {
     config.ports.first().map(|port| port.port)
 }
 
+fn deployment_failure_progress(deployment: &Deployment) -> Option<String> {
+    let status = deployment.status.as_ref()?;
+    if status.observed_generation < deployment.metadata.generation {
+        return None;
+    }
+    let failure = status
+        .conditions
+        .as_ref()?
+        .iter()
+        .find(|condition| condition.type_ == "ReplicaFailure" && condition.status == "True")?;
+    let reason = failure.reason.as_deref().unwrap_or("ReplicaFailure");
+    let message = failure
+        .message
+        .as_deref()
+        .unwrap_or("Could not create replicas");
+    Some(format!("{reason}: {message}"))
+}
+
 fn workload_ready(
     desired_replicas: i32,
     ready_replicas: Option<i32>,
@@ -194,10 +212,25 @@ pub struct KubernetesContainerController {
     /// the previous generation must not complete this rollout.
     #[serde(default)]
     pub(crate) update_generation: Option<i64>,
+    /// Kubernetes' explanation for a workload that cannot create replicas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) workload_failure: Option<String>,
 }
 
 #[controller]
 impl KubernetesContainerController {
+    fn get_progress(&self) -> Option<&str> {
+        match self.state {
+            KubernetesContainerState::WaitingForWorkload
+            | KubernetesContainerState::WaitingForUpdate => Some(
+                self.workload_failure
+                    .as_deref()
+                    .unwrap_or("Waiting for workload readiness."),
+            ),
+            _ => None,
+        }
+    }
+
     // ─────────────── CREATE FLOW ──────────────────────────────
     #[flow_entry(Create)]
     #[handler(
@@ -584,6 +617,7 @@ impl KubernetesContainerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.workload_failure = None;
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
 
@@ -662,6 +696,7 @@ impl KubernetesContainerController {
                 .await
             {
                 Ok(deployment) => {
+                    self.workload_failure = deployment_failure_progress(&deployment);
                     if let Some(status) = &deployment.status {
                         (
                             status.ready_replicas,
@@ -1403,6 +1438,7 @@ impl KubernetesContainerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.workload_failure = None;
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Container>()?;
 
@@ -1463,6 +1499,7 @@ impl KubernetesContainerController {
                 .await
             {
                 Ok(deployment) => {
+                    self.workload_failure = deployment_failure_progress(&deployment);
                     let ready = deployment
                         .status
                         .as_ref()
@@ -2139,6 +2176,7 @@ mod output_tests {
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            workload_failure: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         };
@@ -2207,6 +2245,7 @@ mod output_tests {
             public_endpoint,
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            workload_failure: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         };
@@ -2274,6 +2313,7 @@ impl KubernetesContainerController {
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            workload_failure: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         }
@@ -3201,6 +3241,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workload_progress_reports_current_replica_failure_and_clears_after_repair() {
+        for updating in [false, true] {
+            let server = httpmock::MockServer::start_async().await;
+            let mut response = serde_json::json!({
+                "apiVersion": "apps/v1", "kind": "Deployment",
+                "metadata": {"name": "web", "generation": 2},
+                "status": {"replicas": 0, "readyReplicas": 0, "observedGeneration": 2,
+                    "conditions": [{"type": "ReplicaFailure", "status": "True",
+                        "reason": "FailedCreate", "message": "pods are forbidden: exceeded quota: site-pods"}]}
+            });
+            let config = manifest_test_container(&[], false);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+            let mut ctx = harness.ctx();
+            point_at(&mut ctx, &server);
+            let mut controller = manifest_test_controller();
+            controller.state = if updating {
+                KubernetesContainerState::WaitingForUpdate
+            } else {
+                KubernetesContainerState::WaitingForWorkload
+            };
+            for (observed, failed, expected) in [
+                (
+                    2,
+                    true,
+                    "FailedCreate: pods are forbidden: exceeded quota: site-pods",
+                ),
+                (1, true, "Waiting for workload readiness."),
+                (2, false, "Waiting for workload readiness."),
+            ] {
+                response["status"]["observedGeneration"] = observed.into();
+                response["status"]["conditions"][0]["status"] =
+                    if failed { "True" } else { "False" }.into();
+                let mut request = server.mock(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/apis/apps/v1/namespaces/test-ns/deployments/web");
+                    then.status(200).json_body(response.clone());
+                });
+                let action = if updating {
+                    controller.waiting_for_update(&ctx).await
+                } else {
+                    controller.waiting_for_workload(&ctx).await
+                }
+                .unwrap();
+                assert!(matches!(
+                    action,
+                    KubernetesContainerHandlerAction::Stay { .. }
+                ));
+                request.assert_hits(1);
+                request.delete();
+                let restored: KubernetesContainerController =
+                    serde_json::from_value(serde_json::to_value(&controller).unwrap()).unwrap();
+                assert_eq!(ResourceController::get_progress(&restored), Some(expected));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn initial_workload_accepts_ready_capacity_and_waits_for_unready_pods() {
         for stateful in [false, true] {
             for (ready, total, complete) in
@@ -3496,6 +3593,7 @@ mod tests {
             public_endpoint: KubernetesPublicEndpointState::default(),
             env_secret: EnvSecretRotationTracker::default(),
             update_generation: None,
+            workload_failure: None,
             zero_ready_observed: false,
             _internal_stay_count: None,
         };

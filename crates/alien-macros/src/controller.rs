@@ -252,6 +252,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut requires_convergence_reconciliation_method = None;
     let mut nothing_deleted_yet_method = None;
     let mut has_runtime_setup_inputs_method = None;
+    let mut get_progress_method = None;
 
     for item in &item_impl.items {
         match item {
@@ -280,6 +281,11 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
 
                 if method.sig.ident == "has_runtime_setup_inputs" {
                     has_runtime_setup_inputs_method = Some(method.clone());
+                    continue;
+                }
+
+                if method.sig.ident == "get_progress" {
+                    get_progress_method = Some(method.clone());
                     continue;
                 }
 
@@ -360,6 +366,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
         requires_convergence_reconciliation_method.as_ref(),
         nothing_deleted_yet_method.as_ref(),
         has_runtime_setup_inputs_method.as_ref(),
+        get_progress_method.as_ref(),
     );
 
     // Generate handler methods
@@ -528,6 +535,7 @@ fn generate_controller_impl(
     requires_convergence_reconciliation_method: Option<&ImplItemFn>,
     nothing_deleted_yet_method: Option<&ImplItemFn>,
     has_runtime_setup_inputs_method: Option<&ImplItemFn>,
+    get_progress_method: Option<&ImplItemFn>,
 ) -> TokenStream2 {
     let step_match_arms = generate_step_match_arms(state_enum_name, handler_action_name, handlers);
     let get_status_match_arms =
@@ -538,6 +546,17 @@ fn generate_controller_impl(
             quote! { #state_enum_name::#state => Some(#progress), }
         })
     });
+    let get_progress_body = if let Some(method) = get_progress_method {
+        let body = &method.block;
+        quote! { #body }
+    } else {
+        quote! {
+            match &self.state {
+                #(#progress_arms)*
+                _ => None,
+            }
+        }
+    };
     let transition_to_failure_body = generate_transition_to_failure(state_enum_name, handlers);
     let transition_to_delete_body = generate_transition_to_delete(state_enum_name, flow_entries);
     let transition_to_teardown_body =
@@ -665,11 +684,8 @@ fn generate_controller_impl(
                 }
             }
 
-            fn get_progress(&self) -> Option<&'static str> {
-                match &self.state {
-                    #(#progress_arms)*
-                    _ => None,
-                }
+            fn get_progress(&self) -> Option<&str> {
+                #get_progress_body
             }
 
             fn get_outputs(&self) -> Option<alien_core::ResourceOutputs> {
