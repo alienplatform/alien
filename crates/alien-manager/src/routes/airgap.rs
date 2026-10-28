@@ -588,7 +588,7 @@ async fn reconcile_report(
 /// gateway timeout that makes no progress.
 const TELEMETRY_BUDGET: Duration = Duration::from_secs(45);
 
-/// Groups written to the telemetry backend at once. Backends that
+/// Signal writes to the telemetry backend at once. Backends that
 /// acknowledge a write only once it is flushed take seconds per batch.
 const TELEMETRY_CONCURRENCY: usize = 8;
 const TELEMETRY_GROUP_BATCHES: usize = 128;
@@ -654,11 +654,11 @@ struct Forwarded {
 /// contains every batch an earlier one had that the manager hasn't
 /// confirmed, so a batch below the mark has been received.
 ///
-/// Bounded groups are written [`TELEMETRY_CONCURRENCY`] at a time. The mark
+/// Signal writes run [`TELEMETRY_CONCURRENCY`] at a time. The mark
 /// only moves over groups that completed in order, so it never covers a
-/// batch that didn't go through. No new group starts once `budget` has
-/// passed; the ones in flight finish and the rest wait for the next report.
-/// A failed group and any later completed groups are replayed next time.
+/// batch that didn't go through. No new signal starts once `budget` has
+/// passed; writes in flight finish and the rest wait for the next report.
+/// Partially written groups and any groups after a failure are replayed.
 async fn forward_telemetry(
     backend: Arc<dyn TelemetryBackend>,
     kv: Arc<dyn Kv>,
@@ -677,22 +677,40 @@ async fn forward_telemetry(
 
     let backend = backend.as_ref();
     let caller = &caller;
-    let mut written = stream::iter(group_telemetry(batches))
+    let signals = group_telemetry(batches).into_iter().flat_map(|group| {
+        let signals = group.signals.len();
+        group
+            .signals
+            .into_iter()
+            .enumerate()
+            .map(move |(index, (signal, data))| {
+                // Ordered completion of the last signal proves the whole group
+                // succeeded. A budget stop partway through a group leaves it unacknowledged.
+                (
+                    group.through,
+                    signal,
+                    data,
+                    (index + 1 == signals).then_some(group.count),
+                )
+            })
+    });
+    let mut written = stream::iter(signals)
         // A batch without an id (from an older site) can't be picked up by
         // the next report, so the budget never holds one back. They sort
         // first.
-        .take_while(|group| ready(group.through.is_none() || Instant::now() < deadline))
-        .map(|group| async move {
-            for (signal, data) in group.signals {
-                backend.ingest(signal, caller, data.into()).await?;
-            }
-            Ok::<_, alien_error::AlienError>((group.through, group.count))
+        .take_while(|(id, _, _, _)| ready(id.is_none() || Instant::now() < deadline))
+        .map(|(id, signal, data, completed_count)| async move {
+            backend.ingest(signal, caller, data.into()).await?;
+            Ok::<_, alien_error::AlienError>((id, completed_count))
         })
         .buffered(TELEMETRY_CONCURRENCY);
 
     let mut accepted = 0;
     while let Some(written_batch) = written.next().await {
-        let (id, count) = written_batch.map_err(IntoResponse::into_response)?;
+        let (id, completed_count) = written_batch.map_err(IntoResponse::into_response)?;
+        let Some(count) = completed_count else {
+            continue;
+        };
         accepted += count;
         if let Some(id) = id {
             through = Some(id);
@@ -872,9 +890,12 @@ mod tests {
     /// A backend that, like one acknowledging a write only once it is
     /// flushed, takes a while per batch. Records the id each batch carries
     /// in its payload.
+    #[derive(Default)]
     struct SlowBackend {
         delay: Duration,
         received: Mutex<Vec<i64>>,
+        active: std::sync::atomic::AtomicUsize,
+        max_active: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait]
@@ -885,7 +906,15 @@ mod tests {
             _caller: &TelemetryCaller,
             data: bytes::Bytes,
         ) -> Result<(), AlienError> {
+            let active = self
+                .active
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            self.max_active
+                .fetch_max(active, std::sync::atomic::Ordering::SeqCst);
             tokio::time::sleep(self.delay).await;
+            self.active
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             let ids = batch_ids(&data);
             self.received.lock().unwrap().extend(ids);
             Ok(())
@@ -1044,7 +1073,7 @@ mod tests {
         let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
         let backend = Arc::new(SlowBackend {
             delay: Duration::ZERO,
-            received: Mutex::new(Vec::new()),
+            ..Default::default()
         });
         let mut input = batches(0..=1);
         input[0].0 = None;
@@ -1177,12 +1206,76 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn slow_mixed_signals_share_the_write_limit_and_return_partial_progress() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+        let backend = Arc::new(SlowBackend {
+            delay: Duration::from_secs(25),
+            ..Default::default()
+        });
+        let mut input = batches(1..=1024);
+        for (id, signal, _) in &mut input {
+            *signal = match id.unwrap() % 3 {
+                0 => TelemetrySignal::Logs,
+                1 => TelemetrySignal::Traces,
+                _ => TelemetrySignal::Metrics,
+            };
+        }
+        let started = Instant::now();
+        let first = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input.clone(),
+            TELEMETRY_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "mixed signals must not wait for three serial backend flushes: {:?}",
+            started.elapsed()
+        );
+        assert!(first.accepted > 0 && first.accepted < 1024);
+        assert_eq!(first.through, Some(first.accepted as i64));
+        assert_eq!(
+            read_telemetry_mark(kv.as_ref(), "mark").await.unwrap(),
+            first.through
+        );
+        assert_eq!(
+            backend.max_active.load(std::sync::atomic::Ordering::SeqCst),
+            TELEMETRY_CONCURRENCY
+        );
+        let replay = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input,
+            TELEMETRY_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(replay.through, Some(1024));
+        let received = backend.received.lock().unwrap();
+        for id in 1..=1024 {
+            let count = received.iter().filter(|&&found| found == id).count();
+            if id <= first.through.unwrap() {
+                assert_eq!(count, 1);
+            } else {
+                assert!(count >= 1);
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_backlog_is_forwarded_across_reports_within_the_budget_without_duplicates() {
         let tmp = tempfile::tempdir().unwrap();
         let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
         let backend = Arc::new(SlowBackend {
             delay: Duration::from_millis(200),
-            received: Mutex::new(Vec::new()),
+            ..Default::default()
         });
         let budget = Duration::from_millis(500);
         let last_id = (TELEMETRY_GROUP_BATCHES * TELEMETRY_CONCURRENCY * 4) as i64;
