@@ -106,14 +106,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}"
-            ]
+            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}"]
           }
         }
       },
@@ -267,14 +263,46 @@
         }
       },
       {
-        // Live workers are created by the management role, but their
-        // resource-scoped execution and management policies are attached to
-        // setup-created stack roles after the worker exists. Keep this
-        // limited to Alien stack roles by name.
+        // Live workers attach their policies to setup-created stack roles.
         "label": "attach-lambda-runtime-policies",
         "description": "Attach application-owned runtime policies to IAM roles used by Lambda functions.",
         "grant": {
-          "actions": ["iam:PutRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies"]
+          "actions": [
+            "iam:PutRolePolicy",
+            "iam:PutRolePermissionsBoundary"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "read-lambda-runtime-policies",
+        "description": "Attach application-owned runtime policies to IAM roles used by Lambda functions.",
+        "grant": {
+          "actions": [
+            "iam:GetRolePolicy",
+            "iam:ListRolePolicies"
+          ]
         },
         "binding": {
           "stack": {
@@ -698,9 +726,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"
-            ],
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -733,9 +759,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"
-            ],
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",

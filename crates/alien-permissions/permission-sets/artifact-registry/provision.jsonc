@@ -49,15 +49,40 @@
         "grant": {
           "actions": [
             "iam:CreateRole",
-            "iam:GetRole",
-            "iam:TagRole",
             "iam:UpdateAssumeRolePolicy",
             "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:DetachRolePolicy",
+            "iam:PutRolePermissionsBoundary"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:GetRole",
+            "iam:TagRole",
             "iam:GetRolePolicy",
             "iam:ListRolePolicies",
-            "iam:DeleteRolePolicy",
             "iam:ListAttachedRolePolicies",
-            "iam:DetachRolePolicy",
             "iam:DeleteRole"
           ]
         },

@@ -1,6 +1,8 @@
 //! The setup-owned ceiling for roles written by management.
 
-use std::collections::BTreeSet;
+use std::{borrow::Cow, collections::BTreeSet};
+
+use alien_core::AwsBindingSpec;
 
 use alien_error::AlienError;
 use serde_json::{json, Value};
@@ -128,6 +130,43 @@ pub fn aws_permissions_boundary(
         }));
     }
     Ok(policy)
+}
+
+/// Older setups have no boundary policy or adoption grant. Only omit the catalog's
+/// boundary condition; explicit custom conditions must keep their original meaning.
+pub(super) fn role_write_binding<'a>(
+    binding: &'a AwsBindingSpec,
+    actions: &'a [String],
+    context: &PermissionContext,
+) -> (Cow<'a, AwsBindingSpec>, Cow<'a, [String]>) {
+    let uses_setup_boundary = binding
+        .condition
+        .as_ref()
+        .and_then(|conditions| conditions.get("StringEquals"))
+        .and_then(|values| values.get("iam:PermissionsBoundary"))
+        .is_some_and(|value| value == "${awsPermissionsBoundaryArn}");
+    if context.aws_permissions_boundary_arn.is_some() || !uses_setup_boundary {
+        return (Cow::Borrowed(binding), Cow::Borrowed(actions));
+    }
+
+    let mut binding = binding.clone();
+    if let Some(conditions) = &mut binding.condition {
+        if let Some(values) = conditions.get_mut("StringEquals") {
+            values.shift_remove("iam:PermissionsBoundary");
+            if values.is_empty() {
+                conditions.shift_remove("StringEquals");
+            }
+        }
+        if conditions.is_empty() {
+            binding.condition = None;
+        }
+    }
+    let actions = actions
+        .iter()
+        .filter(|action| action.as_str() != "iam:PutRolePermissionsBoundary")
+        .cloned()
+        .collect();
+    (Cow::Owned(binding), Cow::Owned(actions))
 }
 
 fn is_runtime_set(id: &str) -> bool {

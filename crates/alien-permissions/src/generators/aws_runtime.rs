@@ -144,13 +144,16 @@ impl AwsRuntimePermissionsGenerator {
                     })?,
             };
 
+            let (binding_spec, actions) =
+                super::aws_boundary::role_write_binding(binding_spec, actions, context);
+
             let resources =
                 VariableInterpolator::interpolate_string_list(&binding_spec.resources, context)?;
             let not_resources = VariableInterpolator::interpolate_string_list(
                 &binding_spec.not_resources,
                 context,
             )?;
-            let conditions = self.extract_conditions(binding_spec, context)?;
+            let conditions = self.extract_conditions(&binding_spec, context)?;
 
             let statement_id = self.statement_id(
                 permission_set,
@@ -162,7 +165,7 @@ impl AwsRuntimePermissionsGenerator {
             let statement = AwsIamStatement {
                 sid: statement_id,
                 effect: platform_permission.effect.as_str().to_string(),
-                action: actions.clone(),
+                action: actions.into_owned(),
                 resource: resources,
                 not_resource: not_resources,
                 condition: if conditions.is_empty() {
@@ -291,7 +294,10 @@ mod tests {
             .iter()
             .map(|statement| statement.sid.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(sids, ["DuplicateSid", "DuplicateSid2", "Other", "DuplicateSid3"]);
+        assert_eq!(
+            sids,
+            ["DuplicateSid", "DuplicateSid2", "Other", "DuplicateSid3"]
+        );
     }
 
     #[test]
@@ -306,7 +312,10 @@ mod tests {
 
         assert_eq!(
             statements,
-            [statement("ListEventSourceMappings", "*"), statement("Other", "*")]
+            [
+                statement("ListEventSourceMappings", "*"),
+                statement("Other", "*")
+            ]
         );
     }
 

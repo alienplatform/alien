@@ -8,6 +8,31 @@
           "actions": [
             "iam:CreateRole",
             "iam:PutRolePolicy",
+            "iam:PutRolePermissionsBoundary"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
             "iam:GetRole",
             "iam:GetRolePolicy",
             "iam:ListRolePolicies",

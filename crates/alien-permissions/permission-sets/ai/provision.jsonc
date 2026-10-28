@@ -4,14 +4,37 @@
   "platforms": {
     "aws": [
       {
+        // Provisioning attaches the Bedrock invoke policy to the workload role.
         "grant": {
-          // Bedrock access is grantless at the infrastructure level; provisioning
-          // consists of attaching/detaching the bedrock-invoke policy on the
-          // workload IAM role created for this resource.
           "actions": [
             "iam:PutRolePolicy",
-            "iam:GetRolePolicy",
             "iam:DeleteRolePolicy",
+            "iam:PutRolePermissionsBoundary"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:GetRolePolicy",
             "iam:ListRolePolicies"
           ]
         },

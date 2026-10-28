@@ -99,11 +99,14 @@ impl AwsCloudFormationPermissionsGenerator {
                     })?,
             };
 
+            let (binding_spec, actions) =
+                super::aws_boundary::role_write_binding(binding_spec, actions, context);
+
             let resources =
                 self.interpolate_cloudformation_resources(&binding_spec.resources, context)?;
             let not_resources =
                 self.interpolate_cloudformation_resources(&binding_spec.not_resources, context)?;
-            let conditions = self.extract_cloudformation_conditions(binding_spec, context)?;
+            let conditions = self.extract_cloudformation_conditions(&binding_spec, context)?;
 
             let statement_id = self.statement_id(
                 permission_set,
@@ -176,6 +179,7 @@ impl AwsCloudFormationPermissionsGenerator {
         // Check if the template contains CloudFormation variables or regular variables
         let contains_cf_vars = template.contains("${AWS::") || template.contains("${!");
         let contains_regular_vars = [
+            "${awsPermissionsBoundaryArn}",
             "${stackPrefix}",
             "${resourceId}",
             "${resourceName}",
@@ -193,6 +197,19 @@ impl AwsCloudFormationPermissionsGenerator {
         if contains_regular_vars {
             // Template contains our custom variables that need to be replaced.
             let mut result = template;
+            if result.contains("${awsPermissionsBoundaryArn}") {
+                let arn = context
+                    .aws_permissions_boundary_arn
+                    .as_deref()
+                    .ok_or_else(|| {
+                        alien_error::AlienError::new(ErrorData::VariableNotFound {
+                            variable: "awsPermissionsBoundaryArn".to_string(),
+                        })
+                    })?;
+                result = result
+                    .replace("${awsPermissionsBoundaryArn}", arn)
+                    .replace("arn:aws:", "arn:${AWS::Partition}:");
+            }
             if let Some(stack_prefix) = context.stack_prefix.as_ref() {
                 if stack_prefix.is_empty() {
                     // Empty stack prefix means just use the stack name
