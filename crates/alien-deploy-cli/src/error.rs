@@ -6,6 +6,15 @@ pub type Result<T> = alien_error::Result<T, ErrorData>;
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The Operator reached a terminal failure while rolling out a release.
+    #[error(
+        code = "ROLLOUT_FAILED",
+        message = "Rollout of {release_id} failed: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    RolloutFailed { release_id: String, message: String },
+
     #[error(
         code = "CONFIGURATION_ERROR",
         message = "Configuration error: {message}",
