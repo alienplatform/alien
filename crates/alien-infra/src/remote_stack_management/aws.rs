@@ -1,15 +1,17 @@
 use std::{collections::HashSet, time::Duration};
 use tracing::{info, warn};
 
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{
+    aws_permissions_boundary_for_stack, ResourceControllerContext, ResourcePermissionsHelper,
+};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
     standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
-    KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
-    RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
-    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle,
-    ResourceOutputs, ResourceStatus, Worker,
+    InitialSetupAuthority, KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState,
+    RemoteStackManagement, RemoteStackManagementHeartbeatData,
+    RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus, Worker,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -151,6 +153,7 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.install_permissions_boundary(ctx).await?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -245,6 +248,7 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        self.install_permissions_boundary(ctx).await?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -293,9 +297,9 @@ impl AwsRemoteStackManagementController {
         let role_name = match &self.role_name {
             Some(name) => name,
             None => {
-                // No role was created, skip to deleted
+                // A boundary may remain after an interrupted cleanup.
                 return Ok(HandlerAction::Continue {
-                    state: Deleted,
+                    state: DeletingPermissionsBoundary,
                     suggested_delay: None,
                 });
             }
@@ -478,6 +482,26 @@ impl AwsRemoteStackManagementController {
         self.management_permissions_applied = false;
 
         Ok(HandlerAction::Continue {
+            state: DeletingPermissionsBoundary,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = DeletingPermissionsBoundary, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
+    async fn deleting_permissions_boundary(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if let Some(arn) = &self.permissions_boundary_arn {
+            let client = ctx
+                .service_provider
+                .get_aws_iam_client(ctx.get_aws_config()?)
+                .await?;
+            self.delete_owned_policy(client.as_ref(), arn).await?;
+            self.permissions_boundary_arn = None;
+            self.permissions_boundary_document = None;
+        }
+        Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
         })
@@ -498,6 +522,16 @@ impl AwsRemoteStackManagementController {
     );
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup
+            && ctx.deployment_config.setup_run
+        {
+            let required = self.required_permissions_boundary(ctx)?;
+            if self.permissions_boundary_arn.is_none()
+                || self.permissions_boundary_document.as_ref() != Some(&required)
+            {
+                return Ok(true);
+            }
+        }
         super::management_permissions_need_refresh(
             ctx,
             self.management_permissions_revision.as_deref(),
@@ -581,21 +615,7 @@ impl AwsRemoteStackManagementController {
         )
     }
 
-    /// Generate managed IAM policy documents for management permissions from the stack's management profile.
-    fn generate_management_policy_documents(
-        &self,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<Vec<String>> {
-        // Get the management permission profile from the stack
-        // The stack processor should have processed the management permissions
-        let management_permissions = ctx.desired_stack.management();
-        let management_profile = management_permissions.profile()
-            .ok_or_else(|| AlienError::new(ErrorData::InfrastructureError {
-                message: "Management permissions not configured or set to Auto. Management permissions must be explicitly configured for remote stack management.".to_string(),
-                operation: Some("generate_management_policy_document".to_string()),
-                resource_id: Some("management".to_string()),
-            }))?;
-
+    fn permission_context(&self, ctx: &ResourceControllerContext<'_>) -> Result<PermissionContext> {
         let aws_config = ctx.get_aws_config()?;
         let mut permission_context = PermissionContext::new()
             .with_stack_prefix(ctx.resource_prefix.to_string())
@@ -622,6 +642,87 @@ impl AwsRemoteStackManagementController {
         {
             permission_context = permission_context.with_managing_account_id(managing_account_id);
         }
+
+        Ok(permission_context)
+    }
+
+    fn required_permissions_boundary(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<serde_json::Value> {
+        let mut context = self.permission_context(ctx)?;
+        context.aws_permissions_boundary_arn = Some(self.management_policy_arn(
+            &ctx.get_aws_config()?.account_id,
+            &format!("{}-permissions-boundary", ctx.resource_prefix),
+        ));
+        aws_permissions_boundary_for_stack(ctx.desired_stack, ctx.state, &context)
+    }
+
+    async fn install_permissions_boundary(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        if ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup {
+            return Err(AlienError::new(ErrorData::SetupRerunRequired {
+                resource_id: ctx.desired_config.id().to_string(),
+                message: "Only direct setup may install the AWS permissions boundary".to_string(),
+            }));
+        }
+        let document = self.required_permissions_boundary(ctx)?;
+        if self.permissions_boundary_arn.is_some()
+            && self.permissions_boundary_document.as_ref() == Some(&document)
+        {
+            return Ok(());
+        }
+        let aws = ctx.get_aws_config()?;
+        let name = format!("{}-permissions-boundary", ctx.resource_prefix);
+        let arn = self.management_policy_arn(&aws.account_id, &name);
+        let serialized = serde_json::to_string(&document)
+            .into_alien_error()
+            .context(ErrorData::InfrastructureError {
+                message: "Cannot serialize AWS permissions boundary".to_string(),
+                operation: Some("install_permissions_boundary".to_string()),
+                resource_id: Some(ctx.desired_config.id().to_string()),
+            })?;
+        let client = ctx.service_provider.get_aws_iam_client(aws).await?;
+        // Keep the cleanup target even if AWS accepts the request but its response is lost.
+        self.permissions_boundary_arn = Some(arn.clone());
+        match client.create_policy(&name, &serialized, None).await {
+            Ok(_) => {}
+            Err(error) if is_remote_conflict(&error) => {
+                self.create_default_policy_version(client.as_ref(), &arn, &serialized)
+                    .await?;
+            }
+            Err(error) => {
+                return Err(error
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to install permissions boundary '{arn}'"),
+                        resource_id: Some(ctx.desired_config.id().to_string()),
+                    })
+                    .into())
+            }
+        }
+        // Record the accepted document before any management-policy write can fail.
+        self.permissions_boundary_document = Some(document);
+        Ok(())
+    }
+
+    /// Generate managed IAM policy documents for management permissions from the stack's management profile.
+    fn generate_management_policy_documents(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<Vec<String>> {
+        // Get the management permission profile from the stack
+        // The stack processor should have processed the management permissions
+        let management_permissions = ctx.desired_stack.management();
+        let management_profile = management_permissions.profile()
+            .ok_or_else(|| AlienError::new(ErrorData::InfrastructureError {
+                message: "Management permissions not configured or set to Auto. Management permissions must be explicitly configured for remote stack management.".to_string(),
+                operation: Some("generate_management_policy_document".to_string()),
+                resource_id: Some("management".to_string()),
+            }))?;
+
+        let permission_context = self.permission_context(ctx)?;
 
         // Include all permission sets from the management profile in the stack-level
         // management policies. Generate each permission set independently so IAM
@@ -673,7 +774,8 @@ impl AwsRemoteStackManagementController {
                 action: vec!["iam:GetRole".to_string()],
                 resource: vec![format!(
                     "arn:aws:iam::{}:role/{}",
-                    aws_config.account_id, role_name
+                    ctx.get_aws_config()?.account_id,
+                    role_name
                 )],
                 not_resource: Vec::new(),
                 condition: None,
@@ -758,7 +860,12 @@ impl AwsRemoteStackManagementController {
             return ResourcePermissionsHelper::aws_kubernetes_cluster_permission_context(
                 ctx, cluster,
             )
-            .map(|context| context.with_resource_id(resource_id.to_string()));
+            .map(|mut context| {
+                // This setup step may have installed the boundary since ctx.state was read.
+                context.aws_permissions_boundary_arn =
+                    base_permission_context.aws_permissions_boundary_arn.clone();
+                context.with_resource_id(resource_id.to_string())
+            });
         }
 
         let mut context = base_permission_context
@@ -1230,7 +1337,13 @@ mod tests {
                     },
                 })
             });
-        iam.expect_attach_role_policy().returning(|_, _| Ok(()));
+        iam.expect_attach_role_policy().returning(|_, arn| {
+            assert!(
+                !arn.ends_with("-permissions-boundary"),
+                "the boundary is never an identity grant"
+            );
+            Ok(())
+        });
         let iam = Arc::new(iam);
         let mut provider = MockPlatformServiceProvider::new();
         provider
@@ -1251,6 +1364,7 @@ mod tests {
         };
         let mut executor = SingleControllerExecutor::builder()
             .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
             .controller(AwsRemoteStackManagementController::default())
             .platform(Platform::Aws)
             .service_provider(Arc::new(provider))
@@ -1262,6 +1376,25 @@ mod tests {
 
         executor.run_until_terminal().await.expect("setup runs");
         assert_eq!(executor.status(), ResourceStatus::Running);
+        let controller = executor
+            .internal_state::<AwsRemoteStackManagementController>()
+            .unwrap();
+        let installed = controller.permissions_boundary_document.as_ref().unwrap();
+        assert!(controller.permissions_boundary_arn.is_some());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&documents.lock().unwrap()[0]).unwrap(),
+            *installed
+        );
+        executor
+            .with_context(|ctx| {
+                crate::core::validate_installed_aws_permissions_boundary(
+                    ctx.desired_stack,
+                    ctx.state,
+                    &ctx.client_config,
+                    ctx.deployment_config,
+                )
+            })
+            .expect("installed boundary permits runtime handoff");
 
         let statements: Vec<serde_json::Value> = documents
             .lock()
@@ -1308,3 +1441,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "aws_boundary_tests.rs"]
+mod boundary_tests;
