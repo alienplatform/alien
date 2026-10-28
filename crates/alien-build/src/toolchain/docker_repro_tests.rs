@@ -14,6 +14,14 @@ use std::{
 
 #[tokio::test]
 async fn cold_docker_builds_preserve_unchanged_image_digests() {
+    if !Command::new("docker")
+        .arg("info")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        eprintln!("Skipping cold image build test: Docker is not available");
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let name = format!(
         "image-repro-{}",
