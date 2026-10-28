@@ -17,6 +17,8 @@ pub fn extract_binding_secrets(
 ) -> Result<BindingSecretExtraction> {
     let mut secret_env_vars = Vec::new();
     let mut modified_json = binding_json.clone();
+    // Both the binding string and generated Secret env entries enter the pod template.
+    modified_json.sort_all_objects();
 
     // Walk the JSON tree to find SecretRef objects
     extract_secrets_recursive(
@@ -153,6 +155,36 @@ fn extract_secrets_recursive(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn equivalent_binding_maps_keep_pod_environment_and_secret_order_stable() {
+        let first: serde_json::Value = serde_json::from_str(r#"{"service":"example","nested":{"z":{"secretRef":{"name":"credentials","key":"second"}},"a":{"secretRef":{"name":"credentials","key":"first"}}},"args":["run","app"]}"#).unwrap();
+        let second: serde_json::Value = serde_json::from_str(r#"{"args":["run","app"],"nested":{"a":{"secretRef":{"key":"first","name":"credentials"}},"z":{"secretRef":{"key":"second","name":"credentials"}}},"service":"example"}"#).unwrap();
+        let first = extract_binding_secrets("service", &first).unwrap();
+        let second = extract_binding_secrets("service", &second).unwrap();
+        assert_eq!(first.resolved_binding_json, second.resolved_binding_json);
+        assert_eq!(first.secret_env_vars, second.secret_env_vars);
+        assert_eq!(
+            first.secret_env_vars,
+            vec![
+                (
+                    "ALIEN_BINDING_SERVICE_A".into(),
+                    "credentials".into(),
+                    "first".into()
+                ),
+                (
+                    "ALIEN_BINDING_SERVICE_Z".into(),
+                    "credentials".into(),
+                    "second".into()
+                ),
+            ]
+        );
+        let resolved: serde_json::Value =
+            serde_json::from_str(&first.resolved_binding_json).unwrap();
+        assert_eq!(resolved["args"], json!(["run", "app"]));
+        assert_eq!(resolved["nested"]["a"], "$(ALIEN_BINDING_SERVICE_A)");
+        assert_eq!(resolved["nested"]["z"], "$(ALIEN_BINDING_SERVICE_Z)");
+    }
 
     #[test]
     fn typed_bindings_keep_the_legacy_environment_projection() {

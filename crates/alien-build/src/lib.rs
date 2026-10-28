@@ -2644,13 +2644,28 @@ async fn compute_source_artifact_cache_key(
         hasher.update(b"\0layer-compression:gzip-v1\0");
     }
     hasher.update(src.as_bytes());
-    hasher.update(
-        serde_json::to_vec(toolchain_config)
-            .into_alien_error()
-            .context(ErrorData::JsonSerializationError {
-                message: "Failed to serialize toolchain config for build cache key".to_string(),
-            })?,
-    );
+    let mut config = serde_json::to_value(toolchain_config)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationError {
+            message: "Failed to serialize toolchain config for build cache key".to_string(),
+        })?;
+    config.sort_all_objects();
+    hasher.update(serde_json::to_vec(&config).into_alien_error().context(
+        ErrorData::JsonSerializationError {
+            message: "Failed to serialize toolchain config for build cache key".to_string(),
+        },
+    )?);
+    if matches!(
+        toolchain_config,
+        ToolchainConfig::Docker { .. } | ToolchainConfig::Python { .. }
+    ) {
+        // Invalidate archives exported before timestamp normalization, and
+        // account for Buildx's inherited source timestamp when it is supplied.
+        hasher.update(b"\0reproducible-oci-export-v1\0");
+        if let Some(epoch) = std::env::var_os("SOURCE_DATE_EPOCH") {
+            hasher.update(epoch.as_encoded_bytes());
+        }
+    }
     // Source artifact bytes are platform-independent for equivalent target sets.
     // The actual differences are target triples, debug/release mode, workload
     // kind (which decides the image shape: runtime for Workers, direct
@@ -5702,6 +5717,57 @@ mod tests {
             sandbox_image_hash(tarballs(), Platform::Azure),
             sandbox_image_hash(tarballs(), Platform::Gcp)
         );
+    }
+
+    #[tokio::test]
+    async fn docker_artifact_cache_ignores_build_arg_order_but_tracks_values() {
+        let source = tempdir().unwrap();
+        std::fs::write(source.path().join("Dockerfile"), "FROM scratch\n").unwrap();
+        let targets = vec![BinaryTarget::LinuxArm64];
+        let settings = BuildSettings {
+            output_directory: source.path().join("out").to_string_lossy().into_owned(),
+            platform: PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            targets: Some(targets.clone()),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+            rebuild: false,
+            pull_base_images: false,
+        };
+        let mut previous = None;
+        for index in 0..17 {
+            let config = ToolchainConfig::Docker {
+                dockerfile: None,
+                target: None,
+                build_args: Some(HashMap::from([
+                    ("CACHE".to_string(), "shared".to_string()),
+                    (
+                        "MODE".to_string(),
+                        if index == 16 { "debug" } else { "release" }.to_string(),
+                    ),
+                    ("TARGET".to_string(), "linux".to_string()),
+                ])),
+            };
+            let key = compute_source_artifact_cache_key(
+                source.path().to_str().unwrap(),
+                &config,
+                &settings,
+                &targets,
+                crate::toolchain::WorkloadKind::Container,
+            )
+            .await
+            .unwrap();
+            if let Some(previous) = &previous {
+                if index == 16 {
+                    assert_ne!(&key, previous);
+                } else {
+                    assert_eq!(&key, previous);
+                }
+            }
+            previous = Some(key);
+        }
     }
 
     #[tokio::test]

@@ -154,7 +154,16 @@ pub fn serialize_binding_as_env_var<T: Serialize>(
 ) -> crate::error::Result<HashMap<String, String>> {
     let mut env_vars = HashMap::new();
     let key = binding_env_var_name(binding_name);
-    let binding_json = serde_json::to_string(binding).into_alien_error().context(
+    let mut value = serde_json::to_value(binding).into_alien_error().context(
+        ErrorData::BindingConfigInvalid {
+            binding_name: binding_name.to_string(),
+            reason: "Failed to serialize binding to JSON".to_string(),
+        },
+    )?;
+    // Environment strings become part of pod templates. Map insertion order
+    // must not restart a workload whose binding values have not changed.
+    value.sort_all_objects();
+    let binding_json = serde_json::to_string(&value).into_alien_error().context(
         ErrorData::BindingConfigInvalid {
             binding_name: binding_name.to_string(),
             reason: "Failed to serialize binding to JSON".to_string(),
@@ -285,6 +294,49 @@ mod tests {
         assert!(resolve_binding_env_refs(&mut missing, &HashMap::new(), "database").is_err());
         let mut invalid = json!({"envRef": 7});
         assert!(resolve_binding_env_refs(&mut invalid, &env, "database").is_err());
+    }
+
+    #[test]
+    fn build_binding_environment_is_stable_across_map_constructions() {
+        let expected = r#"{"buildEnvVars":{"CACHE":"shared","MODE":"release","TARGET":"linux"},"namespace":"site","service":"kubernetes","serviceAccountName":"builder"}"#;
+        for _ in 0..16 {
+            let binding = BuildBinding::kubernetes(
+                "site",
+                "builder",
+                HashMap::from([
+                    ("MODE".to_string(), "release".to_string()),
+                    ("CACHE".to_string(), "shared".to_string()),
+                    ("TARGET".to_string(), "linux".to_string()),
+                ]),
+            );
+            let vars = serialize_binding_as_env_var("build", &binding).unwrap();
+            assert_eq!(vars["ALIEN_BUILD_BINDING"], expected);
+            let parsed: BuildBinding = parse_binding_from_env(&vars, "build").unwrap();
+            assert_eq!(parsed, binding);
+        }
+    }
+
+    #[test]
+    fn binding_environment_ignores_nested_object_order_but_preserves_arrays() {
+        let first =
+            json!({"service": "kubernetes", "nested": [{"z": 1, "a": 2}], "args": ["run", "app"]});
+        let second =
+            json!({"args": ["run", "app"], "nested": [{"a": 2, "z": 1}], "service": "kubernetes"});
+        let original = serialize_binding_as_env_var("build", &first).unwrap();
+        assert_eq!(
+            original,
+            serialize_binding_as_env_var("build", &second).unwrap()
+        );
+        let mut changed = second;
+        changed["args"] = json!(["app", "run"]);
+        assert_ne!(
+            original,
+            serialize_binding_as_env_var("build", &changed).unwrap()
+        );
+        assert_eq!(
+            serde_json::from_str::<JsonValue>(&original["ALIEN_BUILD_BINDING"]).unwrap(),
+            first
+        );
     }
 
     #[test]

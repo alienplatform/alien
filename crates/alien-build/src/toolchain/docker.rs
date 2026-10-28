@@ -5,8 +5,8 @@ use crate::settings::BinaryTargetExt;
 use alien_core::AlienEvent;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use flate2::{Compression, write::GzEncoder};
-use serde_json::{Value, json};
+use flate2::{write::GzEncoder, Compression};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -402,11 +402,14 @@ impl DockerToolchain {
             && context.workload == super::WorkloadKind::Worker;
         let output = if lambda_worker {
             format!(
-                "type=oci,dest={},compression=gzip,force-compression=true",
+                "type=oci,dest={},compression=gzip,force-compression=true,rewrite-timestamp=true",
                 output_tarball.display()
             )
         } else {
-            format!("type=oci,dest={}", output_tarball.display())
+            format!(
+                "type=oci,dest={},rewrite-timestamp=true",
+                output_tarball.display()
+            )
         };
         let arch_str = match context.build_target.to_dockdash_arch() {
             dockdash::Arch::Amd64 => "amd64",
@@ -440,6 +443,18 @@ impl DockerToolchain {
             // Lambda accepts a single architecture and no attestation manifest.
             args.push("--provenance=false".to_string());
             args.push("--sbom=false".to_string());
+        }
+
+        // Cold builds must not change image digests because of build time or
+        // checkout mtimes. Preserve an explicitly configured source timestamp.
+        if !self
+            .build_args
+            .as_ref()
+            .is_some_and(|args| args.contains_key("SOURCE_DATE_EPOCH"))
+            && std::env::var_os("SOURCE_DATE_EPOCH").is_none()
+        {
+            args.push("--build-arg".to_string());
+            args.push("SOURCE_DATE_EPOCH=0".to_string());
         }
 
         // Add build args if provided
@@ -1322,6 +1337,10 @@ fn rewrite_archive(
 #[cfg(all(test, unix))]
 #[path = "docker_builder_tests.rs"]
 mod builder_tests;
+
+#[cfg(test)]
+#[path = "docker_repro_tests.rs"]
+mod repro_tests;
 
 #[cfg(test)]
 mod tests {
