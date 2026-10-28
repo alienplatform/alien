@@ -1458,7 +1458,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Install CloudFormation linter
-        run: pipx install cfn-lint
+        run: pipx install cfn-lint==1.59.0
 
       - name: Install JS dependencies and build packages
         run: |

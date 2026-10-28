@@ -706,6 +706,18 @@ pub fn generate_cloudformation_template_with_profile(
         )?;
     }
 
+    // Output-only registration still needs a resource for CloudFormation to accept
+    // the stack. A handle has no properties and does not wait without a WaitCondition.
+    if template.resources.is_empty() {
+        insert_resource(
+            &mut template,
+            CfResource::new(
+                "RegistrationHandle".to_string(),
+                "AWS::CloudFormation::WaitConditionHandle".to_string(),
+            ),
+        )?;
+    }
+
     lower_json_strings(&mut template)?;
     validate_role_policy_limits(&template)?;
     validate_acyclic(&template)?;

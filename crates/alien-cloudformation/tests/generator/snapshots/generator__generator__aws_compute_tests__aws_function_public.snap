@@ -122,7 +122,9 @@ Rules:
             - Ref: CertificateArn
             - ''
       AssertDescription: CertificateArn must be set to an AWS ACM certificate ARN when DomainName is set.
-Resources: {}
+Resources:
+  RegistrationHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
 Outputs:
   DeploymentSourceKind:
     Value: cloudformation
