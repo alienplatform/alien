@@ -6,6 +6,15 @@ pub type Result<T> = alien_error::Result<T, ErrorData>;
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// Download or publication exhausted the destination filesystem.
+    #[error(
+        code = "DISK_FULL",
+        message = "{message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    DiskFull { message: String },
+
     /// The Operator reached a terminal failure while rolling out a release.
     #[error(
         code = "ROLLOUT_FAILED",

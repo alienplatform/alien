@@ -532,6 +532,7 @@ dependencies = [
  "alien-preflights",
  "clap",
  "flate2",
+ "fs2",
  "hex",
  "httpmock",
  "oci-client",

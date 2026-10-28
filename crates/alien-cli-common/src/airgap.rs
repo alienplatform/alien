@@ -22,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
+use alien_error::{AlienError, AlienErrorData, Context, ContextError, IntoAlienError};
 use oci_client::{
     client::{Client as OciClient, ClientConfig, ClientProtocol},
     errors::{OciDistributionError, OciErrorCode},
@@ -41,6 +41,18 @@ use tokio::io::AsyncWriteExt as _;
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The destination filesystem has no room for the bundle.
+    #[error(
+        code = "DISK_FULL",
+        message = "No space left at {path} ({available_space} available). Free space or move the transfer folder to a larger filesystem, then run sync again.",
+        retryable = "false",
+        internal = "false"
+    )]
+    DiskFull {
+        path: String,
+        available_space: String,
+    },
+
     /// The bundle file is unreadable, incomplete, or fails its checksums.
     #[error(
         code = "AIRGAP_BUNDLE_INVALID",
@@ -169,6 +181,25 @@ fn file_failed(message: impl Into<String>) -> ErrorData {
     }
 }
 
+/// Preserve disk-full details before converting an IO error to a generic source.
+pub fn file_error(path: &Path, error: std::io::Error) -> AlienError<ErrorData> {
+    let data = if error.kind() == std::io::ErrorKind::StorageFull {
+        // A failed mkdir may name a path that does not exist yet.
+        let available_space = path
+            .ancestors()
+            .find_map(|parent| fs2::available_space(parent).ok())
+            .map(|bytes| format!("{bytes} bytes"))
+            .unwrap_or_else(|| "free space unknown".to_string());
+        ErrorData::DiskFull {
+            path: path.display().to_string(),
+            available_space,
+        }
+    } else {
+        file_failed(format!("accessing {}", path.display()))
+    };
+    AlienError::from_std(&error).context(data)
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -229,8 +260,7 @@ pub async fn export_images(
     let mut omitted = BTreeSet::new();
     tokio::fs::create_dir_all(layout.join("blobs").join("sha256"))
         .await
-        .into_alien_error()
-        .context(file_failed("creating the OCI layout"))?;
+        .map_err(|error| file_error(layout, error))?;
     let mut exported = Vec::new();
     let mut index_entries = Vec::new();
 
@@ -295,25 +325,24 @@ async fn pull_blob_to_file(
 ) -> Result<()> {
     let mut file = tokio::fs::File::create(path)
         .await
-        .into_alien_error()
-        .context(file_failed("creating a blob file"))?;
+        .map_err(|error| file_error(path, error))?;
     client
         .pull_blob(reference, digest, &mut file)
         .await
-        .into_alien_error()
-        .context(copy_failed(
-            &reference.whole(),
-            format!("pulling blob {digest}"),
-        ))?;
+        .map_err(|error| match error {
+            OciDistributionError::IoError(error) => file_error(path, error),
+            error => AlienError::from_std(&error).context(copy_failed(
+                &reference.whole(),
+                format!("pulling blob {digest}"),
+            )),
+        })?;
     // Tokio file writes may still be pending when the registry stream ends.
     file.flush()
         .await
-        .into_alien_error()
-        .context(file_failed("flushing a blob file"))?;
+        .map_err(|error| file_error(path, error))?;
     file.sync_all()
         .await
-        .into_alien_error()
-        .context(file_failed("syncing a blob file"))?;
+        .map_err(|error| file_error(path, error))?;
     Ok(())
 }
 
@@ -337,8 +366,7 @@ async fn write_manifest_tree(
     }
     tokio::fs::write(blob_path(layout, digest)?, manifest)
         .await
-        .into_alien_error()
-        .context(file_failed("writing a manifest"))?;
+        .map_err(|error| file_error(layout, error))?;
 
     let (children, blobs) = referenced(manifest);
     for child in children {
@@ -604,8 +632,7 @@ pub async fn pull_chart(dir: &Path, reference: &str, access: &RegistryAccess) ->
     let version = parsed.tag().unwrap_or("latest");
     tokio::fs::create_dir_all(dir.join(CHART_DIR))
         .await
-        .into_alien_error()
-        .context(file_failed("creating the chart directory"))?;
+        .map_err(|error| file_error(dir, error))?;
     let file = format!("{CHART_DIR}/{name}-{version}.tgz");
     pull_blob_to_file(&client, &parsed, &layer, &dir.join(&file)).await?;
     Ok(file)
@@ -926,18 +953,17 @@ async fn signed_manifest(dir: &Path, trusted_key: &str) -> Result<BundleManifest
 
 /// Pack `dir` into an uncompressed tar at `file`.
 pub fn pack(dir: &Path, file: &Path) -> Result<()> {
-    let out = std::fs::File::create(file)
-        .into_alien_error()
-        .context(file_failed(format!("creating {}", file.display())))?;
+    let out = std::fs::File::create(file).map_err(|error| file_error(file, error))?;
     let mut builder = tar::Builder::new(out);
     builder
         .append_dir_all(".", dir)
-        .into_alien_error()
-        .context(file_failed("writing the bundle"))?;
+        .map_err(|error| file_error(file, error))?;
+    builder.finish().map_err(|error| file_error(file, error))?;
     builder
-        .finish()
-        .into_alien_error()
-        .context(file_failed("finishing the bundle"))
+        .into_inner()
+        .map_err(|error| file_error(file, error))?
+        .sync_all()
+        .map_err(|error| file_error(file, error))
 }
 
 /// Unpack a bundle tar into `dir`.
@@ -961,8 +987,7 @@ async fn write_json(path: &Path, value: &serde_json::Value) -> Result<()> {
         .context(file_failed("encoding JSON"))?;
     tokio::fs::write(path, bytes)
         .await
-        .into_alien_error()
-        .context(file_failed(format!("writing {}", path.display())))
+        .map_err(|error| file_error(path, error))
 }
 
 #[cfg(test)]
@@ -974,6 +999,17 @@ mod tests {
         LogCollectorDefault, OperatorImageDefault, PackageDefaults,
     };
     use httpmock::prelude::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn packing_reports_a_full_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("payload"), b"bundle contents").unwrap();
+        let error = pack(dir.path(), Path::new("/dev/full")).unwrap_err();
+        assert_eq!(error.code, "DISK_FULL");
+        assert!(error.message.contains("/dev/full"));
+        assert!(error.message.contains("bytes"));
+    }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
@@ -999,7 +1035,9 @@ mod tests {
         let error = pull_blob_to_file(&client, &reference, &digest, Path::new("/dev/full"))
             .await
             .expect_err("a failed file write must fail the download");
-        assert_eq!(error.code, "AIRGAP_FILE_FAILED");
+        assert_eq!(error.code, "DISK_FULL");
+        assert!(error.message.contains("/dev/full"));
+        assert!(error.message.contains("bytes"));
         assert!(
             error.to_string().contains("No space left on device"),
             "{error}"
