@@ -972,6 +972,7 @@ dependencies = [
  "backon",
  "base64 0.22.1",
  "dotenvy",
+ "httpmock",
  "k8s-openapi",
  "mockall",
  "rand 0.9.5",
