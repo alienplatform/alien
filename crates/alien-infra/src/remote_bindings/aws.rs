@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag};
+use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamRoleWriter};
 use alien_core::{
     standard_resource_tags, RemoteBindings, RemoteBindingsOutputs, ResourceOutputs, ResourceStatus,
 };
@@ -39,8 +39,8 @@ impl AwsRemoteBindingsController {
             .service_provider
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
-        let response = client
-            .create_role(
+        let response = IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .create(
                 CreateRoleRequest::builder()
                     .role_name(role_name.clone())
                     .assume_role_policy_document(trust_policy(&management.managing_role_arn))
@@ -95,9 +95,18 @@ impl AwsRemoteBindingsController {
                 resource_id: Some(resource_id.clone()),
             })
         })?;
-        ctx.service_provider
+        let client = ctx
+            .service_provider
             .get_aws_iam_client(ctx.get_aws_config()?)
-            .await?
+            .await?;
+        IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .prepare_existing(role_name, ctx.resource_prefix, &resource_id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare Remote Bindings IAM role '{role_name}'"),
+                resource_id: Some(resource_id.clone()),
+            })?;
+        client
             .update_assume_role_policy(role_name, &trust_policy(&management.managing_role_arn))
             .await
             .context(ErrorData::CloudPlatformError {
@@ -119,6 +128,33 @@ impl AwsRemoteBindingsController {
                 .service_provider
                 .get_aws_iam_client(ctx.get_aws_config()?)
                 .await?;
+            match IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
+                .prepare_existing(role_name, ctx.resource_prefix, &resource_id)
+                .await
+            {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    self.role_name = None;
+                    self.role_arn = None;
+                    return Ok(HandlerAction::Continue {
+                        state: Deleted,
+                        suggested_delay: None,
+                    });
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to prepare Remote Bindings IAM role '{role_name}' for deletion"
+                        ),
+                        resource_id: Some(resource_id.clone()),
+                    }))
+                }
+            }
             match client.list_role_policies(role_name).await {
                 Ok(response) => {
                     if let Some(policy_names) = response.list_role_policies_result.policy_names {
@@ -240,6 +276,270 @@ mod tests {
     use super::*;
     use crate::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
+
+    const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/test-permissions-boundary";
+
+    fn role() -> serde_json::Value {
+        serde_json::json!({
+            "Path": "/", "RoleName": "test-access", "RoleId": "id",
+            "Arn": "arn:aws:iam::123456789012:role/test-access", "CreateDate": "2026-01-01",
+            "Tags": {"member": standard_resource_tags("test", "access").into_iter()
+                .map(|(key, value)| serde_json::json!({"Key": key, "Value": value}))
+                .collect::<Vec<_>>()}
+        })
+    }
+
+    async fn executor(
+        iam: MockIamApi,
+        state: AwsRemoteBindingsState,
+        bounded: bool,
+    ) -> SingleControllerExecutor {
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut management =
+            crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(
+                "test-management",
+            );
+        if bounded {
+            management.aws_permissions_boundary_arn = Some(BOUNDARY.to_string());
+        }
+        SingleControllerExecutor::builder()
+            .resource(RemoteBindings::new("access".to_string()).build())
+            .controller(AwsRemoteBindingsController {
+                state,
+                role_name: Some("test-access".to_string()),
+                role_arn: Some("arn:aws:iam::123456789012:role/test-access".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                management,
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn expect_adoption(iam: &mut MockIamApi, sequence: &mut mockall::Sequence) {
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|name| {
+                assert_eq!(name, "test-access");
+                Ok(
+                    serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": role()}}))
+                        .unwrap(),
+                )
+            });
+        iam.expect_list_attached_role_policies()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|name| {
+                assert_eq!(name, "test-access");
+                Ok(serde_json::from_value(
+                    serde_json::json!({"ListAttachedRolePoliciesResult": {"IsTruncated": false}}),
+                )
+                .unwrap())
+            });
+        iam.expect_put_role_permissions_boundary()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|name, boundary| {
+                assert_eq!(name, "test-access");
+                assert_eq!(boundary, BOUNDARY);
+                Ok(())
+            });
+    }
+
+    #[tokio::test]
+    async fn create_passes_the_recorded_boundary_and_ownership_tags() {
+        for bounded in [false, true] {
+            let mut iam = MockIamApi::new();
+            iam.expect_create_role().times(1).returning(move |request| {
+                assert_eq!(request.role_name, "test-access");
+                assert_eq!(
+                    request.permissions_boundary.as_deref(),
+                    bounded.then_some(BOUNDARY)
+                );
+                let tags: std::collections::HashMap<_, _> = request
+                    .tags
+                    .unwrap()
+                    .into_iter()
+                    .map(|tag| (tag.key, tag.value))
+                    .collect();
+                assert_eq!(tags, standard_resource_tags("test", "access"));
+                assert_eq!(
+                    request.assume_role_policy_document,
+                    trust_policy("arn:aws:iam::111122223333:role/alien-test-manager")
+                );
+                Ok(serde_json::from_value(
+                    serde_json::json!({"CreateRoleResult": {"Role": role()}}),
+                )
+                .unwrap())
+            });
+            let mut executor = executor(iam, AwsRemoteBindingsState::CreatingRole, bounded).await;
+            executor.step().await.unwrap();
+            let controller = executor
+                .internal_state::<AwsRemoteBindingsController>()
+                .unwrap();
+            assert_eq!(controller.state, AwsRemoteBindingsState::Ready);
+            assert_eq!(controller.role_name.as_deref(), Some("test-access"));
+            assert_eq!(
+                controller.role_arn.as_deref(),
+                Some("arn:aws:iam::123456789012:role/test-access")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn update_adopts_before_writing_trust_and_preserves_legacy_behavior() {
+        for bounded in [false, true] {
+            let mut iam = MockIamApi::new();
+            let mut sequence = mockall::Sequence::new();
+            if bounded {
+                expect_adoption(&mut iam, &mut sequence);
+            }
+            iam.expect_update_assume_role_policy()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|name, policy| {
+                    assert_eq!(name, "test-access");
+                    assert_eq!(
+                        policy,
+                        trust_policy("arn:aws:iam::111122223333:role/alien-test-manager")
+                    );
+                    Ok(())
+                });
+            let mut executor = executor(iam, AwsRemoteBindingsState::UpdateStart, bounded).await;
+            executor.step().await.unwrap();
+            assert_eq!(
+                executor
+                    .internal_state::<AwsRemoteBindingsController>()
+                    .unwrap()
+                    .state,
+                AwsRemoteBindingsState::Ready
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_adopts_before_removing_policies_and_role() {
+        let mut iam = MockIamApi::new();
+        let mut sequence = mockall::Sequence::new();
+        expect_adoption(&mut iam, &mut sequence);
+        iam.expect_list_role_policies()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|name| {
+                assert_eq!(name, "test-access");
+                Ok(
+                    serde_json::from_value(serde_json::json!({"ListRolePoliciesResult": {
+                        "PolicyNames": {"member": ["grant"]}, "IsTruncated": false
+                    }}))
+                    .unwrap(),
+                )
+            });
+        iam.expect_delete_role_policy()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|name, policy| {
+                assert_eq!((name, policy), ("test-access", "grant"));
+                Ok(())
+            });
+        iam.expect_delete_role()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|name| {
+                assert_eq!(name, "test-access");
+                Ok(())
+            });
+        let mut executor = executor(iam, AwsRemoteBindingsState::DeleteStart, true).await;
+        executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AwsRemoteBindingsController>()
+            .unwrap();
+        assert_eq!(controller.state, AwsRemoteBindingsState::Deleted);
+        assert_eq!(controller.role_name, None);
+        assert_eq!(controller.role_arn, None);
+    }
+
+    #[tokio::test]
+    async fn missing_role_completes_bounded_delete_without_mutations() {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().times(1).returning(|name| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "IAM Role".to_string(),
+                    resource_name: name.to_string(),
+                },
+            ))
+        });
+        let mut executor = executor(iam, AwsRemoteBindingsState::DeleteStart, true).await;
+        executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AwsRemoteBindingsController>()
+            .unwrap();
+        assert_eq!(controller.state, AwsRemoteBindingsState::Deleted);
+        assert_eq!(controller.role_name, None);
+        assert_eq!(controller.role_arn, None);
+    }
+
+    #[tokio::test]
+    async fn unsafe_roles_stop_update_and_delete_before_mutation() {
+        for state in [
+            AwsRemoteBindingsState::UpdateStart,
+            AwsRemoteBindingsState::DeleteStart,
+        ] {
+            for unsafe_policy in [false, true] {
+                let mut iam = MockIamApi::new();
+                iam.expect_get_role().times(1).returning(move |_| {
+                    let mut role = role();
+                    if !unsafe_policy {
+                        role["Tags"] = serde_json::Value::Null;
+                    }
+                    Ok(
+                        serde_json::from_value(
+                            serde_json::json!({"GetRoleResult": {"Role": role}}),
+                        )
+                        .unwrap(),
+                    )
+                });
+                if unsafe_policy {
+                    iam.expect_list_attached_role_policies().times(1).returning(|_| {
+                        Ok(serde_json::from_value(serde_json::json!({"ListAttachedRolePoliciesResult": {
+                            "AttachedPolicies": {"member": [{"PolicyName": "AdministratorAccess", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}]}, "IsTruncated": false
+                        }})).unwrap())
+                    });
+                }
+                let mut executor = executor(iam, state.clone(), true).await;
+                let error = executor
+                    .step()
+                    .await
+                    .expect_err("unsafe role must not be modified");
+                let expected_code = if unsafe_policy {
+                    "INVALID_INPUT"
+                } else {
+                    "EXISTING_CLOUD_RESOURCE_NOT_OWNED"
+                };
+                assert!(
+                    std::iter::successors(error.source.as_deref(), |cause| cause.source.as_deref())
+                        .any(|cause| cause.code == expected_code),
+                    "{error:?}"
+                );
+                let controller = executor
+                    .internal_state::<AwsRemoteBindingsController>()
+                    .unwrap();
+                assert_eq!(controller.state, state);
+                assert_eq!(controller.role_name.as_deref(), Some("test-access"));
+                assert!(controller.role_arn.is_some());
+            }
+        }
+    }
 
     /// Setup writes each published resource's grant onto this role and never records it, so the
     /// role's delete is what revokes them: every inline policy goes before the role.
