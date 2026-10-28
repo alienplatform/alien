@@ -13,7 +13,7 @@ use crate::error::{ErrorData, Result};
 use crate::StackMutation;
 use alien_core::{
     DeploymentConfig, Network, NetworkSettings, Platform, ResourceEntry, ResourceLifecycle, Stack,
-    StackState,
+    StackState, MAX_CREATED_NETWORK_AVAILABILITY_ZONES,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -107,6 +107,20 @@ impl StackMutation for NetworkMutation {
                     mutation_name: self.description().to_string(),
                     message: format!(
                         "BYO network settings do not match target platform {target_platform:?}"
+                    ),
+                    resource_id: Some("default-network".to_string()),
+                }));
+            }
+        }
+        if let Some(NetworkSettings::Create {
+            availability_zones, ..
+        }) = &config.stack_settings.network
+        {
+            if !(1..=MAX_CREATED_NETWORK_AVAILABILITY_ZONES).contains(availability_zones) {
+                return Err(AlienError::new(ErrorData::StackMutationFailed {
+                    mutation_name: self.description().to_string(),
+                    message: format!(
+                        "a created network needs between 1 and {MAX_CREATED_NETWORK_AVAILABILITY_ZONES} availability zones, got {availability_zones}"
                     ),
                     resource_id: Some("default-network".to_string()),
                 }));
@@ -388,6 +402,51 @@ mod tests {
 
         let mutation = NetworkMutation;
         assert!(!mutation.should_run(&stack, &stack_state, &config));
+    }
+
+    #[tokio::test]
+    async fn test_mutate_rejects_out_of_range_availability_zones() {
+        for availability_zones in [0, MAX_CREATED_NETWORK_AVAILABILITY_ZONES + 1] {
+            let config = create_deployment_config(Some(NetworkSettings::Create {
+                cidr: None,
+                availability_zones,
+            }));
+
+            let error = NetworkMutation
+                .mutate(
+                    create_test_stack(),
+                    &create_stack_state(Platform::Aws),
+                    &config,
+                )
+                .await
+                .expect_err("out-of-range zone count should be rejected");
+
+            assert_eq!(error.code, "STACK_MUTATION_FAILED");
+            assert!(
+                error.message.contains(&format!("got {availability_zones}")),
+                "{}",
+                error.message
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mutate_accepts_max_availability_zones() {
+        let config = create_deployment_config(Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: MAX_CREATED_NETWORK_AVAILABILITY_ZONES,
+        }));
+
+        let mutated_stack = NetworkMutation
+            .mutate(
+                create_test_stack(),
+                &create_stack_state(Platform::Aws),
+                &config,
+            )
+            .await
+            .expect("the maximum zone count should be accepted");
+
+        assert!(mutated_stack.resources.contains_key("default-network"));
     }
 
     #[tokio::test]
