@@ -243,6 +243,42 @@ impl DockerToolchain {
         Self::bootstrap_builder(builder_name).await
     }
 
+    fn validate_buildkit_versions(builder_name: &str, inspect: &str) -> Result<()> {
+        let nodes = inspect
+            .split_once("Nodes:")
+            .map(|(_, nodes)| nodes)
+            .unwrap_or("");
+        let node_count = nodes
+            .lines()
+            .filter(|line| line.trim_start().starts_with("Name:"))
+            .count();
+        let versions: Vec<_> = nodes
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim_start();
+                line.strip_prefix("BuildKit version:")
+                    .or_else(|| line.strip_prefix("BuildKit:"))
+                    .map(str::trim)
+            })
+            .collect();
+        if node_count == 0 || versions.len() != node_count {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "Could not verify the BuildKit version of every node in builder '{builder_name}'. Reproducible image exports require BuildKit >= 0.13. Inspect it with `docker buildx inspect --bootstrap {builder_name}` and select an upgraded builder with BUILDX_BUILDER."
+            ))));
+        }
+        for version in versions {
+            let mut parts = version.trim_start_matches('v').split('.');
+            let major = parts.next().and_then(|part| part.parse::<u64>().ok());
+            let minor = parts.next().and_then(|part| part.parse::<u64>().ok());
+            if !matches!((major, minor), (Some(major), Some(minor)) if (major, minor) >= (0, 13)) {
+                return Err(AlienError::new(Self::docker_build_error(format!(
+                    "Builder '{builder_name}' reports BuildKit '{version}'; reproducible image exports require BuildKit >= 0.13 for rewrite-timestamp. Upgrade its BuildKit nodes or select an upgraded builder with BUILDX_BUILDER, then retry."
+                ))));
+            }
+        }
+        Ok(())
+    }
+
     async fn bootstrap_builder(builder_name: &str) -> Result<()> {
         let output = Command::new("docker")
             .args(["buildx", "inspect", "--bootstrap", builder_name])
@@ -258,7 +294,7 @@ impl DockerToolchain {
                 String::from_utf8_lossy(&output.stderr).trim()
             ))));
         }
-        Ok(())
+        Self::validate_buildkit_versions(builder_name, &String::from_utf8_lossy(&output.stdout))
     }
 
     async fn select_builder() -> Result<BuildxBuilder> {
@@ -1361,6 +1397,30 @@ mod tests {
     }
 
     /// Buildx output for a linux/amd64 build FROM an image that publishes only linux/arm64.
+    #[test]
+    fn buildkit_versions_require_timestamp_rewriting_on_every_node() {
+        for version in ["v0.13.0", "v0.13.0-beta1", "v0.26.1", "v1.0.0"] {
+            let inspect = format!("Name: test\nNodes:\nName: node0\nBuildKit version: {version}\n");
+            DockerToolchain::validate_buildkit_versions("test", &inspect).unwrap();
+        }
+        for nodes in [
+            "Name: node0\nBuildKit: v0.12.5\n",
+            "Name: node0\nBuildKit version: unknown\n",
+            "Name: node0\nStatus: error\n",
+            "Name: node0\nBuildKit: v0.13.0\nName: node1\nBuildKit: v0.12.5\n",
+            "Name: node0\nBuildKit: v0.13.0\nName: node1\nStatus: error\n",
+            "",
+        ] {
+            let error =
+                DockerToolchain::validate_buildkit_versions("test", &format!("Nodes:\n{nodes}"))
+                    .unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("BuildKit >= 0.13"), "{message}");
+            assert!(message.contains("BUILDX_BUILDER"), "{message}");
+            assert!(message.contains("test"), "{message}");
+        }
+    }
+
     #[test]
     fn a_base_without_the_target_platform_is_named_from_the_build_output() {
         let output = "#3 [internal] load metadata for public.ecr.aws/lambda/microvms:al2023-minimal\n\
