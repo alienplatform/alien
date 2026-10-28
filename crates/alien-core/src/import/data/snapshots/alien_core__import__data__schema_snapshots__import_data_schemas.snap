@@ -724,6 +724,9 @@ expression: schemas
           "null"
         ]
       },
+      "permissionsBoundaryDocument": {
+        "description": "Installed boundary document with setup template parameters resolved. Required with its ARN."
+      },
       "remoteBindingsRoleArn": {
         "description": "Setup-owned role used only for opted-in remote binding data access.",
         "type": [

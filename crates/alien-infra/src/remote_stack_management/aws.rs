@@ -44,6 +44,9 @@ pub struct AwsRemoteStackManagementController {
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) permissions_boundary_arn: Option<String>,
+    /// Installed policy approved by setup, retained for release compatibility checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) permissions_boundary_document: Option<serde_json::Value>,
     /// Whether management permissions have been applied
     pub(crate) management_permissions_applied: bool,
     /// Revision of the management permissions last applied. Missing on
@@ -1118,6 +1121,7 @@ impl AwsRemoteStackManagementController {
             management_permissions_applied: true,
             management_permissions_revision: None,
             permissions_boundary_arn: None,
+            permissions_boundary_document: None,
             _internal_stay_count: None,
         }
     }

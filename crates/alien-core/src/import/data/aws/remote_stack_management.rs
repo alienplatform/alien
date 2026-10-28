@@ -20,6 +20,9 @@ pub struct AwsRemoteStackManagementImportData {
         skip_serializing_if = "Option::is_none"
     )]
     pub permissions_boundary_arn: Option<String>,
+    /// Installed boundary document with setup template parameters resolved. Required with its ARN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions_boundary_document: Option<serde_json::Value>,
     /// Setup-owned role used only for opted-in remote binding data access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(ignore))]
