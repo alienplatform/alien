@@ -3244,6 +3244,23 @@ fn rollout_progress(state: &serde_json::Value) -> String {
     summary
 }
 
+fn rollout_status_progress(
+    status: Option<&serde_json::Value>,
+    sequence: u64,
+    attempt: &str,
+    release_id: &str,
+    namespace: &str,
+) -> String {
+    if let Some(status) = status {
+        if status["sequence"].as_u64() == Some(sequence)
+            && (status.get("attempt").is_none() || status["attempt"].as_str() == Some(attempt))
+        {
+            return rollout_progress(&status["state"]);
+        }
+    }
+    format!("Operator has not picked up {release_id} yet; check kubectl get pods -n {namespace}")
+}
+
 async fn wait_for_rollout(
     settings: &SiteSide,
     stack_id: &str,
@@ -3258,17 +3275,20 @@ async fn wait_for_rollout(
     let mut previous_progress = String::new();
     let mut last_progress = started;
     loop {
-        if let Some((status, _)) = read_status(settings, stack_id, namespace).await? {
-            if status["sequence"].as_u64() == Some(sequence) {
-                let progress = rollout_progress(&status["state"]);
-                if progress != previous_progress
-                    || last_progress.elapsed() >= Duration::from_secs(30)
-                {
-                    println!("{progress} ({}s elapsed)", started.elapsed().as_secs());
-                    previous_progress = progress;
-                    last_progress = std::time::Instant::now();
-                }
-            }
+        let status = read_status(settings, stack_id, namespace).await?;
+        let progress = rollout_status_progress(
+            status.as_ref().map(|(status, _)| status),
+            sequence,
+            attempt,
+            release_id,
+            namespace,
+        );
+        if progress != previous_progress || last_progress.elapsed() >= Duration::from_secs(30) {
+            println!("{progress} ({}s elapsed)", started.elapsed().as_secs());
+            previous_progress = progress;
+            last_progress = std::time::Instant::now();
+        }
+        if let Some((status, _)) = status {
             let secrets_checked_after =
                 (started.elapsed() < SECRET_STATUS_TIMEOUT).then_some(started_at);
             match rollout_finished(
@@ -3296,7 +3316,7 @@ async fn wait_for_rollout(
                                 .file_name()
                                 .and_then(|name| name.to_str())
                         })
-                        .unwrap_or("appctl");
+                        .unwrap_or("sync");
                     eprintln!("Run `{command} sync` to retry; `{command} rollback` returns to the previous release.");
                     return Err(error);
                 }
@@ -5576,6 +5596,30 @@ stringData:
             "{message}"
         );
         assert!(message.contains("1/2 resources complete"), "{message}");
+    }
+
+    #[test]
+    fn rollout_progress_reports_missing_and_stale_operator_acknowledgements() {
+        let expected = "Operator has not picked up release yet; check kubectl get pods -n site";
+        for status in [
+            None,
+            Some(serde_json::json!({"sequence": 6, "attempt": "current"})),
+            Some(serde_json::json!({"sequence": 7, "attempt": "previous"})),
+        ] {
+            assert_eq!(
+                rollout_status_progress(status.as_ref(), 7, "current", "release", "site"),
+                expected,
+            );
+        }
+        for status in [
+            serde_json::json!({"sequence": 7, "attempt": "current", "state": {"status": "updating"}}),
+            serde_json::json!({"sequence": 7, "state": {"status": "updating"}}),
+        ] {
+            assert_eq!(
+                rollout_status_progress(Some(&status), 7, "current", "release", "site"),
+                "updating (0/0 resources complete)",
+            );
+        }
     }
 
     #[test]
