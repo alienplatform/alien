@@ -17552,10 +17552,15 @@
             "description": "Telemetry batches passed to the telemetry backend.",
             "minimum": 0
           },
+          "telemetryRejected": {
+            "type": "integer",
+            "description": "Permanently rejected batches recorded separately for diagnosis, not ingested.",
+            "minimum": 0
+          },
           "telemetryThrough": {
             "type": "integer",
             "format": "int64",
-            "description": "Highest batch the manager has passed on for this deployment, across\nreports.",
+            "description": "Highest batch durably ingested or retained as permanently rejected,\nacross reports.",
             "nullable": true
           }
         }

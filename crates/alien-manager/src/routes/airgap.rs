@@ -29,6 +29,7 @@ use axum::{
 use base64::Engine as _;
 use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
 use super::{auth, AppState};
@@ -404,8 +405,11 @@ pub struct StatusReportResponse {
     pub status: String,
     /// Telemetry batches passed to the telemetry backend.
     pub telemetry_accepted: usize,
-    /// Highest batch the manager has passed on for this deployment, across
-    /// reports.
+    /// Permanently rejected batches recorded separately for diagnosis, not ingested.
+    #[serde(default)]
+    pub telemetry_rejected: usize,
+    /// Highest batch durably ingested or retained as permanently rejected,
+    /// across reports.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub telemetry_through: Option<i64>,
 }
@@ -547,6 +551,7 @@ async fn status_report(
         Json(StatusReportResponse {
             status,
             telemetry_accepted: forwarded.accepted,
+            telemetry_rejected: forwarded.rejected,
             telemetry_through: forwarded.through,
         }),
     )
@@ -605,11 +610,12 @@ struct TelemetryGroup {
     signals: Vec<(TelemetrySignal, Vec<u8>)>,
 }
 
-fn group_telemetry(batches: Vec<DecodedBatch>) -> Vec<TelemetryGroup> {
+fn group_telemetry(batches: Vec<DecodedBatch>, max_batches: usize) -> Vec<TelemetryGroup> {
     let mut groups: Vec<TelemetryGroup> = Vec::new();
     for (id, signal, data) in batches {
         if groups.last().is_none_or(|group| {
-            group.count == TELEMETRY_GROUP_BATCHES
+            group.count == max_batches
+                || id.is_none()
                 || group.bytes + data.len() > TELEMETRY_GROUP_BYTES
                 || group.through.is_some() != id.is_some()
         }) {
@@ -641,6 +647,8 @@ fn group_telemetry(batches: Vec<DecodedBatch>) -> Vec<TelemetryGroup> {
 struct Forwarded {
     /// Batches the telemetry backend accepted.
     accepted: usize,
+    /// Batches recorded as permanently rejected by the backend.
+    rejected: usize,
     /// The mark after forwarding: every batch up to it has been received.
     through: Option<i64>,
 }
@@ -655,8 +663,8 @@ struct Forwarded {
 /// confirmed, so a batch below the mark has been received.
 ///
 /// Signal writes run [`TELEMETRY_CONCURRENCY`] at a time. The mark
-/// only moves over groups that completed in order, so it never covers a
-/// batch that didn't go through. No new signal starts once `budget` has
+/// only moves over groups completed in order: every covered batch was ingested
+/// or has a durable record of permanent rejection. No new signal starts once `budget` has
 /// passed; writes in flight finish and the rest wait for the next report.
 /// Partially written groups and any groups after a failure are replayed.
 async fn forward_telemetry(
@@ -675,54 +683,151 @@ async fn forward_telemetry(
     batches.retain(|(id, _, _)| !id.is_some_and(|id| mark.is_some_and(|mark| id <= mark)));
     batches.sort_by_key(|(id, _, _)| *id);
 
-    let backend = backend.as_ref();
-    let caller = &caller;
-    let signals = group_telemetry(batches).into_iter().flat_map(|group| {
-        let signals = group.signals.len();
-        group
-            .signals
-            .into_iter()
-            .enumerate()
-            .map(move |(index, (signal, data))| {
-                // Ordered completion of the last signal proves the whole group
-                // succeeded. A budget stop partway through a group leaves it unacknowledged.
-                (
-                    group.through,
-                    signal,
-                    data,
-                    (index + 1 == signals).then_some(group.count),
-                )
-            })
-    });
+    // A rejected group is retried one batch at a time. Persist the upper bound
+    // so the next request can resume within the normal time budget.
+    let split_key = format!("{mark_key}:individual-through");
+    let split_through = read_telemetry_mark(kv.as_ref(), &split_key)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    let individual = split_through.is_some_and(|end| through.is_none_or(|mark| mark < end));
+    let max_batches = if individual {
+        1
+    } else {
+        TELEMETRY_GROUP_BATCHES
+    };
+    let last_id = batches.iter().filter_map(|(id, _, _)| *id).max();
+    let signals = group_telemetry(batches.clone(), max_batches)
+        .into_iter()
+        .flat_map(|group| {
+            let signals = group.signals.len();
+            group
+                .signals
+                .into_iter()
+                .enumerate()
+                .map(move |(index, (signal, data))| {
+                    (
+                        group.through,
+                        signal,
+                        data,
+                        group.count,
+                        (index + 1 == signals).then_some(group.count),
+                    )
+                })
+        });
     let mut written = stream::iter(signals)
-        // A batch without an id (from an older site) can't be picked up by
-        // the next report, so the budget never holds one back. They sort
-        // first.
-        .take_while(|(id, _, _, _)| ready(id.is_none() || Instant::now() < deadline))
-        .map(|(id, signal, data, completed_count)| async move {
-            backend.ingest(signal, caller, data.into()).await?;
-            Ok::<_, alien_error::AlienError>((id, completed_count))
+        .take_while(|(id, _, _, _, _)| ready(id.is_none() || Instant::now() < deadline))
+        .map(|(id, signal, data, count, completed_count)| {
+            let backend = backend.as_ref();
+            let kv = kv.as_ref();
+            let caller = &caller;
+            let mark_key = &mark_key;
+            async move {
+                let result = match backend.ingest(signal, caller, data.clone().into()).await {
+                    Ok(()) => Ok(0),
+                    Err(error) if count == 1 && permanent_payload_rejection(&error) => {
+                        retain_rejected_batch(kv, mark_key, id, signal, &data, &error)
+                            .await
+                            .map(|()| 1)
+                    }
+                    Err(error) => Err(error),
+                };
+                (id, completed_count, result)
+            }
         })
         .buffered(TELEMETRY_CONCURRENCY);
 
     let mut accepted = 0;
-    while let Some(written_batch) = written.next().await {
-        let (id, completed_count) = written_batch.map_err(IntoResponse::into_response)?;
+    let mut rejected = 0;
+    while let Some((id, completed_count, result)) = written.next().await {
+        let rejected_count = match result {
+            Ok(count) => count,
+            Err(error)
+                if !individual && permanent_payload_rejection(&error) && last_id.is_some() =>
+            {
+                drop(written);
+                let Some(end) = last_id else {
+                    return Err(error.into_response());
+                };
+                kv.put(&split_key, end.to_string().into_bytes(), None)
+                    .await
+                    .map_err(|error| {
+                        ErrorData::internal(format!(
+                            "recording individual telemetry retry: {error}"
+                        ))
+                        .into_response()
+                    })?;
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                // Legacy batches precede identified batches and have already completed.
+                batches.retain(|(id, _, _)| id.is_some());
+                let rest = Box::pin(forward_telemetry(
+                    backend, kv, caller, mark_key, batches, remaining,
+                ))
+                .await?;
+                return Ok(Forwarded {
+                    accepted: accepted + rest.accepted,
+                    rejected: rejected + rest.rejected,
+                    through: rest.through,
+                });
+            }
+            Err(error) => return Err(error.into_response()),
+        };
         let Some(count) = completed_count else {
             continue;
         };
-        accepted += count;
+        accepted += count - rejected_count;
+        rejected += rejected_count;
         if let Some(id) = id {
-            through = Some(id);
             kv.put(&mark_key, id.to_string().into_bytes(), None)
                 .await
-                .map_err(|e| {
-                    ErrorData::internal(format!("recording received telemetry: {e}"))
+                .map_err(|error| {
+                    ErrorData::internal(format!("recording received telemetry: {error}"))
                         .into_response()
                 })?;
+            through = Some(id);
         }
     }
-    Ok(Forwarded { accepted, through })
+    Ok(Forwarded {
+        accepted,
+        rejected,
+        through,
+    })
+}
+
+fn permanent_payload_rejection(error: &alien_error::AlienError) -> bool {
+    matches!(error.http_status_code, Some(400 | 413 | 422))
+}
+
+/// Record the explicit rejection before acknowledging it. Keep only bounded
+/// metadata: telemetry payloads can exceed the KV store's value limit.
+async fn retain_rejected_batch(
+    kv: &dyn Kv,
+    mark_key: &str,
+    id: Option<i64>,
+    signal: TelemetrySignal,
+    data: &[u8],
+    error: &alien_error::AlienError,
+) -> Result<(), alien_error::AlienError> {
+    let signal = match signal {
+        TelemetrySignal::Logs => "logs",
+        TelemetrySignal::Metrics => "metrics",
+        TelemetrySignal::Traces => "traces",
+    };
+    let identity = id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| format!("{signal}-{:x}", Sha256::digest(data)));
+    let record = serde_json::json!({
+        "id": id, "signal": signal, "httpStatus": error.http_status_code,
+        "bytes": data.len(), "sha256": format!("{:x}", Sha256::digest(data)),
+    });
+    kv.put(
+        &format!("{mark_key}:rejected:{identity}"),
+        record.to_string().into_bytes(),
+        None,
+    )
+    .await
+    .map_err(|error| error.into_generic())?;
+    tracing::warn!(batch_id = ?id, signal, status = ?error.http_status_code, "Telemetry batch permanently rejected; rejection details recorded");
+    Ok(())
 }
 
 fn telemetry_mark_key(deployment_id: &str) -> String {
@@ -756,7 +861,10 @@ async fn read_telemetry_mark(
 mod tests {
     use std::sync::Mutex;
 
-    use alien_bindings::providers::kv::local::LocalKv;
+    use alien_bindings::{
+        providers::kv::local::LocalKv,
+        traits::{Binding, KvEntry, PutOptions, ScanResult},
+    };
     use alien_error::AlienError;
     use async_trait::async_trait;
     use opentelemetry_proto::tonic::{
@@ -771,6 +879,229 @@ mod tests {
     use prost::Message;
 
     use super::*;
+
+    #[derive(Debug)]
+    struct RejectRecordWrites(Arc<dyn Kv>);
+    impl Binding for RejectRecordWrites {}
+    #[async_trait]
+    impl Kv for RejectRecordWrites {
+        async fn get(&self, key: &str) -> alien_bindings::error::Result<Option<KvEntry>> {
+            self.0.get(key).await
+        }
+        async fn put(
+            &self,
+            key: &str,
+            value: Vec<u8>,
+            options: Option<PutOptions>,
+        ) -> alien_bindings::error::Result<bool> {
+            if key.contains(":rejected:") {
+                return Err(AlienError::new(
+                    alien_bindings::error::ErrorData::KvOperationFailed {
+                        operation: "put".into(),
+                        key: key.into(),
+                        reason: "rejection storage unavailable".into(),
+                    },
+                ));
+            }
+            self.0.put(key, value, options).await
+        }
+        async fn delete(
+            &self,
+            key: &str,
+            version: Option<&str>,
+        ) -> alien_bindings::error::Result<bool> {
+            self.0.delete(key, version).await
+        }
+        async fn exists(&self, key: &str) -> alien_bindings::error::Result<bool> {
+            self.0.exists(key).await
+        }
+        async fn scan_prefix(
+            &self,
+            prefix: &str,
+            limit: Option<usize>,
+            cursor: Option<String>,
+        ) -> alien_bindings::error::Result<ScanResult> {
+            self.0.scan_prefix(prefix, limit, cursor).await
+        }
+    }
+
+    #[tokio::test]
+    async fn rejection_record_failure_keeps_the_batch_unacknowledged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(RejectRecordWrites(Arc::new(
+            LocalKv::new(tmp.path().join("kv")).await.unwrap(),
+        )));
+        let backend = Arc::new(RejectMalformed {
+            status: 400,
+            delay: Duration::ZERO,
+            received: Mutex::new(Vec::new()),
+        });
+        let result = forward_telemetry(
+            backend,
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            vec![(Some(1), TelemetrySignal::Logs, b"{}".to_vec())],
+            TELEMETRY_BUDGET,
+        )
+        .await;
+        assert_eq!(result.unwrap_err().status(), StatusCode::BAD_GATEWAY);
+        assert!(kv.get("mark").await.unwrap().is_none());
+        assert!(kv.get("mark:rejected:1").await.unwrap().is_none());
+    }
+
+    struct RejectMalformed {
+        status: u16,
+        delay: Duration,
+        received: Mutex<Vec<i64>>,
+    }
+
+    #[async_trait]
+    impl TelemetryBackend for RejectMalformed {
+        async fn ingest(
+            &self,
+            _: TelemetrySignal,
+            _: &TelemetryCaller,
+            data: bytes::Bytes,
+        ) -> Result<(), AlienError> {
+            if data.starts_with(b"{") {
+                let mut error = ErrorData::bad_request("invalid telemetry").into_generic();
+                error.http_status_code = Some(self.status);
+                return Err(error);
+            }
+            tokio::time::sleep(self.delay).await;
+            self.received.lock().unwrap().extend(batch_ids(&data));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn permanent_rejection_records_metadata_and_unblocks_later_batches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+        let backend = Arc::new(RejectMalformed {
+            status: 400,
+            delay: Duration::ZERO,
+            received: Mutex::new(Vec::new()),
+        });
+        let invalid = vec![b'{'; 100_000]; // Larger than the KV value limit.
+        let mut input = vec![(Some(1), TelemetrySignal::Logs, invalid.clone())];
+        input.extend(batches(2..=200));
+        let result = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input.clone(),
+            TELEMETRY_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (result.accepted, result.rejected, result.through),
+            (199, 1, Some(200))
+        );
+        let record = kv.get("mark:rejected:1").await.unwrap().unwrap();
+        let record: serde_json::Value = serde_json::from_slice(&record.value).unwrap();
+        assert_eq!(record["bytes"], 100_000);
+        assert_eq!(record["httpStatus"], 400);
+        assert_eq!(record["sha256"], format!("{:x}", Sha256::digest(&invalid)));
+        assert!(record.get("data").is_none());
+        let received: std::collections::BTreeSet<_> =
+            backend.received.lock().unwrap().iter().copied().collect();
+        assert_eq!(received, (2..=200).collect());
+        let replay = forward_telemetry(
+            backend,
+            kv,
+            caller(),
+            "mark".into(),
+            input,
+            TELEMETRY_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (replay.accepted, replay.rejected, replay.through),
+            (0, 0, Some(200))
+        );
+    }
+
+    #[tokio::test]
+    async fn authentication_throttling_and_server_failures_do_not_acknowledge_data() {
+        for status in [401, 403, 429, 500, 502, 503, 504] {
+            let tmp = tempfile::tempdir().unwrap();
+            let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+            let backend = Arc::new(RejectMalformed {
+                status,
+                delay: Duration::ZERO,
+                received: Mutex::new(Vec::new()),
+            });
+            let input = vec![(Some(1), TelemetrySignal::Logs, b"{}".to_vec())];
+            let error = forward_telemetry(
+                backend,
+                kv.clone(),
+                caller(),
+                "mark".into(),
+                input,
+                TELEMETRY_BUDGET,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.status().as_u16(), status);
+            assert!(kv.get("mark").await.unwrap().is_none());
+            assert!(kv.get("mark:rejected:1").await.unwrap().is_none());
+            assert!(kv.get("mark:individual-through").await.unwrap().is_none());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn individual_fallback_resumes_across_budgets_then_restores_grouping() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+        let backend = Arc::new(RejectMalformed {
+            status: 400,
+            delay: Duration::from_secs(5),
+            received: Mutex::new(Vec::new()),
+        });
+        let mut input = vec![(Some(1), TelemetrySignal::Logs, b"{}".to_vec())];
+        input.extend(batches(2..=200));
+        let mut through = 0;
+        let mut rejected = 0;
+        for _ in 0..5 {
+            let start = Instant::now();
+            let result = forward_telemetry(
+                backend.clone(),
+                kv.clone(),
+                caller(),
+                "mark".into(),
+                input.clone(),
+                TELEMETRY_BUDGET,
+            )
+            .await
+            .unwrap();
+            assert!(start.elapsed() < Duration::from_secs(60));
+            assert!(result.through.unwrap() > through);
+            through = result.through.unwrap();
+            rejected += result.rejected;
+            if through == 200 {
+                break;
+            }
+        }
+        assert_eq!((through, rejected), (200, 1));
+        let start = Instant::now();
+        let result = forward_telemetry(
+            backend,
+            kv,
+            caller(),
+            "mark".into(),
+            batches(201..=1224),
+            TELEMETRY_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!((result.accepted, result.through), (1024, Some(1224)));
+        assert!(start.elapsed() < Duration::from_secs(10));
+    }
 
     #[tokio::test]
     async fn signed_release_records_the_authenticated_download() {
@@ -987,7 +1318,7 @@ mod tests {
                 _ => TelemetrySignal::Metrics,
             };
         }
-        let groups = group_telemetry(input);
+        let groups = group_telemetry(input, TELEMETRY_GROUP_BATCHES);
         assert_eq!(groups.len(), 8);
         let mut received = Vec::new();
         for group in groups {
@@ -1045,12 +1376,15 @@ mod tests {
                 }),
             });
         let large = request.encode_to_vec();
-        let groups = group_telemetry(vec![
-            (None, TelemetrySignal::Logs, batch_data(0)),
-            (Some(1), TelemetrySignal::Logs, batch_data(1)),
-            (Some(2), TelemetrySignal::Logs, large.clone()),
-            (Some(3), TelemetrySignal::Logs, batch_data(3)),
-        ]);
+        let groups = group_telemetry(
+            vec![
+                (None, TelemetrySignal::Logs, batch_data(0)),
+                (Some(1), TelemetrySignal::Logs, batch_data(1)),
+                (Some(2), TelemetrySignal::Logs, large.clone()),
+                (Some(3), TelemetrySignal::Logs, batch_data(3)),
+            ],
+            TELEMETRY_GROUP_BATCHES,
+        );
         assert_eq!(
             groups.iter().map(|group| group.through).collect::<Vec<_>>(),
             vec![None, Some(1), Some(2), Some(3)]

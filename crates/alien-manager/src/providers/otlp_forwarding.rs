@@ -1,5 +1,6 @@
+use crate::error::ErrorData;
 use crate::traits::telemetry_backend::{TelemetryBackend, TelemetryCaller, TelemetrySignal};
-use alien_error::{AlienError, Context, GenericError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashMap;
@@ -76,12 +77,14 @@ impl TelemetryBackend for OtlpForwardingBackend {
             .context(GenericError {
                 message: "Failed to forward telemetry signal to OTLP backend".to_string(),
             })?;
-        response
-            .error_for_status()
-            .into_alien_error()
-            .context(GenericError {
-                message: "OTLP backend rejected telemetry signal".to_string(),
-            })?;
+        let status = response.status().as_u16();
+        if let Err(source) = response.error_for_status() {
+            let mut error = AlienError::from_std(&source)
+                .context(ErrorData::TelemetryBackendRejected { status });
+            error.http_status_code = Some(status);
+            error.retryable = !matches!(status, 400 | 413 | 422);
+            return Err(error.into_generic());
+        }
 
         Ok(())
     }

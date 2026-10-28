@@ -13,7 +13,13 @@ use axum::{
     Json, Router,
 };
 use base64::Engine as _;
+use opentelemetry_proto::tonic::collector::{
+    logs::v1::ExportLogsServiceRequest, metrics::v1::ExportMetricsServiceRequest,
+    trace::v1::ExportTraceServiceRequest,
+};
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
+use std::io::Read as _;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -31,10 +37,37 @@ struct OtlpServerState {
     airgap_export_token: Option<String>,
 }
 
-/// OTLP response
-#[derive(Serialize)]
-struct OtlpResponse {
-    accepted: bool,
+const MAX_OTLP_BYTES: usize = 10 * 1024 * 1024;
+
+/// Only decoded protobuf enters the buffer; bound gzip expansion as well as wire bytes.
+fn otlp_body(headers: &HeaderMap, body: Bytes) -> Result<Bytes, StatusCode> {
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim);
+    if !content_type.is_some_and(|value| value.eq_ignore_ascii_case("application/x-protobuf")) {
+        return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+    match headers
+        .get(axum::http::header::CONTENT_ENCODING)
+        .map(|value| value.to_str())
+    {
+        None => Ok(body),
+        Some(Ok(value)) if value.trim().eq_ignore_ascii_case("identity") => Ok(body),
+        Some(Ok(value)) if value.trim().eq_ignore_ascii_case("gzip") => {
+            let mut decoded = Vec::new();
+            flate2::read::MultiGzDecoder::new(body.as_ref())
+                .take((MAX_OTLP_BYTES + 1) as u64)
+                .read_to_end(&mut decoded)
+                .map_err(|_| StatusCode::BAD_REQUEST)?;
+            if decoded.len() > MAX_OTLP_BYTES {
+                return Err(StatusCode::PAYLOAD_TOO_LARGE);
+            }
+            Ok(decoded.into())
+        }
+        _ => Err(StatusCode::UNSUPPORTED_MEDIA_TYPE),
+    }
 }
 
 #[derive(Serialize)]
@@ -65,7 +98,7 @@ pub async fn start_otlp_server(
         .route("/internal/logs", post(handle_collector_logs))
         .route("/airgap/telemetry", get(handle_airgap_export))
         .route("/airgap/telemetry/seal", post(handle_airgap_seal))
-        .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_OTLP_BYTES))
         .with_state(OtlpServerState {
             db,
             namespace,
@@ -215,8 +248,11 @@ async fn handle_health() -> Json<HealthResponse> {
 
 async fn handle_logs(
     State(state): State<OtlpServerState>,
+    headers: HeaderMap,
     body: Bytes,
-) -> Result<Json<OtlpResponse>, StatusCode> {
+) -> Result<Response, StatusCode> {
+    let body = otlp_body(&headers, body)?;
+    ExportLogsServiceRequest::decode(body.clone()).map_err(|_| StatusCode::BAD_REQUEST)?;
     debug!(bytes = body.len(), "Received OTLP logs");
 
     if let Err(e) = state.db.store_telemetry("logs", &body).await {
@@ -227,13 +263,20 @@ async fn handle_logs(
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
-    Ok(Json(OtlpResponse { accepted: true }))
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/x-protobuf")],
+        Bytes::new(),
+    )
+        .into_response())
 }
 
 async fn handle_metrics(
     State(state): State<OtlpServerState>,
+    headers: HeaderMap,
     body: Bytes,
-) -> Result<Json<OtlpResponse>, StatusCode> {
+) -> Result<Response, StatusCode> {
+    let body = otlp_body(&headers, body)?;
+    ExportMetricsServiceRequest::decode(body.clone()).map_err(|_| StatusCode::BAD_REQUEST)?;
     debug!(bytes = body.len(), "Received OTLP metrics");
 
     if let Err(e) = state.db.store_telemetry("metrics", &body).await {
@@ -244,13 +287,20 @@ async fn handle_metrics(
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
-    Ok(Json(OtlpResponse { accepted: true }))
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/x-protobuf")],
+        Bytes::new(),
+    )
+        .into_response())
 }
 
 async fn handle_traces(
     State(state): State<OtlpServerState>,
+    headers: HeaderMap,
     body: Bytes,
-) -> Result<Json<OtlpResponse>, StatusCode> {
+) -> Result<Response, StatusCode> {
+    let body = otlp_body(&headers, body)?;
+    ExportTraceServiceRequest::decode(body.clone()).map_err(|_| StatusCode::BAD_REQUEST)?;
     debug!(bytes = body.len(), "Received OTLP traces");
 
     if let Err(e) = state.db.store_telemetry("traces", &body).await {
@@ -261,7 +311,11 @@ async fn handle_traces(
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     }
 
-    Ok(Json(OtlpResponse { accepted: true }))
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/x-protobuf")],
+        Bytes::new(),
+    )
+        .into_response())
 }
 
 async fn handle_collector_logs(
@@ -308,7 +362,10 @@ async fn ingest_collector_logs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{Ipv4Addr, TcpListener};
+    use std::{
+        io::Write as _,
+        net::{Ipv4Addr, TcpListener},
+    };
     use tokio::time::{sleep, Duration};
 
     const TEST_ENCRYPTION_KEY: &str =
@@ -317,6 +374,90 @@ mod tests {
     fn free_port() -> u16 {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.local_addr().unwrap().port()
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[tokio::test]
+    async fn otlp_http_validates_encoding_and_bounds_gzip_before_buffering() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let port = free_port();
+        let cancel = CancellationToken::new();
+        let server = tokio::spawn(start_otlp_server(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            port,
+            db.clone(),
+            None,
+            None,
+            None,
+            None,
+            cancel.clone(),
+        ));
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{port}");
+        for _ in 0..50 {
+            if client.get(format!("{base}/health")).send().await.is_ok() {
+                break;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+        let protobuf = vec![10, 0]; // One empty resource message, valid for each signal.
+        for signal in ["logs", "metrics", "traces"] {
+            for (content_type, encoding, bytes, expected) in [
+                ("application/json", "identity", b"{}".to_vec(), 415),
+                ("application/x-protobuf", "br", protobuf.clone(), 415),
+                (
+                    "application/x-protobuf",
+                    "gzip",
+                    b"broken gzip".to_vec(),
+                    400,
+                ),
+                ("application/x-protobuf", "identity", vec![255], 400),
+                (
+                    "application/x-protobuf",
+                    "gzip",
+                    gzip(&vec![0; MAX_OTLP_BYTES + 1]),
+                    413,
+                ),
+                ("application/x-protobuf", "identity", protobuf.clone(), 200),
+                ("application/x-protobuf", "gzip", gzip(&protobuf), 200),
+            ] {
+                let response = client
+                    .post(format!("{base}/v1/{signal}"))
+                    .header("content-type", content_type)
+                    .header("content-encoding", encoding)
+                    .body(bytes)
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status().as_u16(),
+                    expected,
+                    "{signal} {content_type} {encoding}"
+                );
+                if expected == 200 {
+                    assert_eq!(response.headers()["content-type"], "application/x-protobuf");
+                    assert!(response.bytes().await.unwrap().is_empty());
+                }
+            }
+        }
+        let stored = db.telemetry_after(0, 100).await.unwrap();
+        assert_eq!(stored.len(), 6);
+        for (index, (_, signal, bytes)) in stored.iter().enumerate() {
+            assert_eq!(signal, ["logs", "metrics", "traces"][index / 2]);
+            assert_eq!(bytes, &protobuf);
+        }
+        cancel.cancel();
+        server.await.unwrap().unwrap();
     }
 
     #[tokio::test]
@@ -435,7 +576,8 @@ mod tests {
         // This accepted write arrives after the ordinary export page.
         assert!(client
             .post(format!("{base}/v1/logs"))
-            .body("late accepted")
+            .header("content-type", "application/x-protobuf")
+            .body(Vec::<u8>::new())
             .send()
             .await
             .unwrap()
@@ -453,7 +595,8 @@ mod tests {
         assert_eq!(
             client
                 .post(format!("{base}/v1/logs"))
-                .body("after seal")
+                .header("content-type", "application/x-protobuf")
+                .body(Vec::<u8>::new())
                 .send()
                 .await
                 .unwrap()
@@ -474,7 +617,7 @@ mod tests {
             base64::engine::general_purpose::STANDARD
                 .decode(drained["items"][0]["data"].as_str().unwrap())
                 .unwrap(),
-            b"late accepted"
+            b""
         );
         let offset = crate::db::PodLogOffset {
             timestamp: "2026-01-01T00:00:00Z".into(),

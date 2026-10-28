@@ -1204,6 +1204,7 @@ dependencies = [
  "bon",
  "chrono",
  "clap",
+ "flate2",
  "fs2",
  "futures",
  "hostname 0.4.2",

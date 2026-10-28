@@ -911,6 +911,9 @@ async fn send_reports(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StatusReportResponse {
+    /// Batches recorded as permanently rejected instead of ingested.
+    #[serde(default)]
+    telemetry_rejected: usize,
     /// Highest telemetry batch the manager has received.
     telemetry_through: Option<i64>,
 }
@@ -1002,6 +1005,9 @@ async fn send_report(
             return Ok(());
         }
         let response: StatusReportResponse = read_response(response, &path).await?;
+        if response.telemetry_rejected > 0 {
+            println!("Warning: {} telemetry batches were permanently rejected by the telemetry backend. The manager recorded their identifiers and rejection details; they were not ingested.", response.telemetry_rejected);
+        }
         if !sending {
             return Ok(());
         }

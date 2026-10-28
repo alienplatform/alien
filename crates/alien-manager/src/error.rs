@@ -8,6 +8,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The telemetry backend refused an OTLP request.
+    #[error(
+        code = "TELEMETRY_BACKEND_REJECTED",
+        message = "Telemetry backend rejected the request (HTTP {status})",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 502
+    )]
+    TelemetryBackendRejected { status: u16 },
+
     /// Deployment not found
     #[error(
         code = "DEPLOYMENT_NOT_FOUND",
