@@ -391,48 +391,7 @@ impl AwsStorageController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
-        let config = ctx.desired_resource_config::<Storage>()?;
-
-        let bucket_name = self.bucket_name.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Bucket name not set in state".to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
-
-        if config.public_read {
-            info!(bucket=%bucket_name, "Configuring bucket policy for public read");
-
-            // Set bucket policy for public read access
-            let policy = serde_json::json!({
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Principal": "*",
-                        "Action": "s3:GetObject",
-                        "Resource": format!("arn:aws:s3:::{}/*", bucket_name)
-                    }
-                ]
-            });
-
-            client
-                .put_bucket_policy(bucket_name, &policy.to_string())
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to configure bucket policy for S3 bucket '{}'",
-                        bucket_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            info!(bucket=%bucket_name, "Bucket policy configured successfully");
-        } else {
-            info!(bucket=%bucket_name, "Skipping bucket policy configuration (public read not enabled)");
-        }
+        self.apply_bucket_policy(ctx).await?;
 
         Ok(HandlerAction::Continue {
             state: ConfiguringLifecycle,
@@ -837,75 +796,19 @@ impl AwsStorageController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
         let config = ctx.desired_resource_config::<Storage>()?;
-        let prev_config = ctx.previous_resource_config::<Storage>()?;
-
-        // Check if public policy needs to be updated
-        if config.public_read != prev_config.public_read {
-            let bucket_name = self.bucket_name.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Bucket name not set in state during public policy update".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?;
-
-            info!(bucket=%bucket_name, "Updating bucket policy for public read");
-
-            if config.public_read {
-                // Set bucket policy for public read access
-                let policy = serde_json::json!({
-                    "Version": "2012-10-17",
-                    "Statement": [
-                        {
-                            "Effect": "Allow",
-                            "Principal": "*",
-                            "Action": "s3:GetObject",
-                            "Resource": format!("arn:aws:s3:::{}/*", bucket_name)
-                        }
-                    ]
-                });
-
-                client
-                    .put_bucket_policy(bucket_name, &policy.to_string())
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to update bucket policy for S3 bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-
-                info!(bucket=%bucket_name, "Bucket policy set successfully");
-            } else {
-                // Remove bucket policy - ignore NotFound errors
-                match client.delete_bucket_policy(bucket_name).await {
-                    Ok(_) => {
-                        info!(bucket=%bucket_name, "Bucket policy removed successfully");
-                    }
-                    Err(e)
-                        if matches!(
-                            e.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        info!(bucket=%bucket_name, "Bucket policy already removed or never existed");
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to remove bucket policy for S3 bucket '{}'",
-                                bucket_name
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        }));
-                    }
-                }
-            }
-        } else {
-            info!(name=%config.id, "Skipping bucket policy update (no changes needed)");
+        let setup_owned = ctx.initial_setup_authority
+            != alien_core::InitialSetupAuthority::DirectSetup
+            && ctx
+                .desired_stack
+                .resources
+                .get(&config.id)
+                .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Frozen);
+        // A saved checkpoint can resume here without passing through UpdateStart.
+        if !setup_owned || config != ctx.previous_resource_config::<Storage>()? {
+            // Reapply even when public_read is unchanged: older buckets may not
+            // have the HTTPS requirement yet. Never delete the private policy.
+            self.apply_bucket_policy(ctx).await?;
         }
 
         Ok(HandlerAction::Continue {
@@ -1333,6 +1236,62 @@ fn versioning_status_label(status: VersioningStatus) -> String {
 }
 
 impl AwsStorageController {
+    async fn apply_bucket_policy(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+            && ctx
+                .desired_stack
+                .resources
+                .get(&config.id)
+                .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Frozen)
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "Storage bucket policy is setup-owned; apply the updated setup package to change this Frozen bucket".into(),
+            }));
+        }
+        let bucket = self.bucket_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "Bucket name missing while configuring bucket policy".into(),
+            })
+        })?;
+        let bucket_arn = format!("arn:aws:s3:::{bucket}");
+        let mut statements = vec![serde_json::json!({
+            "Sid": "DenyInsecureTransport",
+            "Effect": "Deny",
+            "Principal": "*",
+            "Action": "s3:*",
+            "Resource": [bucket_arn, format!("{bucket_arn}/*")],
+            "Condition": {"Bool": {"aws:SecureTransport": "false"}}
+        })];
+        if config.public_read {
+            statements.push(serde_json::json!({
+                "Sid": "AllowPublicRead",
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": "s3:GetObject",
+                "Resource": format!("{bucket_arn}/*")
+            }));
+        }
+        let policy = serde_json::json!({
+            "Version": "2012-10-17",
+            "Statement": statements
+        });
+        ctx.service_provider
+            .get_aws_s3_client(ctx.get_aws_config()?)
+            .await?
+            .put_bucket_policy(bucket, &policy.to_string())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                resource_id: Some(config.id.clone()),
+                message: format!(
+                    "Failed to configure HTTPS-only bucket policy for S3 bucket '{bucket}'"
+                ),
+            })?;
+        Ok(())
+    }
+
     /// Finishes deletion without touching a bucket this deployment cannot prove it created.
     fn keep_bucket(
         &mut self,
@@ -2851,105 +2810,209 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
     }
 
-    /// Test that verifies public read configuration generates correct policy
+    #[rstest]
+    #[case::private(false)]
+    #[case::public(true)]
     #[tokio::test]
-    async fn test_public_read_policy_generation() {
-        let storage = Storage::new("public-test".to_string())
-            .public_read(true)
+    async fn create_requires_https(#[case] public_read: bool) {
+        let storage = Storage::new("objects".into())
+            .public_read(public_read)
             .build();
-
-        let mut mock_s3 = MockS3Api::new();
-
-        mock_s3
+        let mut client = MockS3Api::new();
+        client
             .expect_get_bucket_tagging()
             .returning(|_| Err(missing_bucket()));
-        mock_s3.expect_create_bucket().returning(|_| Ok(()));
-        mock_s3
+        client.expect_create_bucket().times(1).returning(|_| Ok(()));
+        client
             .expect_put_bucket_abac_tags()
+            .times(1)
             .returning(|_, _| Ok(()));
-        mock_s3
+        client
             .expect_put_bucket_versioning()
             .returning(|_, _| Ok(()));
-
-        // Validate public access block configuration
-        mock_s3
+        client
             .expect_put_public_access_block()
-            .withf(|_bucket_name, config| {
-                config.block_public_acls == Some(false)
-                    && config.block_public_policy == Some(false)
-                    && config.ignore_public_acls == Some(false)
-                    && config.restrict_public_buckets == Some(false)
-            })
             .returning(|_, _| Ok(()));
-
-        // Validate bucket policy for public read access
-        mock_s3
+        client
             .expect_put_bucket_policy()
-            .withf(|bucket_name, policy| {
-                // Parse policy as JSON to validate structure
-                let policy_json: serde_json::Value =
-                    serde_json::from_str(policy).expect("Policy should be valid JSON");
-
-                // Should have Version and Statement
-                if policy_json["Version"] != "2012-10-17" {
-                    eprintln!(
-                        "Expected version '2012-10-17', got {:?}",
-                        policy_json["Version"]
-                    );
-                    return false;
-                }
-
-                let statements = policy_json["Statement"]
-                    .as_array()
-                    .expect("Statement should be an array");
-
-                if statements.len() != 1 {
-                    eprintln!("Expected 1 statement, got {}", statements.len());
-                    return false;
-                }
-
-                let statement = &statements[0];
-
-                // Check for correct action and resource
-                if statement["Action"] != "s3:GetObject" {
-                    eprintln!(
-                        "Expected action 's3:GetObject', got {:?}",
-                        statement["Action"]
-                    );
-                    return false;
-                }
-
-                let expected_resource = format!("arn:aws:s3:::{}/*", bucket_name);
-                if statement["Resource"] != expected_resource {
-                    eprintln!(
-                        "Expected resource '{}', got {:?}",
-                        expected_resource, statement["Resource"]
-                    );
-                    return false;
-                }
-
-                true
-            })
-            .returning(|_, _| Ok(()));
-
-        mock_s3
-            .expect_put_bucket_lifecycle_configuration()
-            .returning(|_, _| Ok(()));
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_s3));
-
-        let mut executor = SingleControllerExecutor::builder()
+            .times(1)
+            .returning(move |bucket, policy| {
+                assert_https_policy(bucket, policy, public_read);
+                Ok(())
+            });
+        let mut run = SingleControllerExecutor::builder()
             .resource(storage)
             .controller(AwsStorageController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .service_provider(setup_mock_service_provider(Arc::new(client)))
             .with_test_dependencies()
             .build()
             .await
             .unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+    }
 
-        executor.run_until_terminal().await.unwrap();
-        assert_eq!(executor.status(), ResourceStatus::Running);
+    fn assert_https_policy(bucket: &str, policy: &str, public_read: bool) {
+        let policy: serde_json::Value = serde_json::from_str(policy).unwrap();
+        assert_eq!(policy["Version"], "2012-10-17");
+        let statements = policy["Statement"].as_array().unwrap();
+        assert_eq!(statements.len(), if public_read { 2 } else { 1 });
+        assert_eq!(
+            statements[0],
+            serde_json::json!({
+                "Sid": "DenyInsecureTransport",
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "s3:*",
+                "Resource": [format!("arn:aws:s3:::{bucket}"), format!("arn:aws:s3:::{bucket}/*")],
+                "Condition": {"Bool": {"aws:SecureTransport": "false"}}
+            })
+        );
+        if public_read {
+            assert_eq!(
+                statements[1],
+                serde_json::json!({
+                    "Sid": "AllowPublicRead", "Effect": "Allow", "Principal": "*",
+                    "Action": "s3:GetObject", "Resource": format!("arn:aws:s3:::{bucket}/*")
+                })
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::private_unchanged(false, false)]
+    #[case::public_unchanged(true, true)]
+    #[case::enable_public(false, true)]
+    #[case::disable_public(true, false)]
+    #[tokio::test]
+    async fn update_keeps_https_requirement(
+        #[case] previous_public: bool,
+        #[case] public_read: bool,
+    ) {
+        let storage = Storage::new("objects".into())
+            .public_read(public_read)
+            .build();
+        let mut client = MockS3Api::new();
+        client
+            .expect_put_public_access_block()
+            .returning(|_, _| Ok(()));
+        client
+            .expect_put_bucket_policy()
+            .times(1)
+            .returning(move |bucket, policy| {
+                assert_https_policy(bucket, policy, public_read);
+                Ok(())
+            });
+        let mut run = SingleControllerExecutor::builder()
+            .resource(
+                Storage::new("objects".into())
+                    .public_read(previous_public)
+                    .build(),
+            )
+            .controller(AwsStorageController::mock_ready("objects"))
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(client)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        run.update(storage).unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+    }
+
+    #[rstest]
+    #[case::create(AwsStorageState::ConfiguringPublicPolicy)]
+    #[case::update(AwsStorageState::UpdatePublicPolicy)]
+    #[tokio::test]
+    async fn bucket_policy_checkpoint_retries_lost_response(#[case] state: AwsStorageState) {
+        let storage = Storage::new("objects".into()).build();
+        let mut client = MockS3Api::new();
+        let applied = Arc::new(Mutex::new(Vec::new()));
+        let policies = applied.clone();
+        client
+            .expect_put_bucket_policy()
+            .times(2)
+            .returning(move |bucket, policy| {
+                assert_https_policy(bucket, policy, false);
+                let mut policies = policies.lock().unwrap();
+                policies.push(policy.to_string());
+                if policies.len() == 1 {
+                    Err(lost_response())
+                } else {
+                    Ok(())
+                }
+            });
+        client
+            .expect_get_bucket_tagging()
+            .returning(|_| Ok(our_tags("objects")));
+        client.expect_empty_bucket().times(1).returning(|_| Ok(()));
+        client.expect_delete_bucket().times(1).returning(|_| Ok(()));
+        let mut controller = legacy_recorded("objects");
+        controller.state = state;
+        let controller: AwsStorageController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let mut run = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .previous_resource(storage)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(client)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        assert!(run.step().await.is_err());
+        assert_eq!(
+            run.internal_state::<AwsStorageController>()
+                .unwrap()
+                .bucket_name
+                .as_deref(),
+            Some("test-objects")
+        );
+        run.step().await.unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        let policies = applied.lock().unwrap();
+        assert_eq!(policies.len(), 2);
+        assert_eq!(policies[0], policies[1]);
+        drop(policies);
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Deleted);
+    }
+
+    #[rstest]
+    #[case::unchanged(false)]
+    #[case::changed(true)]
+    #[tokio::test]
+    async fn bucket_policy_checkpoint_preserves_setup_ownership(#[case] changed: bool) {
+        let mut controller = legacy_recorded("objects");
+        controller.state = AwsStorageState::UpdatePublicPolicy;
+        let mut run = SingleControllerExecutor::builder()
+            .resource(Storage::new("objects".into()).public_read(changed).build())
+            .previous_resource(Storage::new("objects".into()).build())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        if changed {
+            assert!(run
+                .step()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("setup-owned"));
+        } else {
+            run.run_until_terminal().await.unwrap();
+            assert_eq!(run.status(), ResourceStatus::Running);
+        }
     }
 
     /// Test that verifies deletion works when bucket_name is not set (early creation failure)
