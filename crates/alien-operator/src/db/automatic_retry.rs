@@ -41,9 +41,17 @@ pub(crate) fn approved_target_hash(
         .environment_variables
         .variables
         .iter()
-        .map(|variable| (&variable.name, &variable.value))
+        .map(|variable| {
+            let targets = variable.target_resources.as_ref().map(|targets| {
+                let mut targets: Vec<_> = targets.iter().collect();
+                targets.sort_unstable();
+                targets.dedup();
+                targets
+            });
+            (&variable.name, &variable.value, &variable.var_type, targets)
+        })
         .collect();
-    environment.sort_unstable();
+    environment.sort_unstable_by(|left, right| left.0.cmp(right.0).then(left.1.cmp(right.1)));
     let mut target = serde_json::to_value((
         release_identity,
         &config.stack_settings,
@@ -351,11 +359,19 @@ mod tests {
                 var_type: alien_core::EnvironmentVariableType::Plain,
                 target_resources: None,
             });
-        for change in 0..4 {
+        for change in 0..6 {
             match change {
                 0 => {}
                 1 => config.environment_variables.variables[0].value = "second".into(),
-                2 => config.stack_settings.airgapped = true,
+                2 => {
+                    config.environment_variables.variables[0].var_type =
+                        alien_core::EnvironmentVariableType::Secret
+                }
+                3 => {
+                    config.environment_variables.variables[0].target_resources =
+                        Some(vec!["worker".into()])
+                }
+                4 => config.stack_settings.airgapped = true,
                 _ => failed.target_release.as_mut().unwrap().version = Some("2".into()),
             }
             db.set_deployment_state(&failed).await.unwrap();
@@ -370,6 +386,25 @@ mod tests {
                 "approved target change {change} must get a fresh budget"
             );
         }
+    }
+
+    #[test]
+    fn variable_target_order_does_not_change_the_approved_target() {
+        let mut config = config();
+        config
+            .environment_variables
+            .variables
+            .push(alien_core::EnvironmentVariable {
+                name: "MODE".into(),
+                value: "first".into(),
+                var_type: alien_core::EnvironmentVariableType::Plain,
+                target_resources: Some(vec!["worker".into(), "api".into()]),
+            });
+        let first = approved_target_hash(None, &config).unwrap();
+        config.environment_variables.variables[0].target_resources =
+            Some(vec!["api".into(), "worker".into(), "api".into()]);
+        config.environment_variables.created_at = "refreshed".into();
+        assert_eq!(first, approved_target_hash(None, &config).unwrap());
     }
 
     #[tokio::test]
