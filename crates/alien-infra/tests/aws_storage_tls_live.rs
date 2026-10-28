@@ -10,7 +10,7 @@
 use std::{sync::Arc, time::Duration};
 
 use alien_aws_clients::{
-    aws::aws_request_utils::{AwsRequestSigner, AwsSignConfig},
+    aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig},
     s3::PutObjectRequest,
     AwsClientConfigExt, S3Api, S3Client,
 };
@@ -28,6 +28,7 @@ const PAYLOAD: &str = "storage TLS probe";
 async fn signed_status(client: &Client, signing: &AwsSignConfig, url: &str) -> StatusCode {
     client
         .get(url)
+        .content_sha256("")
         .sign_aws_request(signing)
         .unwrap()
         .send()
@@ -169,7 +170,8 @@ async fn storage_requires_https_through_create_upgrade_and_public_read_changes()
     run.run_until_terminal().await.unwrap();
     assert_eq!(run.status(), ResourceStatus::Deleted);
     let bucket = format!("{prefix}-objects");
-    let missing = s3.head_bucket(&bucket).await.unwrap_err();
+    // The tagging API distinguishes NoSuchBucket from an existing untagged bucket.
+    let missing = s3.get_bucket_tagging(&bucket).await.unwrap_err();
     assert!(matches!(
         missing.error,
         Some(alien_aws_clients::ErrorData::RemoteResourceNotFound { .. })
