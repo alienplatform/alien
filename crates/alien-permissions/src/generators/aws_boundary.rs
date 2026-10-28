@@ -256,15 +256,6 @@ mod tests {
             .with_managing_account_id("210987654321")
     }
 
-    fn matches(pattern: &str, value: &str) -> bool {
-        let pattern = regex::escape(pattern)
-            .replace(r"\*", ".*")
-            .replace(r"\?", ".");
-        regex::Regex::new(&format!("^{pattern}$"))
-            .unwrap()
-            .is_match(value)
-    }
-
     #[test]
     fn full_catalog_fits_and_covers_runtime_actions_and_resources() {
         let context = context();
@@ -297,59 +288,17 @@ mod tests {
                     }
                     let mut single = set.clone();
                     single.platforms.aws = Some(vec![entry.clone()]);
-                    for statement in generator
+                    let required = generator
                         .generate_policy(&single, target, &context)
-                        .unwrap()
-                        .statement
-                    {
-                        assert!(
-                            statement.not_resource.is_empty(),
-                            "Review new runtime NotResource grant: {id}"
-                        );
-                        for action in &statement.action {
-                            for resource in &statement.resource {
-                                assert!(
-                                    policy["Statement"].as_array().unwrap().iter().any(
-                                        |boundary| {
-                                            let action_covered = if boundary["NotAction"] == "iam:*"
-                                            {
-                                                !action.to_ascii_lowercase().starts_with("iam:")
-                                                    && action != "*"
-                                            } else {
-                                                boundary["Action"].as_array().unwrap().iter().any(
-                                                    |allowed| {
-                                                        matches(
-                                                            &allowed
-                                                                .as_str()
-                                                                .unwrap()
-                                                                .to_ascii_lowercase(),
-                                                            &action.to_ascii_lowercase(),
-                                                        )
-                                                    },
-                                                )
-                                            };
-                                            let condition_covered = boundary
-                                                .get("Condition")
-                                                .is_none()
-                                                || boundary["Condition"]
-                                                    == serde_json::to_value(&statement.condition)
-                                                        .unwrap();
-                                            action_covered
-                                                && condition_covered
-                                                && boundary["Resource"]
-                                                    .as_array()
-                                                    .unwrap()
-                                                    .iter()
-                                                    .any(|allowed| {
-                                                        matches(allowed.as_str().unwrap(), resource)
-                                                    })
-                                        }
-                                    ),
-                                    "Boundary does not cover {id}: {action} on {resource}"
-                                );
-                            }
-                        }
-                    }
+                        .unwrap();
+                    assert!(
+                        super::super::aws_permissions_boundary_covers(
+                            &policy,
+                            &serde_json::to_value(required).unwrap(),
+                        )
+                        .unwrap(),
+                        "Boundary does not cover {id} ({target:?})"
+                    );
                 }
             }
         }
