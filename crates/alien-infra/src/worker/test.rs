@@ -439,15 +439,22 @@ impl TestWorkerController {
         // Support Stay-based exhaustion simulation for testing Bug 1/2 fixes.
         // When set, the handler always returns Stay and never advances, so the
         // macro's exhaustion path is exercised rather than the manual poll counter.
+        // SIMULATE_STAY_DELAY_MS sets the delay each Stay asks for, so a driver's
+        // scheduling can be checked against a real poll budget (attempts x delay).
         if let Some(max_times_str) = target_func.environment.get("SIMULATE_STAY_EXHAUSTION") {
             let max_times: u32 = max_times_str.parse().unwrap_or(3);
+            let delay_ms = target_func
+                .environment
+                .get("SIMULATE_STAY_DELAY_MS")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(POLL_DELAY_MS);
             info!(
-                "→ [test-create] SIMULATE_STAY_EXHAUSTION active (max_times={}) for `{}`",
-                max_times, identifier
+                "→ [test-create] SIMULATE_STAY_EXHAUSTION active (max_times={}, delay_ms={}) for `{}`",
+                max_times, delay_ms, identifier
             );
             return Ok(HandlerAction::Stay {
                 max_times: Some(max_times),
-                suggested_delay: Some(Duration::from_millis(POLL_DELAY_MS)),
+                suggested_delay: Some(Duration::from_millis(delay_ms)),
             });
         }
 

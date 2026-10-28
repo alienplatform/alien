@@ -179,18 +179,7 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
     );
 
     loop {
-        let mut delay = interval;
-        match run_deployment_continuously(&state).await {
-            Ok((steps, suggested_delay)) => {
-                delay = delay.max(suggested_delay);
-                if steps > 0 {
-                    info!(steps = steps, "Deployment completed");
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "Deployment failed");
-            }
-        }
+        let delay = run_deployment_pass(&state, interval).await;
 
         tokio::select! {
             _ = tokio::time::sleep(delay) => {},
@@ -198,6 +187,23 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
                 info!("Deployment loop shutting down");
                 return;
             }
+        }
+    }
+}
+
+/// One pass of the deployment loop. Returns how long the loop waits before the
+/// next pass: the step's requested delay, never less than `interval`.
+async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Duration {
+    match run_deployment_continuously(state).await {
+        Ok((steps, suggested_delay)) => {
+            if steps > 0 {
+                info!(steps = steps, "Deployment completed");
+            }
+            interval.max(suggested_delay)
+        }
+        Err(e) => {
+            error!(error = %e, "Deployment failed");
+            interval
         }
     }
 }
@@ -417,14 +423,11 @@ pub(crate) async fn run_deployment_continuously(
         );
     }
 
-    // Only waits on the deployer (keys, machines) honor the step's delay; resource
-    // waits during setup or updates keep the loop's short polling interval.
-    let waiting_on_deployer = matches!(
-        loop_result.final_status,
-        alien_core::DeploymentStatus::WaitingForSecrets
-            | alien_core::DeploymentStatus::WaitingForMachines
-    );
-    let delay = if loop_result.stop_reason == LoopStopReason::Delayed && waiting_on_deployer {
+    // Honor the step's delay for every wait, resource waits included. A
+    // controller's poll budget (`Stay { max_times }`) counts steps, so its
+    // author's wall-clock budget is `max_times` times the delay it asks for;
+    // stepping on a shorter interval spends that budget faster.
+    let delay = if loop_result.stop_reason == LoopStopReason::Delayed {
         Duration::from_millis(transport.suggested_delay_ms.load(Ordering::Relaxed))
     } else {
         Duration::ZERO
@@ -1622,5 +1625,116 @@ mod tests {
         assert_eq!(recovered.current_release, installed.current_release);
         assert!(recovered.target_release.is_none());
         assert!(state.db.get_deployment_config().await.unwrap().is_some());
+    }
+
+    /// A resource wait's poll budget is `max_times` steps, one per requested
+    /// delay. The Kubernetes public endpoint wait asks for 60 polls 10s apart,
+    /// so it must not time out before about ten minutes. The loop is driven
+    /// pass by pass and its waits are added up instead of slept.
+    #[tokio::test]
+    async fn resource_poll_budget_lasts_its_requested_delays() {
+        const MAX_POLLS: u32 = 60;
+        const POLL_DELAY: Duration = Duration::from_secs(10);
+
+        let directory = tempfile::tempdir().unwrap();
+        let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_poll").await.unwrap();
+        let worker = alien_core::Worker::new("worker".into())
+            .code(alien_core::WorkerCode::Image {
+                image: "test:1".into(),
+            })
+            .permissions("default".into())
+            .environment(HashMap::from([
+                ("SIMULATE_STAY_EXHAUSTION".into(), MAX_POLLS.to_string()),
+                (
+                    "SIMULATE_STAY_DELAY_MS".into(),
+                    POLL_DELAY.as_millis().to_string(),
+                ),
+            ]))
+            .build();
+        let mut stack = alien_core::Stack::new("poll".into())
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        stack
+            .permissions
+            .profiles
+            .insert("default".into(), alien_core::PermissionProfile::new());
+        db.set_deployment_state(&DeploymentState {
+            status: DeploymentStatus::Pending,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: Some(alien_core::ReleaseInfo {
+                release_id: Some("rel_1".into()),
+                version: Some("1.0.0".into()),
+                description: None,
+                stack,
+            }),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        })
+        .await
+        .unwrap();
+        db.set_deployment_config(&test_deployment_config())
+            .await
+            .unwrap();
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Test)
+                .data_dir(directory.path().to_str().unwrap())
+                .encryption_key(key)
+                .build(),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+        let interval = Duration::from_secs(state.config.deployment_interval_seconds);
+        assert!(
+            interval < POLL_DELAY,
+            "the loop interval must be shorter than the poll delay for this test to mean anything"
+        );
+
+        let mut waited = Duration::ZERO;
+        let mut passes = 0;
+        let failed = loop {
+            let current = state.db.get_deployment_state().await.unwrap().unwrap();
+            if current.status.is_failed() {
+                break current;
+            }
+            assert!(
+                passes < 4 * MAX_POLLS,
+                "deployment never failed; status {:?} after {passes} passes",
+                current.status
+            );
+            waited += run_deployment_pass(&state, interval).await;
+            passes += 1;
+        };
+
+        assert_eq!(failed.status, DeploymentStatus::ProvisioningFailed);
+        let worker = &failed.stack_state.as_ref().unwrap().resources["worker"];
+        assert_eq!(worker.status, alien_core::ResourceStatus::ProvisionFailed);
+        assert_eq!(
+            worker.error.as_ref().map(|error| error.code.as_str()),
+            Some("RESOURCE_POLLING_TIMEOUT")
+        );
+        // The 60th poll times out, after 59 waits of the requested delay.
+        let budget = POLL_DELAY * (MAX_POLLS - 1);
+        assert!(
+            waited >= budget,
+            "poll budget spent after {waited:?}; the controller asked for {budget:?}"
+        );
+        // Setup passes before the wait add only a few short waits.
+        assert!(
+            waited <= budget + POLL_DELAY * 6,
+            "loop waited {waited:?}, far longer than the {budget:?} budget"
+        );
     }
 }
