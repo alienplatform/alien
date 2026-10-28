@@ -39,6 +39,7 @@ use base64::Engine as _;
 use clap::Parser;
 use oci_client::secrets::RegistryAuth;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::{io::AsyncBufReadExt as _, process::Command};
 use uuid::Uuid;
 
@@ -53,7 +54,6 @@ const BUNDLE_EXTENSION: &str = "bundle";
 const REPORT_EXTENSION: &str = "report";
 /// Installed bundles kept for rollback.
 const KEEP_INSTALLED: usize = 3;
-const ROLLOUT_TIMEOUT: Duration = Duration::from_secs(600);
 const SECRET_STATUS_TIMEOUT: Duration = Duration::from_secs(120);
 /// `alien-deploy` builds for the site, inside bundles and the folder.
 const TOOLS_DIR: &str = "tools";
@@ -498,6 +498,7 @@ pub async fn rollback_command(args: RollbackArgs) -> Result<()> {
         &trusted_key,
         &site.deployment_id,
         &site.name,
+        None,
     )
     .await?;
     let mut machine = load_machine(&site.deployment_id)?;
@@ -2676,20 +2677,33 @@ async fn install_pending(
             stored_pull_credentials(&settings, &manifest.stack_id, &namespace).await?;
     }
     let settings = &settings;
-    println!(
-        "Installing update {} ({} images → {})",
-        manifest.release_id,
-        manifest.images.len(),
-        settings.registry
-    );
-    let mapping = airgap::import_images(
-        &work.path().join(airgap::OCI_DIR),
-        &manifest.images,
-        &settings.registry,
-        &settings.registry_access(),
-    )
-    .await
-    .context(config_error("pushing images"))?;
+    let fingerprint = install_fingerprint(&manifest, settings, &namespace, &trusted_key, site)?;
+    let resume = installed_fingerprint(settings, &manifest.stack_id, &namespace)
+        .await?
+        .as_deref()
+        == Some(fingerprint.as_str());
+    if resume {
+        println!(
+            "Update {} is already installed; resuming rollout.",
+            manifest.release_id
+        );
+    } else {
+        println!(
+            "Installing update {} ({} images → {})",
+            manifest.release_id,
+            manifest.images.len(),
+            settings.registry
+        );
+        airgap::import_images(
+            &work.path().join(airgap::OCI_DIR),
+            &manifest.images,
+            &settings.registry,
+            &settings.registry_access(),
+        )
+        .await
+        .context(config_error("pushing images"))?;
+    }
+    let mapping = airgap::site_references(&manifest.images, &settings.registry);
     let mut target: serde_json::Value = serde_json::from_slice(
         &std::fs::read(work.path().join(airgap::TARGET_FILE))
             .into_alien_error()
@@ -2716,17 +2730,20 @@ async fn install_pending(
         ),
         None => None,
     };
-    helm_upgrade(
-        settings,
-        &record,
-        &work.path().join(&manifest.chart),
-        &namespace,
-        pull_secret.as_deref(),
-        &trusted_key,
-        &site.deployment_id,
-        &site.name,
-    )
-    .await?;
+    if !resume {
+        helm_upgrade(
+            settings,
+            &record,
+            &work.path().join(&manifest.chart),
+            &namespace,
+            pull_secret.as_deref(),
+            &trusted_key,
+            &site.deployment_id,
+            &site.name,
+            Some(&fingerprint),
+        )
+        .await?;
+    }
     let mut machine = load_machine(&site.deployment_id)?;
     machine.deletion_inventory = None;
     save_machine(&site.deployment_id, &machine)?;
@@ -2810,6 +2827,84 @@ async fn install_pending(
         manifest.release_id
     );
     Ok(())
+}
+
+/// Record the verified install inputs in Helm's revision description. A normal
+/// upgrade or rollback replaces the description, so it cannot reuse this receipt.
+fn install_fingerprint(
+    manifest: &BundleManifest,
+    settings: &SiteSide,
+    namespace: &str,
+    trusted_key: &str,
+    site: &SiteState,
+) -> Result<String> {
+    let mut values = Vec::new();
+    for path in &settings.values {
+        let bytes = std::fs::read(path)
+            .into_alien_error()
+            .context(config_error(format!(
+                "reading Helm values {}",
+                path.display()
+            )))?;
+        values.push(
+            serde_yaml::from_slice::<serde_json::Value>(&bytes)
+                .into_alien_error()
+                .context(config_error(format!(
+                    "parsing Helm values {}",
+                    path.display()
+                )))?,
+        );
+    }
+    let inputs = serde_json::json!({
+        "release": manifest.release_id,
+        "chart": manifest.files.get(&manifest.chart),
+        "target": manifest.files.get(airgap::TARGET_FILE),
+        "images": manifest.images,
+        "chartImages": manifest.chart_images,
+        "registry": settings.registry.trim_end_matches('/'),
+        "pullCredentials": settings.registry_credentials.is_some(),
+        "namespace": namespace,
+        "trustedKey": trusted_key,
+        "deploymentId": site.deployment_id,
+        "name": site.name,
+        "values": values,
+    });
+    Ok(format!(
+        "sync:{}",
+        hex::encode(Sha256::digest(inputs.to_string().as_bytes()))
+    ))
+}
+
+async fn installed_fingerprint(
+    settings: &SiteSide,
+    release: &str,
+    namespace: &str,
+) -> Result<Option<String>> {
+    let mut cmd = Command::new("helm");
+    cmd.args(["status", release, "-n", namespace, "-o", "json"]);
+    if let Some(context) = &settings.kube_context {
+        cmd.arg("--kube-context").arg(context);
+    }
+    let output = cmd
+        .output()
+        .await
+        .into_alien_error()
+        .context(config_error("reading the installed Helm revision"))?;
+    if !output.status.success() {
+        if String::from_utf8_lossy(&output.stderr).contains("release: not found") {
+            return Ok(None);
+        }
+        return Err(AlienError::new(config_error(format!(
+            "helm status failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))));
+    }
+    let status: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .into_alien_error()
+        .context(config_error("parsing the installed Helm revision"))?;
+    Ok((status["info"]["status"] == "deployed")
+        .then(|| status["info"]["description"].as_str().map(str::to_string))
+        .flatten())
 }
 
 /// How an update is installed at this site, from its verified manifest:
@@ -3107,16 +3202,63 @@ fn rollout_finished(
         .as_str()
         .is_some_and(|s| s.ends_with("failed"))
     {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!(
-                "The rollout of {release_id} failed: {}. Run sync again to retry the same bundle; `alien-deploy rollback` returns to the previous release.",
-                state["error"]["message"]
-                    .as_str()
-                    .unwrap_or("see the Operator's logs")
-            ),
+        return Err(AlienError::new(ErrorData::RolloutFailed {
+            release_id: release_id.to_string(),
+            message: rollout_progress(state),
         }));
     }
     Ok(false)
+}
+
+/// Summarize resource progress using the same messages the Operator reports.
+fn rollout_progress(state: &serde_json::Value) -> String {
+    let phase = state["status"].as_str().unwrap_or("waiting for status");
+    let mut details = Vec::new();
+    if let Some(message) = state["error"]["message"].as_str() {
+        details.push(message.to_string());
+    }
+    let mut completed = 0;
+    let mut total = 0;
+    if let Some(resources) = state["stackState"]["resources"].as_object() {
+        total = resources.len();
+        for (name, resource) in resources {
+            let status = resource["status"].as_str().unwrap_or("pending");
+            if matches!(status, "running" | "deleted" | "teardown-required") {
+                completed += 1;
+                continue;
+            }
+            let message = resource["error"]["message"]
+                .as_str()
+                .or_else(|| resource["progress"].as_str());
+            details.push(match message {
+                Some(message) => format!("{name}: {status} — {message}"),
+                None => format!("{name}: {status}"),
+            });
+        }
+    }
+    let mut summary = format!("{phase} ({completed}/{total} resources complete)");
+    for detail in details {
+        summary.push_str("\n  ");
+        summary.push_str(&detail);
+    }
+    summary
+}
+
+fn rollout_status_progress(
+    status: Option<&serde_json::Value>,
+    sequence: u64,
+    attempt: &str,
+    release_id: &str,
+    namespace: &str,
+) -> String {
+    if let Some(status) = status {
+        if status["sequence"].as_u64() == Some(sequence)
+            && (status.get("attempt").is_none() || status["attempt"].as_str() == Some(attempt))
+        {
+            return rollout_progress(&status["state"]);
+        }
+    }
+    format!("Operator has not picked up {release_id} yet; check kubectl get pods -n {namespace}")
 }
 
 async fn wait_for_rollout(
@@ -3130,27 +3272,55 @@ async fn wait_for_rollout(
     println!("Waiting for {release_id} to roll out");
     let started = std::time::Instant::now();
     let started_at = chrono::Utc::now();
+    let mut previous_progress = String::new();
+    let mut last_progress = started;
     loop {
-        if let Some((status, _)) = read_status(settings, stack_id, namespace).await? {
+        let status = read_status(settings, stack_id, namespace).await?;
+        let progress = rollout_status_progress(
+            status.as_ref().map(|(status, _)| status),
+            sequence,
+            attempt,
+            release_id,
+            namespace,
+        );
+        if progress != previous_progress || last_progress.elapsed() >= Duration::from_secs(30) {
+            println!("{progress} ({}s elapsed)", started.elapsed().as_secs());
+            previous_progress = progress;
+            last_progress = std::time::Instant::now();
+        }
+        if let Some((status, _)) = status {
             let secrets_checked_after =
                 (started.elapsed() < SECRET_STATUS_TIMEOUT).then_some(started_at);
-            if rollout_finished(
+            match rollout_finished(
                 &status,
                 release_id,
                 sequence,
                 secrets_checked_after,
                 Some(attempt),
-            )? {
-                return Ok(());
+            ) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(error) => {
+                    let config =
+                        alien_core::embedded_config::load_embedded_config::<DeployCliConfig>()
+                            .unwrap_or_else(|error| {
+                                tracing::warn!(%error, "Could not read branding for the retry hint");
+                                None
+                            });
+                    let invoked = std::env::args().next().unwrap_or_default();
+                    let command = config
+                        .as_ref()
+                        .and_then(|config| config.name.as_deref())
+                        .or_else(|| {
+                            Path::new(&invoked)
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                        })
+                        .unwrap_or("sync");
+                    eprintln!("Run `{command} sync` to retry; `{command} rollback` returns to the previous release.");
+                    return Err(error);
+                }
             }
-        }
-        if started.elapsed() > ROLLOUT_TIMEOUT {
-            return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: format!(
-                    "{release_id} hasn't finished rolling out after {} minutes. Check the pods in {namespace}; run sync again to report.",
-                    ROLLOUT_TIMEOUT.as_secs() / 60
-                ),
-            }));
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
@@ -3502,6 +3672,7 @@ async fn helm_upgrade(
     trusted_key: &str,
     deployment_id: &str,
     deployment_name: &str,
+    fingerprint: Option<&str>,
 ) -> Result<()> {
     // Match --reset-then-reuse-values: new chart defaults, saved user values,
     // then the files supplied for this installation.
@@ -3586,6 +3757,9 @@ async fn helm_upgrade(
             &format!("airgapped.bundleSigningKey={trusted_key}"),
         ])
         .args(["--wait", "--timeout", "300s"]);
+    if let Some(fingerprint) = fingerprint {
+        cmd.args(["--description", fingerprint]);
+    }
     for (key, image) in &record.chart_images {
         cmd.args([
             "--set-string",
@@ -3953,6 +4127,7 @@ mod tests {
             "fixture",
             "dep_fixture",
             "fixture",
+            None,
         )
         .await;
         let installed = release_values(&settings, "app", &namespace).await.unwrap();
@@ -3990,6 +4165,7 @@ mod tests {
             "fixture",
             "dep_fixture",
             "fixture",
+            None,
         )
         .await;
         let carried_values = release_values(&settings, "app", &namespace).await.unwrap();
@@ -4004,6 +4180,7 @@ mod tests {
             "fixture",
             "dep_fixture",
             "fixture",
+            None,
         )
         .await;
         let values = chart.path().join("site.yaml");
@@ -4018,6 +4195,7 @@ mod tests {
             "fixture",
             "dep_fixture",
             "fixture",
+            None,
         )
         .await;
         std::fs::write(&values, "postgres:\n  database:\n    enabled: true\nstackSettings:\n  externalBindings:\n    database:\n      type: postgres\n      service: external\n").unwrap();
@@ -4030,6 +4208,7 @@ mod tests {
             "fixture",
             "dep_fixture",
             "fixture",
+            None,
         )
         .await;
         let mut cleanup = kubectl(settings.kube_context.as_deref());
@@ -5395,6 +5574,66 @@ stringData:
         let mut delete = kubectl(settings.kube_context.as_deref());
         delete.args(["delete", "namespace", &namespace]);
         run(delete, "removing test namespace").await.unwrap();
+    }
+
+    #[test]
+    fn rollout_failure_names_resource_and_last_error() {
+        let status = serde_json::json!({"sequence": 7, "state": {
+            "status": "update-failed",
+            "stackState": {"resources": {
+                "database": {"status": "running"},
+                "api": {"status": "update-failed", "error": {
+                    "message": "Deployment has no ready replicas"
+                }}
+            }}
+        }});
+        let error = rollout_finished(&status, "release", 7, None, None).unwrap_err();
+        assert_eq!(error.code, "ROLLOUT_FAILED");
+        let message = error.to_string();
+        assert!(message.contains("api: update-failed"), "{message}");
+        assert!(
+            message.contains("Deployment has no ready replicas"),
+            "{message}"
+        );
+        assert!(message.contains("1/2 resources complete"), "{message}");
+    }
+
+    #[test]
+    fn rollout_progress_reports_missing_and_stale_operator_acknowledgements() {
+        let expected = "Operator has not picked up release yet; check kubectl get pods -n site";
+        for status in [
+            None,
+            Some(serde_json::json!({"sequence": 6, "attempt": "current"})),
+            Some(serde_json::json!({"sequence": 7, "attempt": "previous"})),
+        ] {
+            assert_eq!(
+                rollout_status_progress(status.as_ref(), 7, "current", "release", "site"),
+                expected,
+            );
+        }
+        for status in [
+            serde_json::json!({"sequence": 7, "attempt": "current", "state": {"status": "updating"}}),
+            serde_json::json!({"sequence": 7, "state": {"status": "updating"}}),
+        ] {
+            assert_eq!(
+                rollout_status_progress(Some(&status), 7, "current", "release", "site"),
+                "updating (0/0 resources complete)",
+            );
+        }
+    }
+
+    #[test]
+    fn rollout_progress_shows_active_resource_message() {
+        let state = serde_json::json!({"status": "updating", "stackState": {
+            "resources": {
+                "database": {"status": "running"},
+                "api": {"status": "updating", "progress": "Waiting for 2 replicas"}
+            }
+        }});
+        assert_eq!(
+            rollout_progress(&state),
+            "updating (1/2 resources complete)\n  api: updating — Waiting for 2 replicas"
+        );
     }
 
     #[test]
