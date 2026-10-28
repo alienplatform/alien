@@ -2657,6 +2657,11 @@ async fn install_pending(
         }
     }
     let installed = observation.and_then(|(status, _)| current_release(&status));
+    let repositories = super::sync_registry::repositories(&manifest.images, &settings.registry)?;
+    println!("Site image repositories:");
+    for repository in repositories.keys() {
+        println!("  {repository}");
+    }
 
     if args.dry_run {
         println!(
@@ -2706,6 +2711,7 @@ async fn install_pending(
             manifest.release_id
         );
     } else {
+        super::sync_registry::check(&repositories, &settings.registry_access()).await?;
         println!(
             "Installing update {} ({} images → {})",
             manifest.release_id,
@@ -3333,9 +3339,12 @@ async fn wait_for_rollout(
                             Path::new(&invoked)
                                 .file_name()
                                 .and_then(|name| name.to_str())
-                        })
-                        .unwrap_or("sync");
-                    eprintln!("Run `{command} sync` to retry; `{command} rollback` returns to the previous release.");
+                        });
+                    if let Some(command) = command {
+                        eprintln!("Run `{command} sync` to retry; `{command} rollback` returns to the previous release.");
+                    } else {
+                        eprintln!("Run the sync command to retry; the rollback command returns to the previous release.");
+                    }
                     return Err(error);
                 }
             }

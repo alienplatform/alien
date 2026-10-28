@@ -14,6 +14,19 @@ pub enum ErrorData {
         internal = "false"
     )]
     RolloutFailed { release_id: String, message: String },
+    /// Site image repositories cannot be used for this update.
+    #[error(
+        code = "REGISTRY_PREFLIGHT_FAILED",
+        message = "Registry preflight failed: {message}",
+        retryable = "inherit",
+        internal = "false"
+    )]
+    RegistryPreflightFailed {
+        message: String,
+        /// Per-repository failures, including their original error chains.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        failures: Vec<alien_error::AlienError>,
+    },
 
     #[error(
         code = "CONFIGURATION_ERROR",
