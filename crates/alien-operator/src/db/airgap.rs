@@ -1,9 +1,9 @@
 use alien_core::{DeploymentState, DeploymentStatus};
 use alien_error::{Context, IntoAlienError};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use turso::Connection;
 
-use super::OperatorDb;
+use super::{database_error, read_json, write_json, OperatorDb};
 use crate::error::{ErrorData, Result};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -12,45 +12,6 @@ pub(crate) struct AirgapReceipt {
     pub sequence: u64,
     pub target_hash: String,
     pub attempt: Option<String>,
-}
-
-fn database_error(message: &str) -> ErrorData {
-    ErrorData::DatabaseError {
-        message: message.into(),
-    }
-}
-
-async fn read_json<T: DeserializeOwned>(conn: &Connection, key: &str) -> Result<Option<T>> {
-    let mut rows = conn
-        .query("SELECT value FROM state WHERE key = ?", (key,))
-        .await
-        .into_alien_error()
-        .context(database_error("Reading air-gapped state"))?;
-    let Some(row) = rows
-        .next()
-        .await
-        .into_alien_error()
-        .context(database_error("Reading air-gapped state row"))?
-    else {
-        return Ok(None);
-    };
-    let value: String = row
-        .get(0)
-        .into_alien_error()
-        .context(database_error("Reading air-gapped state value"))?;
-    serde_json::from_str(&value)
-        .map(Some)
-        .into_alien_error()
-        .context(database_error("Decoding air-gapped state"))
-}
-
-async fn write_json<T: Serialize>(conn: &Connection, key: &str, value: &T) -> Result<()> {
-    let value = serde_json::to_string(value)
-        .into_alien_error()
-        .context(database_error("Encoding air-gapped state"))?;
-    conn.execute("INSERT INTO state (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", (key, value)).await
-        .into_alien_error().context(database_error("Saving air-gapped state"))?;
-    Ok(())
 }
 
 impl OperatorDb {

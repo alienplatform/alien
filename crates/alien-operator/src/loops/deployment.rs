@@ -12,7 +12,7 @@
 //! until the deployment is synced (Running, Failed, or Deleted).
 
 use crate::config::OperatorConfig;
-use crate::db::OperatorDb;
+use crate::db::{AutomaticRetry, OperatorDb};
 use crate::OperatorState;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
@@ -285,6 +285,33 @@ pub(crate) async fn run_deployment_continuously(
             return Ok((0, Duration::ZERO));
         }
     };
+    if !current.retry_requested
+        && matches!(
+            current.status,
+            DeploymentStatus::ProvisioningFailed | DeploymentStatus::UpdateFailed
+        )
+    {
+        match state
+            .db
+            .prepare_automatic_retry(&current, &base_config, chrono::Utc::now())
+            .await?
+        {
+            AutomaticRetry::Scheduled {
+                attempt,
+                delay_seconds,
+            } => {
+                info!(release_id = %target_release_id, attempt, delay_seconds,
+                    "Scheduled automatic retry of failed deployment");
+                return Ok((0, Duration::ZERO));
+            }
+            AutomaticRetry::Requested { attempt } => {
+                current.retry_requested = true;
+                info!(release_id = %target_release_id, attempt,
+                    "Resuming failed deployment from saved checkpoints");
+            }
+            AutomaticRetry::Idle => return Ok((0, Duration::ZERO)),
+        }
+    }
     let mut enriched_config = enrich_config(
         base_config,
         &state.config,
@@ -414,13 +441,15 @@ pub(crate) async fn run_deployment_continuously(
             }
         }
 
-        info!(
-            status = ?loop_result.final_status,
-            stop_reason = ?loop_result.stop_reason,
-            outcome = ?loop_result.outcome,
-            steps = steps_executed,
-            "Deployment reached terminal state"
-        );
+        if steps_executed > 0 {
+            info!(
+                status = ?loop_result.final_status,
+                stop_reason = ?loop_result.stop_reason,
+                outcome = ?loop_result.outcome,
+                steps = steps_executed,
+                "Deployment reached terminal state"
+            );
+        }
     }
 
     // Honor the step's delay for every wait, resource waits included. A
