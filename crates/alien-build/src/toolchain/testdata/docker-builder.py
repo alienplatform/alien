@@ -25,7 +25,7 @@ with state() as current:
     scenario = current["scenario"]
 
 if arguments == ["buildx", "inspect"]:
-    if scenario == "provider":
+    if scenario.startswith("provider"):
         print("Name: provider-owned\nDriver: docker-container")
     else:
         endpoint = "selected-context" if scenario == "context" else "default"
@@ -57,7 +57,8 @@ elif arguments[:3] == ["buildx", "inspect", "--bootstrap"] and len(arguments) ==
             sys.exit("cannot bootstrap an unknown builder")
         current["bootstraps"] += 1
         (root / "worker").touch()
-    print("Status: running")
+    version = "v0.12.5" if scenario == "provider-old" else "v0.13.0"
+    print(f"Nodes:\nName: node0\nStatus: running\nBuildKit version: {version}")
 elif arguments[:2] == ["buildx", "inspect"] and len(arguments) == 3:
     with state() as current:
         exists = arguments[2] in current["builders"]

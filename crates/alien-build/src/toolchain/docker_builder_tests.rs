@@ -17,7 +17,7 @@ impl DockerFixture {
         let executable = directory.path().join("docker");
         fs::write(&executable, include_str!("testdata/docker-builder.py")).unwrap();
         fs::set_permissions(executable, fs::Permissions::from_mode(0o755)).unwrap();
-        let builders = if scenario == "provider" {
+        let builders = if scenario.starts_with("provider") {
             vec!["provider-owned"]
         } else {
             vec![]
@@ -160,4 +160,18 @@ fn selected_provider_builder_is_not_replaced() {
             ["buildx", "inspect", "--bootstrap", "provider-owned"]
         ])
     );
+}
+
+#[test]
+fn old_provider_builder_is_rejected_without_replacing_it() {
+    let fixture = DockerFixture::new("provider-old");
+    let output = fixture.select().wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("BuildKit >= 0.13"), "{stderr}");
+    assert!(stderr.contains("v0.12.5"), "{stderr}");
+    let state = fixture.state();
+    assert_eq!(state["builders"], json!(["provider-owned"]));
+    assert!(state["creates"].as_array().unwrap().is_empty());
+    assert_eq!(state["bootstraps"], 1);
 }
