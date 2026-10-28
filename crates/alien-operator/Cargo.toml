@@ -35,6 +35,7 @@ reqwest = { workspace = true, default-features = false, features = ["json", "rus
 axum = { workspace = true, features = ["tokio", "http2"] }
 opentelemetry-proto = { version = "0.30", features = ["gen-tonic-messages", "logs"] }
 prost = { workspace = true }
+flate2 = { workspace = true }
 
 # Database
 turso = { workspace = true }
