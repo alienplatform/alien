@@ -1,3 +1,4 @@
+pub mod aws_boundary;
 pub mod aws_cloudformation;
 pub mod aws_runtime;
 pub mod azure_runtime;
@@ -5,6 +6,7 @@ pub mod azure_setup_owned;
 pub mod gcp_runtime;
 mod labels;
 
+pub use aws_boundary::aws_permissions_boundary;
 pub use aws_cloudformation::{
     AwsCloudFormationIamPolicy, AwsCloudFormationIamStatement,
     AwsCloudFormationPermissionsGenerator,
