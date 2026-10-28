@@ -13,6 +13,10 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use base64::Engine as _;
 use http::header;
+use opentelemetry_proto::tonic::{
+    collector::logs::v1::ExportLogsServiceRequest, logs::v1::ResourceLogs,
+};
+use prost::Message;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
@@ -55,16 +59,27 @@ impl TelemetryBackend for CapturedTelemetry {
         &self,
         signal: TelemetrySignal,
         caller: &TelemetryCaller,
-        _data: bytes::Bytes,
+        data: bytes::Bytes,
     ) -> Result<(), AlienError> {
         self.2.notify_one();
         tokio::time::sleep(self.1).await;
-        self.0
-            .lock()
+        let records = ExportLogsServiceRequest::decode(data)
             .unwrap()
-            .push((signal, caller.deployment_id.clone()));
+            .resource_logs;
+        self.0.lock().unwrap().extend(
+            records
+                .into_iter()
+                .map(|_| (signal, caller.deployment_id.clone())),
+        );
         Ok(())
     }
+}
+
+fn otlp_batch() -> Vec<u8> {
+    ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs::default()],
+    }
+    .encode_to_vec()
 }
 
 struct NoCredentials;
@@ -295,7 +310,7 @@ async fn report(
     } else {
         serde_json::json!([{
             "signal": "logs",
-            "data": base64::engine::general_purpose::STANDARD.encode(b"otlp"),
+            "data": base64::engine::general_purpose::STANDARD.encode(otlp_batch()),
         }])
     };
     let body = serde_json::json!({
@@ -391,7 +406,7 @@ fn batches_request(fixture: &Fixture, ids: &[i64]) -> Request<Body> {
         "telemetry": ids.iter().map(|id| serde_json::json!({
             "id": id,
             "signal": "logs",
-            "data": base64::engine::general_purpose::STANDARD.encode(b"otlp"),
+            "data": base64::engine::general_purpose::STANDARD.encode(otlp_batch()),
         })).collect::<Vec<_>>(),
     });
     Request::builder()
@@ -444,7 +459,7 @@ async fn a_report_sent_again_does_not_duplicate_telemetry() {
 #[tokio::test]
 async fn a_client_that_disconnects_mid_report_does_not_cause_duplicates() {
     let fixture = fixture_with_backend_delay(Duration::from_millis(300)).await;
-    let ids: Vec<i64> = (1..=20).collect();
+    let ids: Vec<i64> = (1..=2048).collect();
 
     // The client gives up once the first batches went through and more are
     // in flight at the backend.
@@ -473,7 +488,7 @@ async fn a_client_that_disconnects_mid_report_does_not_cause_duplicates() {
         loop {
             let (status, body) = report(&fixture, &fixture.site_token, true).await;
             assert_eq!(status, StatusCode::OK, "{body}");
-            if body["telemetryThrough"] == 20 {
+            if body["telemetryThrough"] == 2048 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -485,7 +500,7 @@ async fn a_client_that_disconnects_mid_report_does_not_cause_duplicates() {
     // The site sends the same report again.
     let again = report_batches(&fixture, &ids).await;
     assert_eq!(again["telemetryAccepted"], 0, "{again}");
-    assert_eq!(again["telemetryThrough"], 20, "{again}");
+    assert_eq!(again["telemetryThrough"], 2048, "{again}");
     assert_eq!(
         fixture.telemetry.0.lock().unwrap().len(),
         ids.len(),
@@ -527,7 +542,7 @@ async fn deletion_target_stays_scoped_and_final_report_drains_logs_first() {
     }
     let body = serde_json::json!({
         "state": {"status":"deleted", "platform":"kubernetes", "protocolVersion":CURRENT_DEPLOYMENT_PROTOCOL_VERSION},
-        "telemetry":[{"id":1,"signal":"logs","data":base64::engine::general_purpose::STANDARD.encode(b"final logs")}]
+        "telemetry":[{"id":1,"signal":"logs","data":base64::engine::general_purpose::STANDARD.encode(otlp_batch())}]
     });
     let router = alien_manager::routes::airgap::router().with_state(fixture.state.clone());
     let request = Request::builder()
