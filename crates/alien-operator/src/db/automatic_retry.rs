@@ -1,4 +1,4 @@
-use alien_core::{DeploymentConfig, DeploymentState, DeploymentStatus};
+use alien_core::{DeploymentConfig, DeploymentState, DeploymentStatus, ReleaseInfo};
 use alien_error::{Context, IntoAlienError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,45 @@ struct RetryBudget {
     retry_at: Option<DateTime<Utc>>,
 }
 
+pub(crate) fn approved_target_hash(
+    release: Option<&ReleaseInfo>,
+    config: &DeploymentConfig,
+) -> Result<String> {
+    // A new execution claim refreshes credentials and metadata. Only changes
+    // to the approved target grant another automatic retry budget.
+    let release_identity = match release.and_then(|release| release.release_id.as_ref()) {
+        Some(id) => serde_json::to_value(id),
+        None => serde_json::to_value(release),
+    }
+    .into_alien_error()
+    .context(database_error("Encoding automatic retry release"))?;
+    let mut environment: Vec<_> = config
+        .environment_variables
+        .variables
+        .iter()
+        .map(|variable| (&variable.name, &variable.value))
+        .collect();
+    environment.sort_unstable();
+    let mut target = serde_json::to_value((
+        release_identity,
+        &config.stack_settings,
+        &config.input_values,
+        environment,
+    ))
+    .into_alien_error()
+    .context(database_error("Encoding automatic retry target"))?;
+    target.sort_all_objects();
+    let target_hash = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&target)
+                .into_alien_error()
+                .context(database_error("Hashing automatic retry target"))?
+        )
+    );
+    Ok(target_hash)
+}
+
 impl OperatorDb {
     /// Schedule or request a bounded retry of the same approved target. The
     /// budget and retry flag commit together so restarts cannot reset the limit.
@@ -43,18 +82,7 @@ impl OperatorDb {
         {
             return Ok(AutomaticRetry::Idle);
         }
-        let mut target = serde_json::to_value((&expected.target_release, config))
-            .into_alien_error()
-            .context(database_error("Encoding automatic retry target"))?;
-        target.sort_all_objects();
-        let target_hash = format!(
-            "{:x}",
-            Sha256::digest(
-                serde_json::to_vec(&target)
-                    .into_alien_error()
-                    .context(database_error("Hashing automatic retry target"))?
-            )
-        );
+        let target_hash = approved_target_hash(expected.target_release.as_ref(), config)?;
         let conn = self.conn.lock().await;
         let Some(stored) = Self::get_deployment_state_locked(&conn).await? else {
             return Ok(AutomaticRetry::Idle);
@@ -297,6 +325,104 @@ mod tests {
                 delay_seconds: 30
             },
             "a corrected config on the same release is a new target"
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_values_and_anonymous_releases_reset_the_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), KEY)
+            .await
+            .unwrap();
+        let mut failed = failed_state();
+        failed.target_release.as_mut().unwrap().release_id = None;
+        let mut config = config();
+        let now = Utc::now();
+        db.set_deployment_state(&failed).await.unwrap();
+        db.prepare_automatic_retry(&failed, &config, now)
+            .await
+            .unwrap();
+        config
+            .environment_variables
+            .variables
+            .push(alien_core::EnvironmentVariable {
+                name: "MODE".into(),
+                value: "first".into(),
+                var_type: alien_core::EnvironmentVariableType::Plain,
+                target_resources: None,
+            });
+        for change in 0..4 {
+            match change {
+                0 => {}
+                1 => config.environment_variables.variables[0].value = "second".into(),
+                2 => config.stack_settings.airgapped = true,
+                _ => failed.target_release.as_mut().unwrap().version = Some("2".into()),
+            }
+            db.set_deployment_state(&failed).await.unwrap();
+            assert_eq!(
+                db.prepare_automatic_retry(&failed, &config, now + chrono::Duration::seconds(31))
+                    .await
+                    .unwrap(),
+                AutomaticRetry::Scheduled {
+                    attempt: 1,
+                    delay_seconds: 30
+                },
+                "approved target change {change} must get a fresh budget"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refreshed_claim_metadata_does_not_reset_the_retry_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), KEY)
+            .await
+            .unwrap();
+        let mut failed = failed_state();
+        let mut config = config();
+        let mut now = Utc::now();
+        db.set_deployment_state(&failed).await.unwrap();
+        for (index, delay) in RETRY_DELAYS_SECONDS.into_iter().enumerate() {
+            assert_eq!(
+                db.prepare_automatic_retry(&failed, &config, now)
+                    .await
+                    .unwrap(),
+                AutomaticRetry::Scheduled {
+                    attempt: index + 1,
+                    delay_seconds: delay
+                }
+            );
+            let mut refreshed = serde_json::to_value(&config).unwrap();
+            refreshed["deploymentToken"] = format!("refreshed-{index}").into();
+            refreshed["managementConfig"] = serde_json::json!({"platform": "kubernetes"});
+            refreshed["monitoring"] = serde_json::json!({
+                "logsEndpoint": "http://localhost/v1/logs",
+                "logsAuthHeader": format!("authorization=Bearer refreshed-{index}")
+            });
+            refreshed["domainMetadata"] = serde_json::json!({
+                "baseDomain": "example.test", "publicSubdomain": format!("renewed-{index}"),
+                "hostedZoneId": "local", "resources": {}
+            });
+            refreshed["environmentVariables"]["createdAt"] = now.to_rfc3339().into();
+            config = serde_json::from_value(refreshed).unwrap();
+            failed.target_release.as_mut().unwrap().description = Some(format!("metadata-{index}"));
+            db.set_deployment_state(&failed).await.unwrap();
+            now += chrono::Duration::seconds(delay);
+            assert_eq!(
+                db.prepare_automatic_retry(&failed, &config, now)
+                    .await
+                    .unwrap(),
+                AutomaticRetry::Requested { attempt: index + 1 },
+                "new claim metadata must consume the existing budget"
+            );
+            db.set_deployment_state(&failed).await.unwrap();
+        }
+        config.environment_variables.created_at = "another-claim".into();
+        assert_eq!(
+            db.prepare_automatic_retry(&failed, &config, now + chrono::Duration::days(1))
+                .await
+                .unwrap(),
+            AutomaticRetry::Idle
         );
     }
 

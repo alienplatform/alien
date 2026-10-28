@@ -538,7 +538,39 @@ async fn sync_with_manager(
                 }
                 None => false,
             };
-            accept_target(state, &target_deployment, maintenance).await?;
+            let repeated_failed_target = if sync_response.execution_claim == durable_execution.claim
+            {
+                match (
+                    state.db.get_deployment_state().await?,
+                    state.db.get_deployment_config().await?,
+                ) {
+                    (Some(current), Some(config))
+                        if matches!(
+                            current.status,
+                            DeploymentStatus::ProvisioningFailed | DeploymentStatus::UpdateFailed
+                        ) =>
+                    {
+                        crate::db::approved_target_hash(current.target_release.as_ref(), &config)?
+                            == crate::db::approved_target_hash(
+                                Some(&target_deployment.release_info),
+                                &target_deployment.config,
+                            )?
+                    }
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if repeated_failed_target {
+                // A heartbeat can refresh credentials without authorizing a new
+                // attempt. Keep the failed checkpoint and its bounded retry policy.
+                state
+                    .db
+                    .set_deployment_config(&target_deployment.config)
+                    .await?;
+            } else {
+                accept_target(state, &target_deployment, maintenance).await?;
+            }
         }
     }
 
@@ -1938,6 +1970,112 @@ mod tests {
         .await;
         assert_eq!(body["executionClaim"]["operationId"], "duop_receipt");
         assert_eq!(body["executionClaim"]["attemptId"], "duat_receipt");
+    }
+
+    #[tokio::test]
+    async fn repeated_failed_target_refreshes_credentials_without_restarting_execution() {
+        for claimed in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let db = OperatorDb::new(directory.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap();
+            db.set_deployment_id("dep_retry").await.unwrap();
+            let target: alien_core::sync::TargetDeployment = serde_json::from_value(json!({
+                "releaseInfo": {"releaseId": "rel_retry", "stack": {"id": "retry", "resources": {}}},
+                "config": {"environmentVariables": {"variables": [], "hash": "", "createdAt": "first"}}
+            })).unwrap();
+            let current: DeploymentState = serde_json::from_value(json!({
+                "platform": "aws", "status": "update-failed", "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                "targetRelease": target.release_info
+            })).unwrap();
+            db.set_deployment_state(&current).await.unwrap();
+            db.set_deployment_config(&target.config).await.unwrap();
+            let claim = claimed.then(|| alien_core::sync::SyncExecutionClaim {
+                operation_id: "operation_retry".into(),
+                attempt_id: "attempt_retry".into(),
+            });
+            db.set_sync_execution("session_retry", claim.as_ref(), Some(&target))
+                .await
+                .unwrap();
+            let mut refreshed = target.clone();
+            refreshed.config.deployment_token = Some("refreshed-token".into());
+            refreshed.config.environment_variables.created_at = "second".into();
+            let response = Arc::new(Mutex::new(
+                json!({"target": refreshed, "executionClaim": claim}),
+            ));
+            let served = response.clone();
+            let app = Router::new().route(
+                "/v1/sync",
+                post(move || {
+                    let response = served.lock().unwrap().clone();
+                    async move { Json(response) }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let state = OperatorState {
+                config: OperatorConfig::builder()
+                    .platform(Platform::Aws)
+                    .operator_permission("diagnostics")
+                    .data_dir(directory.path().to_str().unwrap())
+                    .encryption_key(TEST_ENCRYPTION_KEY)
+                    .build(),
+                db: Arc::new(db),
+                service_provider: None,
+                operations_sync_handler: None,
+                pod_log_collection: false,
+                cancel: CancellationToken::new(),
+            };
+            let client = create_authenticated_client("ax_dep_test").unwrap();
+            sync_with_manager(&state, &client, &url, false, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                state
+                    .db
+                    .get_deployment_state()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                DeploymentStatus::UpdateFailed
+            );
+            assert_eq!(
+                state
+                    .db
+                    .get_deployment_config()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .deployment_token
+                    .as_deref(),
+                Some("refreshed-token")
+            );
+            // An explicit new claim or a corrected input remains executable.
+            if claimed {
+                response.lock().unwrap()["executionClaim"]["attemptId"] = "attempt_explicit".into();
+            } else {
+                response.lock().unwrap()["target"]["config"]["inputValues"] =
+                    json!({"enabled": true});
+            }
+            sync_with_manager(&state, &client, &url, false, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                state
+                    .db
+                    .get_deployment_state()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                DeploymentStatus::UpdatePending
+            );
+            server.abort();
+        }
     }
 
     #[tokio::test]

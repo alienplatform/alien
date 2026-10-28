@@ -25,7 +25,7 @@ use crate::workload_observation::{is_settled, workload_identity};
 mod airgap;
 mod automatic_retry;
 pub(crate) use airgap::AirgapReceipt;
-pub(crate) use automatic_retry::AutomaticRetry;
+pub(crate) use automatic_retry::{approved_target_hash, AutomaticRetry};
 
 fn database_error(message: &str) -> ErrorData {
     ErrorData::DatabaseError {
