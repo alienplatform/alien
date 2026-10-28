@@ -21,7 +21,12 @@ pub enum ErrorData {
         retryable = "inherit",
         internal = "false"
     )]
-    RegistryPreflightFailed { message: String },
+    RegistryPreflightFailed {
+        message: String,
+        /// Per-repository failures, including their original error chains.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        failures: Vec<alien_error::AlienError>,
+    },
 
     #[error(
         code = "CONFIGURATION_ERROR",
