@@ -1,10 +1,14 @@
-name: Sandbox paired reproduction
+name: Sandbox runner setup verification
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   paired:
+    strategy:
+      fail-fast: false
+      matrix:
+        repetition: [1, 2, 3]
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 30
     env:
@@ -30,31 +34,19 @@ jobs:
             sysctl "$key" || true
           done
           docker info --format '{{json .KernelVersion}} {{json .OperatingSystem}} {{json .SecurityOptions}}'
-      - name: Compare base and rollout change on the same worker
+      - name: Verify runner setup and security suite
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin 892d1c0f8001a2b3d1f5a45dc31952076e4a1f83 aee922a22e5bb38c383ff9429858015ee3849869
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/agent-target"
-          for revision in base head; do
-            case "$revision" in
-              base) commit=892d1c0f8001a2b3d1f5a45dc31952076e4a1f83 ;;
-              head) commit=aee922a22e5bb38c383ff9429858015ee3849869 ;;
-            esac
-            checkout="$RUNNER_TEMP/agent-$revision"
-            git worktree add --detach "$checkout" "$commit"
-            (
-              cd "$checkout"
-              cargo test --locked -p alien-sandbox-agent --lib --no-run --message-format=json > "$RUNNER_TEMP/$revision-build.jsonl"
-            )
-            binary=$(python3 -c 'import json,sys; print(next(item["executable"] for line in open(sys.argv[1]) if line.startswith("{") and (item := json.loads(line)).get("executable") and item.get("target", {}).get("kind") == ["lib"]))' "$RUNNER_TEMP/$revision-build.jsonl")
-            if "$checkout/scripts/test-sandbox-agent-security.sh" "$binary" > "$RUNNER_TEMP/$revision-security.log" 2>&1; then
-              status=0
-            else
-              status=$?
-            fi
-            cat "$RUNNER_TEMP/$revision-security.log"
-            printf '%s\n' "$status" > "$RUNNER_TEMP/$revision-status"
-            printf '%s (%s): exit %s\n' "$revision" "$commit" "$status" >> "$GITHUB_STEP_SUMMARY"
-          done
-          test "$(cat "$RUNNER_TEMP/base-status")" = 0
-          test "$(cat "$RUNNER_TEMP/head-status")" = 0
+          git fetch --no-tags --depth=1 origin alon/alien-2058-enable-ci-user-namespaces
+          git checkout --detach FETCH_HEAD
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          text = Path('.github/workflows/ci-fast.yml').read_text()
+          step = text.split('      - name: Enable user namespaces for sandbox security tests\n', 1)[1].split('      - name:', 1)[0]
+          script = step.split('        run: |\n', 1)[1]
+          Path('/tmp/runner-setup.sh').write_text('\n'.join(line[10:] for line in script.splitlines()))
+          PYTHON
+          bash -e /tmp/runner-setup.sh
+          cargo test --locked -p alien-sandbox-agent --lib --no-run --message-format=json > "$RUNNER_TEMP/build.jsonl"
+          binary=$(python3 -c 'import json,sys; print(next(item["executable"] for line in open(sys.argv[1]) if line.startswith("{") and (item := json.loads(line)).get("executable") and item.get("target", {}).get("kind") == ["lib"]))' "$RUNNER_TEMP/build.jsonl")
+          sudo ./scripts/test-sandbox-agent-security.sh "$binary"
