@@ -106,10 +106,14 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*"]
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*"
+            ]
           },
           "resource": {
-            "resources": ["arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}"]
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}"
+            ]
           }
         }
       },
@@ -267,10 +271,7 @@
         "label": "attach-lambda-runtime-policies",
         "description": "Attach application-owned runtime policies to IAM roles used by Lambda functions.",
         "grant": {
-          "actions": [
-            "iam:PutRolePolicy",
-            "iam:PutRolePermissionsBoundary"
-          ]
+          "actions": ["iam:PutRolePolicy", "iam:PutRolePermissionsBoundary"]
         },
         "binding": {
           "stack": {
@@ -299,10 +300,7 @@
         "label": "read-lambda-runtime-policies",
         "description": "Attach application-owned runtime policies to IAM roles used by Lambda functions.",
         "grant": {
-          "actions": [
-            "iam:GetRolePolicy",
-            "iam:ListRolePolicies"
-          ]
+          "actions": ["iam:GetRolePolicy", "iam:ListRolePolicies"]
         },
         "binding": {
           "stack": {
@@ -726,7 +724,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
+            "resources": [
+              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -759,7 +759,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"],
+            "resources": [
+              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",

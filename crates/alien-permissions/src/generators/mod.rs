@@ -6,7 +6,7 @@ pub mod azure_setup_owned;
 pub mod gcp_runtime;
 mod labels;
 
-pub use aws_boundary::aws_permissions_boundary;
+pub use aws_boundary::{aws_permissions_boundary, aws_stack_permissions_boundary};
 pub use aws_cloudformation::{
     AwsCloudFormationIamPolicy, AwsCloudFormationIamStatement,
     AwsCloudFormationPermissionsGenerator,

@@ -5,11 +5,7 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "iam:CreateRole",
-            "iam:PutRolePolicy",
-            "iam:PutRolePermissionsBoundary"
-          ]
+          "actions": ["iam:CreateRole", "iam:PutRolePolicy", "iam:PutRolePermissionsBoundary"]
         },
         "binding": {
           "stack": {

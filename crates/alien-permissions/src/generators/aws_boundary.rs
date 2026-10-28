@@ -2,7 +2,7 @@
 
 use std::{borrow::Cow, collections::BTreeSet};
 
-use alien_core::AwsBindingSpec;
+use alien_core::{AwsBindingSpec, PermissionSetReference, Stack};
 
 use alien_error::AlienError;
 use serde_json::{json, Value};
@@ -15,6 +15,50 @@ use crate::{
 use super::{AwsIamStatement, AwsRuntimePermissionsGenerator};
 
 const MANAGED_POLICY_LIMIT: usize = 6_144;
+
+/// Render the boundary including inline grants from application permission profiles.
+///
+/// The resolver receives the profile name and scope (`"*"` or a resource id). It must
+/// return the same context used to compile that identity's grants, including actual
+/// resource names for resource scopes. It is called only for scopes with inline AWS
+/// permissions. Management permissions are deliberately not part of this ceiling.
+/// Named catalog grants are already included by [`aws_permissions_boundary`].
+pub fn aws_stack_permissions_boundary(
+    stack: &Stack,
+    context: &PermissionContext,
+    mut resolve_context: impl FnMut(&str, &str) -> Result<PermissionContext>,
+) -> Result<Value> {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let mut statements = Vec::new();
+    for (profile_name, profile) in stack.permission_profiles() {
+        for (scope, references) in &profile.0 {
+            let inline_sets: Vec<_> = references
+                .iter()
+                .filter_map(|reference| match reference {
+                    PermissionSetReference::Inline(set) if set.platforms.aws.is_some() => Some(set),
+                    _ => None,
+                })
+                .collect();
+            if inline_sets.is_empty() {
+                continue;
+            }
+            let grant_context = resolve_context(profile_name, scope)?;
+            let target = if scope == "*" {
+                BindingTarget::Stack
+            } else {
+                BindingTarget::Resource
+            };
+            for set in inline_sets {
+                statements.extend(
+                    generator
+                        .generate_policy(set, target, &grant_context)?
+                        .statement,
+                );
+            }
+        }
+    }
+    aws_permissions_boundary(context, &statements)
+}
 
 /// Render the stack permissions boundary from the runtime catalog and compiled inline grants.
 ///
@@ -358,6 +402,130 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
+    }
+
+    fn inline_profile(resource: &str) -> alien_core::PermissionProfile {
+        let set = serde_json::from_value(json!({
+            "id": "custom/read",
+            "description": "Read approved objects",
+            "platforms": {"aws": [{
+                "grant": {"actions": ["s3:GetObject"]},
+                "binding": {
+                    "stack": {"resources": [resource]},
+                    "resource": {
+                        "resources": ["arn:aws:s3:::${resourceName}/*"],
+                        "condition": {"StringEquals": {"s3:ExistingObjectTag/profile": "${resourceId}"}}
+                    }
+                }
+            }]}
+        })).unwrap();
+        alien_core::PermissionProfile(indexmap::indexmap! {
+            "*".to_string() => vec![PermissionSetReference::Inline(set)]
+        })
+    }
+
+    #[test]
+    fn stack_boundary_compiles_inline_grants_with_their_identity_and_resource_contexts() {
+        let mut scoped = inline_profile("unused");
+        let sets = scoped.0.shift_remove("*").unwrap();
+        scoped.0.insert("uploads".to_string(), sets);
+        let mut other_cloud = inline_profile("unused");
+        let PermissionSetReference::Inline(set) = &mut other_cloud.0["*"][0] else {
+            unreachable!()
+        };
+        set.platforms.aws = None;
+        let stack = Stack::new("test".to_string())
+            .permission("other-cloud", other_cloud)
+            .permission("reader", inline_profile("arn:aws:s3:::external-global/*"))
+            .permission("writer", scoped)
+            .permission(
+                "catalog",
+                alien_core::PermissionProfile::new().global(["storage/data-read"]),
+            )
+            .management(alien_core::ManagementPermissions::Extend(inline_profile(
+                "arn:aws:s3:::management-only/*",
+            )))
+            .build();
+        let mut resolved = Vec::new();
+        let boundary = aws_stack_permissions_boundary(&stack, &context(), |profile, scope| {
+            resolved.push((profile.to_string(), scope.to_string()));
+            Ok(context()
+                .with_resource_name("actual-existing-bucket")
+                .with_resource_id(scope))
+        })
+        .unwrap();
+        assert_eq!(
+            resolved,
+            [
+                ("reader".to_string(), "*".to_string()),
+                ("writer".to_string(), "uploads".to_string())
+            ]
+        );
+        let statements = boundary["Statement"].as_array().unwrap();
+        assert!(statements.iter().any(|s| s["Resource"]
+            == json!(["arn:aws:s3:::external-global/*"])
+            && s["Action"] == json!(["s3:GetObject"])));
+        assert!(statements.iter().any(|s| s["Resource"]
+            == json!(["arn:aws:s3:::actual-existing-bucket/*"])
+            && s["Action"] == json!(["s3:GetObject"])
+            && s["Condition"]
+                == json!({"StringEquals": {"s3:ExistingObjectTag/profile": "uploads"}})));
+        assert!(!boundary.to_string().contains("management-only"));
+    }
+
+    #[test]
+    fn stack_boundary_preserves_inline_overrides_and_deduplicates_shared_grants() {
+        let mut profile = inline_profile("arn:aws:s3:::custom-override/*");
+        let PermissionSetReference::Inline(set) = &mut profile.0["*"][0] else {
+            unreachable!()
+        };
+        // An inline definition remains custom even when its id matches a catalog set.
+        set.id = "storage/data-read".to_string();
+        let one = Stack::new("test".to_string())
+            .permission("one", profile.clone())
+            .build();
+        let two = Stack::new("test".to_string())
+            .permission("one", profile.clone())
+            .permission("two", profile)
+            .build();
+        let render = |stack: &Stack| {
+            aws_stack_permissions_boundary(stack, &context(), |_, _| Ok(context())).unwrap()
+        };
+        let boundary = render(&one);
+        assert_eq!(boundary, render(&two));
+        assert!(boundary["Statement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["Resource"] == json!(["arn:aws:s3:::custom-override/*"])));
+    }
+
+    #[test]
+    fn stack_boundary_propagates_resolution_compilation_and_size_failures() {
+        let stack = Stack::new("test".to_string())
+            .permission("one", inline_profile("${missingVariable}"))
+            .build();
+        let error = aws_stack_permissions_boundary(&stack, &context(), |_, _| {
+            Err(AlienError::new(ErrorData::VariableNotFound {
+                variable: "actualResourceName".to_string(),
+            }))
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "VARIABLE_NOT_FOUND");
+        assert!(error.to_string().contains("actualResourceName"));
+        let error =
+            aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context())).unwrap_err();
+        assert_eq!(error.code, "VARIABLE_NOT_FOUND");
+        assert!(error.to_string().contains("missingVariable"));
+        let stack = Stack::new("test".to_string())
+            .permission("one", inline_profile(&"x".repeat(MANAGED_POLICY_LIMIT)))
+            .build();
+        assert_eq!(
+            aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context()))
+                .unwrap_err()
+                .code,
+            "PERMISSIONS_BOUNDARY_TOO_LARGE"
+        );
     }
 
     #[test]

@@ -6,11 +6,7 @@
       {
         // Provisioning attaches the Bedrock invoke policy to the workload role.
         "grant": {
-          "actions": [
-            "iam:PutRolePolicy",
-            "iam:DeleteRolePolicy",
-            "iam:PutRolePermissionsBoundary"
-          ]
+          "actions": ["iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary"]
         },
         "binding": {
           "stack": {
@@ -33,10 +29,7 @@
       },
       {
         "grant": {
-          "actions": [
-            "iam:GetRolePolicy",
-            "iam:ListRolePolicies"
-          ]
+          "actions": ["iam:GetRolePolicy", "iam:ListRolePolicies"]
         },
         "binding": {
           "stack": {
