@@ -1959,6 +1959,7 @@ mod tests {
             management.status = ResourceStatus::Running;
             management.outputs = Some(alien_core::ResourceOutputs::new(
                 alien_core::RemoteStackManagementOutputs {
+                    aws_permissions_boundary_arn: None,
                     management_resource_id: "arn:aws:iam::123456789012:role/test-management"
                         .to_string(),
                     access_configuration: "arn:aws:iam::123456789012:role/test-management"
@@ -2035,6 +2036,7 @@ mod tests {
         if protocol_version < alien_core::GCP_FEDERATION_DEPLOYMENT_PROTOCOL_VERSION {
             stack_state.resources.get_mut("management").unwrap().outputs = Some(
                 alien_core::ResourceOutputs::new(alien_core::RemoteStackManagementOutputs {
+                    aws_permissions_boundary_arn: None,
                     management_resource_id: "manager@test-project.iam.gserviceaccount.com".into(),
                     access_configuration: "manager@test-project.iam.gserviceaccount.com".into(),
                     legacy_remote_bindings_access: None,

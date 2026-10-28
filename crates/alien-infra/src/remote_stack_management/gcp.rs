@@ -681,6 +681,7 @@ impl GcpRemoteStackManagementController {
         }
         let access = self.federation_access.as_ref()?;
         Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+            aws_permissions_boundary_arn: None,
             management_resource_id: access.service_account_email.clone(),
             access_configuration: serde_json::json!(access).to_string(),
             legacy_remote_bindings_access: None,

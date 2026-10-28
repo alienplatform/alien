@@ -1260,6 +1260,21 @@ fn deserialize_controller_by_tag(
 
 // Add the new helper method implementation
 impl ResourceControllerContext<'_> {
+    /// Boundary recorded by setup; missing on deployments using an older setup.
+    pub fn aws_permissions_boundary_arn(&self) -> Option<&str> {
+        self.state
+            .resources
+            .values()
+            .filter(|state| {
+                state.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
+            })
+            .filter_map(|state| state.outputs.as_ref())
+            .filter_map(|outputs| {
+                outputs.downcast_ref::<alien_core::RemoteStackManagementOutputs>()
+            })
+            .find_map(|outputs| outputs.aws_permissions_boundary_arn.as_deref())
+    }
+
     /// Human-facing deployment name for cloud console metadata.
     pub fn deployment_name_for_metadata(&self) -> Option<&str> {
         self.deployment_config

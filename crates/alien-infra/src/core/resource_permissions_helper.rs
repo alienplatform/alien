@@ -10,6 +10,7 @@ use crate::core::{
     ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
+use alien_aws_clients::iam::IamRoleWriter;
 use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
@@ -1453,6 +1454,27 @@ impl ResourcePermissionsHelper {
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
 
+        let preparation = IamRoleWriter::new(iam.as_ref(), ctx.aws_permissions_boundary_arn())
+            .prepare_existing(&role_name)
+            .await;
+        match preparation {
+            Ok(()) => {}
+            Err(error)
+                if definition.is_none()
+                    && matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+            {
+                return Ok(())
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to prepare Remote Bindings IAM role '{role_name}'"),
+                    resource_id: Some(resource_id.to_string()),
+                }))
+            }
+        }
         let Some(definition) = definition else {
             // Either name may carry the grant, depending on when the role was set up.
             for policy_name in [
@@ -1588,7 +1610,8 @@ impl ResourcePermissionsHelper {
                 .collect();
             roles.push((role_name, owned, desired));
         }
-        if let Some(role_name) = Self::existing_aws_management_role_name(ctx)? {
+        let management_role_name = Self::existing_aws_management_role_name(ctx)?;
+        if let Some(role_name) = management_role_name.clone() {
             // Provision sets are granted by RemoteStackManagement, never per resource.
             let owned = registered_sets
                 .iter()
@@ -1657,9 +1680,35 @@ impl ResourcePermissionsHelper {
                 .into_iter()
                 .map(|name| retained_policy_name(name, &listed))
                 .collect();
-            let stale = listed
+            let stale: Vec<_> = listed
                 .into_iter()
-                .filter(|name| owned.contains(name) && !desired.contains(name));
+                .filter(|name| owned.contains(name) && !desired.contains(name))
+                .collect();
+            // Setup owns the management identity itself; it must remain unbounded.
+            if !stale.is_empty() && management_role_name.as_deref() != Some(role_name.as_str()) {
+                match IamRoleWriter::new(iam.as_ref(), ctx.aws_permissions_boundary_arn())
+                    .prepare_existing(&role_name)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) =>
+                    {
+                        continue
+                    }
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to prepare IAM role '{role_name}' for stale grant cleanup"
+                            ),
+                            resource_id: Some(resource_id.to_string()),
+                        }))
+                    }
+                }
+            }
             for policy_name in stale {
                 match iam.delete_role_policy(&role_name, &policy_name).await {
                     Ok(()) => {}
@@ -1841,6 +1890,15 @@ impl ResourcePermissionsHelper {
             permission_context,
         )?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
+        if !policies.is_empty() {
+            IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
+                .prepare_existing(&service_account_role_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to prepare IAM role '{service_account_role_name}' for resource grants"),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+        }
         let existing =
             Self::aws_inline_policy_names(&iam_client, &service_account_role_name, resource_id)
                 .await?;

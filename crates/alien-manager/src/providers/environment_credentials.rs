@@ -154,6 +154,7 @@ pub(super) mod tests {
         .with_updates(|state| {
             state.status = ResourceStatus::Running;
             state.outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+                aws_permissions_boundary_arn: None,
                 management_resource_id: "target-uami-resource-id".to_string(),
                 access_configuration: serde_json::json!({
                     "uamiClientId": "target-uami-client",

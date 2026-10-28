@@ -713,6 +713,13 @@ expression: schemas
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "AWS RemoteStackManagement ImportData.",
     "properties": {
+      "awsPermissionsBoundaryArn": {
+        "description": "Setup-owned permissions boundary for roles written by management. Absent in older setups.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "managementPermissionsApplied": {
         "description": "Whether the management inline policy was attached by the generated stack.",
         "type": "boolean"

@@ -2312,6 +2312,7 @@ mod tests {
                 .status(ResourceStatus::Running)
                 .config(Resource::new(remote_management))
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    aws_permissions_boundary_arn: None,
                     management_resource_id: role_arn.to_string(),
                     access_configuration: role_arn.to_string(),
                     legacy_remote_bindings_access: None,
@@ -2670,6 +2671,7 @@ mod tests {
             (
                 "federated",
                 RemoteStackManagementOutputs {
+                    aws_permissions_boundary_arn: None,
                     management_resource_id: GCP_MANAGEMENT_EMAIL.to_string(),
                     access_configuration: descriptor.to_string(),
                     legacy_remote_bindings_access: None,
@@ -2678,6 +2680,7 @@ mod tests {
             (
                 "before federation",
                 RemoteStackManagementOutputs {
+                    aws_permissions_boundary_arn: None,
                     management_resource_id: GCP_MANAGEMENT_EMAIL.to_string(),
                     access_configuration: GCP_MANAGEMENT_EMAIL.to_string(),
                     legacy_remote_bindings_access: None,

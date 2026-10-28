@@ -21,6 +21,7 @@ use super::*;
 fn aws_remote_stack_management_import_preserves_setup_ownership() {
     let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
     let data = AwsRemoteStackManagementImportData {
+        aws_permissions_boundary_arn: None,
         role_arn: "arn:aws:iam::123456789012:role/alien-stack-mgmt".to_string(),
         role_name: "alien-stack-mgmt".to_string(),
         remote_bindings_role_arn: Some(
@@ -57,6 +58,54 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
         serde_json::Value::Null,
         "import must not claim setup-created grants are runtime-owned"
     );
+}
+
+#[test]
+fn aws_boundary_survives_import_and_controller_restore() {
+    let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
+    for boundary in [
+        None,
+        Some("arn:aws:iam::123456789012:policy/test-permissions-boundary"),
+    ] {
+        let mut data = json!({
+            "roleName": "test-management",
+            "roleArn": "arn:aws:iam::123456789012:role/test-management",
+            "managementPermissionsApplied": true,
+            "futureSetupField": "ignored"
+        });
+        if let Some(arn) = boundary {
+            data["awsPermissionsBoundaryArn"] = json!(arn);
+        }
+        let state = run_through_registry(
+            &RemoteStackManagement::RESOURCE_TYPE,
+            Platform::Aws,
+            data,
+            &entry,
+            "us-east-1",
+            &aws_management_config(),
+        );
+        assert_eq!(state.status, ResourceStatus::Running);
+        let outputs = state
+            .outputs
+            .as_ref()
+            .unwrap()
+            .downcast_ref::<RemoteStackManagementOutputs>()
+            .unwrap();
+        assert_eq!(outputs.aws_permissions_boundary_arn.as_deref(), boundary);
+        let controller =
+            alien_infra::deserialize_controller(internal_state(&state).clone()).unwrap();
+        let restored = controller.get_outputs().unwrap();
+        assert_eq!(
+            restored
+                .downcast_ref::<RemoteStackManagementOutputs>()
+                .unwrap(),
+            outputs
+        );
+        assert_eq!(
+            internal_state(&state)["awsPermissionsBoundaryArn"],
+            json!(boundary)
+        );
+    }
 }
 
 #[test]

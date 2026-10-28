@@ -57,6 +57,10 @@ pub struct RemoteStackManagementOutputs {
     /// For Azure: JSON containing the target managed identity client ID and tenant ID
     pub access_configuration: String,
 
+    /// Setup-owned AWS permissions boundary. Absent for older setups and other providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_permissions_boundary_arn: Option<String>,
+
     /// Read-only compatibility for deployments imported before Remote Bindings became a
     /// first-class resource. New controllers never serialize this field.
     #[serde(default, rename = "remoteBindingsAccess", skip_serializing)]

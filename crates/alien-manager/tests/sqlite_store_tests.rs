@@ -3684,6 +3684,7 @@ async fn deleting_a_protocol_one_gcp_installation_keeps_setup_teardown_routing()
     management.lifecycle = Some(ResourceLifecycle::Frozen);
     management.outputs = Some(alien_core::ResourceOutputs::new(
         alien_core::RemoteStackManagementOutputs {
+            aws_permissions_boundary_arn: None,
             management_resource_id: "manager@test-project.iam.gserviceaccount.com".into(),
             access_configuration: "manager@test-project.iam.gserviceaccount.com".into(),
             legacy_remote_bindings_access: None,

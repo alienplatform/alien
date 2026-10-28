@@ -2523,6 +2523,7 @@ mod tests {
         let resource_state = if has_outputs {
             builder
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    aws_permissions_boundary_arn: None,
                     management_resource_id: "arn:aws:iam::123456789012:role/test-management"
                         .to_string(),
                     access_configuration: "arn:aws:iam::123456789012:role/test-management"
@@ -4028,6 +4029,7 @@ mod tests {
             .get_mut("remote-stack-management")
             .unwrap()
             .outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+                aws_permissions_boundary_arn: None,
             management_resource_id: "target@example.invalid".to_string(),
             access_configuration: "target@example.invalid".to_string(),
             legacy_remote_bindings_access: None,
@@ -4111,6 +4113,7 @@ mod tests {
             .get_mut("remote-stack-management")
             .unwrap()
             .outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+                aws_permissions_boundary_arn: None,
             management_resource_id: "other@example.invalid".to_string(),
             access_configuration: "other@example.invalid".to_string(),
             legacy_remote_bindings_access: None,
@@ -4132,6 +4135,7 @@ mod tests {
             .get_mut("remote-stack-management")
             .unwrap()
             .outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+                aws_permissions_boundary_arn: None,
             management_resource_id: "target@example.invalid".to_string(),
             access_configuration: serde_json::json!({
                 "assertionAudience": "urn:deployment-access:v1:0123456789abcdef",

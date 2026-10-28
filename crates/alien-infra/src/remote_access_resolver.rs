@@ -112,6 +112,7 @@ impl RemoteAccessResolver {
         external_id: Option<&ManagementExternalId>,
     ) -> Result<ClientConfig> {
         let access = RemoteStackManagementOutputs {
+            aws_permissions_boundary_arn: None,
             management_resource_id: outputs.resource_id.clone(),
             access_configuration: outputs.access_configuration.clone(),
             legacy_remote_bindings_access: None,
@@ -239,6 +240,7 @@ impl RemoteAccessResolver {
         target_environment: Option<&EnvironmentInfo>,
     ) -> Result<ClientConfig> {
         let access = RemoteStackManagementOutputs {
+            aws_permissions_boundary_arn: None,
             management_resource_id: outputs.resource_id.clone(),
             access_configuration: outputs.access_configuration.clone(),
             legacy_remote_bindings_access: None,
@@ -450,6 +452,7 @@ mod tests {
                 .status(ResourceStatus::Running)
                 .config(Resource::new(config))
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    aws_permissions_boundary_arn: None,
                     management_resource_id: service_account_email.to_string(),
                     access_configuration: access_configuration.to_string(),
                     legacy_remote_bindings_access: None,
@@ -668,6 +671,7 @@ mod tests {
                     .status(ResourceStatus::Running)
                     .config(Resource::new(config))
                     .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                        aws_permissions_boundary_arn: None,
                         management_resource_id: TARGET_ROLE.to_string(),
                         access_configuration: TARGET_ROLE.to_string(),
                         legacy_remote_bindings_access: None,

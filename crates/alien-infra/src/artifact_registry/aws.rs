@@ -7,7 +7,7 @@ use tracing::{debug, info, warn};
 
 use crate::core::{aws_ownership::is_tagged_as_ours, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
+use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi, IamRoleWriter};
 use alien_core::{
     standard_resource_tags, ArtifactRegistry, ArtifactRegistryHeartbeatData,
     ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, AwsEcrArtifactRegistryHeartbeatData,
@@ -217,6 +217,13 @@ impl AwsArtifactRegistryController {
         // Create policy document for ECR pull permissions
         let policy_document = self.generate_ecr_pull_policy(ctx, &config.id)?;
 
+        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .prepare_existing(&pull_role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
+                resource_id: Some(config.id.clone()),
+            })?;
         iam_client
             .put_role_policy(&pull_role_name, policy_name, &policy_document)
             .await
@@ -295,6 +302,13 @@ impl AwsArtifactRegistryController {
         // Create policy document for ECR push+pull permissions
         let policy_document = self.generate_ecr_push_policy(ctx, &config.id)?;
 
+        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .prepare_existing(&push_role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
+                resource_id: Some(config.id.clone()),
+            })?;
         iam_client
             .put_role_policy(&push_role_name, policy_name, &policy_document)
             .await
@@ -409,6 +423,13 @@ impl AwsArtifactRegistryController {
         // Generate updated trust policy (allow service account roles)
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
+        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .prepare_existing(&pull_role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
+                resource_id: Some(config.id.clone()),
+            })?;
         iam_client
             .update_assume_role_policy(&pull_role_name, &assume_role_policy)
             .await
@@ -451,6 +472,13 @@ impl AwsArtifactRegistryController {
         // Always update the policy to ensure it's correct
         let policy_document = self.generate_ecr_pull_policy(ctx, &config.id)?;
 
+        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .prepare_existing(&pull_role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare IAM role '{pull_role_name}' for writing"),
+                resource_id: Some(config.id.clone()),
+            })?;
         iam_client
             .put_role_policy(&pull_role_name, policy_name, &policy_document)
             .await
@@ -489,6 +517,13 @@ impl AwsArtifactRegistryController {
         // Generate updated trust policy (allow service account roles)
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
 
+        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .prepare_existing(&push_role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
+                resource_id: Some(config.id.clone()),
+            })?;
         iam_client
             .update_assume_role_policy(&push_role_name, &assume_role_policy)
             .await
@@ -531,6 +566,13 @@ impl AwsArtifactRegistryController {
         // Always update the policy to ensure it's correct
         let policy_document = self.generate_ecr_push_policy(ctx, &config.id)?;
 
+        IamRoleWriter::new(iam_client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .prepare_existing(&push_role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare IAM role '{push_role_name}' for writing"),
+                resource_id: Some(config.id.clone()),
+            })?;
         iam_client
             .put_role_policy(&push_role_name, policy_name, &policy_document)
             .await
@@ -617,7 +659,7 @@ impl AwsArtifactRegistryController {
         };
         let pull_role_name = recorded_role_name(pull_role_arn, &config.id)?;
 
-        self.cleanup_role_policies(&*iam_client, &pull_role_name, "pull", &config.id)
+        self.cleanup_role_policies(ctx, &*iam_client, &pull_role_name, "pull", &config.id)
             .await?;
 
         Ok(HandlerAction::Continue {
@@ -731,7 +773,7 @@ impl AwsArtifactRegistryController {
         };
         let push_role_name = recorded_role_name(push_role_arn, &config.id)?;
 
-        self.cleanup_role_policies(&*iam_client, &push_role_name, "push", &config.id)
+        self.cleanup_role_policies(ctx, &*iam_client, &push_role_name, "push", &config.id)
             .await?;
 
         Ok(HandlerAction::Continue {
@@ -1016,7 +1058,10 @@ impl AwsArtifactRegistryController {
             )
             .build();
 
-        let error = match iam_client.create_role(request).await {
+        let error = match IamRoleWriter::new(iam_client, ctx.aws_permissions_boundary_arn())
+            .create(request)
+            .await
+        {
             Ok(response) => return Ok(response.create_role_result.role.arn),
             Err(error) => error,
         };
@@ -1047,11 +1092,25 @@ impl AwsArtifactRegistryController {
 
     async fn cleanup_role_policies(
         &self,
+        ctx: &ResourceControllerContext<'_>,
         iam_client: &dyn IamApi,
         role_name: &str,
         role_label: &str,
         resource_id: &str,
     ) -> Result<()> {
+        match IamRoleWriter::new(iam_client, ctx.aws_permissions_boundary_arn())
+            .prepare_existing(role_name)
+            .await
+        {
+            Ok(()) => {}
+            Err(error) if is_not_found(&error) => return Ok(()),
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to prepare IAM role '{role_name}' for policy cleanup"),
+                    resource_id: Some(resource_id.to_string()),
+                }))
+            }
+        }
         match iam_client.list_attached_role_policies(role_name).await {
             Ok(response) => {
                 if let Some(attached_policies) = response
@@ -1544,6 +1603,264 @@ mod tests {
                 marker: None,
             },
         }
+    }
+
+    const TEST_BOUNDARY: &str = "arn:aws:iam::123456789012:policy/test-permissions-boundary";
+
+    fn bounded_management() -> crate::remote_stack_management::AwsRemoteStackManagementController {
+        let mut controller =
+            crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(
+                "test-management",
+            );
+        controller.aws_permissions_boundary_arn = Some(TEST_BOUNDARY.to_string());
+        controller
+    }
+
+    #[tokio::test]
+    async fn bounded_registry_creation_passes_boundary_to_both_roles() {
+        for state in [
+            AwsArtifactRegistryState::CreatingPullRole,
+            AwsArtifactRegistryState::CreatingPushRole,
+        ] {
+            let mut iam = MockIamApi::new();
+            iam.expect_create_role().times(1).returning(|request| {
+                assert_eq!(request.permissions_boundary.as_deref(), Some(TEST_BOUNDARY));
+                Ok(create_successful_role_response(&request.role_name))
+            });
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(basic_artifact_registry())
+                .controller(AwsArtifactRegistryController {
+                    state,
+                    ..Default::default()
+                })
+                .platform(Platform::Aws)
+                .with_dependency(
+                    alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                    bounded_management(),
+                )
+                .service_provider(setup_mock_service_provider(Arc::new(iam)))
+                .build()
+                .await
+                .unwrap();
+            executor.step().await.unwrap();
+            let controller = executor
+                .internal_state::<AwsArtifactRegistryController>()
+                .unwrap();
+            assert!(controller.pull_role_arn.is_some() || controller.push_role_arn.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_registry_adopts_before_each_policy_or_trust_write() {
+        for (state, trust) in [
+            (AwsArtifactRegistryState::CreatingPullRolePolicy, false),
+            (AwsArtifactRegistryState::CreatingPushRolePolicy, false),
+            (AwsArtifactRegistryState::UpdatingPullRolePolicy, false),
+            (AwsArtifactRegistryState::UpdatingPushRolePolicy, false),
+            (AwsArtifactRegistryState::UpdatingPullRoleTrustPolicy, true),
+            (AwsArtifactRegistryState::UpdatingPushRoleTrustPolicy, true),
+        ] {
+            let mut iam = MockIamApi::new();
+            let mut sequence = mockall::Sequence::new();
+            iam.expect_get_role()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|name| {
+                    Ok(GetRoleResponse {
+                        get_role_result: GetRoleResult {
+                            role: create_successful_role_response(name)
+                                .create_role_result
+                                .role,
+                        },
+                    })
+                });
+            iam.expect_list_attached_role_policies()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Ok(empty_attached_role_policies_response()));
+            iam.expect_put_role_permissions_boundary()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, arn| {
+                    assert_eq!(arn, TEST_BOUNDARY);
+                    Ok(())
+                });
+            if trust {
+                iam.expect_update_assume_role_policy()
+                    .times(1)
+                    .in_sequence(&mut sequence)
+                    .returning(|_, _| Ok(()));
+            } else {
+                iam.expect_put_role_policy()
+                    .times(1)
+                    .in_sequence(&mut sequence)
+                    .returning(|_, _, _| Ok(()));
+            }
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(basic_artifact_registry())
+                .controller(AwsArtifactRegistryController {
+                    state,
+                    ..Default::default()
+                })
+                .platform(Platform::Aws)
+                .with_dependency(
+                    alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                    bounded_management(),
+                )
+                .service_provider(setup_mock_service_provider(Arc::new(iam)))
+                .build()
+                .await
+                .unwrap();
+            executor.step().await.expect("adoption precedes the write");
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_registry_cleanup_adopts_before_removing_policies_and_tolerates_missing_roles()
+    {
+        for missing in [false, true] {
+            for pull in [false, true] {
+                let mut iam = MockIamApi::new();
+                let mut sequence = mockall::Sequence::new();
+                iam.expect_get_role()
+                    .times(1)
+                    .in_sequence(&mut sequence)
+                    .returning(move |name| {
+                        if missing {
+                            Err(AlienError::new(
+                                alien_client_core::ErrorData::RemoteResourceNotFound {
+                                    resource_type: "IAM role".to_string(),
+                                    resource_name: name.to_string(),
+                                },
+                            ))
+                        } else {
+                            Ok(GetRoleResponse {
+                                get_role_result: GetRoleResult {
+                                    role: create_successful_role_response(name)
+                                        .create_role_result
+                                        .role,
+                                },
+                            })
+                        }
+                    });
+                if !missing {
+                    iam.expect_list_attached_role_policies()
+                        .times(1)
+                        .in_sequence(&mut sequence)
+                        .returning(|_| Ok(empty_attached_role_policies_response()));
+                    iam.expect_put_role_permissions_boundary()
+                        .times(1)
+                        .in_sequence(&mut sequence)
+                        .returning(|_, arn| {
+                            assert_eq!(arn, TEST_BOUNDARY);
+                            Ok(())
+                        });
+                    iam.expect_list_attached_role_policies()
+                        .times(1)
+                        .in_sequence(&mut sequence)
+                        .returning(|_| Ok(empty_attached_role_policies_response()));
+                    iam.expect_list_role_policies()
+                        .times(1)
+                        .in_sequence(&mut sequence)
+                        .returning(|_| {
+                            Ok(ListRolePoliciesResponse {
+                                list_role_policies_result: ListRolePoliciesResult {
+                                    policy_names: Some(PolicyNames {
+                                        member: vec!["old-policy".into()],
+                                    }),
+                                    is_truncated: Some(false),
+                                    marker: None,
+                                },
+                            })
+                        });
+                    iam.expect_delete_role_policy()
+                        .times(1)
+                        .in_sequence(&mut sequence)
+                        .returning(|_, name| {
+                            assert_eq!(name, "old-policy");
+                            Ok(())
+                        });
+                }
+                let mut executor = SingleControllerExecutor::builder()
+                    .resource(basic_artifact_registry())
+                    .controller(AwsArtifactRegistryController {
+                        state: if pull {
+                            AwsArtifactRegistryState::DeletingPullRolePolicy
+                        } else {
+                            AwsArtifactRegistryState::DeletingPushRolePolicy
+                        },
+                        pull_role_arn: Some("arn:aws:iam::123456789012:role/recorded-pull".into()),
+                        push_role_arn: Some("arn:aws:iam::123456789012:role/recorded-push".into()),
+                        ..Default::default()
+                    })
+                    .platform(Platform::Aws)
+                    .with_dependency(
+                        alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                        bounded_management(),
+                    )
+                    .service_provider(setup_mock_service_provider(Arc::new(iam)))
+                    .build()
+                    .await
+                    .unwrap();
+                executor.step().await.expect("cleanup can advance");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_registry_refuses_unsupported_adoption_before_writing() {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().times(1).returning(|name| {
+            Ok(GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: create_successful_role_response(name)
+                        .create_role_result
+                        .role,
+                },
+            })
+        });
+        iam.expect_list_attached_role_policies()
+            .times(1)
+            .returning(|_| {
+                Ok(ListAttachedRolePoliciesResponse {
+                    list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                        attached_policies: Some(AttachedPolicies {
+                            member: vec![AttachedPolicy {
+                                policy_name: "AmazonEC2ReadOnlyAccess".into(),
+                                policy_arn: "arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess"
+                                    .into(),
+                            }],
+                        }),
+                        is_truncated: Some(false),
+                        marker: None,
+                    },
+                })
+            });
+        // Neither adoption nor the trust write is allowed after an unsupported-policy audit.
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_artifact_registry())
+            .controller(AwsArtifactRegistryController {
+                state: AwsArtifactRegistryState::UpdatingPullRoleTrustPolicy,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                bounded_management(),
+            )
+            .service_provider(setup_mock_service_provider(Arc::new(iam)))
+            .build()
+            .await
+            .unwrap();
+        let error = executor.step().await.expect_err("unsafe adoption fails");
+        assert!(format!("{error:?}").contains("AmazonEC2ReadOnlyAccess"));
+        assert!(matches!(
+            executor
+                .internal_state::<AwsArtifactRegistryController>()
+                .unwrap()
+                .state,
+            AwsArtifactRegistryState::UpdatingPullRoleTrustPolicy
+        ));
     }
 
     #[tokio::test]

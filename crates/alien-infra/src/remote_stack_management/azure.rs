@@ -1281,6 +1281,7 @@ impl AzureRemoteStackManagementController {
             });
 
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+                aws_permissions_boundary_arn: None,
                 management_resource_id: uami_resource_id.clone(),
                 access_configuration: access_config.to_string(),
                 legacy_remote_bindings_access: None,
