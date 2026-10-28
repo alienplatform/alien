@@ -176,6 +176,11 @@ fn default_availability_zones() -> u8 {
     2
 }
 
+/// Most availability zones a created network can span. The AWS network gives each zone a
+/// /20 public subnet from x.x.0.0 and a /20 private subnet from x.x.128.0 of the /16, so a
+/// ninth zone would overlap the private range.
+pub const MAX_CREATED_NETWORK_AVAILABILITY_ZONES: u8 = 8;
+
 /// Deployment-time compute choices for Alien-managed compute pools.
 ///
 /// Application source declares portable pool requirements. This settings

@@ -3267,9 +3267,14 @@ impl AwsNetworkController {
 
             let zones = select_network_availability_zones(az_response, availability_zones);
 
-            if zones.is_empty() {
-                return Err(AlienError::new(ErrorData::CloudPlatformError {
-                    message: "No availability zones found in region".to_string(),
+            // Creating fewer zones than requested would leave the network short with no error.
+            if zones.len() < usize::from(availability_zones) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "The network requests {availability_zones} availability zones, but the region offers {}: {}",
+                        zones.len(),
+                        zones.join(", ")
+                    ),
                     resource_id: Some(config.id.clone()),
                 }));
             }
@@ -6174,6 +6179,41 @@ mod controller_state_tests {
         assert_eq!(state.vpc_id.as_deref(), Some("vpc-a"));
         assert_eq!(state.extra_vpc_ids, ["vpc-b"]);
         assert_eq!(state.state, AwsNetworkState::ConfiguringVpcDns);
+    }
+
+    #[tokio::test]
+    async fn region_with_fewer_zones_than_requested_fails_before_creating_a_vpc() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_availability_zones().returning(|_| {
+            Ok(parse(json!({
+                "availabilityZoneInfo": { "item": [{ "zoneName": "us-east-1a" }] }
+            })))
+        });
+        ec2.expect_describe_vpcs().times(0);
+        ec2.expect_create_vpc().times(0);
+
+        let mut executor = executor(
+            ec2,
+            AwsNetworkController {
+                state: AwsNetworkState::CreatingVpc,
+                ..Default::default()
+            },
+            None,
+        )
+        .await;
+
+        let error = executor
+            .step()
+            .await
+            .expect_err("two zones can't be created in a one-zone region");
+        assert!(
+            error
+                .to_string()
+                .contains("requests 2 availability zones, but the region offers 1: us-east-1a"),
+            "{error}"
+        );
+        assert!(controller(&executor).availability_zones.is_empty());
+        assert!(controller(&executor).vpc_id.is_none());
     }
 
     #[tokio::test]

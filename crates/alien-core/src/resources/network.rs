@@ -143,7 +143,27 @@ impl ResourceDefinition for Network {
         // This would require recreating all networking infrastructure
         match (&self.settings, &new_network.settings) {
             (NetworkSettings::UseDefault, NetworkSettings::UseDefault) => Ok(()),
-            (NetworkSettings::Create { .. }, NetworkSettings::Create { .. }) => Ok(()),
+            (
+                NetworkSettings::Create {
+                    availability_zones: old_zones,
+                    ..
+                },
+                NetworkSettings::Create {
+                    availability_zones: new_zones,
+                    ..
+                },
+            ) => {
+                // The network controller creates subnets once and never adds or removes zones.
+                if old_zones != new_zones {
+                    return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                        resource_id: self.id.clone(),
+                        reason: format!(
+                            "the network's availability zone count can't change after it is created ({old_zones} to {new_zones}); create a new deployment to use a different count"
+                        ),
+                    }));
+                }
+                Ok(())
+            }
             (NetworkSettings::ByoVpcAws { .. }, NetworkSettings::ByoVpcAws { .. }) => Ok(()),
             (NetworkSettings::ByoVpcGcp { .. }, NetworkSettings::ByoVpcGcp { .. }) => Ok(()),
             (NetworkSettings::ByoVnetAzure { .. }, NetworkSettings::ByoVnetAzure { .. }) => Ok(()),
@@ -231,6 +251,18 @@ mod tests {
 
     #[test]
     fn test_network_validate_update_same_type() {
+        let network = Network::new("default-network".to_string())
+            .settings(NetworkSettings::Create {
+                cidr: Some("10.0.0.0/16".to_string()),
+                availability_zones: 2,
+            })
+            .build();
+
+        assert!(network.validate_update(&network.clone()).is_ok());
+    }
+
+    #[test]
+    fn test_network_validate_update_availability_zone_change_fails() {
         let network1 = Network::new("default-network".to_string())
             .settings(NetworkSettings::Create {
                 cidr: Some("10.0.0.0/16".to_string()),
@@ -241,12 +273,15 @@ mod tests {
         let network2 = Network::new("default-network".to_string())
             .settings(NetworkSettings::Create {
                 cidr: Some("10.0.0.0/16".to_string()),
-                availability_zones: 3, // Changed
+                availability_zones: 3,
             })
             .build();
 
-        // Same network type (Create) should be allowed
-        assert!(network1.validate_update(&network2).is_ok());
+        let error = network1
+            .validate_update(&network2)
+            .expect_err("changing the zone count should be rejected");
+        assert_eq!(error.code, "INVALID_RESOURCE_UPDATE");
+        assert!(error.message.contains("(2 to 3)"), "{}", error.message);
     }
 
     #[test]
