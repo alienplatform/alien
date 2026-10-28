@@ -588,12 +588,53 @@ async fn reconcile_report(
 /// gateway timeout that makes no progress.
 const TELEMETRY_BUDGET: Duration = Duration::from_secs(45);
 
-/// Batches written to the telemetry backend at once. Backends that
+/// Groups written to the telemetry backend at once. Backends that
 /// acknowledge a write only once it is flushed take seconds per batch.
 const TELEMETRY_CONCURRENCY: usize = 8;
+const TELEMETRY_GROUP_BATCHES: usize = 128;
+const TELEMETRY_GROUP_BYTES: usize = 1024 * 1024;
 
 /// One decoded batch from a report: its id, signal and OTLP bytes.
 type DecodedBatch = (Option<i64>, TelemetrySignal, Vec<u8>);
+
+/// An ordered window acknowledged only after all its signals are durable.
+struct TelemetryGroup {
+    through: Option<i64>,
+    count: usize,
+    bytes: usize,
+    signals: Vec<(TelemetrySignal, Vec<u8>)>,
+}
+
+fn group_telemetry(batches: Vec<DecodedBatch>) -> Vec<TelemetryGroup> {
+    let mut groups: Vec<TelemetryGroup> = Vec::new();
+    for (id, signal, data) in batches {
+        if groups.last().is_none_or(|group| {
+            group.count == TELEMETRY_GROUP_BATCHES
+                || group.bytes + data.len() > TELEMETRY_GROUP_BYTES
+                || group.through.is_some() != id.is_some()
+        }) {
+            groups.push(TelemetryGroup {
+                through: id,
+                count: 0,
+                bytes: 0,
+                signals: Vec::new(),
+            });
+        }
+        let group = groups.last_mut().expect("a group was created");
+        group.through = id;
+        group.count += 1;
+        group.bytes += data.len();
+        // OTLP export requests contain repeated resource messages. Protobuf
+        // concatenation appends those messages without changing their contents.
+        // Keep signals separate, including when source batches interleave them.
+        if let Some((_, combined)) = group.signals.iter_mut().find(|(kind, _)| *kind == signal) {
+            combined.extend(data);
+        } else {
+            group.signals.push((signal, data));
+        }
+    }
+    groups
+}
 
 /// What forwarding a report's telemetry got through.
 #[derive(Debug)]
@@ -613,12 +654,11 @@ struct Forwarded {
 /// contains every batch an earlier one had that the manager hasn't
 /// confirmed, so a batch below the mark has been received.
 ///
-/// Batches are written [`TELEMETRY_CONCURRENCY`] at a time, but the mark
-/// only moves over the batches that completed in order, so it never covers
-/// a batch that didn't go through. No new batch starts once `budget` has
+/// Bounded groups are written [`TELEMETRY_CONCURRENCY`] at a time. The mark
+/// only moves over groups that completed in order, so it never covers a
+/// batch that didn't go through. No new group starts once `budget` has
 /// passed; the ones in flight finish and the rest wait for the next report.
-/// A failure keeps what went through before it; batches after it that
-/// completed are sent again with the next report.
+/// A failed group and any later completed groups are replayed next time.
 async fn forward_telemetry(
     backend: Arc<dyn TelemetryBackend>,
     kv: Arc<dyn Kv>,
@@ -637,23 +677,23 @@ async fn forward_telemetry(
 
     let backend = backend.as_ref();
     let caller = &caller;
-    let mut written = stream::iter(batches)
+    let mut written = stream::iter(group_telemetry(batches))
         // A batch without an id (from an older site) can't be picked up by
         // the next report, so the budget never holds one back. They sort
         // first.
-        .take_while(|(id, _, _)| ready(id.is_none() || Instant::now() < deadline))
-        .map(|(id, signal, data)| async move {
-            backend
-                .ingest(signal, caller, data.into())
-                .await
-                .map(|()| id)
+        .take_while(|group| ready(group.through.is_none() || Instant::now() < deadline))
+        .map(|group| async move {
+            for (signal, data) in group.signals {
+                backend.ingest(signal, caller, data.into()).await?;
+            }
+            Ok::<_, alien_error::AlienError>((group.through, group.count))
         })
         .buffered(TELEMETRY_CONCURRENCY);
 
     let mut accepted = 0;
     while let Some(written_batch) = written.next().await {
-        let id = written_batch.map_err(IntoResponse::into_response)?;
-        accepted += 1;
+        let (id, count) = written_batch.map_err(IntoResponse::into_response)?;
+        accepted += count;
         if let Some(id) = id {
             through = Some(id);
             kv.put(&mark_key, id.to_string().into_bytes(), None)
@@ -701,6 +741,16 @@ mod tests {
     use alien_bindings::providers::kv::local::LocalKv;
     use alien_error::AlienError;
     use async_trait::async_trait;
+    use opentelemetry_proto::tonic::{
+        collector::{
+            logs::v1::ExportLogsServiceRequest, metrics::v1::ExportMetricsServiceRequest,
+            trace::v1::ExportTraceServiceRequest,
+        },
+        common::v1::{any_value::Value, AnyValue, KeyValue},
+        logs::v1::ResourceLogs,
+        resource::v1::Resource,
+    };
+    use prost::Message;
 
     use super::*;
 
@@ -836,15 +886,56 @@ mod tests {
             data: bytes::Bytes,
         ) -> Result<(), AlienError> {
             tokio::time::sleep(self.delay).await;
-            let id = std::str::from_utf8(&data).unwrap().parse().unwrap();
-            self.received.lock().unwrap().push(id);
+            let ids = batch_ids(&data);
+            self.received.lock().unwrap().extend(ids);
             Ok(())
         }
     }
 
+    fn batch_data(id: i64) -> Vec<u8> {
+        ExportLogsServiceRequest {
+            resource_logs: vec![ResourceLogs {
+                resource: Some(Resource {
+                    attributes: vec![KeyValue {
+                        key: "batch.id".into(),
+                        value: Some(AnyValue {
+                            value: Some(Value::IntValue(id)),
+                        }),
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+        }
+        .encode_to_vec()
+    }
+
+    fn batch_ids(data: &[u8]) -> Vec<i64> {
+        ExportLogsServiceRequest::decode(data)
+            .unwrap()
+            .resource_logs
+            .into_iter()
+            .map(|logs| {
+                let value = logs
+                    .resource
+                    .unwrap()
+                    .attributes
+                    .remove(0)
+                    .value
+                    .unwrap()
+                    .value
+                    .unwrap();
+                let Value::IntValue(id) = value else {
+                    panic!("batch id must be an integer")
+                };
+                id
+            })
+            .collect()
+    }
+
     fn batches(ids: impl IntoIterator<Item = i64>) -> Vec<DecodedBatch> {
         ids.into_iter()
-            .map(|id| (Some(id), TelemetrySignal::Logs, id.to_string().into_bytes()))
+            .map(|id| (Some(id), TelemetrySignal::Logs, batch_data(id)))
             .collect()
     }
 
@@ -857,7 +948,235 @@ mod tests {
         }
     }
 
+    #[test]
+    fn grouped_otlp_preserves_interleaved_signals_and_every_resource() {
+        let mut input = batches(1..=1024);
+        for (id, signal, _) in &mut input {
+            *signal = match id.unwrap() % 3 {
+                0 => TelemetrySignal::Logs,
+                1 => TelemetrySignal::Traces,
+                _ => TelemetrySignal::Metrics,
+            };
+        }
+        let groups = group_telemetry(input);
+        assert_eq!(groups.len(), 8);
+        let mut received = Vec::new();
+        for group in groups {
+            assert_eq!(group.count, 128);
+            assert!(group.bytes <= TELEMETRY_GROUP_BYTES);
+            assert_eq!(group.signals.len(), 3);
+            for (signal, data) in group.signals {
+                let ids = batch_ids(&data);
+                let resources = match signal {
+                    TelemetrySignal::Logs => ExportLogsServiceRequest::decode(data.as_slice())
+                        .unwrap()
+                        .resource_logs
+                        .len(),
+                    TelemetrySignal::Traces => ExportTraceServiceRequest::decode(data.as_slice())
+                        .unwrap()
+                        .resource_spans
+                        .len(),
+                    TelemetrySignal::Metrics => {
+                        ExportMetricsServiceRequest::decode(data.as_slice())
+                            .unwrap()
+                            .resource_metrics
+                            .len()
+                    }
+                };
+                assert_eq!(resources, ids.len());
+                for id in &ids {
+                    assert_eq!(
+                        *id % 3,
+                        match signal {
+                            TelemetrySignal::Logs => 0,
+                            TelemetrySignal::Traces => 1,
+                            TelemetrySignal::Metrics => 2,
+                        }
+                    );
+                }
+                received.extend(ids);
+            }
+        }
+        received.sort();
+        assert_eq!(received, (1..=1024).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn grouping_bounds_payloads_and_keeps_legacy_batches_out_of_the_budget() {
+        let mut request = ExportLogsServiceRequest::decode(batch_data(2).as_slice()).unwrap();
+        request.resource_logs[0]
+            .resource
+            .as_mut()
+            .unwrap()
+            .attributes
+            .push(KeyValue {
+                key: "payload".into(),
+                value: Some(AnyValue {
+                    value: Some(Value::StringValue("x".repeat(TELEMETRY_GROUP_BYTES))),
+                }),
+            });
+        let large = request.encode_to_vec();
+        let groups = group_telemetry(vec![
+            (None, TelemetrySignal::Logs, batch_data(0)),
+            (Some(1), TelemetrySignal::Logs, batch_data(1)),
+            (Some(2), TelemetrySignal::Logs, large.clone()),
+            (Some(3), TelemetrySignal::Logs, batch_data(3)),
+        ]);
+        assert_eq!(
+            groups.iter().map(|group| group.through).collect::<Vec<_>>(),
+            vec![None, Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(
+            groups[2].signals[0].1, large,
+            "an oversized original batch is forwarded alone without truncation"
+        );
+    }
+
+    struct RejectOneGroup {
+        reject_id: i64,
+        reject: std::sync::atomic::AtomicBool,
+        received: Mutex<Vec<i64>>,
+    }
+
     #[tokio::test]
+    async fn an_expired_budget_still_forwards_legacy_batches_without_acknowledging_new_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+        let backend = Arc::new(SlowBackend {
+            delay: Duration::ZERO,
+            received: Mutex::new(Vec::new()),
+        });
+        let mut input = batches(0..=1);
+        input[0].0 = None;
+        let forwarded = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+        assert_eq!(forwarded.accepted, 1);
+        assert_eq!(forwarded.through, None);
+        assert_eq!(*backend.received.lock().unwrap(), vec![0]);
+        assert_eq!(
+            read_telemetry_mark(kv.as_ref(), "mark").await.unwrap(),
+            None
+        );
+    }
+
+    #[async_trait]
+    impl TelemetryBackend for RejectOneGroup {
+        async fn ingest(
+            &self,
+            _signal: TelemetrySignal,
+            _caller: &TelemetryCaller,
+            data: bytes::Bytes,
+        ) -> Result<(), AlienError> {
+            let ids = batch_ids(&data);
+            if ids.contains(&self.reject_id)
+                && self.reject.swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(ErrorData::internal("rejected group").into_generic());
+            }
+            self.received.lock().unwrap().extend(ids);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_group_never_advances_the_mark_and_replay_finishes_the_backlog() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+        let backend = Arc::new(RejectOneGroup {
+            reject_id: 129,
+            reject: std::sync::atomic::AtomicBool::new(true),
+            received: Mutex::new(Vec::new()),
+        });
+        let first = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            batches(1..=1024),
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(first.is_err());
+        assert_eq!(
+            read_telemetry_mark(kv.as_ref(), "mark").await.unwrap(),
+            Some(128)
+        );
+        let replay = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            batches(1..=1024),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(replay.through, Some(1024));
+        assert_eq!(replay.accepted, 896);
+        let received = backend.received.lock().unwrap();
+        for id in 1..=1024 {
+            let count = received.iter().filter(|&&found| found == id).count();
+            if id <= 128 {
+                assert_eq!(count, 1);
+            } else {
+                assert!(count >= 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn one_successful_signal_does_not_acknowledge_a_partially_failed_group() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+        let backend = Arc::new(RejectOneGroup {
+            reject_id: 200,
+            reject: std::sync::atomic::AtomicBool::new(true),
+            received: Mutex::new(Vec::new()),
+        });
+        let mut input = batches(1..=256);
+        input[199].1 = TelemetrySignal::Traces;
+        assert!(forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input.clone(),
+            Duration::from_secs(5)
+        )
+        .await
+        .is_err());
+        assert!(
+            backend.received.lock().unwrap().contains(&256),
+            "logs in the failed window reached the backend"
+        );
+        assert_eq!(
+            read_telemetry_mark(kv.as_ref(), "mark").await.unwrap(),
+            Some(128)
+        );
+        let replay = forward_telemetry(
+            backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(replay.through, Some(256));
+        assert_eq!(replay.accepted, 128);
+        assert!(backend.received.lock().unwrap().contains(&200));
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_backlog_is_forwarded_across_reports_within_the_budget_without_duplicates() {
         let tmp = tempfile::tempdir().unwrap();
         let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
@@ -866,7 +1185,8 @@ mod tests {
             received: Mutex::new(Vec::new()),
         });
         let budget = Duration::from_millis(500);
-        let backlog = 1..=100;
+        let last_id = (TELEMETRY_GROUP_BATCHES * TELEMETRY_CONCURRENCY * 4) as i64;
+        let backlog = 1..=last_id;
 
         // Serially, 200ms per batch would fit 2-3 batches in the budget.
         let started = Instant::now();
@@ -887,7 +1207,8 @@ mod tests {
             "answers within the budget plus one batch in flight, took {took:?}"
         );
         assert!(
-            first.accepted >= 2 * TELEMETRY_CONCURRENCY && first.accepted < 100,
+            first.accepted >= 2 * TELEMETRY_CONCURRENCY * TELEMETRY_GROUP_BATCHES
+                && first.accepted < last_id as usize,
             "batches are written concurrently but the backlog doesn't fit: {first:?}"
         );
         let through = first.through.expect("progress was made");
@@ -903,7 +1224,7 @@ mod tests {
         // The site sends its whole backlog again, as it does until the
         // acknowledgement reaches it; each report picks up after the mark.
         let mut last = first;
-        while last.through != Some(100) {
+        while last.through != Some(last_id) {
             let next = forward_telemetry(
                 backend.clone(),
                 kv.clone(),

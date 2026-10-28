@@ -26,7 +26,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
@@ -927,6 +927,17 @@ async fn send_report(
     let last = report.telemetry.iter().map(|batch| batch.id).max();
     let deleting = report.state["status"].as_str() == Some("deleted");
     let terminal = deleting || report.state["status"].as_str() == Some("retained");
+    let initial_mark = site.uploaded_through;
+    let total = report
+        .telemetry
+        .iter()
+        .filter(|batch| batch.id > initial_mark)
+        .count();
+    let started = Instant::now();
+    let client = http()?;
+    if total > 0 {
+        println!("Uploading {total} telemetry batches for {}...", site.name);
+    }
     loop {
         let mut body = serde_json::json!({
             "state": report.state, "telemetry": [], "writtenAt": report.written_at,
@@ -966,7 +977,7 @@ async fn send_report(
         }
         body["telemetry"] = serde_json::Value::Array(fresh);
         let path = format!("/v1/deployments/{}/status-report", site.deployment_id);
-        let response = http()?
+        let response = client
             .post(format!("{}{path}", token.url))
             .bearer_auth(&token.token)
             .json(&body)
@@ -1009,12 +1020,19 @@ async fn send_report(
         site.uploaded_through = confirmed;
         // Saved after every request, so progress is never lost.
         save_site(folder, site)?;
+        let acknowledged = report
+            .telemetry
+            .iter()
+            .filter(|batch| batch.id > initial_mark && batch.id <= confirmed)
+            .count();
+        println!(
+            "Uploaded {acknowledged}/{total} telemetry batches in {}s (acknowledged through {confirmed}).",
+            started.elapsed().as_secs()
+        );
         if last.is_some_and(|last| confirmed >= last) {
             if !terminal {
                 return Ok(());
             }
-        } else {
-            println!("The manager took telemetry through batch {confirmed}; sending the rest.");
         }
     }
 }

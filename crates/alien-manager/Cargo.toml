@@ -126,7 +126,7 @@ alien-tunnel = { workspace = true, features = ["manager", "operator"] }
 alien-commands = { workspace = true, features = ["test-utils"] }
 alien-infra = { workspace = true, features = ["test-utils"] }
 mockall = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = { workspace = true }
 httpmock = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
