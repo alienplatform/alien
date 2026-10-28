@@ -6,6 +6,28 @@ pub type Result<T> = alien_error::Result<T, ErrorData>;
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The Operator reached a terminal failure while rolling out a release.
+    #[error(
+        code = "ROLLOUT_FAILED",
+        message = "Rollout of {release_id} failed: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    RolloutFailed { release_id: String, message: String },
+    /// Site image repositories cannot be used for this update.
+    #[error(
+        code = "REGISTRY_PREFLIGHT_FAILED",
+        message = "Registry preflight failed: {message}",
+        retryable = "inherit",
+        internal = "false"
+    )]
+    RegistryPreflightFailed {
+        message: String,
+        /// Per-repository failures, including their original error chains.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        failures: Vec<alien_error::AlienError>,
+    },
+
     #[error(
         code = "CONFIGURATION_ERROR",
         message = "Configuration error: {message}",
