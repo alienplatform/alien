@@ -5,24 +5,24 @@ use tracing::{info, warn};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{
-    CreateRoleRequest, CreateRoleTag, TrustPolicyDocument, TrustPolicyPrincipal,
+    CreateRoleRequest, CreateRoleTag, IamRoleWriter, TrustPolicyDocument, TrustPolicyPrincipal,
     TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use alien_core::{
-    AwsIamRoleServiceAccountHeartbeatData, Build, ComputeCluster, Container, HeartbeatBackend,
-    ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
-    ResourceOutputs, ResourceStatus, ServiceAccount, ServiceAccountHeartbeatData,
-    ServiceAccountHeartbeatStatus, ServiceAccountOutputs, Worker, standard_resource_tags,
+    standard_resource_tags, AwsIamRoleServiceAccountHeartbeatData, Build, ComputeCluster,
+    Container, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, ServiceAccount,
+    ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus, ServiceAccountOutputs, Worker,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use alien_permissions::{
-    BindingTarget, PermissionContext,
     aws_resource_policies::{
         aws_resource_policy_name, aws_service_account_injected_statements, legacy_policy_name,
         names_aws_resource_grant,
     },
     generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator},
+    BindingTarget, PermissionContext,
 };
 use chrono::Utc;
 
@@ -102,14 +102,13 @@ impl AwsServiceAccountController {
             )
             .build();
 
-        let created_role =
-            client
-                .create_role(role_request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create IAM role '{}'", role_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        let created_role = IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .create(role_request)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create IAM role '{}'", role_name),
+                resource_id: Some(config.id.clone()),
+            })?;
 
         let role_arn = created_role.create_role_result.role.arn;
 
@@ -273,6 +272,13 @@ impl AwsServiceAccountController {
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
         let role_name = self.role_name.as_ref().unwrap();
+        IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to prepare service account IAM role '{role_name}'"),
+                resource_id: Some(config.id.clone()),
+            })?;
         client
             .update_assume_role_policy(role_name, &policy)
             .await
@@ -351,6 +357,36 @@ impl AwsServiceAccountController {
 
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
+
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        match IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
+            .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+            .await
+        {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                self.role_name = None;
+                self.role_arn = None;
+                self.stack_permissions_applied = false;
+                return Ok(HandlerAction::Continue {
+                    state: Deleted,
+                    suggested_delay: None,
+                });
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to prepare service account IAM role '{role_name}' for deletion"
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }))
+            }
+        }
 
         info!(
             role_name = %role_name,
@@ -714,6 +750,22 @@ impl AwsServiceAccountController {
             "Applying stack-level permission sets to IAM role"
         );
 
+        if !policy_document.is_empty()
+            || ctx
+                .state
+                .resources
+                .get(&config.id)
+                .is_some_and(|state| state.previous_config.is_some())
+        {
+            IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
+                .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to prepare service account IAM role '{role_name}'"),
+                    resource_id: Some(config.id.clone()),
+                })?;
+        }
+
         if !policy_document.is_empty() {
             client
                 .put_role_policy(role_name, MANAGED_POLICY_NAME, &policy_document)
@@ -730,14 +782,30 @@ impl AwsServiceAccountController {
                 role_name = %role_name,
                 "Stack-level permissions applied successfully"
             );
-        } else if ctx.state.resources.get(&config.id).is_some_and(|state| state.previous_config.is_some()) {
-            match client.delete_role_policy(role_name, MANAGED_POLICY_NAME).await {
-                Ok(()) => {},
-                Err(error) if matches!(error.error, Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })) => {},
-                Err(error) => return Err(error.context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to remove empty stack permissions from IAM role '{role_name}'"),
-                    resource_id: Some(config.id.clone()),
-                })),
+        } else if ctx
+            .state
+            .resources
+            .get(&config.id)
+            .is_some_and(|state| state.previous_config.is_some())
+        {
+            match client
+                .delete_role_policy(role_name, MANAGED_POLICY_NAME)
+                .await
+            {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to remove empty stack permissions from IAM role '{role_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }))
+                }
             }
         } else {
             info!(
@@ -833,6 +901,13 @@ impl AwsServiceAccountController {
                 !kept.contains(name) && names_aws_resource_grant(name, set_ids.iter().copied())
             });
         for policy_name in dropped {
+            IamRoleWriter::new(client.as_ref(), ctx.aws_permissions_boundary_arn())
+                .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to prepare service account IAM role '{role_name}'"),
+                    resource_id: Some(config.id.clone()),
+                })?;
             match client.delete_role_policy(role_name, &policy_name).await {
                 Ok(()) => info!(
                     role_name = %role_name,
@@ -1358,9 +1433,422 @@ mod tests {
     use crate::core::{
         controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
     };
-    use alien_aws_clients::iam::{ListRolePoliciesResponse, ListRolePoliciesResult, PolicyNames};
+    use alien_aws_clients::iam::{
+        ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames,
+    };
     use alien_core::permissions::PermissionProfile;
     use std::sync::Arc;
+
+    const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/test-permissions-boundary";
+
+    fn role() -> serde_json::Value {
+        serde_json::json!({
+            "Path": "/", "RoleName": "test-execution-sa", "RoleId": "id",
+            "Arn": "arn:aws:iam::123456789012:role/test-execution-sa", "CreateDate": "2026-01-01",
+            "Tags": {"member": standard_resource_tags("test", "execution-sa").into_iter()
+                .map(|(key, value)| serde_json::json!({"Key": key, "Value": value}))
+                .collect::<Vec<_>>()}
+        })
+    }
+
+    async fn executor(
+        iam: MockIamApi,
+        state: AwsServiceAccountState,
+        bounded: bool,
+    ) -> SingleControllerExecutor {
+        executor_with_account(iam, state, bounded, policy_account(10)).await
+    }
+
+    async fn executor_with_account(
+        iam: MockIamApi,
+        state: AwsServiceAccountState,
+        bounded: bool,
+        account: ServiceAccount,
+    ) -> SingleControllerExecutor {
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut management =
+            crate::remote_stack_management::AwsRemoteStackManagementController::mock_ready(
+                "test-management",
+            );
+        if bounded {
+            management.aws_permissions_boundary_arn = Some(BOUNDARY.to_string());
+        }
+        SingleControllerExecutor::builder()
+            .resource(account)
+            .previous_resource(policy_account(10))
+            .controller(AwsServiceAccountController {
+                state,
+                role_name: Some("test-execution-sa".to_string()),
+                role_arn: Some("arn:aws:iam::123456789012:role/test-execution-sa".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                management,
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn expect_adoption(iam: &mut MockIamApi, sequence: &mut mockall::Sequence) {
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|name| {
+                assert_eq!(name, "test-execution-sa");
+                Ok(
+                    serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": role()}}))
+                        .unwrap(),
+                )
+            });
+        iam.expect_list_attached_role_policies()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|name| {
+                assert_eq!(name, "test-execution-sa");
+                Ok(serde_json::from_value(
+                    serde_json::json!({"ListAttachedRolePoliciesResult": {"IsTruncated": false}}),
+                )
+                .unwrap())
+            });
+        iam.expect_put_role_permissions_boundary()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|name, boundary| {
+                assert_eq!(name, "test-execution-sa");
+                assert_eq!(boundary, BOUNDARY);
+                Ok(())
+            });
+    }
+
+    #[tokio::test]
+    async fn create_passes_the_recorded_boundary_and_ownership_tags() {
+        for bounded in [false, true] {
+            let mut iam = MockIamApi::new();
+            iam.expect_create_role().times(1).returning(move |request| {
+                assert_eq!(request.role_name, "test-execution-sa");
+                assert_eq!(
+                    request.permissions_boundary.as_deref(),
+                    bounded.then_some(BOUNDARY)
+                );
+                let tags: std::collections::HashMap<_, _> = request
+                    .tags
+                    .unwrap()
+                    .into_iter()
+                    .map(|tag| (tag.key, tag.value))
+                    .collect();
+                assert_eq!(tags, standard_resource_tags("test", "execution-sa"));
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&request.assume_role_policy_document)
+                        .unwrap()["Version"],
+                    "2012-10-17"
+                );
+                Ok(serde_json::from_value(
+                    serde_json::json!({"CreateRoleResult": {"Role": role()}}),
+                )
+                .unwrap())
+            });
+            let mut executor = executor(iam, AwsServiceAccountState::CreatingRole, bounded).await;
+            executor.step().await.unwrap();
+            let controller = executor
+                .internal_state::<AwsServiceAccountController>()
+                .unwrap();
+            assert_eq!(
+                controller.state,
+                AwsServiceAccountState::ApplyingStackPermissions
+            );
+            assert_eq!(controller.role_name.as_deref(), Some("test-execution-sa"));
+            assert_eq!(
+                controller.role_arn.as_deref(),
+                Some("arn:aws:iam::123456789012:role/test-execution-sa")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn update_adopts_before_writing_trust_and_preserves_legacy_behavior() {
+        for bounded in [false, true] {
+            let mut iam = MockIamApi::new();
+            let mut sequence = mockall::Sequence::new();
+            if bounded {
+                expect_adoption(&mut iam, &mut sequence);
+            }
+            iam.expect_update_assume_role_policy()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|name, policy| {
+                    assert_eq!(name, "test-execution-sa");
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(policy).unwrap()["Version"],
+                        "2012-10-17"
+                    );
+                    Ok(())
+                });
+            let mut executor = executor(iam, AwsServiceAccountState::UpdateStart, bounded).await;
+            executor.step().await.unwrap();
+            assert_eq!(
+                executor
+                    .internal_state::<AwsServiceAccountController>()
+                    .unwrap()
+                    .state,
+                AwsServiceAccountState::UpdatingStackPermissions
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_adopts_before_removing_policies_and_role() {
+        let mut iam = MockIamApi::new();
+        let mut sequence = mockall::Sequence::new();
+        expect_adoption(&mut iam, &mut sequence);
+        iam.expect_list_attached_role_policies()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| {
+                Ok(serde_json::from_value(
+                    serde_json::json!({"ListAttachedRolePoliciesResult": {"AttachedPolicies": {"member": [{"PolicyName": "custom", "PolicyArn": "arn:aws:iam::123456789012:policy/custom"}]}, "IsTruncated": false}}),
+                )
+                .unwrap())
+            });
+        iam.expect_detach_role_policy()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|name, policy| {
+                assert_eq!(
+                    (name, policy),
+                    (
+                        "test-execution-sa",
+                        "arn:aws:iam::123456789012:policy/custom"
+                    )
+                );
+                Ok(())
+            });
+        iam.expect_list_role_policies()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|name| {
+                assert_eq!(name, "test-execution-sa");
+                Ok(
+                    serde_json::from_value(serde_json::json!({"ListRolePoliciesResult": {
+                        "PolicyNames": {"member": ["grant"]}, "IsTruncated": false
+                    }}))
+                    .unwrap(),
+                )
+            });
+        iam.expect_delete_role_policy()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|name, policy| {
+                assert_eq!((name, policy), ("test-execution-sa", "grant"));
+                Ok(())
+            });
+        iam.expect_delete_role()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|name| {
+                assert_eq!(name, "test-execution-sa");
+                Ok(())
+            });
+        let mut executor = executor(iam, AwsServiceAccountState::DeleteStart, true).await;
+        executor.step().await.unwrap();
+        assert_eq!(
+            executor
+                .internal_state::<AwsServiceAccountController>()
+                .unwrap()
+                .state,
+            AwsServiceAccountState::DeletingRole
+        );
+        executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AwsServiceAccountController>()
+            .unwrap();
+        assert_eq!(controller.state, AwsServiceAccountState::Deleted);
+        assert_eq!(controller.role_name, None);
+        assert_eq!(controller.role_arn, None);
+    }
+
+    #[tokio::test]
+    async fn missing_role_completes_bounded_delete_without_mutations() {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().times(1).returning(|name| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "IAM Role".to_string(),
+                    resource_name: name.to_string(),
+                },
+            ))
+        });
+        let mut executor = executor(iam, AwsServiceAccountState::DeleteStart, true).await;
+        executor.step().await.unwrap();
+        let controller = executor
+            .internal_state::<AwsServiceAccountController>()
+            .unwrap();
+        assert_eq!(controller.state, AwsServiceAccountState::Deleted);
+        assert_eq!(controller.role_name, None);
+        assert_eq!(controller.role_arn, None);
+    }
+
+    #[tokio::test]
+    async fn unsafe_roles_stop_update_and_delete_before_mutation() {
+        for state in [
+            AwsServiceAccountState::UpdateStart,
+            AwsServiceAccountState::ApplyingStackPermissions,
+            AwsServiceAccountState::UpdatingStackPermissions,
+            AwsServiceAccountState::DeleteStart,
+        ] {
+            for unsafe_policy in [false, true] {
+                let mut iam = MockIamApi::new();
+                iam.expect_get_role().times(1).returning(move |_| {
+                    let mut role = role();
+                    if !unsafe_policy {
+                        role["Tags"] = serde_json::Value::Null;
+                    }
+                    Ok(
+                        serde_json::from_value(
+                            serde_json::json!({"GetRoleResult": {"Role": role}}),
+                        )
+                        .unwrap(),
+                    )
+                });
+                if unsafe_policy {
+                    iam.expect_list_attached_role_policies().times(1).returning(|_| {
+                        Ok(serde_json::from_value(serde_json::json!({"ListAttachedRolePoliciesResult": {
+                            "AttachedPolicies": {"member": [{"PolicyName": "AdministratorAccess", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}]}, "IsTruncated": false
+                        }})).unwrap())
+                    });
+                }
+                let mut executor = executor(iam, state.clone(), true).await;
+                let error = executor
+                    .step()
+                    .await
+                    .expect_err("unsafe role must not be modified");
+                let expected_code = if unsafe_policy {
+                    "INVALID_INPUT"
+                } else {
+                    "EXISTING_CLOUD_RESOURCE_NOT_OWNED"
+                };
+                assert!(
+                    std::iter::successors(error.source.as_deref(), |cause| cause.source.as_deref())
+                        .any(|cause| cause.code == expected_code),
+                    "{error:?}"
+                );
+                let controller = executor
+                    .internal_state::<AwsServiceAccountController>()
+                    .unwrap();
+                assert_eq!(controller.state, state);
+                assert_eq!(controller.role_name.as_deref(), Some("test-execution-sa"));
+                assert!(controller.role_arn.is_some());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stack_policy_writes_adopt_first() {
+        for state in [
+            AwsServiceAccountState::ApplyingStackPermissions,
+            AwsServiceAccountState::UpdatingStackPermissions,
+        ] {
+            for bounded in [false, true] {
+                let mut iam = MockIamApi::new();
+                let mut sequence = mockall::Sequence::new();
+                if bounded {
+                    expect_adoption(&mut iam, &mut sequence);
+                }
+                iam.expect_put_role_policy()
+                    .times(1)
+                    .in_sequence(&mut sequence)
+                    .returning(|name, policy, document| {
+                        assert_eq!((name, policy), ("test-execution-sa", MANAGED_POLICY_NAME));
+                        assert_eq!(
+                            serde_json::from_str::<serde_json::Value>(document).unwrap()
+                                ["Statement"][0]["Resource"]
+                                .as_array()
+                                .unwrap()
+                                .len(),
+                            10
+                        );
+                        Ok(())
+                    });
+                let next = if state == AwsServiceAccountState::ApplyingStackPermissions {
+                    AwsServiceAccountState::ApplyingResourcePermissions
+                } else {
+                    AwsServiceAccountState::UpdatingResourcePermissions
+                };
+                let mut executor = executor(iam, state.clone(), bounded).await;
+                executor.step().await.unwrap();
+                assert_eq!(
+                    executor
+                        .internal_state::<AwsServiceAccountController>()
+                        .unwrap()
+                        .state,
+                    next
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_stack_policy_and_dropped_resource_grant_adopt_before_removal() {
+        for resource_grant in [false, true] {
+            let mut iam = MockIamApi::new();
+            let mut sequence = mockall::Sequence::new();
+            if resource_grant {
+                iam.expect_list_role_policies().times(1).in_sequence(&mut sequence).returning(|name| {
+                    assert_eq!(name, "test-execution-sa");
+                    Ok(serde_json::from_value(serde_json::json!({"ListRolePoliciesResult": {
+                        "PolicyNames": {"member": ["deployment-old-storage-data-read", "unrelated"]}, "IsTruncated": false
+                    }})).unwrap())
+                });
+            }
+            expect_adoption(&mut iam, &mut sequence);
+            iam.expect_delete_role_policy()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(move |name, policy| {
+                    assert_eq!(name, "test-execution-sa");
+                    assert_eq!(
+                        policy,
+                        if resource_grant {
+                            "deployment-old-storage-data-read"
+                        } else {
+                            MANAGED_POLICY_NAME
+                        }
+                    );
+                    Ok(())
+                });
+            let state = if resource_grant {
+                AwsServiceAccountState::UpdatingResourcePermissions
+            } else {
+                AwsServiceAccountState::UpdatingStackPermissions
+            };
+            let mut executor = executor_with_account(
+                iam,
+                state,
+                true,
+                ServiceAccount::new("execution-sa".into()).build(),
+            )
+            .await;
+            executor.step().await.unwrap();
+            assert_eq!(
+                executor
+                    .internal_state::<AwsServiceAccountController>()
+                    .unwrap()
+                    .state,
+                if resource_grant {
+                    AwsServiceAccountState::Ready
+                } else {
+                    AwsServiceAccountState::UpdatingResourcePermissions
+                }
+            );
+        }
+    }
 
     #[tokio::test]
     async fn records_runtime_ownership_only_after_automatic_role_creation() {
@@ -1558,9 +2046,17 @@ mod tests {
         let prefix = std::env::var("ALIEN_TEST_TRUST_PREFIX").unwrap();
         assert!(prefix.starts_with("e2e-"));
         let workload = Container::new("api".to_string())
-            .code(alien_core::ContainerCode::Image { image: "example.invalid/probe:1".to_string() })
-            .cpu(alien_core::ResourceSpec { min: "0.25".to_string(), desired: "0.25".to_string() })
-            .memory(alien_core::ResourceSpec { min: "256Mi".to_string(), desired: "256Mi".to_string() })
+            .code(alien_core::ContainerCode::Image {
+                image: "example.invalid/probe:1".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.25".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "256Mi".to_string(),
+                desired: "256Mi".to_string(),
+            })
             .port(8080)
             .permissions("execution".to_string())
             .build();
@@ -1582,8 +2078,11 @@ mod tests {
                 "roleName": format!("{prefix}-execution-sa"),
                 "roleArn": format!("arn:aws:iam::{}:role/{prefix}-execution-sa", config.account_id),
                 "stackPermissionsApplied": true
-            })).unwrap()
-        } else { AwsServiceAccountController::default() };
+            }))
+            .unwrap()
+        } else {
+            AwsServiceAccountController::default()
+        };
         let mut executor = SingleControllerExecutor::builder()
             .resource(resource.clone())
             .controller(controller)
@@ -1591,15 +2090,29 @@ mod tests {
             .client_config(alien_core::ClientConfig::Aws(Box::new(config)))
             .resource_prefix(prefix)
             .with_stack_resource(workload, alien_core::ResourceLifecycle::Live)
-            .with_stack_resource(ComputeCluster::new("compute".to_string()).build(), alien_core::ResourceLifecycle::Frozen)
+            .with_stack_resource(
+                ComputeCluster::new("compute".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
             .real_delays()
-            .build().await.unwrap();
+            .build()
+            .await
+            .unwrap();
         if existing {
-            assert!(executor.needs_update().unwrap(), "legacy checkpoint must request setup reconciliation");
+            assert!(
+                executor.needs_update().unwrap(),
+                "legacy checkpoint must request setup reconciliation"
+            );
             executor.update(resource).unwrap();
         }
-        executor.run_until_status(ResourceStatus::Running).await.unwrap();
-        assert!(!executor.needs_update().unwrap(), "trust must converge after setup");
+        executor
+            .run_until_status(ResourceStatus::Running)
+            .await
+            .unwrap();
+        assert!(
+            !executor.needs_update().unwrap(),
+            "trust must converge after setup"
+        );
     }
 
     #[tokio::test]
@@ -1623,7 +2136,9 @@ mod tests {
                 .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
                 .service_provider(Arc::new(MockPlatformServiceProvider::new()))
                 .with_test_dependencies()
-                .build().await.unwrap();
+                .build()
+                .await
+                .unwrap();
             assert!(!executor.needs_update().unwrap());
             let error = executor.step().await.unwrap_err();
             assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
@@ -1677,7 +2192,9 @@ mod tests {
                 .unwrap();
             executor.update(captured.clone()).unwrap();
             executor.step().await.unwrap();
-            if direct_setup { executor.step().await.unwrap(); }
+            if direct_setup {
+                executor.step().await.unwrap();
+            }
             assert_eq!(
                 executor.status(),
                 if direct_setup {
@@ -1733,10 +2250,11 @@ mod tests {
                 })
             });
             let recorded = deleted.clone();
-            iam.expect_delete_role_policy().returning(move |role, policy| {
-                recorded.lock().unwrap().push(format!("{role}/{policy}"));
-                Ok(())
-            });
+            iam.expect_delete_role_policy()
+                .returning(move |role, policy| {
+                    recorded.lock().unwrap().push(format!("{role}/{policy}"));
+                    Ok(())
+                });
             let iam = Arc::new(iam);
             let mut provider = MockPlatformServiceProvider::new();
             provider
@@ -1759,10 +2277,9 @@ mod tests {
                 .build()
                 .await
                 .unwrap();
-            executor
-                .step()
-                .await
-                .unwrap_or_else(|error| panic!("{case}: the resource permission step fails: {error}"));
+            executor.step().await.unwrap_or_else(|error| {
+                panic!("{case}: the resource permission step fails: {error}")
+            });
 
             assert_eq!(
                 *deleted.lock().unwrap(),
