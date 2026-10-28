@@ -144,7 +144,7 @@ fn legacy_setup_keeps_role_writes_without_granting_boundary_adoption() {
 }
 
 #[test]
-fn catalog_management_role_writes_are_conditioned_except_removal_only_dlm_cleanup() {
+fn catalog_management_role_writes_are_conditioned_except_exact_obsolete_policy_removal() {
     let context = common::create_test_context().with_aws_permissions_boundary_arn(BOUNDARY);
     let generator = AwsRuntimePermissionsGenerator::new();
     for id in list_permission_set_ids() {
@@ -213,6 +213,20 @@ fn catalog_management_role_writes_are_conditioned_except_removal_only_dlm_cleanu
                         assert_eq!(
                             json!(statement.condition),
                             json!({"StringEquals": {"iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"}})
+                        );
+                    } else if id == "compute-cluster/provision" && action == "iam:DetachRolePolicy"
+                    {
+                        assert_eq!(statement.action, ["iam:DetachRolePolicy"]);
+                        let policy =
+                            &statement.condition.as_ref().unwrap()["StringEquals"]["iam:PolicyARN"];
+                        assert!([
+                            "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+                            "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+                        ]
+                        .contains(&policy.as_str()));
+                        assert_eq!(
+                            json!(statement.condition),
+                            json!({"StringEquals": {"iam:PolicyARN": policy}})
                         );
                     } else {
                         assert_eq!(

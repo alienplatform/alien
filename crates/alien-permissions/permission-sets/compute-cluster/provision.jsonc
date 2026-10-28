@@ -3,6 +3,60 @@
   "description": "Allows creating and managing ComputeCluster compute infrastructure. Derived from AwsComputeClusterController, GcpComputeClusterController, AzureComputeClusterController API calls.",
   "platforms": {
     "aws": [
+      // Remove obsolete node agents before adopting the permissions boundary.
+      // No attachment or other policy removal is authorized by these grants.
+      {
+        "grant": {
+          "actions": ["iam:DetachRolePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-role",
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-isolation-v1-role"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["iam:DetachRolePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-role",
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-isolation-v1-role"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+              }
+            }
+          }
+        }
+      },
       // Applied EC2 quota values and public instance-type hardware metadata.
       {
         "grant": { "actions": ["servicequotas:GetServiceQuota", "ec2:DescribeInstanceTypes"] },

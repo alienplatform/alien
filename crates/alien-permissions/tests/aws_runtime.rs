@@ -678,7 +678,7 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
                 assert!(grant.condition.is_none());
             }
             // Manual management still cannot write profiles. Provision additionally
-            // owns the runtime compute profiles; neither set gains role-policy writes.
+            // owns runtime compute profiles and removal of obsolete node policies.
             for action in policy
                 .statement
                 .iter()
@@ -702,6 +702,7 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
                                     | "iam:AddRoleToInstanceProfile"
                                     | "iam:RemoveRoleFromInstanceProfile"
                                     | "iam:DeleteInstanceProfile"
+                                    | "iam:DetachRolePolicy"
                             )),
                         "unexpected IAM action: {id} / {target} / {action}"
                     );

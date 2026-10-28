@@ -108,6 +108,7 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
     ] {
         assert!(ids.contains(id), "missing automatic grant: {id}");
     }
+    assert!(!ids.contains("remote-stack-management/provision"));
     let bounded = compile(&stack, true);
     let mut observed_writes = BTreeSet::new();
     for statement in bounded
@@ -130,6 +131,22 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
                     assert_eq!(
                         json!(statement.condition),
                         json!({"StringEquals": {"iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"}})
+                    );
+                    continue;
+                }
+                if statement.action == ["iam:DetachRolePolicy"]
+                    && statement.resource == ["arn:aws:iam::123456789012:role/sample-*-role"]
+                {
+                    let policy =
+                        &statement.condition.as_ref().unwrap()["StringEquals"]["iam:PolicyARN"];
+                    assert!([
+                        "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+                        "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+                    ]
+                    .contains(&policy.as_str()));
+                    assert_eq!(
+                        json!(statement.condition),
+                        json!({"StringEquals": {"iam:PolicyARN": policy}})
                     );
                     continue;
                 }
@@ -180,6 +197,31 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
                 request = request.with("iam:PermissionsBoundary", boundary);
             }
             assert_ne!(evaluate(&bounded, &request), Decision::Allowed, "{action}");
+        }
+    }
+    // Cleanup must work before boundary adoption without permitting reattachment or
+    // removal of arbitrary policies from an unbounded role.
+    for policy in [
+        "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+        "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+        "arn:aws:iam::aws:policy/AdministratorAccess",
+    ] {
+        for action in ["iam:DetachRolePolicy", "iam:AttachRolePolicy"] {
+            let expected =
+                if action == "iam:DetachRolePolicy" && !policy.ends_with("/AdministratorAccess") {
+                    Decision::Allowed
+                } else {
+                    Decision::NotAllowed
+                };
+            assert_eq!(
+                evaluate(
+                    &bounded,
+                    &Request::new(action, "arn:aws:iam::123456789012:role/sample-compute-role")
+                        .with("iam:PolicyARN", policy)
+                ),
+                expected,
+                "{action}: {policy}"
+            );
         }
     }
     let legacy = compile(&stack, false);
