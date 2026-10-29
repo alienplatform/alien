@@ -355,8 +355,17 @@ impl AwsCloudFormationPermissionsGenerator {
                     let interpolated_value_key =
                         crate::VariableInterpolator::interpolate_variables(value_key, context)?;
                     let value_template = &condition_values[value_key];
-                    let interpolated_value =
-                        self.interpolate_cloudformation_string(value_template, context)?;
+                    let interpolated_value = match value_template {
+                        alien_core::AwsConditionValue::String(value) => {
+                            self.interpolate_cloudformation_string(value, context)?
+                        }
+                        alien_core::AwsConditionValue::List(values) => JsonValue::Array(
+                            values
+                                .iter()
+                                .map(|value| self.interpolate_cloudformation_string(value, context))
+                                .collect::<Result<Vec<_>>>()?,
+                        ),
+                    };
                     interpolated_values.insert(interpolated_value_key, interpolated_value);
                 }
 

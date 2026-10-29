@@ -64,13 +64,13 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     .and_then(|c| c.get("StringEquals"));
                 let owned = equals
                     .and_then(|c| c.get("aws:ResourceTag/${stackTag}"))
-                    .is_some_and(|value| value == "${stackPrefix}");
+                    .is_some_and(|value| value.as_string() == Some("${stackPrefix}"));
                 let creation =
                     equals
                         .and_then(|c| c.get("ec2:CreateAction"))
                         .is_some_and(|action| {
                             matches!(
-                                action.as_str(),
+                                action.as_string().unwrap(),
                                 "CreateVpc"
                                     | "CreateInternetGateway"
                                     | "CreateSubnet"
@@ -99,10 +99,10 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     .as_ref()
                     .and_then(|c| c.get("StringLike"))
                     .and_then(|c| c.get("elasticloadbalancing:CreateAction"))
-                    .is_some_and(|action| action == "Create*")
+                    .is_some_and(|action| action.as_string() == Some("Create*"))
                     && equals
                         .and_then(|c| c.get("aws:RequestTag/${stackTag}"))
-                        .is_some_and(|value| value == "${stackPrefix}");
+                        .is_some_and(|value| value.as_string() == Some("${stackPrefix}"));
                 // Resource bindings use the assigned or imported physical name, which
                 // need not share the stack prefix (for example, CloudFormation names).
                 let named_resource = binding.not_resources.is_empty()
@@ -142,10 +142,10 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     && binding.not_resources == ["arn:*:lambda:*:*:*"]
                     && equals
                         .and_then(|c| c.get("aws:RequestTag/${stackTag}"))
-                        .is_some_and(|value| value == "${stackPrefix}");
+                        .is_some_and(|value| value.as_string() == Some("${stackPrefix}"));
                 let gateway_request_owned = equals
                     .and_then(|c| c.get("aws:RequestTag/${stackTag}"))
-                    .is_some_and(|value| value == "${stackPrefix}");
+                    .is_some_and(|value| value.as_string() == Some("${stackPrefix}"));
                 let gateway_creation = gateway_request_owned
                     && entry.grant.actions.as_ref().is_some_and(|actions| {
                         !actions.is_empty()

@@ -883,7 +883,7 @@ fn condition_equals(
         .as_ref()
         .and_then(|condition| condition.get("StringEquals"))
         .and_then(|values| values.get(key))
-        .is_some_and(|value| value == expected)
+        .is_some_and(|value| value.as_string() == Some(expected))
 }
 
 /// The guard only ever refuses, and only roles carrying the tags setup creates sandbox roles

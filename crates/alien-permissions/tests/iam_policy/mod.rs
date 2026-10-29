@@ -80,14 +80,17 @@ fn conditions_hold(statement: &AwsIamStatement, request: &Request) -> bool {
     };
     conditions.iter().all(|(operator, entries)| {
         entries.iter().all(|(key, expected)| {
-            let actual = request.context.get(key);
+            let expected = expected
+                .as_string()
+                .expect("the evaluator only models scalar conditions");
+            let actual = request.context.get(key).map(String::as_str);
             match operator.as_str() {
                 "StringEquals" | "Bool" => actual == Some(expected),
                 // A negated operator holds when the key is absent.
                 "StringNotEquals" => actual != Some(expected),
                 "StringLike" => actual.is_some_and(|actual| wildcard_match(expected, actual)),
                 // "true" holds when the key is absent from the request, "false" when present.
-                "Null" => match expected.as_str() {
+                "Null" => match expected {
                     "true" => actual.is_none(),
                     "false" => actual.is_some(),
                     other => panic!("Null takes \"true\" or \"false\", not {other}"),

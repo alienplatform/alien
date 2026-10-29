@@ -121,7 +121,7 @@ fn request_variables_survive_runtime_cloudformation_and_boundary_compilation() {
                 assert_eq!(runtime.statement[0].resource, [expected_resource]);
                 assert_eq!(
                     runtime.statement[0].condition.as_ref().unwrap()["StringLike"]["s3:prefix"],
-                    expected_condition
+                    expected_condition.into()
                 );
                 let document = serde_json::to_value(&runtime).unwrap();
                 assert_eq!(resolve(&serde_json::to_value(cf).unwrap()), document);

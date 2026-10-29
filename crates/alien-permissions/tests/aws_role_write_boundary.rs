@@ -223,7 +223,7 @@ fn catalog_management_role_writes_are_conditioned_except_exact_obsolete_policy_r
                             "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
                             "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
                         ]
-                        .contains(&policy.as_str()));
+                        .contains(&policy.as_string().unwrap()));
                         assert_eq!(
                             json!(statement.condition),
                             json!({"StringEquals": {"iam:PolicyARN": policy}})
@@ -235,7 +235,7 @@ fn catalog_management_role_writes_are_conditioned_except_exact_obsolete_policy_r
                                 .as_ref()
                                 .and_then(|c| c.get("StringEquals"))
                                 .and_then(|v| v.get("iam:PermissionsBoundary"))
-                                .map(String::as_str),
+                                .and_then(|value| value.as_string()),
                             Some(BOUNDARY),
                             "{id}: {action}"
                         );
@@ -303,7 +303,7 @@ fn explicit_custom_boundary_conditions_are_not_removed_for_legacy_setups() {
         .flatten()
     {
         binding.condition.as_mut().unwrap()["StringEquals"]
-            .insert("iam:PermissionsBoundary".to_string(), BOUNDARY.to_string());
+            .insert("iam:PermissionsBoundary".to_string(), BOUNDARY.into());
     }
     let policy = AwsRuntimePermissionsGenerator::new()
         .generate_policy(&set, BindingTarget::Stack, &common::create_test_context())

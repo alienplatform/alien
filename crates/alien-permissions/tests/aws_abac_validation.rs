@@ -661,7 +661,8 @@ fn is_tag_absent_binding(binding: &AwsBindingSpec) -> bool {
     conditions.len() == 1
         && null.len() == 1
         && null.iter().all(|(key, value)| {
-            (key == "aws:ResourceTag/${stackTag}" || key == "lambda:FunctionArn") && value == "true"
+            (key == "aws:ResourceTag/${stackTag}" || key == "lambda:FunctionArn")
+                && value.as_string() == Some("true")
         })
 }
 

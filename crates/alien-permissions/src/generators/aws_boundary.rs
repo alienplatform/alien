@@ -252,7 +252,7 @@ fn render_boundary(
                         .as_ref()
                         .and_then(|conditions| conditions.get("StringEquals"))
                         .and_then(|values| values.get(&ownership_key))
-                        .is_some_and(|value| value == prefix)
+                        .is_some_and(|value| value.as_string() == Some(prefix))
                         && statement.action.iter().all(|action| {
                             action.split_once(':').is_some_and(|(service, _)| {
                                 !service.eq_ignore_ascii_case("iam")
@@ -350,7 +350,7 @@ pub(super) fn role_write_binding<'a>(
         .as_ref()
         .and_then(|conditions| conditions.get("StringEquals"))
         .and_then(|values| values.get("iam:PermissionsBoundary"))
-        .is_some_and(|value| value == "${awsPermissionsBoundaryArn}");
+        .is_some_and(|value| value.as_string() == Some("${awsPermissionsBoundaryArn}"));
     if context.aws_permissions_boundary_arn.is_some() || !uses_setup_boundary {
         return (Cow::Borrowed(binding), Cow::Borrowed(actions));
     }

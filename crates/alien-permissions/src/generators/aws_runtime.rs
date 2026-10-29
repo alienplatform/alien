@@ -6,7 +6,7 @@ use crate::{
     variables::{interpolate_aws_variables, VariableInterpolator},
     BindingTarget, PermissionContext,
 };
-use alien_core::{PermissionGrant, PermissionSet};
+use alien_core::{AwsConditionValue, PermissionGrant, PermissionSet};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +28,7 @@ pub struct AwsIamStatement {
     pub not_resource: Vec<String>,
     /// Optional conditions
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition: Option<IndexMap<String, IndexMap<String, String>>>,
+    pub condition: Option<IndexMap<String, IndexMap<String, AwsConditionValue>>>,
 }
 
 /// AWS IAM policy document
@@ -200,7 +200,7 @@ impl AwsRuntimePermissionsGenerator {
         &self,
         binding_spec: &alien_core::AwsBindingSpec,
         context: &PermissionContext,
-    ) -> Result<IndexMap<String, IndexMap<String, String>>> {
+    ) -> Result<IndexMap<String, IndexMap<String, AwsConditionValue>>> {
         if let Some(condition_template) = &binding_spec.condition {
             let mut interpolated_conditions = IndexMap::new();
 
@@ -212,7 +212,17 @@ impl AwsRuntimePermissionsGenerator {
                 for (value_key, value_template) in condition_values {
                     let value_key =
                         VariableInterpolator::interpolate_variables(value_key, context)?;
-                    let interpolated_value = interpolate_aws_variables(value_template, context)?;
+                    let interpolated_value = match value_template {
+                        AwsConditionValue::String(value) => {
+                            AwsConditionValue::String(interpolate_aws_variables(value, context)?)
+                        }
+                        AwsConditionValue::List(values) => AwsConditionValue::List(
+                            values
+                                .iter()
+                                .map(|value| interpolate_aws_variables(value, context))
+                                .collect::<Result<Vec<_>>>()?,
+                        ),
+                    };
                     interpolated_values.insert(value_key, interpolated_value);
                 }
 

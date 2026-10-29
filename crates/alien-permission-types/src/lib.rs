@@ -46,6 +46,37 @@ pub struct PermissionGrant {
     pub data_actions: Option<Vec<String>>,
 }
 
+/// An IAM condition accepts one string or a list of alternative string values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(untagged)]
+pub enum AwsConditionValue {
+    String(String),
+    List(Vec<String>),
+}
+
+impl AwsConditionValue {
+    /// Return the scalar value without treating a list as a scalar condition.
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value),
+            Self::List(_) => None,
+        }
+    }
+}
+
+impl From<String> for AwsConditionValue {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<&str> for AwsConditionValue {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_owned())
+    }
+}
+
 /// AWS-specific binding specification
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -60,7 +91,7 @@ pub struct AwsBindingSpec {
     pub not_resources: Vec<String>,
     /// Optional condition for additional filtering (rare)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition: Option<IndexMap<String, IndexMap<String, String>>>,
+    pub condition: Option<IndexMap<String, IndexMap<String, AwsConditionValue>>>,
 }
 
 /// GCP-specific binding specification
@@ -479,7 +510,7 @@ mod tests {
     ) -> PermissionSet {
         let condition = IndexMap::from([(
             "StringEquals".to_string(),
-            IndexMap::from([("aws:RequestTag/deployment".to_string(), "acme".to_string())]),
+            IndexMap::from([("aws:RequestTag/deployment".to_string(), "acme".into())]),
         )]);
         PermissionSet {
             id: "test/set".to_string(),
