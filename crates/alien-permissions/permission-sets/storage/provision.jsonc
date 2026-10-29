@@ -16,6 +16,7 @@
             "s3:PutBucketAcl",
             "s3:PutEncryptionConfiguration",
             "s3:PutBucketPublicAccessBlock",
+            "s3:PutBucketTagging",
             "s3:GetBucketNotification",
             "s3:PutBucketNotification",
             "s3:GetBucketLocation",
@@ -38,19 +39,6 @@
           },
           "resource": {
             "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
-          }
-        }
-      },
-      {
-        "grant": {
-          "actions": ["s3:PutBucketTagging"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
-          },
-          "resource": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-${resourceId}"]
           }
         }
       }

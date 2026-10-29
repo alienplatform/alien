@@ -340,7 +340,6 @@ fn storage_iam_policies(
     let mut resources = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let context = stack_permission_context(ctx)
-        .with_resource_id(storage.id())
         .with_resource_name(format!("${{AWS::StackName}}-{}", storage.id()));
 
     for (owner_index, (role_id, permission_refs)) in storage_permission_owners(ctx) {

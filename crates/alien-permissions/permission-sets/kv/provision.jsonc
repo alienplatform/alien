@@ -13,6 +13,7 @@
             "dynamodb:UpdateTable",
             "dynamodb:UpdateTimeToLive",
             "dynamodb:DescribeTimeToLive",
+            "dynamodb:TagResource",
             "dynamodb:ListTagsOfResource"
           ]
         },
@@ -22,19 +23,6 @@
           },
           "resource": {
             "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${resourceName}"]
-          }
-        }
-      },
-      {
-        "grant": { "actions": ["dynamodb:TagResource"] },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-*"]
-          },
-          "resource": {
-            "resources": [
-              "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-${resourceId}"
-            ]
           }
         }
       }
