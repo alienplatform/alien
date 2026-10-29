@@ -6820,7 +6820,7 @@ async fn initialize_deployment(
         permission: None,
         // The Kubernetes CLI installs the Operator with Helm. Runtime work
         // starts inside that Operator, so this must use Helm's setup handoff.
-        setup_method: Some(setup_method(platform).to_string()),
+        setup_method: (platform == Platform::Kubernetes).then(|| "helm".to_string()),
         // Lets the manager show the exact `helm uninstall` command at teardown.
         helm_release,
     };
