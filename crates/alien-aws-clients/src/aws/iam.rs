@@ -24,6 +24,8 @@ pub trait IamApi: Send + Sync + Debug {
     // Role Operations
     async fn create_role(&self, request: CreateRoleRequest) -> Result<CreateRoleResponse>;
     async fn get_role(&self, role_name: &str) -> Result<GetRoleResponse>;
+    /// Adds tags to an existing role, replacing values for matching keys.
+    async fn tag_role(&self, role_name: &str, tags: &[CreateRoleTag]) -> Result<()>;
     async fn put_role_permissions_boundary(
         &self,
         role_name: &str,
@@ -395,6 +397,16 @@ impl IamApi for IamClient {
         let params = vec![("RoleName".to_string(), role_name.to_string())];
         let body = Self::build_form_body("GetRole", "2010-05-08", params);
         self.post_xml(body, "GetRole", role_name).await
+    }
+
+    async fn tag_role(&self, role_name: &str, tags: &[CreateRoleTag]) -> Result<()> {
+        let mut params = vec![("RoleName".to_string(), role_name.to_string())];
+        for (i, tag) in tags.iter().enumerate() {
+            params.push((format!("Tags.member.{}.Key", i + 1), tag.key.clone()));
+            params.push((format!("Tags.member.{}.Value", i + 1), tag.value.clone()));
+        }
+        let body = Self::build_form_body("TagRole", "2010-05-08", params);
+        self.post_no_response(body, "TagRole", role_name).await
     }
 
     async fn put_role_permissions_boundary(

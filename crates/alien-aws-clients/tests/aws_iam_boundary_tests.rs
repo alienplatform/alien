@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use alien_aws_clients::{
-    iam::{CreateRoleRequest, IamApi, IamClient, IamRoleWriter, MockIamApi},
+    iam::{CreateRoleRequest, CreateRoleTag, IamApi, IamClient, IamRoleWriter, MockIamApi},
     AwsClientConfig, AwsCredentialProvider, AwsCredentials, ServiceOverrides,
 };
 use alien_client_core::ErrorData;
@@ -257,4 +257,95 @@ async fn put_boundary_sends_signed_iam_query_request() {
         .await
         .unwrap();
     mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn tag_role_sends_signed_indexed_tags_without_losing_special_characters() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .header_exists("authorization")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .matches(|request| {
+                    let params: HashMap<_, _> =
+                        form_urlencoded::parse(request.body.as_deref().expect("IAM request body"))
+                            .into_owned()
+                            .collect();
+                    params
+                        == HashMap::from([
+                            ("Action".into(), "TagRole".into()),
+                            ("Version".into(), "2010-05-08".into()),
+                            ("RoleName".into(), "test-role+backup".into()),
+                            ("Tags.member.1.Key".into(), "managed-by".into()),
+                            ("Tags.member.1.Value".into(), "runtime".into()),
+                            ("Tags.member.2.Key".into(), "description / owner".into()),
+                            (
+                                "Tags.member.2.Value".into(),
+                                "backup + restore = enabled".into(),
+                            ),
+                            ("Tags.member.3.Key".into(), "empty".into()),
+                            ("Tags.member.3.Value".into(), "".into()),
+                        ])
+                });
+            then.status(200).body("<TagRoleResponse/>");
+        })
+        .await;
+    client(&server)
+        .tag_role(
+            "test-role+backup",
+            &[
+                CreateRoleTag {
+                    key: "managed-by".into(),
+                    value: "runtime".into(),
+                },
+                CreateRoleTag {
+                    key: "description / owner".into(),
+                    value: "backup + restore = enabled".into(),
+                },
+                CreateRoleTag {
+                    key: "empty".into(),
+                    value: "".into(),
+                },
+            ],
+        )
+        .await
+        .expect("role tags should be updated");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn tag_role_propagates_denied_and_missing_roles() {
+    for (status, code) in [(403, "AccessDenied"), (404, "NoSuchEntity")] {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("Action=TagRole");
+                then.status(status).body(format!(
+                    "<ErrorResponse><Error><Type>Sender</Type><Code>{code}</Code><Message>Cannot tag role</Message></Error></ErrorResponse>"
+                ));
+            })
+            .await;
+        let error = client(&server)
+            .tag_role(
+                "test-role",
+                &[CreateRoleTag {
+                    key: "managed-by".into(),
+                    value: "runtime".into(),
+                }],
+            )
+            .await
+            .expect_err("a failed tag update must not report successful handoff");
+        match error.error {
+            Some(ErrorData::RemoteAccessDenied { resource_name, .. }) if status == 403 => {
+                assert_eq!(resource_name, "test-role");
+            }
+            Some(ErrorData::RemoteResourceNotFound { resource_name, .. }) if status == 404 => {
+                assert_eq!(resource_name, "test-role");
+            }
+            other => panic!("unexpected IAM error: {other:?}"),
+        }
+        // The shared AWS transport may retry IAM visibility failures.
+        assert!(mock.hits_async().await > 0);
+    }
 }
