@@ -10,7 +10,6 @@
             "ecr:DeleteRepository",
             "ecr:SetRepositoryPolicy",
             "ecr:DeleteRepositoryPolicy",
-            "ecr:TagResource",
             "ecr:PutLifecyclePolicy",
             "ecr:DeleteLifecyclePolicy",
             "ecr:PutImageScanningConfiguration",
@@ -92,6 +91,34 @@
           },
           "resource": {
             "resources": ["arn:aws:iam::${awsAccountId}:role/${resourceName}-*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ecr:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-${resourceName}-*"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["iam:TagRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-*"]
           }
         }
       }

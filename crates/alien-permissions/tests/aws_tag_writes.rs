@@ -155,6 +155,14 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
     const TAG_ACTIONS: &[&str] = &[
         "ec2:createtags",
         "ec2:deletetags",
+        "iam:tagrole",
+        "iam:untagrole",
+        "iam:taginstanceprofile",
+        "iam:untaginstanceprofile",
+        "iam:tagpolicy",
+        "iam:untagpolicy",
+        "ecr:tagresource",
+        "ecr:untagresource",
         "acm:addtagstocertificate",
         "acm:removetagsfromcertificate",
         "dlm:untagresource",
@@ -245,6 +253,10 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     && !binding.resources.is_empty()
                     && binding.resources.iter().all(|arn| {
                         [
+                            "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-",
+                            "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-",
+                            "arn:aws:iam::${awsAccountId}:instance-profile/${stackPrefix}-",
+                            "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-",
                             "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-",
                             "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-",
                             "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-",
