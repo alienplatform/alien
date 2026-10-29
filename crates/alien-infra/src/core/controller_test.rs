@@ -782,6 +782,9 @@ pub struct SingleControllerExecutorBuilder {
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     dependency_lifecycles: HashMap<String, ResourceLifecycle>,
     stack_resources: Vec<(Resource, ResourceLifecycle)>,
+    stack_inputs: Vec<alien_core::StackInputDefinition>,
+    resource_gates: HashMap<String, String>,
+    management_permissions: alien_core::permissions::ManagementPermissions,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
     client_config: Option<ClientConfig>,
     resource_lifecycle: ResourceLifecycle,
@@ -816,6 +819,9 @@ impl SingleControllerExecutorBuilder {
             dependencies: Vec::new(),
             dependency_lifecycles: HashMap::new(),
             stack_resources: Vec::new(),
+            stack_inputs: Vec::new(),
+            resource_gates: HashMap::new(),
+            management_permissions: alien_core::permissions::ManagementPermissions::Auto,
             service_provider: None,
             client_config: None,
             resource_lifecycle: ResourceLifecycle::Live,
@@ -983,6 +989,30 @@ impl SingleControllerExecutorBuilder {
     ) -> Self {
         self.stack_resources
             .push((Resource::new(resource), lifecycle));
+        self
+    }
+
+    /// Adds a gated resource and its deployer input to the test stack.
+    pub fn with_gated_stack_resource<R: ResourceDefinition>(
+        mut self,
+        resource: R,
+        lifecycle: ResourceLifecycle,
+        input: alien_core::StackInputDefinition,
+    ) -> Self {
+        let resource = Resource::new(resource);
+        self.resource_gates
+            .insert(resource.id().to_string(), input.id.clone());
+        self.stack_inputs.push(input);
+        self.stack_resources.push((resource, lifecycle));
+        self
+    }
+
+    /// Sets management permissions before the normal preflight mutations run.
+    pub fn management_permissions(
+        mut self,
+        permissions: alien_core::permissions::ManagementPermissions,
+    ) -> Self {
+        self.management_permissions = permissions;
         self
     }
 
@@ -1227,7 +1257,7 @@ impl SingleControllerExecutorBuilder {
                     display_name: None,
                     description: None,
                     remote_access: false,
-                    enabled_when: None,
+                    enabled_when: self.resource_gates.get(other.id()).cloned(),
                 },
             );
             stack_state.resources.insert(
@@ -1309,10 +1339,10 @@ impl SingleControllerExecutorBuilder {
             resources: stack_resources,
             permissions: alien_core::permissions::PermissionsConfig {
                 profiles: permissions,
-                management: alien_core::permissions::ManagementPermissions::Auto,
+                management: self.management_permissions.clone(),
             },
             supported_platforms: None,
-            inputs: vec![],
+            inputs: self.stack_inputs.clone(),
             dynamic_container_repositories: vec![],
             dynamic_container_image_resources: vec![],
             operations: None,

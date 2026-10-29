@@ -58,6 +58,7 @@ pub(super) fn assert_setup_policy_parity(
         ("AWS::AccountId", json!(account)),
         ("AWS::Partition", json!("aws")),
         ("ManagingRoleArn", json!(manager)),
+        ("InputAiEnabled", json!("true")),
         ("ManagementRole", json!(role)),
         ("ManagementRole.Arn", json!(role_arn)),
         ("ManagementPermissionsBoundary", json!(arn)),
@@ -107,17 +108,50 @@ pub(super) fn assert_setup_policy_parity(
         .unwrap(),
     );
     assert_equivalent(installed, &boundary);
+    let gated = ctx.desired_stack.resources.contains_key("gateway");
+    let mut cfn_gated_writes = 0;
     let cfn_statements: Vec<Value> = template
         .resources
         .values()
         .filter(|r| r.properties.contains_key("Roles"))
+        .filter(|r| {
+            r.condition.as_ref().is_none_or(|condition| {
+                resolve(&serde_json::to_value(&template.conditions[condition]).unwrap()) == true
+            })
+        })
         .flat_map(|r| {
-            resolve(&serde_json::to_value(&r.properties["PolicyDocument"]).unwrap())["Statement"]
-                .as_array()
-                .unwrap()
-                .clone()
+            let document = resolve(&serde_json::to_value(&r.properties["PolicyDocument"]).unwrap());
+            if let Some(condition) = &r.condition {
+                let mut declined = parameters.clone();
+                declined.insert("InputAiEnabled".into(), json!("false"));
+                assert_eq!(
+                    evaluate(
+                        &serde_json::to_value(&template.conditions[condition]).unwrap(),
+                        &template,
+                        &declined
+                    ),
+                    json!(false),
+                    "declining AI must remove its gated policy",
+                );
+                cfn_gated_writes += document["Statement"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|s| {
+                        values(&s["Action"])
+                            .iter()
+                            .any(|a| a == "iam:PutRolePolicy")
+                    })
+                    .count();
+            }
+            document["Statement"].as_array().unwrap().clone()
         })
         .collect();
+    assert_eq!(
+        cfn_gated_writes > 0,
+        gated,
+        "gated CloudFormation role writes exercised"
+    );
     assert_eq!(
         security_grants(controller_statements, &arn),
         security_grants(&cfn_statements, &arn),
@@ -187,7 +221,7 @@ pub(super) fn assert_setup_policy_parity(
         ),
         (
             "var",
-            json!({"managing_account_id": manager.split(':').nth(4).unwrap(), "managing_role_arn": manager}),
+            json!({"managing_account_id": manager.split(':').nth(4).unwrap(), "managing_role_arn": manager, "input_ai_enabled": true}),
         ),
         (
             "aws_iam_policy",
@@ -203,6 +237,7 @@ pub(super) fn assert_setup_policy_parity(
     let terraform_boundary = document(attribute(boundary_block, "policy"), &context);
     assert_equivalent(installed, &terraform_boundary);
     assert_equivalent(&boundary, &terraform_boundary);
+    let mut tf_gated_writes = 0;
     let tf_statements: Vec<Value> = blocks
         .iter()
         .filter(|b| {
@@ -214,13 +249,44 @@ pub(super) fn assert_setup_policy_parity(
                     .get(1)
                     .is_some_and(|l| l.as_str().starts_with("management"))
         })
+        .filter(|b| {
+            b.body
+                .attributes()
+                .find(|a| a.key() == "count")
+                .is_none_or(|a| a.expr().evaluate(&context).unwrap() == hcl::Value::from(1))
+        })
         .flat_map(|b| {
-            document(attribute(b, "policy"), &context)["Statement"]
-                .as_array()
-                .unwrap()
-                .clone()
+            let policy = document(attribute(b, "policy"), &context);
+            if let Some(count) = b.body.attributes().find(|a| a.key() == "count") {
+                let mut declined = Context::new();
+                declined.declare_var(
+                    "var",
+                    hcl::to_value(json!({"input_ai_enabled": false})).unwrap(),
+                );
+                assert_eq!(
+                    count.expr().evaluate(&declined).unwrap(),
+                    hcl::Value::from(0),
+                    "declining AI must remove its gated policy"
+                );
+                tf_gated_writes += policy["Statement"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|s| {
+                        values(&s["Action"])
+                            .iter()
+                            .any(|a| a == "iam:PutRolePolicy")
+                    })
+                    .count();
+            }
+            policy["Statement"].as_array().unwrap().clone()
         })
         .collect();
+    assert_eq!(
+        tf_gated_writes > 0,
+        gated,
+        "gated Terraform role writes exercised"
+    );
     assert_eq!(
         security_grants(controller_statements, &arn),
         security_grants(&tf_statements, &arn),
@@ -307,6 +373,31 @@ fn security_grants(statements: &[Value], boundary: &str) -> BTreeSet<String> {
         "self-protection and setup-owned sandbox role guards"
     );
     assert!(writes > 0);
+    // Resource emitters can repeat an already granted stack-wide Allow on a
+    // concrete role. Ignore only that redundancy; actions and conditions must
+    // match exactly, and every Deny remains part of the comparison.
+    let grants: Vec<Value> = result
+        .iter()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    result.retain(|encoded| {
+        let grant: Value = serde_json::from_str(encoded).unwrap();
+        grant[0] != "Allow"
+            || !grants.iter().any(|other| {
+                other != &grant
+                    && other[0] == grant[0]
+                    && other[1] == grant[1]
+                    && other[3] == grant[3]
+                    && other[2]
+                        .as_str()
+                        .unwrap()
+                        .strip_suffix('*')
+                        .is_some_and(|prefix| {
+                            !prefix.contains(['*', '?'])
+                                && grant[2].as_str().unwrap().starts_with(prefix)
+                        })
+            })
+    });
     result
 }
 
@@ -353,6 +444,7 @@ fn find_import(expression: &Expression) -> Option<&Expression> {
             fields.values().find_map(find_import)
         }
         Expression::Array(items) => items.iter().find_map(find_import),
+        Expression::FuncCall(call) => call.args.iter().find_map(find_import),
         _ => None,
     }
 }

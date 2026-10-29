@@ -1282,14 +1282,17 @@ mod tests {
     /// them on itself, by the name it is created under, and on every role carrying setup's sandbox
     /// tags, Live or Frozen, and keep PassRole.
     #[rstest::rstest]
-    #[case("test-prefix", false)]
-    #[case("ssssssssssssssssssssssssssssssssssssssss", false)]
-    #[case("test-prefix", true)]
-    #[case("ssssssssssssssssssssssssssssssssssssssss", true)]
+    #[case("test-prefix", false, false)]
+    #[case("ssssssssssssssssssssssssssssssssssssssss", false, false)]
+    #[case("test-prefix", true, false)]
+    #[case("ssssssssssssssssssssssssssssssssssssssss", true, false)]
+    #[case("test-prefix", true, true)]
+    #[case("ssssssssssssssssssssssssssssssssssssssss", true, true)]
     #[tokio::test]
     async fn direct_setup_keeps_a_sandboxs_setup_roles_out_of_managements_reach(
         #[case] prefix: &str,
         #[case] physical_keys: bool,
+        #[case] gated_ai: bool,
     ) {
         let documents = Arc::new(Mutex::new(Vec::<String>::new()));
         let created_roles = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -1383,6 +1386,22 @@ mod tests {
                 crate::core::controller_test::test_function_1(),
                 ResourceLifecycle::Live,
             );
+        if gated_ai {
+            builder = builder
+                .with_gated_stack_resource(
+                    alien_core::Ai::new("gateway".into()).build(),
+                    ResourceLifecycle::Frozen,
+                    alien_core::StackInputDefinition::deployer_boolean(
+                        "aiEnabled",
+                        "Enable AI",
+                        "Create the AI gateway",
+                        Some(true),
+                    ),
+                )
+                .management_permissions(alien_core::permissions::ManagementPermissions::extend(
+                    alien_core::PermissionProfile::new().global(["ai/provision"]),
+                ));
+        }
         if physical_keys {
             builder = builder.permission_profile(
                 "key-user",
