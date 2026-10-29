@@ -1113,7 +1113,16 @@ async fn download_update(
     let pending = by_sequence(&folder.join(TO_SITE), Some(BUNDLE_EXTENSION))?;
     let mut already_carried = None;
     for (_, path) in &pending {
-        let manifest = pending_manifest(path)?;
+        let manifest = match pending_manifest(path) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                eprintln!(
+                    "Cannot reuse pending bundle {}: {error}. Downloading a replacement if needed.",
+                    path.display()
+                );
+                continue;
+            }
+        };
         if manifest.deployment_id == site.deployment_id
             && manifest.release_id == release_id
             && manifest.files.get(airgap::TARGET_FILE) == Some(&target_hash)
@@ -6240,6 +6249,154 @@ stringData:
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn refresh_publishes_new_settings_and_ack_before_removing_pending_bundles() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let target = serde_json::json!({
+            "releaseInfo": {"releaseId": "rel_new", "stack": {"id": "app"}},
+            "config": {"inputValues": {"message": "after"}}
+        });
+        let mut chart = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        let values =
+            format!("runtime:\n  image:\n    repository: {host}/operator\n    tag: fixture\n");
+        let mut header = tar::Header::new_gnu();
+        header.set_size(values.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        chart
+            .append_data(&mut header, "app/values.yaml", values.as_bytes())
+            .unwrap();
+        let chart = chart.into_inner().unwrap().finish().unwrap();
+        let chart_digest = format!("sha256:{}", hex::encode(Sha256::digest(&chart)));
+        let chart_manifest = serde_json::json!({
+            "schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "layers": [{"mediaType": "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+                "digest": chart_digest, "size": chart.len()}]
+        })
+        .to_string()
+        .into_bytes();
+        let image = br#"{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}"#.to_vec();
+        let key = BundleSigningKey::from_seed([7; 32]);
+        let public_key = key.public_key();
+        let desired = target.clone();
+        let server_host = host.clone();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = stop.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !stopped.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("accept: {error}"),
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut request = String::new();
+                std::io::BufRead::read_line(&mut reader, &mut request).unwrap();
+                let path = request.split_whitespace().nth(1).unwrap().to_string();
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                let mut bytes = vec![0; length];
+                std::io::Read::read_exact(&mut reader, &mut bytes).unwrap();
+                let body = if path.ends_with("/target") {
+                    desired.to_string().into_bytes()
+                } else if path.contains("/bundle-sources?") {
+                    serde_json::json!({"chart": {"reference": format!("{server_host}/charts/app:1"), "credentials": "caller"}}).to_string().into_bytes()
+                } else if path == "/v1/manager" {
+                    serde_json::json!({"registryHost": server_host})
+                        .to_string()
+                        .into_bytes()
+                } else if path.ends_with("/bundle-signature") {
+                    let request: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    let manifest = base64::engine::general_purpose::STANDARD
+                        .decode(request["manifest"].as_str().unwrap())
+                        .unwrap();
+                    serde_json::json!({"signature": key.sign(&manifest), "publicKey": key.public_key()}).to_string().into_bytes()
+                } else if path == "/v2/" {
+                    b"{}".to_vec()
+                } else if path == "/v2/charts/app/manifests/1" {
+                    chart_manifest.clone()
+                } else if path == format!("/v2/charts/app/blobs/{chart_digest}") {
+                    chart.clone()
+                } else if path == "/v2/operator/manifests/fixture" {
+                    image.clone()
+                } else {
+                    panic!("unexpected request: {request}");
+                };
+                std::io::Write::write_all(&mut stream, format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nDocker-Content-Digest: sha256:{}\r\nConnection: close\r\n\r\n",
+                    body.len(), hex::encode(Sha256::digest(&body)),
+                ).as_bytes()).unwrap();
+                std::io::Write::write_all(&mut stream, &body).unwrap();
+            }
+        });
+        for case in ["changed", "ack", "damaged"] {
+            let folder = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(folder.path().join(TO_SITE)).unwrap();
+            let old_path = folder.path().join(TO_SITE).join("1-rel_new.bundle");
+            let mut old_target = target.clone();
+            if case == "changed" {
+                old_target["config"]["inputValues"]["message"] = "before".into();
+            }
+            if case == "damaged" {
+                std::fs::write(&old_path, b"truncated archive").unwrap();
+            } else {
+                pending_test_bundle(&old_path, &old_target, 0);
+            }
+            let mut site = SiteState {
+                deployment_id: "dep_1".into(),
+                uploaded_through: if case == "ack" { 9 } else { 0 },
+                ..Default::default()
+            };
+            let access = ManagerAccess {
+                url: format!("http://{host}"),
+                token: "fixture".into(),
+            };
+            download_update(folder.path(), &mut site, &access, false, false, &[])
+                .await
+                .unwrap();
+            let pending =
+                by_sequence(&folder.path().join(TO_SITE), Some(BUNDLE_EXTENSION)).unwrap();
+            assert_eq!(pending.len(), 1);
+            assert!(!old_path.exists());
+            let extracted = tempfile::tempdir().unwrap();
+            airgap::unpack(&pending[0].1, extracted.path()).unwrap();
+            let manifest = airgap::verify(extracted.path(), &public_key).await.unwrap();
+            assert_eq!(manifest.telemetry_ack, (case == "ack").then_some(9));
+            assert_eq!(
+                manifest.files[airgap::TARGET_FILE],
+                hex::encode(Sha256::digest(serde_json::to_vec_pretty(&target).unwrap()))
+            );
+            let installed_target: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(extracted.path().join(airgap::TARGET_FILE)).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(installed_target, target);
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        server.join().unwrap();
     }
 
     #[test]
