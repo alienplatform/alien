@@ -160,6 +160,8 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "ses:tagresource",
                         "ses:untagresource",
                         "apigateway:tagresource",
+                        "lambda:tagresource",
+                        "lambda:untagresource",
                     ]
                     .iter()
                     .any(|tagging| {
@@ -206,13 +208,34 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "ses:tagresource",
                         "ses:untagresource",
                         "apigateway:tagresource",
+                        "lambda:tagresource",
+                        "lambda:untagresource",
                     ]
                     .iter()
                     .any(|tagging| {
                         iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
                     })
                 });
-                assert!(owned || (creation && !non_ec2), "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
+                let lambda_tags_only = entry.grant.actions.iter().flatten().all(|action| {
+                    matches!(action.as_str(), "lambda:TagResource" | "lambda:ListTags")
+                });
+                let lambda_prefix = lambda_tags_only
+                    && binding.not_resources.is_empty()
+                    && !binding.resources.is_empty()
+                    && binding.resources.iter().all(|arn| {
+                        arn.starts_with("arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-")
+                    });
+                // MicroVM image creation checks TagResource on "*". Excluding every
+                // Lambda ARN permits that check without permitting existing-resource tags.
+                let lambda_creation = entry.grant.actions.as_ref().is_some_and(|actions| {
+                    actions.len() == 1 && actions[0] == "lambda:TagResource"
+                }) && binding.resources.is_empty()
+                    && binding.not_resources == ["arn:*:lambda:*:*:*"]
+                    && equals
+                        .and_then(|c| c.get("aws:RequestTag/${stackTag}"))
+                        .is_some_and(|value| value == "${stackPrefix}");
+                assert!(owned || (creation && !non_ec2) || lambda_prefix || lambda_creation,
+                    "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
             }
         }
     }
@@ -495,6 +518,89 @@ fn api_gateway_tagging_requires_an_owned_endpoint() {
                         );
                     }
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn sandbox_creation_tag_grants_exclude_existing_lambda_resources() {
+    let context = PermissionContext::new()
+        .with_stack_prefix("stack-a")
+        .with_resource_name("sandbox")
+        .with_resource_id("sandbox")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-west-2");
+    for binding in [BindingTarget::Stack, BindingTarget::Resource] {
+        let policy = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(
+                get_permission_set("sandbox/provision").unwrap(),
+                binding,
+                &context,
+            )
+            .unwrap();
+        for manager in ["runtime", "setup"] {
+            let tagging = |resource: &str| {
+                Request::new("lambda:TagResource", resource).request_tags(&[
+                    (ALIEN_STACK_TAG_KEY, "stack-a"),
+                    (ALIEN_MANAGED_BY_TAG_KEY, manager),
+                    (alien_core::ALIEN_RESOURCE_TAG_KEY, "sandbox"),
+                ])
+            };
+            assert_eq!(
+                evaluate(&policy.statement, &tagging("*")),
+                Decision::Allowed
+            );
+            assert_eq!(
+                evaluate(&policy.statement, &Request::new("lambda:TagResource", "*")),
+                Decision::NotAllowed
+            );
+            assert_eq!(
+                evaluate(
+                    &policy.statement,
+                    &tagging("*").with("aws:RequestTag/deployment", "stack-b")
+                ),
+                Decision::NotAllowed
+            );
+            for partition in ["aws", "aws-us-gov", "aws-cn"] {
+                for resource in [
+                    "function:stack-b-worker",
+                    "microvm-image:stack-b-sandbox",
+                    "microvm-image:stack-a-sandbox-2",
+                    "event-source-mapping:example",
+                    "code-signing-config:example",
+                    "capacity-provider:example",
+                    "network-connector:example",
+                    "web-function:example",
+                ] {
+                    let arn = format!("arn:{partition}:lambda:us-west-2:123456789012:{resource}");
+                    let allowed = partition == "aws"
+                        && binding == BindingTarget::Stack
+                        && resource == "microvm-image:stack-a-sandbox-2";
+                    assert_eq!(
+                        evaluate(&policy.statement, &tagging(&arn)),
+                        if allowed {
+                            Decision::Allowed
+                        } else {
+                            Decision::NotAllowed
+                        },
+                        "{binding:?} {manager} {arn}"
+                    );
+                }
+            }
+            let own = "arn:aws:lambda:us-west-2:123456789012:microvm-image:stack-a-sandbox";
+            assert_eq!(
+                evaluate(&policy.statement, &tagging(own)),
+                Decision::Allowed
+            );
+            for arn in [
+                "arn:aws:lambda:us-east-1:123456789012:microvm-image:stack-a-sandbox",
+                "arn:aws:lambda:us-west-2:999999999999:microvm-image:stack-a-sandbox",
+            ] {
+                assert_eq!(
+                    evaluate(&policy.statement, &tagging(arn)),
+                    Decision::NotAllowed
+                );
             }
         }
     }
