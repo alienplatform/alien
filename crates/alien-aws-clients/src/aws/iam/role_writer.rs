@@ -143,7 +143,7 @@ impl<'a> IamRoleWriter<'a> {
             .list_attached_role_policies(role_name)
             .await?
             .list_attached_role_policies_result;
-        // The client currently returns one page. Never adopt on a partial audit.
+        // Never adopt on a partial audit, including responses from other IamApi implementations.
         if policies.is_truncated == Some(true) {
             return Err(AlienError::new(ErrorData::InvalidInput {
                 message: format!(

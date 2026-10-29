@@ -51,6 +51,7 @@ pub trait IamApi: Send + Sync + Debug {
         request: CreateOpenIdConnectProviderRequest,
     ) -> Result<CreateOpenIdConnectProviderResponse>;
     async fn delete_open_id_connect_provider(&self, arn: &str) -> Result<()>;
+    /// Lists all attached managed policies before returning any results.
     async fn list_attached_role_policies(
         &self,
         role_name: &str,
@@ -533,10 +534,56 @@ impl IamApi for IamClient {
         &self,
         role_name: &str,
     ) -> Result<ListAttachedRolePoliciesResponse> {
-        let params = vec![("RoleName".to_string(), role_name.to_string())];
-        let body = Self::build_form_body("ListAttachedRolePolicies", "2010-05-08", params);
-        self.post_xml(body, "ListAttachedRolePolicies", role_name)
-            .await
+        let mut marker = None;
+        let mut seen_markers = HashSet::new();
+        let mut attached_policies = Vec::new();
+        loop {
+            let mut params = vec![("RoleName".to_string(), role_name.to_string())];
+            if let Some(marker) = marker.take() {
+                params.push(("Marker".to_string(), marker));
+            }
+            let body = Self::build_form_body("ListAttachedRolePolicies", "2010-05-08", params);
+            let response: ListAttachedRolePoliciesResponse = self
+                .post_xml(body, "ListAttachedRolePolicies", role_name)
+                .await?;
+            let result = response.list_attached_role_policies_result;
+            if let Some(names) = result.attached_policies {
+                attached_policies.extend(names.member);
+            }
+            match result.is_truncated {
+                Some(false) => {
+                    return Ok(ListAttachedRolePoliciesResponse {
+                        list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                            attached_policies: Some(AttachedPolicies {
+                                member: attached_policies,
+                            }),
+                            is_truncated: Some(false),
+                            marker: None,
+                        },
+                    });
+                }
+                Some(true) => {
+                    let next = result.marker.filter(|value| !value.is_empty()).ok_or_else(|| {
+                        AlienError::new(ErrorData::GenericError {
+                            message: format!("ListAttachedRolePolicies for '{role_name}' returned a truncated page without a continuation marker"),
+                        })
+                    })?;
+                    if !seen_markers.insert(next.clone()) {
+                        return Err(AlienError::new(ErrorData::GenericError {
+                            message: format!(
+                                "ListAttachedRolePolicies for '{role_name}' repeated a continuation marker"
+                            ),
+                        }));
+                    }
+                    marker = Some(next);
+                }
+                None => {
+                    return Err(AlienError::new(ErrorData::GenericError {
+                        message: format!("ListAttachedRolePolicies for '{role_name}' omitted IsTruncated; cannot verify the policy list is complete"),
+                    }));
+                }
+            }
+        }
     }
 
     async fn create_policy(
