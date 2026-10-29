@@ -15,7 +15,6 @@
             "s3:AbortMultipartUpload",
             "s3:DeleteObjectVersion",
             "s3:PutObjectAcl",
-            "s3:PutObjectTagging",
             "s3:RestoreObject"
           ]
         },
@@ -25,6 +24,19 @@
           },
           "resource": {
             "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["s3:PutObjectTagging"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-*/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-${resourceId}/*"]
           }
         }
       }

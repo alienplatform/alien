@@ -346,6 +346,7 @@ fn bucket_path(label: &str, attribute: &str) -> String {
 fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
     for (owner_label, permission_refs) in storage_permission_owners(ctx) {
         let context = stack_permission_context(ctx)
+            .with_resource_id(ctx.resource_id)
             .with_resource_name(format!("${{{}}}", bucket_path(label, "bucket")));
 
         for (idx, permission_ref) in permission_refs.iter().enumerate() {

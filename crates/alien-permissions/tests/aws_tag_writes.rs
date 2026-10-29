@@ -165,6 +165,13 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
         "ecr:untagresource",
         "dynamodb:tagresource",
         "dynamodb:untagresource",
+        "s3:putbuckettagging",
+        "s3:putobjecttagging",
+        "s3:putobjectversiontagging",
+        "s3:deleteobjecttagging",
+        "s3:deleteobjectversiontagging",
+        "s3:tagresource",
+        "s3:untagresource",
         "sqs:tagqueue",
         "sqs:untagqueue",
         "acm:addtagstocertificate",
@@ -258,6 +265,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     && binding.resources.iter().all(|arn| {
                         [
                             "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-",
+                            "arn:aws:s3:::${stackPrefix}-",
                             "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-",
                             "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-",
                             "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-",
