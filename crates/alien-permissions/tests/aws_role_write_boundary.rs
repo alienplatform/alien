@@ -11,7 +11,7 @@ use alien_permissions::{
 use iam_policy::{evaluate, wildcard_match, Decision, Request};
 use serde_json::json;
 
-const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/my-stack-permissions-boundary";
+const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary";
 const ROLE: &str = "arn:aws:iam::123456789012:role/my-stack-jobs";
 const SETS: &[&str] = &[
     "service-account/provision",
@@ -258,7 +258,7 @@ fn catalog_management_role_writes_require_boundary_and_ownership() {
 fn cloudformation_resolves_boundary_arn_and_preserves_tag_conditions() {
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let context = common::create_test_context().with_aws_permissions_boundary_arn(
-        "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-permissions-boundary",
+        "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-boundary",
     );
     let policy = generator
         .generate_policy(
@@ -275,7 +275,7 @@ fn cloudformation_resolves_boundary_arn_and_preserves_tag_conditions() {
     let conditions = &write.condition.as_ref().unwrap()["StringEquals"];
     assert_eq!(
         conditions["iam:PermissionsBoundary"],
-        json!({"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-my-stack-permissions-boundary"})
+        json!({"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-my-stack-deployment-management-boundary"})
     );
     assert_eq!(
         conditions[&format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}")],

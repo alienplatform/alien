@@ -776,7 +776,7 @@ mod tests {
         let generator = alien_permissions::generators::AwsCloudFormationPermissionsGenerator::new();
         let context = super::super::service_account::permission_context()
             .with_aws_permissions_boundary_arn(
-                "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-permissions-boundary"
+                "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary"
                     .to_string(),
             );
         let mut statements = Vec::new();

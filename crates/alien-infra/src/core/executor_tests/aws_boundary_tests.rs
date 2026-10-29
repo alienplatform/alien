@@ -20,7 +20,7 @@ use alien_permissions::PermissionContext;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-const ARN: &str = "arn:aws:iam::123456789012:policy/boundary-test-permissions-boundary";
+const ARN: &str = "arn:aws:iam::123456789012:policy/boundary-test-deployment-management-boundary";
 
 fn permission_context(prefix: &str) -> PermissionContext {
     PermissionContext::new()

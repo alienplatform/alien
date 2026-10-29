@@ -1505,7 +1505,7 @@ mod tests {
         };
         use alien_core::{KubernetesCluster, RemoteStackManagement, ServiceAccount};
 
-        let boundary = "arn:aws:iam::123456789012:policy/test-permissions-boundary";
+        let boundary = "arn:aws:iam::123456789012:policy/test-deployment-management-boundary";
         let mut management = AwsRemoteStackManagementController::mock_ready("test-management");
         management.permissions_boundary_arn = Some(boundary.to_string());
         let mut executor = SingleControllerExecutor::builder()

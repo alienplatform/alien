@@ -68,11 +68,11 @@ fn aws_boundary_survives_import_and_controller_restore() {
         ("permissionsBoundaryArn", None),
         (
             "permissionsBoundaryArn",
-            Some("arn:aws:iam::123456789012:policy/test-permissions-boundary"),
+            Some("arn:aws:iam::123456789012:policy/test-deployment-management-boundary"),
         ),
         (
             "awsPermissionsBoundaryArn",
-            Some("arn:aws:iam::123456789012:policy/test-permissions-boundary"),
+            Some("arn:aws:iam::123456789012:policy/test-deployment-management-boundary"),
         ),
     ] {
         let mut data = json!({
@@ -164,7 +164,7 @@ fn rerunning_setup_replaces_the_installed_boundary_document() {
                 "roleName": "test-management",
                 "roleArn": "arn:aws:iam::123456789012:role/test-management",
                 "managementPermissionsApplied": true,
-                "permissionsBoundaryArn": "arn:aws:iam::123456789012:policy/test-permissions-boundary",
+                "permissionsBoundaryArn": "arn:aws:iam::123456789012:policy/test-deployment-management-boundary",
                 "permissionsBoundaryDocument": document,
             }),
             &ctx,
@@ -213,7 +213,7 @@ fn aws_boundary_import_rejects_incomplete_or_unreadable_setup() {
         resource: &entry,
     };
     let registry = ImporterRegistry::built_in();
-    let arn = json!("arn:aws:iam::123456789012:policy/test-permissions-boundary");
+    let arn = json!("arn:aws:iam::123456789012:policy/test-deployment-management-boundary");
     for (boundary_arn, document) in [
         (arn.clone(), serde_json::Value::Null),
         (serde_json::Value::Null, installed_boundary_document()),

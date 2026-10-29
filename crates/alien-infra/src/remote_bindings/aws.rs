@@ -286,7 +286,7 @@ mod tests {
     use crate::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
 
-    const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/test-permissions-boundary";
+    const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/test-deployment-management-boundary";
 
     fn role() -> serde_json::Value {
         serde_json::json!({

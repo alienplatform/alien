@@ -85,7 +85,7 @@ fn rejects_oversized_statements_even_after_a_valid_chunk() {
 fn bounded_catalog_chunks_preserve_conditions_and_fit_the_attachment_budget() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let context = aws_terraform_permission_context().with_aws_permissions_boundary_arn(
-        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${local.resource_prefix}-permissions-boundary",
+        "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${local.resource_prefix}-deployment-management-boundary",
     );
     let mut statements = Vec::new();
     for id in alien_permissions::list_permission_set_ids() {
@@ -156,7 +156,7 @@ fn bounded_catalog_chunks_preserve_conditions_and_fit_the_attachment_budget() {
         assert_eq!(
             statement["Condition"]["StringEquals"]["iam:PermissionsBoundary"],
             format!(
-                "arn:aws:iam::123456789012:policy/{}-permissions-boundary",
+                "arn:aws:iam::123456789012:policy/{}-deployment-management-boundary",
                 "p".repeat(40)
             )
         );

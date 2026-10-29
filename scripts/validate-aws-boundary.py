@@ -77,7 +77,7 @@ def main():
     if len(chunks) > 10 or any(len(encode(document(chunk))) > 6144 for chunk in chunks):
         raise RuntimeError("Generated management policy exceeds test role managed-policy quotas")
     iam, s3, lamb = admin.client("iam"), admin.client("s3"), admin.client("lambda")
-    boundary_arn = f"arn:aws:iam::{account}:policy/{prefix}-permissions-boundary"
+    boundary_arn = f"arn:aws:iam::{account}:policy/{prefix}-deployment-management-boundary"
     role_arn = lambda name: f"arn:aws:iam::{account}:role/{name}"
     lambda_trust = trust({"Service": "lambda.amazonaws.com"})
     admin_policy = encode(document([{"Effect": "Allow", "Action": "*", "Resource": "*"}]))
@@ -111,10 +111,10 @@ def main():
     try:
         template = {"AWSTemplateFormatVersion": "2010-09-09", "Resources": {
             "Boundary": {"Type": "AWS::IAM::ManagedPolicy", "Properties": {
-                "ManagedPolicyName": prefix + "-permissions-boundary", "PolicyDocument": boundary}}}}
+                "ManagedPolicyName": prefix + "-deployment-management-boundary", "PolicyDocument": boundary}}}}
         admin.client("cloudformation").validate_template(TemplateBody=encode(template))
         print(f"PASS CloudFormation validate-template; boundary {len(encode(boundary))} characters", flush=True)
-        policies.append(iam.create_policy(PolicyName=prefix + "-permissions-boundary",
+        policies.append(iam.create_policy(PolicyName=prefix + "-deployment-management-boundary",
                                          PolicyDocument=encode(boundary))["Policy"]["Arn"])
         create_role(iam, prefix + "-management", AssumeRolePolicyDocument=trust({"AWS": f"arn:aws:iam::{account}:root"}))
         for index, chunk in enumerate(chunks):

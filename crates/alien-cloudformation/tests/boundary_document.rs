@@ -73,7 +73,7 @@ fn validate_document(document: &Value) {
             "Boundary": {
                 "Type": "AWS::IAM::ManagedPolicy",
                 "Properties": {
-                    "ManagedPolicyName": {"Fn::Sub": "${AWS::StackName}-permissions-boundary"},
+                    "ManagedPolicyName": {"Fn::Sub": "${AWS::StackName}-deployment-management-boundary"},
                     "PolicyDocument": rendered
                 }
             }

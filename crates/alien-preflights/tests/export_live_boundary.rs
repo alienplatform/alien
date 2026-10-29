@@ -64,7 +64,7 @@ async fn export_live_boundary_policies() {
         .with_managing_account_id(&account)
         .with_managing_role_arn(format!("arn:aws:iam::{account}:role/{prefix}-management"))
         .with_aws_permissions_boundary_arn(format!(
-            "arn:aws:iam::{account}:policy/{prefix}-permissions-boundary"
+            "arn:aws:iam::{account}:policy/{prefix}-deployment-management-boundary"
         ));
     let boundary = aws_stack_permissions_boundary(&stack, &context, |_, scope| {
         assert_eq!(scope, "*");

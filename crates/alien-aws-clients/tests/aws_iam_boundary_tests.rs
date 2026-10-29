@@ -10,7 +10,7 @@ use httpmock::prelude::*;
 use mockall::{predicate::eq, Sequence};
 use serde_json::json;
 
-const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/test-permissions-boundary";
+const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/test-deployment-management-boundary";
 
 fn expect_role(iam: &mut MockIamApi, boundary: Option<&'static str>) {
     iam.expect_get_role()

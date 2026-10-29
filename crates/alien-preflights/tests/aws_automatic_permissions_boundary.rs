@@ -16,7 +16,7 @@ use iam_policy::{evaluate, wildcard_match, Decision, Request};
 use serde_json::json;
 use std::collections::BTreeSet;
 
-const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/sample-permissions-boundary";
+const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/sample-deployment-management-boundary";
 const ROLE: &str = "arn:aws:iam::123456789012:role/sample-jobs";
 const WRITES: &[&str] = &[
     "iam:CreateRole",

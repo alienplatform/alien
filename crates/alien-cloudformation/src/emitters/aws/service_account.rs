@@ -294,7 +294,7 @@ pub(crate) fn stack_permission_context(ctx: &EmitContext<'_>) -> PermissionConte
         .any(|(_, entry)| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
     {
         context.aws_permissions_boundary_arn = Some(
-            "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-permissions-boundary"
+            "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary"
                 .to_string(),
         );
     }

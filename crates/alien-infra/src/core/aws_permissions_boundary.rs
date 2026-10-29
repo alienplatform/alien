@@ -603,8 +603,10 @@ mod tests {
             .add(cluster, ResourceLifecycle::Frozen)
             .build();
         let mut base = context();
-        base.aws_permissions_boundary_arn =
-            Some("arn:aws:iam::123456789012:policy/boundary-test-permissions-boundary".to_string());
+        base.aws_permissions_boundary_arn = Some(
+            "arn:aws:iam::123456789012:policy/boundary-test-deployment-management-boundary"
+                .to_string(),
+        );
         let resolved =
             boundary_grant_context(&stack, &StackState::new(Platform::Aws), &base, "cluster")
                 .unwrap();

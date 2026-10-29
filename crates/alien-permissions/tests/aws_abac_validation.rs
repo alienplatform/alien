@@ -1376,7 +1376,7 @@ fn legacy_backup_role_cleanup_is_name_scoped_and_removal_only() {
             set,
             BindingTarget::Stack,
             &context.with_aws_permissions_boundary_arn(
-                "arn:aws:iam::123456789012:policy/my-stack-permissions-boundary",
+                "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary",
             ),
         )
         .unwrap();

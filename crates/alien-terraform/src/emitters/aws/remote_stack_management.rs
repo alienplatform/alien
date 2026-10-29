@@ -57,10 +57,9 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             [
                 attr(
                     "name",
-                    expr::template("${local.resource_prefix}-permissions-boundary"),
+                    expr::template("${local.resource_prefix}-deployment-management-boundary"),
                 ),
                 attr("policy", boundary_document(ctx)?),
-                attr("tags", tags(ctx, "management")),
             ],
         ));
         let generator = AwsRuntimePermissionsGenerator::new();

@@ -960,7 +960,7 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
     assert_eq!(
         boundary_denies[0]["Resource"],
         serde_json::json!([
-            format!("arn:{PARITY_PARTITION}:iam::{PARITY_ACCOUNT}:policy/{PARITY_PREFIX}-permissions-boundary"),
+            format!("arn:{PARITY_PARTITION}:iam::{PARITY_ACCOUNT}:policy/{PARITY_PREFIX}-deployment-management-boundary"),
             format!("arn:aws:iam::{PARITY_ACCOUNT}:role/{PARITY_PREFIX}-*")
         ])
     );
@@ -1062,7 +1062,7 @@ fn evaluate_policy_expression(expression: &hcl::Expression) -> serde_json::Value
         let resolved = text
             .replace(
                 "${aws_iam_policy.management_permissions_boundary.arn}",
-                &format!("arn:{PARITY_PARTITION}:iam::{PARITY_ACCOUNT}:policy/{PARITY_PREFIX}-permissions-boundary"),
+                &format!("arn:{PARITY_PARTITION}:iam::{PARITY_ACCOUNT}:policy/{PARITY_PREFIX}-deployment-management-boundary"),
             )
             .replace("${local.resource_prefix}", PARITY_PREFIX)
             .replace("${data.aws_partition.current.partition}", PARITY_PARTITION)

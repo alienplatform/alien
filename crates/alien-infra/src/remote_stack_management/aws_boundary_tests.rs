@@ -1,9 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 use alien_aws_clients::iam::{
-    CreatePolicyResponse, CreatePolicyResult, CreatePolicyVersionResponse,
-    CreatePolicyVersionResult, ListPolicyVersionsResponse, ListPolicyVersionsResult, MockIamApi,
-    Policy, PolicyVersion, PolicyVersions,
+    AttachedPolicies, AttachedPolicy, CreatePolicyResponse, CreatePolicyResult,
+    CreatePolicyVersionResponse, CreatePolicyVersionResult, ListAttachedRolePoliciesResponse,
+    ListAttachedRolePoliciesResult, ListPolicyVersionsResponse, ListPolicyVersionsResult,
+    MockIamApi, Policy, PolicyVersion, PolicyVersions,
 };
 use alien_client_core::ErrorData as ClientError;
 use futures::executor::block_on;
@@ -14,7 +15,7 @@ use crate::core::{
     controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
 };
 
-const ARN: &str = "arn:aws:iam::123456789012:policy/test-prefix-permissions-boundary";
+const ARN: &str = "arn:aws:iam::123456789012:policy/test-prefix-deployment-management-boundary";
 
 async fn executor(iam: MockIamApi) -> SingleControllerExecutor {
     let iam = Arc::new(iam);
@@ -67,7 +68,7 @@ async fn installation_records_exact_document_and_retries_without_reinstalling() 
     iam.expect_create_policy()
         .times(1)
         .returning(move |name, document, _| {
-            assert_eq!(name, "test-prefix-permissions-boundary");
+            assert_eq!(name, "test-prefix-deployment-management-boundary");
             *captured.lock().unwrap() =
                 Some(serde_json::from_str::<serde_json::Value>(document).unwrap());
             Ok(CreatePolicyResponse {
@@ -401,4 +402,92 @@ async fn kubernetes_management_scope_keeps_boundary_installed_in_current_step() 
         .unwrap();
     assert_eq!(resolved.aws_permissions_boundary_arn.as_deref(), Some(ARN));
     assert_eq!(resolved.resource_id.as_deref(), Some("cluster"));
+}
+
+#[tokio::test]
+async fn stale_chunk_cleanup_preserves_boundary_and_unrelated_policies() {
+    let controller = AwsRemoteStackManagementController::default();
+    let mut iam = MockIamApi::new();
+    iam.expect_list_attached_role_policies()
+        .times(1)
+        .returning(|_| {
+            Ok(ListAttachedRolePoliciesResponse {
+                list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                    attached_policies: Some(AttachedPolicies {
+                        member: [
+                            "test-prefix-deployment-management-0",
+                            "test-prefix-deployment-management-1",
+                            "test-prefix-deployment-management-boundary",
+                            "other-deployment-management-1",
+                            "test-prefix-deployment-management-01",
+                            "test-prefix-deployment-management-custom",
+                        ]
+                        .into_iter()
+                        .map(|name| AttachedPolicy {
+                            policy_name: name.to_string(),
+                            policy_arn: format!("arn:aws:iam::123456789012:policy/{name}"),
+                        })
+                        .collect(),
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+    let stale = "arn:aws:iam::123456789012:policy/test-prefix-deployment-management-1";
+    iam.expect_detach_role_policy()
+        .times(1)
+        .returning(move |role, arn| {
+            assert_eq!(role, "test-prefix-management");
+            assert_eq!(arn, stale);
+            Ok(())
+        });
+    iam.expect_list_policy_versions()
+        .times(1)
+        .returning(move |arn| {
+            assert_eq!(arn, stale);
+            Ok(ListPolicyVersionsResponse {
+                list_policy_versions_result: ListPolicyVersionsResult {
+                    versions: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+    iam.expect_delete_policy().times(1).returning(move |arn| {
+        assert_eq!(arn, stale);
+        Ok(())
+    });
+    let executor = executor(MockIamApi::new()).await;
+    executor
+        .with_context(|ctx| {
+            block_on(
+                controller.reconcile_owned_management_policies(
+                    ctx,
+                    &iam,
+                    "test-prefix-management",
+                    &[
+                        "arn:aws:iam::123456789012:policy/test-prefix-deployment-management-0"
+                            .to_string(),
+                    ],
+                ),
+            )
+        })
+        .unwrap();
+}
+
+#[test]
+fn chunk_recognition_uses_the_exact_generated_name_even_after_truncation() {
+    let controller = AwsRemoteStackManagementController::default();
+    for prefix in ["test-prefix".to_string(), "s".repeat(200)] {
+        for index in [0, 9, 10, 999] {
+            let name = controller.management_policy_name(&prefix, index);
+            assert!(controller.is_owned_management_policy_name(&prefix, &name));
+            assert!(!controller.is_owned_management_policy_name(&prefix, &format!("{name}-copy")));
+        }
+        assert!(!controller.is_owned_management_policy_name(
+            &prefix,
+            &format!("{prefix}-deployment-management-boundary"),
+        ));
+    }
 }

@@ -624,8 +624,9 @@ fn policy_document_size(statements: &[AwsIamStatement]) -> Result<usize> {
             let token = "${local.resource_prefix}";
             let mut size = policy.len() + policy.matches(token).count() * (40 - token.len());
             // Boundary attributes resolve to an ARN containing the maximum prefix.
-            let boundary_arn_len =
-                "arn:aws:iam::123456789012:policy/".len() + 40 + "-permissions-boundary".len();
+            let boundary_arn_len = "arn:aws:iam::123456789012:policy/".len()
+                + 40
+                + "-deployment-management-boundary".len();
             for reference in policy.split("${aws_iam_policy.").skip(1) {
                 if let Some((reference, _)) = reference.split_once('}') {
                     if reference.ends_with("_permissions_boundary.arn") {

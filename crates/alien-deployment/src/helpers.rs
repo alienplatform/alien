@@ -2385,8 +2385,9 @@ mod tests {
                 alien_infra::AwsRemoteStackManagementController::mock_ready("management"),
             )))
             .unwrap();
-        saved.internal_state.as_mut().unwrap()["permissionsBoundaryArn"] =
-            serde_json::json!("arn:aws:iam::123456789012:policy/test-permissions-boundary");
+        saved.internal_state.as_mut().unwrap()["permissionsBoundaryArn"] = serde_json::json!(
+            "arn:aws:iam::123456789012:policy/test-deployment-management-boundary"
+        );
         let mut state = StackState::new(Platform::Aws);
         state.resources.insert("management".to_string(), saved);
         let client = ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {

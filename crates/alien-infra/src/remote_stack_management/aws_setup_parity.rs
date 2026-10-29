@@ -31,7 +31,7 @@ pub(super) fn assert_setup_policy_parity(
         .unwrap()
         .unwrap()
         .managing_role_arn;
-    let arn = format!("arn:aws:iam::{account}:policy/{prefix}-permissions-boundary");
+    let arn = format!("arn:aws:iam::{account}:policy/{prefix}-deployment-management-boundary");
     let role = format!("{prefix}-management");
     let role_arn = format!("arn:aws:iam::{account}:role/{role}");
     let template = generate_cloudformation_template(

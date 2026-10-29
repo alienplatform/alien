@@ -768,7 +768,7 @@ Resources:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       ManagedPolicyName:
-        Fn::Sub: ${AWS::StackName}-permissions-boundary
+        Fn::Sub: ${AWS::StackName}-deployment-management-boundary
       PolicyDocument:
         Statement:
         - Effect: Allow

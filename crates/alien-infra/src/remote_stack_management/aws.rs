@@ -349,7 +349,10 @@ impl AwsRemoteStackManagementController {
                             }
                         }
 
-                        if self.is_owned_management_policy_name(&policy.policy_name) {
+                        if self.is_owned_management_policy_name(
+                            ctx.resource_prefix,
+                            &policy.policy_name,
+                        ) {
                             self.delete_owned_policy(client.as_ref(), &policy.policy_arn)
                                 .await?;
                         }
@@ -653,7 +656,7 @@ impl AwsRemoteStackManagementController {
         let mut context = self.permission_context(ctx)?;
         context.aws_permissions_boundary_arn = Some(self.management_policy_arn(
             &ctx.get_aws_config()?.account_id,
-            &format!("{}-permissions-boundary", ctx.resource_prefix),
+            &format!("{}-deployment-management-boundary", ctx.resource_prefix),
         ));
         aws_permissions_boundary_for_stack(ctx.desired_stack, ctx.state, &context)
     }
@@ -675,7 +678,7 @@ impl AwsRemoteStackManagementController {
             return Ok(());
         }
         let aws = ctx.get_aws_config()?;
-        let name = format!("{}-permissions-boundary", ctx.resource_prefix);
+        let name = format!("{}-deployment-management-boundary", ctx.resource_prefix);
         let arn = self.management_policy_arn(&aws.account_id, &name);
         let serialized = serde_json::to_string(&document)
             .into_alien_error()
@@ -1076,7 +1079,7 @@ impl AwsRemoteStackManagementController {
 
     async fn reconcile_owned_management_policies(
         &self,
-        _ctx: &ResourceControllerContext<'_>,
+        ctx: &ResourceControllerContext<'_>,
         client: &dyn IamApi,
         role_name: &str,
         desired_policy_arns: &[String],
@@ -1099,7 +1102,7 @@ impl AwsRemoteStackManagementController {
             .unwrap_or_default();
 
         for policy in attached {
-            if !self.is_owned_management_policy_name(&policy.policy_name)
+            if !self.is_owned_management_policy_name(ctx.resource_prefix, &policy.policy_name)
                 || desired.contains(policy.policy_arn.as_str())
             {
                 continue;
@@ -1214,8 +1217,14 @@ impl AwsRemoteStackManagementController {
         format!("arn:aws:iam::{account_id}:policy/{policy_name}")
     }
 
-    fn is_owned_management_policy_name(&self, policy_name: &str) -> bool {
-        policy_name.contains(MANAGED_POLICY_BASE_NAME)
+    fn is_owned_management_policy_name(&self, resource_prefix: &str, policy_name: &str) -> bool {
+        let Some((_, suffix)) = policy_name.rsplit_once('-') else {
+            return false;
+        };
+        let Ok(index) = suffix.parse::<usize>() else {
+            return false;
+        };
+        policy_name == self.management_policy_name(resource_prefix, index)
     }
 
     /// Creates a controller in a ready state with mock values for testing purposes.
@@ -1350,7 +1359,7 @@ mod tests {
             });
         iam.expect_attach_role_policy().returning(|_, arn| {
             assert!(
-                !arn.ends_with("-permissions-boundary"),
+                !arn.ends_with("-deployment-management-boundary"),
                 "the boundary is never an identity grant"
             );
             Ok(())

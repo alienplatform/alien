@@ -51,7 +51,7 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
         let mut boundary = CfResource::new(boundary_id, "AWS::IAM::ManagedPolicy".to_string());
         boundary.properties.insert(
             "ManagedPolicyName".to_string(),
-            CfExpression::sub("${AWS::StackName}-permissions-boundary"),
+            CfExpression::sub("${AWS::StackName}-deployment-management-boundary"),
         );
         boundary
             .properties
@@ -107,7 +107,7 @@ fn boundary_document(ctx: &EmitContext<'_>) -> Result<CfExpression> {
             ))
             .with_managing_account_id("210987654321")
             .with_aws_permissions_boundary_arn(format!(
-                "arn:aws:iam::123456789012:policy/{}-permissions-boundary",
+                "arn:aws:iam::123456789012:policy/{}-deployment-management-boundary",
                 "s".repeat(40)
             )),
     )?;
@@ -119,7 +119,7 @@ fn boundary_document(ctx: &EmitContext<'_>) -> Result<CfExpression> {
             .with_managing_role_arn("${ManagingRoleArn}")
             .with_managing_account_id("${managingAccountId}")
             .with_aws_permissions_boundary_arn(
-                "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-permissions-boundary",
+                "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary",
             ),
     )?;
     let rendered = AwsCloudFormationPermissionsGenerator::new()
@@ -267,7 +267,7 @@ fn remote_management_trust_policy(ctx: &EmitContext<'_>) -> CfExpression {
 fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
-    let boundary_arn = "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-permissions-boundary";
+    let boundary_arn = "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary";
     let context = permission_context().with_aws_permissions_boundary_arn(boundary_arn);
 
     if let Some(profile) = ctx.stack.management().profile() {

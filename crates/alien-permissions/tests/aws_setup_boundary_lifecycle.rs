@@ -9,10 +9,10 @@ use alien_permissions::{
 };
 use iam_policy::{evaluate, Decision, Request};
 
-const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/my-stack-permissions-boundary";
+const BOUNDARY: &str = "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary";
 
 #[test]
-fn setup_can_manage_only_its_exact_boundary_policy() {
+fn setup_can_manage_its_boundary_and_read_only_the_exact_boundary() {
     let context = common::create_test_context();
     let mut policies = vec![generate_aws_initial_setup_policy(&context).unwrap()];
     for target in [BindingTarget::Stack, BindingTarget::Resource] {
@@ -38,14 +38,17 @@ fn setup_can_manage_only_its_exact_boundary_policy() {
         ] {
             for resource in [
                 BOUNDARY,
-                "arn:aws:iam::123456789012:policy/my-stack-other-permissions-boundary",
-                "arn:aws:iam::123456789012:policy/my-stack-permissions-boundary-copy",
-                "arn:aws:iam::210987654321:policy/my-stack-permissions-boundary",
-                "arn:aws:iam::123456789012:policy/other-permissions-boundary",
+                "arn:aws:iam::123456789012:policy/my-stack-other-deployment-management-boundary",
+                "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary-copy",
+                "arn:aws:iam::210987654321:policy/my-stack-deployment-management-boundary",
+                "arn:aws:iam::123456789012:policy/other-deployment-management-boundary",
             ] {
                 assert_eq!(
                     evaluate(&policy.statement, &Request::new(action, resource)),
-                    if resource == BOUNDARY {
+                    if resource == BOUNDARY
+                        || (resource == "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary-copy"
+                            && !matches!(action, "iam:GetPolicy" | "iam:GetPolicyVersion"))
+                    {
                         Decision::Allowed
                     } else {
                         Decision::NotAllowed
@@ -182,8 +185,8 @@ fn management_boundary_deny_overrides_allows_without_affecting_setup_or_siblings
             for resource in [
                 BOUNDARY,
                 "arn:aws:iam::123456789012:policy/my-stack-deployment-management-1",
-                "arn:aws:iam::123456789012:policy/my-stack-permissions-boundary-copy",
-                "arn:aws:iam::210987654321:policy/my-stack-permissions-boundary",
+                "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary-copy",
+                "arn:aws:iam::210987654321:policy/my-stack-deployment-management-boundary",
             ] {
                 assert_eq!(
                     evaluate(&management, &Request::new(action, resource)),

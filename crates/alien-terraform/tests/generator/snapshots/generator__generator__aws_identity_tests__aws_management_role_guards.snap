@@ -62,7 +62,7 @@ expression: "serde_json::to_string_pretty(&guards).expect(\"serializes\")"
       "iam:DeleteRolePermissionsBoundary"
     ],
     "Resource": [
-      "arn:aws-us-gov:iam::987654321098:policy/acme-parity-permissions-boundary",
+      "arn:aws-us-gov:iam::987654321098:policy/acme-parity-deployment-management-boundary",
       "arn:aws:iam::987654321098:role/acme-parity-*"
     ]
   }

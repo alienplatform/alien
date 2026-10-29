@@ -3,25 +3,17 @@
   "description": "Allows provisioning the cross-account management role and its generated managed policies",
   "platforms": {
     "aws": [
-      // Setup alone owns the execution ceiling, including its policy versions.
+      // Setup reads the execution ceiling; the management-policy scope below owns its writes.
       {
         "grant": {
-          "actions": [
-            "iam:CreatePolicy",
-            "iam:CreatePolicyVersion",
-            "iam:DeletePolicy",
-            "iam:DeletePolicyVersion",
-            "iam:ListPolicyVersions",
-            "iam:GetPolicy",
-            "iam:GetPolicyVersion"
-          ]
+          "actions": ["iam:GetPolicy", "iam:GetPolicyVersion"]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-permissions-boundary"]
+            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-boundary"]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-permissions-boundary"]
+            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-boundary"]
           }
         }
       },

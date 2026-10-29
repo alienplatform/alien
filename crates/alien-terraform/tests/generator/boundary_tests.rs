@@ -137,10 +137,14 @@ fn check_boundary(enabled: Option<bool>) {
                 .any(|l| l.as_str() == "management_permissions_boundary")
         })
         .unwrap();
+    assert!(boundary
+        .body
+        .attributes()
+        .all(|attribute| attribute.key() != "tags"));
     for prefix in ["boundary-short".to_string(), "s".repeat(40)] {
         let region = "ap-southeast-7";
         let account = "123456789012";
-        let arn = format!("arn:aws:iam::{account}:policy/{prefix}-permissions-boundary");
+        let arn = format!("arn:aws:iam::{account}:policy/{prefix}-deployment-management-boundary");
         let key1 =
             format!("arn:aws:kms:{region}:{account}:key/00000000-0000-0000-0000-000000000001");
         let key2 =
@@ -209,7 +213,7 @@ fn check_boundary(enabled: Option<bool>) {
         let installed = document(attribute(boundary, "policy"), &context);
         assert_eq!(
             serde_json::to_value(attribute(boundary, "name").evaluate(&context).unwrap()).unwrap(),
-            json!(format!("{prefix}-permissions-boundary"))
+            json!(format!("{prefix}-deployment-management-boundary"))
         );
         let runtime = PermissionContext::new()
             .with_stack_prefix(&prefix)
@@ -423,7 +427,7 @@ fn gated_ai_registration_and_role_writes_preserve_the_boundary() {
         .find(|attribute| attribute.key() == "deployment_resources")
         .unwrap();
     for enabled in [true, false] {
-        let arn = "arn:aws:iam::123456789012:policy/bounded-permissions-boundary";
+        let arn = "arn:aws:iam::123456789012:policy/bounded-deployment-management-boundary";
         let mut context = Context::new();
         for (name, value) in [
             ("local", json!({"resource_prefix": "bounded"})),

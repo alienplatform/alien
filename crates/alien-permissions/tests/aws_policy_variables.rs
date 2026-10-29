@@ -73,7 +73,9 @@ fn resolve(value: &Value) -> Value {
                     "AWS::StackName" => "app",
                     "AWS::AccountId" => "123456789012",
                     "AWS::Region" => "us-east-1",
-                    "BoundaryPolicy" => "arn:aws:iam::123456789012:policy/app-permissions-boundary",
+                    "BoundaryPolicy" => {
+                        "arn:aws:iam::123456789012:policy/app-deployment-management-boundary"
+                    }
                     other => panic!("unresolved CloudFormation variable {other}"),
                 });
             }
@@ -167,7 +169,7 @@ fn cloudformation_preserves_explicit_escapes_and_boundary_references() {
     );
     assert_eq!(
         document["Statement"][0]["Condition"]["StringLike"]["s3:prefix"],
-        "arn:aws:iam::123456789012:policy/app-permissions-boundary/${aws:username}"
+        "arn:aws:iam::123456789012:policy/app-deployment-management-boundary/${aws:username}"
     );
 }
 

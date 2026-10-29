@@ -118,7 +118,7 @@ fn check_boundary(enabled: Option<bool>) {
     for prefix in ["boundary-short".to_string(), "s".repeat(40)] {
         let account = "123456789012";
         let region = "ap-southeast-7";
-        let arn = format!("arn:aws:iam::{account}:policy/{prefix}-permissions-boundary");
+        let arn = format!("arn:aws:iam::{account}:policy/{prefix}-deployment-management-boundary");
         let first = "00000000-0000-0000-0000-000000000001";
         let second = "00000000-0000-0000-0000-000000000002";
         let mut parameters: HashMap<String, Value> = [
@@ -388,14 +388,14 @@ fn gated_ai_registration_and_role_writes_preserve_the_boundary() {
                 writes += 1;
                 assert_eq!(
                     statement["Condition"]["StringEquals"]["iam:PermissionsBoundary"],
-                    json!({"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-permissions-boundary"})
+                    json!({"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary"})
                 );
             }
         }
     }
     assert!(writes > 0);
     for enabled in [true, false] {
-        let arn = "arn:aws:iam::123456789012:policy/bounded-permissions-boundary";
+        let arn = "arn:aws:iam::123456789012:policy/bounded-deployment-management-boundary";
         let parameters = [
             ("AWS::StackName", json!("bounded")),
             ("AWS::Region", json!("us-east-1")),

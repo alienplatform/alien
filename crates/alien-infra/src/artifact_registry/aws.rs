@@ -1624,7 +1624,8 @@ mod tests {
         }
     }
 
-    const TEST_BOUNDARY: &str = "arn:aws:iam::123456789012:policy/test-permissions-boundary";
+    const TEST_BOUNDARY: &str =
+        "arn:aws:iam::123456789012:policy/test-deployment-management-boundary";
 
     fn bounded_management() -> crate::remote_stack_management::AwsRemoteStackManagementController {
         let mut controller =

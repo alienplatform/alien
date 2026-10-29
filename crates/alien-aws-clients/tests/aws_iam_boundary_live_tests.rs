@@ -64,7 +64,7 @@ async fn live_role_writer_enforces_boundary_and_ownership() {
         "arn:aws:sts::{account}:assumed-role/{prefix}-management/"
     )));
     let iam = IamClient::new(http, AwsCredentialProvider::from_config_sync(config));
-    let boundary = format!("arn:aws:iam::{account}:policy/{prefix}-permissions-boundary");
+    let boundary = format!("arn:aws:iam::{account}:policy/{prefix}-deployment-management-boundary");
     let writer = IamRoleWriter::new(&iam, Some(&boundary));
     let trust = json!({"Version": "2012-10-17", "Statement": [{
         "Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"},

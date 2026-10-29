@@ -118,7 +118,7 @@ fn management_cannot_make_or_rewrite_a_role_dlm_runs_as() {
 
 #[test]
 fn bounded_container_grants_do_not_write_setup_backup_roles() {
-    let boundary = format!("arn:aws:iam::{ACCOUNT}:policy/{PREFIX}-permissions-boundary");
+    let boundary = format!("arn:aws:iam::{ACCOUNT}:policy/{PREFIX}-deployment-management-boundary");
     let context = legacy_context().with_aws_permissions_boundary_arn(&boundary);
     for target in [BindingTarget::Stack, BindingTarget::Resource] {
         let set = get_permission_set("container/provision").unwrap();

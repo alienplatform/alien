@@ -42,7 +42,7 @@ both successful tagged creation and denied foreign-resource tag changes.
 
 ## AWS role permissions boundaries
 
-AWS setup creates `${stackPrefix}-permissions-boundary` alongside the management
+AWS setup creates `${stackPrefix}-deployment-management-boundary` alongside the management
 identity's policies. Direct setup, CloudFormation and Terraform use
 `aws_stack_permissions_boundary` and record both the installed policy ARN and
 its document. Setup owns creation, updates and deletion of this managed policy.
