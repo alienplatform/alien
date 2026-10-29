@@ -1601,6 +1601,18 @@ impl StackExecutor {
                     continue;
                 }
 
+                // A dependency change does not authorize runtime to rewrite setup-owned
+                // resources. Frozen resources with management operations still reconcile.
+                if self.initial_setup_authority != InitialSetupAuthority::DirectSetup
+                    && desired_config.lifecycle == ResourceLifecycle::Frozen
+                    && !ownership_policy_for_resource_type(
+                        desired_config.resource.resource_type().as_ref(),
+                    )
+                    .requires_management_permissions()
+                {
+                    continue;
+                }
+
                 // Check if this resource has any dependencies that are being updated or created
                 let has_dependency_change = desired_config.dependencies.iter().any(|dep_ref| {
                     current_updates.contains(dep_ref.id()) || current_creates.contains(dep_ref.id())
