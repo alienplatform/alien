@@ -8,7 +8,7 @@ use crate::{ErrorData, Result};
 /// Whether the installed boundary permits everything the required boundary permits.
 ///
 /// This compares generated identity policies, not arbitrary IAM policy equivalence. Conditions
-/// must match exactly unless the installed grant is unconditional. Installed Denies must also
+/// on the installed grant must also occur in the required grant. Installed Denies must also
 /// occur in the required document. Unsupported comparisons return false, requiring setup again;
 /// malformed documents return an error. Neither case may be treated as permission to proceed.
 /// Documents must be decoded JSON with template parameters already resolved.
@@ -37,8 +37,22 @@ pub fn aws_permissions_boundary_covers(installed: &Value, required: &Value) -> R
                     .iter()
                     .filter(|s| s["Effect"] == "Allow")
                     .any(|grant| {
-                        let condition_covered = grant.get("Condition").is_none()
-                            || grant.get("Condition") == wanted.get("Condition");
+                        let condition_covered =
+                            grant.get("Condition").is_none_or(|conditions| {
+                                conditions.as_object().into_iter().flatten().all(
+                                    |(operator, entries)| {
+                                        entries.as_object().into_iter().flatten().all(
+                                            |(key, value)| {
+                                                wanted
+                                                    .get("Condition")
+                                                    .and_then(|conditions| conditions.get(operator))
+                                                    .and_then(|entries| entries.get(key))
+                                                    == Some(value)
+                                            },
+                                        )
+                                    },
+                                )
+                            });
                         condition_covered
                             && action_covered(grant, wanted, action_key, action)
                             && resource_covered(grant, wanted, resource_key, resource)
@@ -452,6 +466,17 @@ mod tests {
         changed["Statement"]["Condition"]["StringEquals"]["aws:RequestedRegion"] =
             json!("us-west-2");
         assert!(!aws_permissions_boundary_covers(&conditional, &changed).unwrap());
+
+        let mut narrower = conditional.clone();
+        narrower["Statement"]["Condition"]["StringEquals"]["aws:ResourceTag/deployment"] =
+            json!("our-stack");
+        narrower["Statement"]["Condition"]["Bool"] = json!({"aws:SecureTransport": "true"});
+        assert!(aws_permissions_boundary_covers(&conditional, &narrower).unwrap());
+        assert!(!aws_permissions_boundary_covers(&narrower, &conditional).unwrap());
+        let mut optional = conditional.clone();
+        optional["Statement"]["Condition"] =
+            json!({"StringEqualsIfExists": {"aws:RequestedRegion": "us-east-1"}});
+        assert!(!aws_permissions_boundary_covers(&conditional, &optional).unwrap());
 
         let denied = policy(json!([
             allow("s3:GetObject", "*"),

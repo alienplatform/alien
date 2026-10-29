@@ -54,7 +54,10 @@ The document defines a ceiling for roles management writes:
 - Name-based runtime catalog bindings contribute stack-prefixed ARN patterns.
   Resource-specific names widen to the deployment prefix. One `Allow` statement
   permits actions other than `iam:*` on these patterns.
-- Runtime grants outside those patterns retain their specific actions,
+- An existing deployment ownership tag permits non-IAM actions on the tagged
+  resource. Identity policies retain service-specific restrictions. Request tags
+  alone do not satisfy this ownership check.
+- Runtime grants outside those patterns and ownership checks retain their specific actions,
   resources and conditions, including grants that require `Resource: "*"`.
 - Custom inline AWS permissions in workload profiles and catalog grants that
   select complete resource ARNs are compiled with their actual resource context.

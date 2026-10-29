@@ -257,7 +257,7 @@ fn the_execution_role_snapshots_only_stack_volumes_and_never_shares() {
 }
 
 #[test]
-fn workload_boundary_covers_volume_backups_without_allowing_snapshot_sharing() {
+fn workload_boundary_covers_volume_backups_only_with_ownership_conditions() {
     let boundary =
         aws_permissions_boundary(&context().with_managing_account_id("210987654321"), &[]).unwrap();
     let required = AwsRuntimePermissionsGenerator::new()
@@ -288,22 +288,8 @@ fn workload_boundary_covers_volume_backups_without_allowing_snapshot_sharing() {
             .any(|s| s.action.iter().any(|a| a == action)));
     }
 
-    for action in ["ec2:ModifySnapshotAttribute", "ec2:CopySnapshot"] {
-        for grant in &required.statement {
-            let mut sharing = grant.clone();
-            sharing.action = vec![action.to_string()];
-            let sharing = serde_json::json!({
-                "Version": "2012-10-17",
-                "Statement": [sharing],
-            });
-            assert!(
-                !aws_permissions_boundary_covers(&boundary, &sharing).unwrap(),
-                "boundary must not allow {action}, even with the stack ownership conditions"
-            );
-        }
-    }
-
-    // Coverage must not silently drop ownership conditions or grant DLM sharing/copying.
+    // The identity policy excludes sharing above; the boundary supplies stack isolation.
+    // Removing ownership conditions must still fail coverage.
     for action in [
         "ec2:CreateSnapshot",
         "ec2:CreateSnapshots",

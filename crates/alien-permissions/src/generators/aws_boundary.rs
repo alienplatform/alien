@@ -2,7 +2,9 @@
 
 use std::{borrow::Cow, collections::BTreeSet};
 
-use alien_core::{AwsBindingSpec, PermissionSet, PermissionSetReference, Stack};
+use alien_core::{
+    AwsBindingSpec, PermissionSet, PermissionSetReference, Stack, ALIEN_STACK_TAG_KEY,
+};
 
 use alien_error::AlienError;
 use serde_json::{json, Value};
@@ -101,7 +103,8 @@ pub fn aws_stack_permissions_boundary(
 /// resource ARNs, compiled with their actual resource contexts. Use [`aws_stack_permissions_boundary`]
 /// to collect these from a stack. Setup must approve changes to these grants. Only name-based
 /// catalog bindings are widened to the stack prefix; complete ARN selectors cannot be widened.
-/// Unprefixed grants retain their actions and conditions.
+/// Existing stack ownership tags provide a non-IAM ceiling for unprefixed resources.
+/// Other unprefixed grants retain their actions and conditions.
 /// Returns an error if interpolation fails or the document exceeds IAM's managed-policy limit.
 pub fn aws_permissions_boundary(
     context: &PermissionContext,
@@ -112,6 +115,7 @@ pub fn aws_permissions_boundary(
             variable: "stackPrefix".to_string(),
         })
     })?;
+    let ownership_key = format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}");
     let mut catalog_context = context.clone();
     catalog_context.resource_name = Some(format!("{prefix}-*"));
     let mut scoped_resources = BTreeSet::new();
@@ -156,6 +160,23 @@ pub fn aws_permissions_boundary(
                 let policy =
                     generator.generate_policy(&single, BindingTarget::Stack, &catalog_context)?;
                 for mut statement in policy.statement {
+                    // Existing ownership covers non-IAM runtime operations even when
+                    // identity policies impose additional service-specific conditions.
+                    if statement
+                        .condition
+                        .as_ref()
+                        .and_then(|conditions| conditions.get("StringEquals"))
+                        .and_then(|values| values.get(&ownership_key))
+                        .is_some_and(|value| value == prefix)
+                        && statement.action.iter().all(|action| {
+                            action.split_once(':').is_some_and(|(service, _)| {
+                                !service.eq_ignore_ascii_case("iam")
+                                    && !service.contains(['*', '?'])
+                            })
+                        })
+                    {
+                        continue;
+                    }
                     let mut unprefixed = Vec::new();
                     for (template, resource) in binding.resources.iter().zip(statement.resource) {
                         if template.contains("${stackPrefix}")
@@ -189,10 +210,16 @@ pub fn aws_permissions_boundary(
             })
         })
         .collect();
-    let mut rendered = vec![json!({
-        "Effect": "Allow", "NotAction": "iam:*", "Resource": scoped_resources,
-    })];
-    rendered.extend(compact_statements(statements).iter().map(render_statement));
+    let mut rendered = vec![
+        json!({
+            "Effect": "Allow", "NotAction": "iam:*", "Resource": scoped_resources,
+        }),
+        json!({
+            "Effect": "Allow", "NotAction": "iam:*", "Resource": "*",
+            "Condition": {"StringEquals": {ownership_key: prefix}},
+        }),
+    ];
+    rendered.extend(statements.iter().map(render_statement));
     let policy = json!({"Version": "2012-10-17", "Statement": rendered});
     let size = policy
         .to_string()
@@ -321,78 +348,6 @@ fn render_statement(statement: &AwsIamStatement) -> Value {
     value
 }
 
-// Factor only explicit Resource grants. NotResource lists are complements, so combining
-// them as resource unions would change their meaning. Denies remain untouched.
-fn compact_statements(mut statements: Vec<AwsIamStatement>) -> Vec<AwsIamStatement> {
-    let unconditional: Vec<_> = statements
-        .iter()
-        .filter(|s| s.effect == "Allow" && s.condition.is_none() && s.not_resource.is_empty())
-        .cloned()
-        .collect();
-    statements.retain_mut(|statement| {
-        if statement.effect == "Allow"
-            && statement.condition.is_some()
-            && !statement.action.is_empty()
-            && !statement.resource.is_empty()
-            && statement.not_resource.is_empty()
-        {
-            statement.action.retain(|action| {
-                !unconditional.iter().any(|grant| {
-                    grant.action.contains(action)
-                        && statement
-                            .resource
-                            .iter()
-                            .all(|r| grant.resource.contains(r))
-                })
-            });
-            return !statement.action.is_empty();
-        }
-        true
-    });
-
-    // Transpose the action/resource pairs, then group resources with identical actions.
-    // Keep the original grouping when factoring would make the document larger.
-    let mut per_resource = Vec::new();
-    let mut untouched = Vec::new();
-    for statement in &statements {
-        if statement.effect != "Allow"
-            || statement.resource.is_empty()
-            || !statement.not_resource.is_empty()
-        {
-            untouched.push(statement.clone());
-            continue;
-        }
-        for resource in &statement.resource {
-            let mut single = statement.clone();
-            single.resource = vec![resource.clone()];
-            merge_statement(&mut per_resource, single);
-        }
-    }
-    let mut factored: Vec<AwsIamStatement> = Vec::new();
-    for statement in per_resource {
-        if let Some(existing) = factored.iter_mut().find(|existing| {
-            existing.action == statement.action && existing.condition == statement.condition
-        }) {
-            existing.resource.extend(statement.resource);
-            existing.resource.sort();
-        } else {
-            factored.push(statement);
-        }
-    }
-    factored.extend(untouched);
-    let size = |statements: &[AwsIamStatement]| {
-        statements
-            .iter()
-            .map(|s| render_statement(s).to_string().len() + 1)
-            .sum::<usize>()
-    };
-    if size(&factored) < size(&statements) {
-        factored
-    } else {
-        statements
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,6 +414,49 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn ownership_ceiling_requires_existing_tags_and_excludes_iam() {
+        let context = context();
+        let boundary = aws_permissions_boundary(&context, &[]).unwrap();
+        let key = format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}");
+        for (action, condition, covered) in [
+            (
+                "ec2:ModifyVolume",
+                json!({"StringEquals": {&key: context.stack_prefix}}),
+                true,
+            ),
+            (
+                "ec2:ModifyVolume",
+                json!({"StringEquals": {&key: "another-stack"}}),
+                false,
+            ),
+            (
+                "ec2:ModifyVolume",
+                json!({"StringEqualsIfExists": {&key: context.stack_prefix}}),
+                false,
+            ),
+            (
+                "ec2:ModifyVolume",
+                json!({"StringEquals": {"aws:RequestTag/deployment": context.stack_prefix}}),
+                false,
+            ),
+            (
+                "iam:PutRolePolicy",
+                json!({"StringEquals": {&key: context.stack_prefix}}),
+                false,
+            ),
+        ] {
+            let required = json!({"Version": "2012-10-17", "Statement": [{
+                "Effect": "Allow", "Action": action, "Resource": "*", "Condition": condition,
+            }]});
+            assert_eq!(
+                super::super::aws_permissions_boundary_covers(&boundary, &required).unwrap(),
+                covered,
+                "{required}"
+            );
         }
     }
 
@@ -549,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_arn_selected_grants_enforce_the_managed_policy_limit() {
+    fn combined_arn_selected_grants_fit_with_longest_prefix() {
         let stack = Stack::new("test".to_string())
             .permission(
                 "application",
@@ -575,11 +573,10 @@ mod tests {
                 ))
             })
         };
-        let error = render(context()).unwrap_err();
-        assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
-        let boundary = render(context().with_stack_prefix("s".repeat(39))).unwrap();
+        let boundary = render(context()).unwrap();
+        assert!(boundary.to_string().len() <= MANAGED_POLICY_LIMIT);
         eprintln!(
-            "Combined boundary at 39-character prefix: {} characters",
+            "Combined boundary at 40-character prefix: {} characters",
             boundary.to_string().len()
         );
         for id in [
@@ -634,114 +631,6 @@ mod tests {
             json!(["s3:GetObject", "s3:GetObjectVersion"])
         );
         assert_eq!(grants[0]["Condition"], json!(first.condition));
-    }
-
-    #[test]
-    fn compaction_preserves_action_resource_pairs_conditions_and_denies() {
-        let first_arn = "arn:aws:s3:::first-bucket/*";
-        let second_arn = "arn:aws:s3:::second-bucket/*";
-        let mut read = custom_statement(first_arn.to_string());
-        read.condition = None;
-        read.resource.push(second_arn.to_string());
-        read.action.push("s3:GetObjectVersion".to_string());
-        let mut write = read.clone();
-        write.resource = vec![first_arn.to_string()];
-        write.action = vec!["s3:PutObject".to_string()];
-        let mut conditional = custom_statement(first_arn.to_string());
-        conditional.action.push("s3:DeleteObject".to_string());
-        let mut different_condition = conditional.clone();
-        different_condition.condition.as_mut().unwrap()["StringEquals"].insert(
-            "s3:ExistingObjectTag/access".to_string(),
-            "other".to_string(),
-        );
-        let mut deny = read.clone();
-        deny.effect = "Deny".to_string();
-        deny.action = vec!["s3:GetObjectVersion".to_string()];
-        let mut excluded = custom_statement(String::new());
-        excluded.resource.clear();
-        excluded.not_resource = vec![first_arn.to_string(), second_arn.to_string()];
-        let original = vec![
-            read,
-            write,
-            conditional,
-            different_condition,
-            deny,
-            excluded,
-        ];
-        let policy = |statements: &[AwsIamStatement]| {
-            json!({
-                "Version": "2012-10-17",
-                "Statement": statements.iter().map(render_statement).collect::<Vec<_>>()
-            })
-        };
-        let expected = policy(&original);
-        for reversed in [false, true] {
-            let mut input = original.clone();
-            if reversed {
-                input.reverse();
-            }
-            let actual = policy(&compact_statements(input));
-            assert!(actual.to_string().len() < expected.to_string().len());
-            assert!(super::super::aws_permissions_boundary_covers(&actual, &expected).unwrap());
-            assert!(super::super::aws_permissions_boundary_covers(&expected, &actual).unwrap());
-            for statement in &original {
-                if statement.effect == "Deny" || !statement.not_resource.is_empty() {
-                    assert!(actual["Statement"]
-                        .as_array()
-                        .unwrap()
-                        .contains(&render_statement(statement)));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn factoring_keeps_the_smaller_grouping_without_cross_granting_actions() {
-        let mut both = custom_statement("arn:aws:s3:::first/*".to_string());
-        both.resource.push("arn:aws:s3:::second/*".to_string());
-        both.action = vec![
-            "s3:GetObject".to_string(),
-            "s3:GetObjectVersion".to_string(),
-        ];
-        let mut first_only = both.clone();
-        first_only.resource.pop();
-        first_only.action = vec!["s3:PutObject".to_string()];
-        let original = vec![both, first_only];
-        let compacted = compact_statements(original.clone());
-        assert!(
-            compacted
-                .iter()
-                .map(|s| render_statement(s).to_string().len())
-                .sum::<usize>()
-                <= original
-                    .iter()
-                    .map(|s| render_statement(s).to_string().len())
-                    .sum::<usize>()
-        );
-        for resource in [
-            "arn:aws:s3:::first/*",
-            "arn:aws:s3:::second/*",
-            "arn:aws:s3:::third/*",
-        ] {
-            for action in [
-                "s3:GetObject",
-                "s3:GetObjectVersion",
-                "s3:PutObject",
-                "s3:DeleteObject",
-            ] {
-                let grants = |statements: &[AwsIamStatement]| {
-                    statements.iter().any(|s| {
-                        s.resource.iter().any(|r| r == resource)
-                            && s.action.iter().any(|a| a == action)
-                    })
-                };
-                assert_eq!(
-                    grants(&original),
-                    grants(&compacted),
-                    "{action} on {resource}"
-                );
-            }
-        }
     }
 
     #[test]
