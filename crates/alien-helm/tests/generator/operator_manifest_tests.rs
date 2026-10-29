@@ -1,3 +1,4 @@
+use alien_core::{Stack, StackSettings};
 use alien_helm::{
     generate_operator_manifest, generate_operator_manifest_with_image_identity,
     generate_product_operator_manifest, HelmChart, OperatorImageIdentityOptions,
@@ -10,7 +11,7 @@ use serde::Deserialize;
 use serde_yaml::Value as YamlValue;
 use std::collections::BTreeSet;
 
-use super::test_utils;
+use super::{helpers::render, test_utils};
 
 const TEST_ENCRYPTION_KEY: &str =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -849,4 +850,39 @@ fn compiled_operation_grants_match_rendered_rbac_in_both_scopes_and_modes() {
             assert_eq!(role_grants(&actual), expected);
         }
     }
+}
+
+#[test]
+fn chart_version_keeps_operator_pod_template_but_image_changes_roll_it() {
+    let stack = Stack::new("stable-operator".into()).build();
+    let chart = render(&stack, StackSettings::default());
+    let operator = |files: &IndexMap<String, String>, values: Option<&str>| {
+        let rendered = test_utils::helm_template(files, values);
+        rendered.assert_ok("operator version upgrade");
+        parse_manifest(&rendered.stdout)
+            .into_iter()
+            .find(|doc| doc["kind"] == "Deployment" && doc["metadata"]["name"] == "test-release")
+            .expect("operator Deployment")
+    };
+    let before = operator(&chart.files, None);
+    let mut upgraded = chart.files.clone();
+    let mut metadata: YamlValue = serde_yaml::from_str(&upgraded["Chart.yaml"]).unwrap();
+    metadata["version"] = YamlValue::String("99.0.0".into());
+    upgraded.insert(
+        "Chart.yaml".into(),
+        serde_yaml::to_string(&metadata).unwrap(),
+    );
+    let after = operator(&upgraded, None);
+    assert_eq!(before["spec"]["selector"], after["spec"]["selector"]);
+    assert_eq!(before["spec"]["template"], after["spec"]["template"]);
+    assert_ne!(
+        before["metadata"]["labels"]["helm.sh/chart"],
+        after["metadata"]["labels"]["helm.sh/chart"]
+    );
+    let changed_image = operator(
+        &upgraded,
+        Some("runtime:\n  image:\n    repository: registry.example.com/operator\n    tag: next\n"),
+    );
+    assert_ne!(after["spec"]["template"], changed_image["spec"]["template"]);
+    assert_eq!(after["spec"]["selector"], changed_image["spec"]["selector"]);
 }
