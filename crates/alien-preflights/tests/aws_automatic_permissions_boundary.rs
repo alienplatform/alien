@@ -5,6 +5,7 @@ mod iam_policy;
 use alien_core::{
     DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Platform, ResourceLifecycle,
     SetupManagement, Stack, StackSettings, StackState, Storage, Vault, Worker, WorkerCode,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_permissions::{
     generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
@@ -375,4 +376,58 @@ async fn legacy_automatic_iam_permissions_match_the_pre_boundary_policy() {
         .unwrap(),
         "legacy compilation must preserve existing IAM grants and denies"
     );
+}
+
+#[tokio::test]
+async fn automatic_profile_cannot_retag_foreign_security_groups() {
+    let stack = automatic_stack().await;
+    let group = "arn:aws:ec2:us-east-1:123456789012:security-group/sg-example";
+    let runtime_tags = [
+        (ALIEN_STACK_TAG_KEY, "sample"),
+        (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+    ];
+    for bounded in [false, true] {
+        // Evaluate the union: another provisioning set must not bypass network ownership.
+        let policy = compile(&stack, bounded);
+        for (owner, manager, expected) in [
+            ("sample", "runtime", Decision::Allowed),
+            ("other-stack", "runtime", Decision::NotAllowed),
+            ("sample", "setup", Decision::NotAllowed),
+            ("", "", Decision::NotAllowed),
+        ] {
+            let existing = [
+                (ALIEN_STACK_TAG_KEY, owner),
+                (ALIEN_MANAGED_BY_TAG_KEY, manager),
+            ];
+            let request = Request::new("ec2:CreateTags", group)
+                .resource_tags(&existing)
+                .request_tags(&runtime_tags);
+            assert_eq!(
+                evaluate(&policy, &request),
+                expected,
+                "bounded={bounded}, existing ownership={owner}/{manager}"
+            );
+        }
+
+        // The service-supplied creation context permits the initial tags only.
+        for (creation, tags, expected) in [
+            (
+                "CreateSecurityGroup",
+                runtime_tags.as_slice(),
+                Decision::Allowed,
+            ),
+            ("CreateSecurityGroup", &[][..], Decision::NotAllowed),
+            ("CreateVpc", runtime_tags.as_slice(), Decision::NotAllowed),
+            ("", runtime_tags.as_slice(), Decision::NotAllowed),
+        ] {
+            let request = Request::new("ec2:CreateTags", group)
+                .request_tags(tags)
+                .with("ec2:CreateAction", creation);
+            assert_eq!(
+                evaluate(&policy, &request),
+                expected,
+                "bounded={bounded}, creation={creation}, tags={tags:?}"
+            );
+        }
+    }
 }
