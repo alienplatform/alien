@@ -159,6 +159,8 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "dlm:tagresource",
                         "ses:tagresource",
                         "ses:untagresource",
+                        "sns:tagresource",
+                        "sns:untagresource",
                         "aoss:tagresource",
                         "aoss:untagresource",
                         "apigateway:tagresource",
@@ -209,6 +211,8 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "dlm:tagresource",
                         "ses:tagresource",
                         "ses:untagresource",
+                        "sns:tagresource",
+                        "sns:untagresource",
                         "aoss:tagresource",
                         "aoss:untagresource",
                         "apigateway:tagresource",
@@ -652,6 +656,77 @@ fn opensearch_tag_changes_require_existing_deployment_ownership() {
                 evaluate(
                     &policy.statement,
                     &Request::new(action, "*").request_tags(&[(ALIEN_STACK_TAG_KEY, "stack-a")])
+                ),
+                Decision::Allowed
+            );
+        }
+    }
+}
+
+#[test]
+fn email_topic_tags_require_existing_stack_ownership() {
+    for resource_name in ["email", "stack-a-email"] {
+        let context = PermissionContext::new()
+            .with_stack_prefix("stack-a")
+            .with_resource_name(resource_name)
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-west-2");
+        for binding in [BindingTarget::Stack, BindingTarget::Resource] {
+            let policy = AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    get_permission_set("email/provision").unwrap(),
+                    binding,
+                    &context,
+                )
+                .unwrap();
+            let topic = if binding == BindingTarget::Stack {
+                "stack-a-email-email-events".to_string()
+            } else {
+                format!("{resource_name}-email-events")
+            };
+            let arn = format!("arn:aws:sns:us-west-2:123456789012:{topic}");
+            for action in ["sns:TagResource", "sns:UntagResource"] {
+                for owner in [None, Some("stack-b"), Some("stack-a")] {
+                    for managed_by in ["setup", "runtime"] {
+                        let mut request = Request::new(action, &arn)
+                            .request_tags(&[(ALIEN_STACK_TAG_KEY, "stack-a")]);
+                        if let Some(owner) = owner {
+                            request = request.resource_tags(&[
+                                (ALIEN_STACK_TAG_KEY, owner),
+                                (ALIEN_MANAGED_BY_TAG_KEY, managed_by),
+                            ]);
+                        }
+                        assert_eq!(
+                            evaluate(&policy.statement, &request),
+                            if owner == Some("stack-a") {
+                                Decision::Allowed
+                            } else {
+                                Decision::NotAllowed
+                            },
+                            "{binding:?} {resource_name} {action} {owner:?} {managed_by}"
+                        );
+                    }
+                }
+                for foreign_arn in [
+                    "arn:aws:sns:us-west-2:123456789012:stack-b-email-email-events",
+                    "arn:aws:sns:us-east-1:123456789012:stack-a-email-email-events",
+                    "arn:aws:sns:us-west-2:999999999999:stack-a-email-email-events",
+                ] {
+                    assert_eq!(
+                        evaluate(
+                            &policy.statement,
+                            &Request::new(action, foreign_arn)
+                                .resource_tags(&[(ALIEN_STACK_TAG_KEY, "stack-a")])
+                        ),
+                        Decision::NotAllowed
+                    );
+                }
+            }
+            assert_eq!(
+                evaluate(
+                    &policy.statement,
+                    &Request::new("sns:CreateTopic", &arn)
+                        .request_tags(&[(ALIEN_STACK_TAG_KEY, "stack-a")])
                 ),
                 Decision::Allowed
             );
