@@ -2187,6 +2187,7 @@ mod setup_update_authorization_tests {
             }),
             current_release_id: Some("release".to_string()),
             desired_release_id: Some("release".to_string()),
+            configuration_revision: None,
             import_source: None,
             setup_method: None,
             setup_metadata: None,

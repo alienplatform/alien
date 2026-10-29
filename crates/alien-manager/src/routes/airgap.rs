@@ -17,28 +17,28 @@ use std::{future::ready, sync::Arc, time::Duration};
 
 use alien_bindings::traits::Kv;
 use alien_core::{
-    sync::TargetDeployment, AirgappedReportMetadata, DeploymentState, Platform, ResourceHeartbeat,
+    AirgappedReportMetadata, DeploymentState, Platform, ResourceHeartbeat, sync::TargetDeployment,
 };
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use base64::Engine as _;
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 use crate::{
     auth::{Scope, Subject},
     error::ErrorData,
     traits::{
-        DeploymentRecord, ReconcileData, ReleaseRecord, TelemetryBackend, TelemetryCaller,
-        TelemetrySignal,
+        DeploymentRecord, ReconcileData, ReconcileInput, ReleaseRecord, TelemetryBackend,
+        TelemetryCaller, TelemetrySignal,
     },
 };
 
@@ -187,7 +187,19 @@ async fn target(
     // Workloads can't reach this manager to export telemetry; the Operator
     // buffers it for the next sync instead.
     target.config.monitoring = None;
-    Json(target).into_response()
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AirgappedTarget {
+        #[serde(flatten)]
+        target: TargetDeployment,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        configuration_revision: Option<String>,
+    }
+    Json(AirgappedTarget {
+        target,
+        configuration_revision: deployment.configuration_revision,
+    })
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -368,6 +380,9 @@ async fn sign_bundle_manifest(
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StatusReport {
+    /// Approved configuration revision confirmed Running by the site.
+    #[serde(default)]
+    pub applied_configuration_revision: Option<String>,
     /// Site clock time when the report was written. Older clients omit it.
     #[serde(default)]
     pub written_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -492,6 +507,7 @@ async fn status_report(
             &deployment.id,
             report.state,
             report.heartbeats.clone(),
+            report.applied_configuration_revision.clone(),
         )
         .await
         {
@@ -539,6 +555,7 @@ async fn status_report(
             &deployment.id,
             report_state,
             report.heartbeats,
+            None,
         )
         .await
         {
@@ -564,24 +581,27 @@ async fn reconcile_report(
     deployment_id: &str,
     report: DeploymentState,
     heartbeats: Vec<ResourceHeartbeat>,
+    applied_configuration_revision: Option<String>,
 ) -> Result<(), alien_error::AlienError> {
+    let data = ReconcileData {
+        deployment_id: deployment_id.to_string(),
+        session: "airgap-status-report".to_string(),
+        state: report,
+        update_heartbeat: true,
+        suggested_delay_ms: None,
+        heartbeats,
+        observed_inventory_batches: Vec::new(),
+        capabilities: Vec::new(),
+        operator_version: None,
+        execution_claim: None,
+        operations_report: None,
+    };
+    let mut request = ReconcileInput::builder(data);
+    if let Some(revision) = applied_configuration_revision {
+        request = request.applied_configuration_revision(revision);
+    }
     store
-        .reconcile(
-            subject,
-            ReconcileData {
-                deployment_id: deployment_id.to_string(),
-                session: "airgap-status-report".to_string(),
-                state: report,
-                update_heartbeat: true,
-                suggested_delay_ms: None,
-                heartbeats,
-                observed_inventory_batches: Vec::new(),
-                capabilities: Vec::new(),
-                operator_version: None,
-                execution_claim: None,
-                operations_report: None,
-            },
-        )
+        .reconcile_request(subject, request.build())
         .await
         .map(|_| ())
 }
@@ -903,7 +923,7 @@ mod tests {
             logs::v1::ExportLogsServiceRequest, metrics::v1::ExportMetricsServiceRequest,
             trace::v1::ExportTraceServiceRequest,
         },
-        common::v1::{any_value::Value, AnyValue, KeyValue},
+        common::v1::{AnyValue, KeyValue, any_value::Value},
         logs::v1::ResourceLogs,
         resource::v1::Resource,
     };
@@ -1370,8 +1390,10 @@ mod tests {
         });
         for heartbeats in [None, Some(serde_json::json!([heartbeat]))] {
             let mut body = serde_json::json!({"state": {"status": "running", "platform": "kubernetes", "protocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION}});
+            let expected_revision = heartbeats.as_ref().map(|_| "configuration-7");
             if let Some(heartbeats) = heartbeats {
                 body["heartbeats"] = heartbeats;
+                body["appliedConfigurationRevision"] = "configuration-7".into();
             }
             let report: StatusReport = serde_json::from_value(body.clone()).unwrap();
             let expected: Vec<ResourceHeartbeat> = serde_json::from_value(
@@ -1382,9 +1404,14 @@ mod tests {
             .unwrap();
             let mut store = crate::traits::deployment_store::MockDeploymentStore::new();
             store
-                .expect_reconcile()
+                .expect_reconcile_request()
                 .times(1)
-                .withf(move |_, data| data.deployment_id == "dep_1" && data.heartbeats == expected)
+                .withf(move |_, request| {
+                    let (data, _) = request.clone().into_parts();
+                    data.deployment_id == "dep_1"
+                        && data.heartbeats == expected
+                        && request.applied_configuration_revision() == expected_revision
+                })
                 .returning(|_, _| Err(ErrorData::internal("store reached").into_generic()));
             let error = reconcile_report(
                 &store,
@@ -1392,6 +1419,7 @@ mod tests {
                 "dep_1",
                 report.state,
                 report.heartbeats,
+                report.applied_configuration_revision,
             )
             .await
             .unwrap_err();
@@ -1687,16 +1715,18 @@ mod tests {
         });
         let mut input = batches(1..=256);
         input[199].1 = TelemetrySignal::Traces;
-        assert!(forward_telemetry(
-            backend.clone(),
-            kv.clone(),
-            caller(),
-            "mark".into(),
-            input.clone(),
-            Duration::from_secs(5)
-        )
-        .await
-        .is_err());
+        assert!(
+            forward_telemetry(
+                backend.clone(),
+                kv.clone(),
+                caller(),
+                "mark".into(),
+                input.clone(),
+                Duration::from_secs(5)
+            )
+            .await
+            .is_err()
+        );
         assert!(
             backend.received.lock().unwrap().contains(&256),
             "logs in the failed window reached the backend"
