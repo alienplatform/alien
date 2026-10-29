@@ -32,7 +32,7 @@
       // instance profile, security group, and surrounding network remain setup-owned.
       {
         "grant": {
-          "actions": ["ec2:CreateLaunchTemplate", "ec2:CreateTags"]
+          "actions": ["ec2:CreateLaunchTemplate"]
         },
         "binding": {
           "stack": {
@@ -57,7 +57,38 @@
       },
       {
         "grant": {
-          "actions": ["ec2:CreateLaunchTemplateVersion", "ec2:DeleteLaunchTemplate"]
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateLaunchTemplate",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateLaunchTemplate",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "ec2:CreateLaunchTemplateVersion",
+            "ec2:DeleteLaunchTemplate",
+            "ec2:CreateTags"
+          ]
         },
         "binding": {
           "stack": {
