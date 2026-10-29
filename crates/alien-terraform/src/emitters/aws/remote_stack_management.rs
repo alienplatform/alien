@@ -15,9 +15,9 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_managed_policy_chunks,
-        ensure_unique_statement_sids, iam_role_name_template, jsonencode,
-        managing_role_trust_statement, policy_document_expr, required_label, tags,
+        downcast, emit_iam_managed_policy_chunks, ensure_unique_statement_sids,
+        iam_role_name_template, jsonencode, jsonencode_policy_value, managing_role_trust_statement,
+        policy_document_expr, required_label, stack_permission_context, tags,
     },
     expr,
 };
@@ -25,9 +25,9 @@ use alien_core::{
     import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference,
     RemoteStackManagement, ResourceLifecycle, Result, Worker,
 };
-use alien_error::Context;
+use alien_error::{AlienError, Context};
 use alien_permissions::{
-    generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
+    generators::{aws_stack_permissions_boundary, AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
 };
 use hcl::expr::Expression;
@@ -51,8 +51,20 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             ],
         ));
 
+        fragment.resource_blocks.push(resource_block(
+            "aws_iam_policy",
+            &format!("{label}_permissions_boundary"),
+            [
+                attr(
+                    "name",
+                    expr::template("${local.resource_prefix}-permissions-boundary"),
+                ),
+                attr("policy", boundary_document(ctx)?),
+                attr("tags", tags(ctx, "management")),
+            ],
+        ));
         let generator = AwsRuntimePermissionsGenerator::new();
-        let context = aws_terraform_permission_context();
+        let context = stack_permission_context(ctx);
         let stack_context = context.clone().with_resource_name("management".to_string());
         let mut statements = Vec::<AwsIamStatement>::new();
         // Keyed by gate input so resources sharing one input share a policy.
@@ -176,9 +188,194 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             ("roleName", expr::traversal(["aws_iam_role", label, "name"])),
             ("roleArn", expr::traversal(["aws_iam_role", label, "arn"])),
             ("managementPermissionsApplied", Expression::Bool(true)),
+            (
+                "permissionsBoundaryArn",
+                expr::traversal([
+                    "aws_iam_policy",
+                    &format!("{label}_permissions_boundary"),
+                    "arn",
+                ]),
+            ),
+            (
+                "permissionsBoundaryDocument",
+                expr::parse(&format!(
+                    "jsondecode(aws_iam_policy.{label}_permissions_boundary.policy)"
+                ))?,
+            ),
         ];
         Ok(expr::object(fields))
     }
+}
+
+fn boundary_document(ctx: &EmitContext<'_>) -> Result<Expression> {
+    let generate = |context: &PermissionContext| {
+        aws_stack_permissions_boundary(ctx.stack, context, |_, scope| {
+            boundary_grant_context(ctx, context, scope)
+        })
+        .context(ErrorData::GenericError {
+            message: "failed to generate AWS permissions boundary".to_string(),
+        })
+    };
+    // Template tokens must not hide an oversized resolved document. Key UUID
+    // budgets are distinct so separate physical grants cannot collapse here.
+    generate(
+        &PermissionContext::new()
+            .with_stack_prefix("s".repeat(40))
+            .with_aws_region("r".repeat(16))
+            .with_aws_account_id("123456789012")
+            .with_managing_role_arn(format!(
+                "arn:aws:iam::210987654321:role/{}",
+                "r".repeat(2019)
+            ))
+            .with_managing_account_id("210987654321"),
+    )?;
+    let context = PermissionContext::new()
+        .with_stack_prefix("${Prefix}")
+        .with_aws_region("${Region}")
+        .with_aws_account_id("${Account}")
+        .with_managing_account_id("${ManagingAccount}")
+        .with_managing_role_arn("${ManagingRole}");
+    let mut document = generate(&context)?;
+    let mut replacements = vec![
+        (
+            "${Prefix}".to_string(),
+            "${local.resource_prefix}".to_string(),
+        ),
+        (
+            "${Region}".to_string(),
+            "${data.aws_region.current.region}".to_string(),
+        ),
+        (
+            "${Account}".to_string(),
+            "${data.aws_caller_identity.current.account_id}".to_string(),
+        ),
+        (
+            "${ManagingAccount}".to_string(),
+            "${var.managing_account_id}".to_string(),
+        ),
+        (
+            "${ManagingRole}".to_string(),
+            "${var.managing_role_arn}".to_string(),
+        ),
+    ];
+    for (index, (id, entry)) in ctx.stack.resources.iter().enumerate() {
+        if entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE {
+            if let Some(label) = ctx.name_for(id) {
+                replacements.insert(
+                    0,
+                    (
+                        format!("arn:aws:kms:${{Region}}:${{Account}}:key/${{Key{index}}}"),
+                        format!("${{local.{label}_selected_key.arn}}"),
+                    ),
+                );
+            }
+        }
+    }
+    replace_boundary_tokens(&mut document, &replacements);
+    Ok(jsonencode_policy_value(document))
+}
+
+fn replace_boundary_tokens(value: &mut serde_json::Value, replacements: &[(String, String)]) {
+    match value {
+        serde_json::Value::String(value) => {
+            for (from, to) in replacements {
+                *value = value.replace(from, to);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                replace_boundary_tokens(item, replacements);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for item in fields.values_mut() {
+                replace_boundary_tokens(item, replacements);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn boundary_grant_context(
+    ctx: &EmitContext<'_>,
+    base: &PermissionContext,
+    scope: &str,
+) -> alien_permissions::Result<PermissionContext> {
+    if scope == "*" {
+        return Ok(base.clone());
+    }
+    let entry = ctx.stack.resources.get(scope).ok_or_else(|| {
+        AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+            message: format!("AWS permissions boundary scope '{scope}' is missing"),
+        })
+    })?;
+    let mut context = base.clone().with_resource_id(scope.to_string());
+    if let Some(cluster) = entry.config.downcast_ref::<KubernetesCluster>() {
+        context.resource_name = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.cluster_name.clone())
+            .or_else(|| {
+                if base.stack_prefix.as_deref() == Some("${Prefix}") {
+                    return Some(kubernetes_cluster_name(cluster));
+                }
+                base.stack_prefix
+                    .as_ref()
+                    .map(|prefix| format!("{prefix}-k8s"))
+            });
+        if let Some(cloud) = &cluster.cloud {
+            if let Some(account) = &cloud.account_id {
+                context.aws_account_id = Some(account.clone());
+            }
+            if let Some(region) = &cloud.region {
+                context.aws_region = Some(region.clone());
+            }
+        }
+    } else if entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE {
+        if entry.enabled_when.is_some() {
+            return Err(AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+                message: format!("AWS permissions boundary key '{scope}' must be unconditional; remove its enabledWhen input before generating setup"),
+            }));
+        }
+        let _label = ctx.name_for(scope).ok_or_else(|| {
+            AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+                message: format!("AWS permissions boundary key '{scope}' has no setup resource"),
+            })
+        })?;
+        let index = ctx.stack.resources.get_index_of(scope).ok_or_else(|| {
+            AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+                message: format!("AWS permissions boundary key '{scope}' is missing"),
+            })
+        })?;
+        context.resource_name = Some(if base.stack_prefix.as_deref() == Some("${Prefix}") {
+            format!("arn:aws:kms:${{Region}}:${{Account}}:key/${{Key{index}}}")
+        } else {
+            format!(
+                "arn:aws:kms:{}:{}:key/00000000-0000-0000-0000-{index:012x}",
+                base.aws_region.as_deref().unwrap_or_default(),
+                base.aws_account_id.as_deref().unwrap_or_default()
+            )
+        });
+    } else {
+        context.resource_name = match entry.config.resource_type().as_ref() {
+            "artifact-registry" | "service-account" | "ai" | "sandbox" => Some(scope.to_string()),
+            "storage" | "queue" | "kv" | "build" | "worker" | "vault" => base
+                .stack_prefix
+                .as_ref()
+                .map(|prefix| format!("{prefix}-{scope}")),
+            _ => {
+                return Err(AlienError::new(
+                    alien_permissions::ErrorData::InvalidPermissionSet {
+                        message: format!(
+                            "AWS permissions boundary resource '{scope}' has unsupported type '{}'",
+                            entry.config.resource_type()
+                        ),
+                    },
+                ))
+            }
+        };
+    }
+    Ok(context)
 }
 
 fn trust_policy() -> Expression {
@@ -264,6 +461,7 @@ fn kubernetes_cluster_name(cluster: &KubernetesCluster) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::emitters::aws::helpers::aws_terraform_permission_context;
     use alien_core::{Resource, ResourceEntry, ResourceLifecycle, Storage, Worker, WorkerCode};
 
     fn live_worker_entry(id: &str) -> ResourceEntry {

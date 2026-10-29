@@ -341,6 +341,21 @@ pub fn aws_terraform_permission_context() -> PermissionContext {
         .with_managing_role_arn("${var.managing_role_arn}")
 }
 
+/// Permission context for a setup that creates its management identity.
+pub fn stack_permission_context(ctx: &EmitContext<'_>) -> PermissionContext {
+    let context = aws_terraform_permission_context();
+    match ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == alien_core::RemoteStackManagement::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    }) {
+        Some(label) => context.with_aws_permissions_boundary_arn(format!(
+            "${{aws_iam_policy.{label}_permissions_boundary.arn}}"
+        )),
+        None => context,
+    }
+}
+
 /// Emit one `aws_iam_role_policy` block for `permission_set`, attached
 /// to the IAM role identified by `role_label`.
 ///
@@ -407,7 +422,7 @@ pub fn emit_workload_resource_grants(
     permission_set_prefix: &str,
 ) -> Result<()> {
     let resource_label = required_label(ctx)?;
-    let context = aws_terraform_permission_context()
+    let context = stack_permission_context(ctx)
         .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
     let generator = AwsRuntimePermissionsGenerator::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
@@ -606,9 +621,20 @@ fn policy_document_size(statements: &[AwsIamStatement]) -> Result<usize> {
         .map(|policy| {
             // Prefix validation permits 40 characters. Keep template overhead
             // as headroom, but account for growth from shorter placeholders.
-            // Other dynamic references still need validation with resolved inputs.
             let token = "${local.resource_prefix}";
-            policy.len() + policy.matches(token).count() * (40 - token.len())
+            let mut size = policy.len() + policy.matches(token).count() * (40 - token.len());
+            // Boundary attributes resolve to an ARN containing the maximum prefix.
+            let boundary_arn_len =
+                "arn:aws:iam::123456789012:policy/".len() + 40 + "-permissions-boundary".len();
+            for reference in policy.split("${aws_iam_policy.").skip(1) {
+                if let Some((reference, _)) = reference.split_once('}') {
+                    if reference.ends_with("_permissions_boundary.arn") {
+                        let token_len = "${aws_iam_policy.".len() + reference.len() + 1;
+                        size += boundary_arn_len.saturating_sub(token_len);
+                    }
+                }
+            }
+            size
         })
 }
 

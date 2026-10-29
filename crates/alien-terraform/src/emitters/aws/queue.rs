@@ -4,8 +4,8 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
-        emit_workload_resource_grants, required_label, resource_prefix_template, tags,
+        downcast, emit_iam_role_policy_for_target_with_label, emit_workload_resource_grants,
+        required_label, resource_prefix_template, stack_permission_context, tags,
     },
     expr,
 };
@@ -66,7 +66,7 @@ impl TfEmitter for AwsQueueEmitter {
                 .ok_or_else(|| AlienError::new(ErrorData::GenericError {
                     message: "Queue batch metadata permission is not registered".into(),
                 }))?;
-            let context = aws_terraform_permission_context()
+            let context = stack_permission_context(ctx)
                 .with_resource_name(format!("${{aws_sqs_queue.{label}.name}}"));
             // Attach after the queue exists, outside the bootstrap policy graph.
             emit_iam_role_policy_for_target_with_label(
@@ -98,7 +98,7 @@ impl TfEmitter for AwsQueueEmitter {
                         ),
                     })
                 })?;
-                let context = aws_terraform_permission_context()
+                let context = stack_permission_context(ctx)
                     .with_resource_name(format!("${{aws_sqs_queue.{label}.name}}"));
                 emit_iam_role_policy_for_target_with_label(
                     &mut fragment,

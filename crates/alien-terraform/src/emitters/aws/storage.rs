@@ -8,14 +8,14 @@ use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
-        iam_policy_name_sanitize, required_label, resource_prefix_template, tags,
+        downcast, emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize,
+        required_label, resource_prefix_template, stack_permission_context, tags,
     },
     expr,
 };
 use alien_core::{
-    LifecycleRule, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
-    ServiceAccount, Storage, import::EmitContext,
+    import::EmitContext, LifecycleRule, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, Result, ServiceAccount, Storage,
 };
 use alien_permissions::BindingTarget;
 use hcl::{
@@ -107,7 +107,7 @@ fn emit_storage_key_iam(
     let Some(permission_set) = alien_permissions::get_permission_set("key/native-storage") else {
         return Ok(());
     };
-    let context = aws_terraform_permission_context()
+    let context = stack_permission_context(ctx)
         .with_resource_name(format!("${{local.{key_label}_selected_key.arn}}"));
 
     // Only object readers and writers use the bucket key. A health check or provisioning
@@ -345,7 +345,7 @@ fn bucket_path(label: &str, attribute: &str) -> String {
 
 fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
     for (owner_label, permission_refs) in storage_permission_owners(ctx) {
-        let context = aws_terraform_permission_context()
+        let context = stack_permission_context(ctx)
             .with_resource_name(format!("${{{}}}", bucket_path(label, "bucket")));
 
         for (idx, permission_ref) in permission_refs.iter().enumerate() {
