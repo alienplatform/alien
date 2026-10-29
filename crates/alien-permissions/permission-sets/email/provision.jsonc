@@ -116,9 +116,7 @@
             "sns:GetTopicAttributes",
             "sns:SetTopicAttributes",
             "sns:Subscribe",
-            "sns:Unsubscribe",
-            "sns:TagResource",
-            "sns:UntagResource"
+            "sns:Unsubscribe"
           ]
         },
         "binding": {
@@ -127,6 +125,31 @@
           },
           "resource": {
             "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${resourceName}-*"]
+          }
+        }
+      },
+      {
+        // Resource bindings may use a physical topic name. Require deployment
+        // ownership before changing tags, including the creation-time check.
+        "grant": {
+          "actions": ["sns:TagResource", "sns:UntagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
           }
         }
       },
