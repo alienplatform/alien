@@ -191,6 +191,14 @@ pub struct CapacityGroup {
 }
 
 impl CapacityGroup {
+    /// Numeric choices exposed by a setup package for this prepared group.
+    /// Groups without a declared policy retain the package's selected counts.
+    pub fn setup_scale_policy(&self) -> CapacityGroupScalePolicy {
+        self.scale_policy.clone().unwrap_or_else(|| {
+            CapacityGroupScalePolicy::from_selected_bounds(self.min_size, self.max_size)
+        })
+    }
+
     /// AWS root volume size, including filesystem headroom and runtime overhead.
     pub fn aws_root_volume_size_gib(&self) -> i32 {
         self.aws_filesystem_size_gib()

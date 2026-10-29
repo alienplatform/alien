@@ -106,6 +106,19 @@ pub fn plan_compute(
     plan_compute_with_state(stack, platform, selected_settings, None)
 }
 
+/// Plan choices for a shared setup artifact built from the source release.
+///
+/// Unlike runtime planning, this must retain the artifact's numeric parameter
+/// bounds. Runtime updates use `plan_compute_with_state` so saved pool choices
+/// remain valid when a later release changes its replica recommendation.
+pub fn plan_setup_compute(
+    stack: &Stack,
+    platform: Platform,
+    selected_settings: Option<&crate::ComputeSettings>,
+) -> Result<ComputePlan, ErrorData> {
+    plan_compute_internal(stack, platform, selected_settings, None, true)
+}
+
 /// Plan a configuration update while retaining the installed machine architecture.
 /// Resource changes must not silently require a different workload image target.
 pub fn plan_compute_with_state(
@@ -114,6 +127,40 @@ pub fn plan_compute_with_state(
     selected_settings: Option<&crate::ComputeSettings>,
     previous_state: Option<&StackState>,
 ) -> Result<ComputePlan, ErrorData> {
+    plan_compute_internal(stack, platform, selected_settings, previous_state, false)
+}
+
+fn plan_compute_internal(
+    stack: &Stack,
+    platform: Platform,
+    selected_settings: Option<&crate::ComputeSettings>,
+    previous_state: Option<&StackState>,
+    for_setup: bool,
+) -> Result<ComputePlan, ErrorData> {
+    // Shared packages are built from release defaults, before installer resource
+    // choices. Those choices must not move the artifact's numeric constraints.
+    let setup_groups = if for_setup {
+        let mut defaults = stack.clone();
+        crate::container_resources::resolve_container_resources(&mut defaults, None)?;
+        let mut groups = collect_workload_groups(&defaults)?;
+        merge_explicit_compute_groups(&defaults, &mut groups)?;
+        for group in groups.values_mut().filter(|group| group.generated) {
+            let defaults = generated_pool_scale_policy(
+                group.scale.default_min_size(),
+                group.scale.default_max_size(),
+                None,
+            );
+            // Package preparation materializes the same recommended counts.
+            // CloudFormation derives its parameter limits from those counts.
+            group.scale = CapacityGroupScalePolicy::from_selected_bounds(
+                defaults.default_min_size(),
+                defaults.default_max_size(),
+            );
+        }
+        Some(groups)
+    } else {
+        None
+    };
     let mut resolved_stack = stack.clone();
     crate::container_resources::resolve_container_resources(
         &mut resolved_stack,
@@ -237,7 +284,9 @@ pub fn plan_compute_with_state(
                     })
                 });
         }
-        if group.generated {
+        if let Some(groups) = &setup_groups {
+            group.scale = groups[&pool_id].scale.clone();
+        } else if group.generated {
             group.scale = generated_pool_scale_policy(
                 group.scale.default_min_size(),
                 group.scale.default_max_size(),
@@ -539,9 +588,7 @@ fn merge_explicit_compute_groups(
                 group.profile.as_ref(),
                 group.nested_virtualization.unwrap_or(false),
             );
-            let scale = group.scale_policy.clone().unwrap_or_else(|| {
-                CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
-            });
+            let scale = group.setup_scale_policy();
             groups
                 .entry(group.group_id.clone())
                 .and_modify(|planned| {

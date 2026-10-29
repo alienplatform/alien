@@ -2000,9 +2000,7 @@ fn add_compute_parameters(
             ),
         );
 
-        let scale = group.scale_policy.as_ref().cloned().unwrap_or_else(|| {
-            CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
-        });
+        let scale = group.setup_scale_policy();
         match (selection, scale) {
             (
                 ComputePoolSelection::Fixed { machines, .. },
