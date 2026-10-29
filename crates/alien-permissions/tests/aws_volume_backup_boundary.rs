@@ -11,7 +11,10 @@ mod iam_policy;
 
 use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
 use alien_permissions::{
-    generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
+    generators::{
+        aws_permissions_boundary, aws_permissions_boundary_covers, AwsIamStatement,
+        AwsRuntimePermissionsGenerator,
+    },
     get_permission_set, BindingTarget, PermissionContext,
 };
 use iam_policy::{evaluate, wildcard_match, Decision, Request};
@@ -250,6 +253,79 @@ fn the_execution_role_snapshots_only_stack_volumes_and_never_shares() {
             Decision::NotAllowed,
             "the execution role must not be granted {action}"
         );
+    }
+}
+
+#[test]
+fn workload_boundary_covers_volume_backups_without_allowing_snapshot_sharing() {
+    let boundary =
+        aws_permissions_boundary(&context().with_managing_account_id("210987654321"), &[]).unwrap();
+    let required = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(
+            get_permission_set("container/volume-backups").unwrap(),
+            BindingTarget::Stack,
+            &context(),
+        )
+        .unwrap();
+    assert!(
+        aws_permissions_boundary_covers(&boundary, &serde_json::to_value(&required).unwrap())
+            .unwrap()
+    );
+
+    // Check the complete snapshot lifecycle, including conditions on both the source
+    // volume and the new snapshot. Describe-only coverage would not be sufficient.
+    for action in [
+        "ec2:CreateSnapshot",
+        "ec2:CreateTags",
+        "ec2:DeleteSnapshot",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeInstances",
+    ] {
+        assert!(required
+            .statement
+            .iter()
+            .any(|s| s.action.iter().any(|a| a == action)));
+    }
+
+    for action in ["ec2:ModifySnapshotAttribute", "ec2:CopySnapshot"] {
+        for grant in &required.statement {
+            let mut sharing = grant.clone();
+            sharing.action = vec![action.to_string()];
+            let sharing = serde_json::json!({
+                "Version": "2012-10-17",
+                "Statement": [sharing],
+            });
+            assert!(
+                !aws_permissions_boundary_covers(&boundary, &sharing).unwrap(),
+                "boundary must not allow {action}, even with the stack ownership conditions"
+            );
+        }
+    }
+
+    // Coverage must not silently drop ownership conditions or grant DLM sharing/copying.
+    for action in [
+        "ec2:CreateSnapshot",
+        "ec2:CreateSnapshots",
+        "ec2:CreateTags",
+        "ec2:DeleteSnapshot",
+        "ec2:ModifySnapshotAttribute",
+        "ec2:CopySnapshot",
+    ] {
+        for resource in [volume_arn("vol-foreign"), snapshot_arn("snap-foreign")] {
+            let unconditional = serde_json::json!({
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": action,
+                    "Resource": resource,
+                }],
+            });
+            assert!(
+                !aws_permissions_boundary_covers(&boundary, &unconditional).unwrap(),
+                "boundary must not allow unconditional {action} on {resource}"
+            );
+        }
     }
 }
 
