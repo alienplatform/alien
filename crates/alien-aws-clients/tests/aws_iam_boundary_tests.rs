@@ -573,3 +573,162 @@ async fn tag_role_propagates_denied_and_missing_roles() {
         assert!(mock.hits_async().await > 0);
     }
 }
+
+fn inline_policy_page(names: &[&str], pagination: &str) -> String {
+    let members = names
+        .iter()
+        .map(|name| format!("<member>{name}</member>"))
+        .collect::<String>();
+    format!("<ListRolePoliciesResponse><ListRolePoliciesResult><PolicyNames>{members}</PolicyNames>{pagination}</ListRolePoliciesResult></ListRolePoliciesResponse>")
+}
+
+#[tokio::test]
+async fn inline_policy_listing_collects_all_pages_including_empty_intermediate_page() {
+    let server = MockServer::start_async().await;
+    let first = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .header_exists("authorization")
+                .body("Action=ListRolePolicies&Version=2010-05-08&RoleName=test-role");
+            then.status(200).body(inline_policy_page(
+                &["VolumeBackups"],
+                "<IsTruncated>true</IsTruncated><Marker>next+/=</Marker>",
+            ));
+        })
+        .await;
+    let second = server.mock_async(|when, then| {
+        when.method(POST).header_exists("authorization")
+            .body("Action=ListRolePolicies&Version=2010-05-08&RoleName=test-role&Marker=next%2B%2F%3D");
+        then.status(200).body(inline_policy_page(&[],
+            "<IsTruncated>true</IsTruncated><Marker>last</Marker>"));
+    }).await;
+    let last = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .header_exists("authorization")
+                .body("Action=ListRolePolicies&Version=2010-05-08&RoleName=test-role&Marker=last");
+            then.status(200).body(inline_policy_page(
+                &["BackupKey", "OldKey"],
+                "<IsTruncated>false</IsTruncated>",
+            ));
+        })
+        .await;
+    let result = client(&server)
+        .list_role_policies("test-role")
+        .await
+        .unwrap()
+        .list_role_policies_result;
+    assert_eq!(
+        result.policy_names.unwrap().member,
+        ["VolumeBackups", "BackupKey", "OldKey"]
+    );
+    assert_eq!(result.is_truncated, Some(false));
+    assert_eq!(result.marker, None);
+    first.assert_async().await;
+    second.assert_async().await;
+    last.assert_async().await;
+}
+
+#[tokio::test]
+async fn inline_policy_listing_rejects_incomplete_pagination_metadata() {
+    for pagination in [
+        "",
+        "<IsTruncated>true</IsTruncated>",
+        "<IsTruncated>true</IsTruncated><Marker></Marker>",
+    ] {
+        let server = MockServer::start_async().await;
+        let page = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .body("Action=ListRolePolicies&Version=2010-05-08&RoleName=test-role");
+                then.status(200)
+                    .body(inline_policy_page(&["VolumeBackups"], pagination));
+            })
+            .await;
+        let error = client(&server)
+            .list_role_policies("test-role")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error.error, Some(ErrorData::GenericError { ref message })
+            if message.contains("ListRolePolicies") && message.contains("test-role"))
+        );
+        page.assert_async().await;
+    }
+}
+
+#[tokio::test]
+async fn inline_policy_listing_rejects_marker_cycles() {
+    let server = MockServer::start_async().await;
+    let mut pages = Vec::new();
+    for (request_marker, response_marker) in [("", "a"), ("&Marker=a", "b"), ("&Marker=b", "a")] {
+        pages.push(server.mock_async(|when, then| {
+            when.method(POST).body(format!("Action=ListRolePolicies&Version=2010-05-08&RoleName=test-role{request_marker}"));
+            then.status(200).body(inline_policy_page(&["VolumeBackups"],
+                &format!("<IsTruncated>true</IsTruncated><Marker>{response_marker}</Marker>")));
+        }).await);
+    }
+    let error = client(&server)
+        .list_role_policies("test-role")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error.error, Some(ErrorData::GenericError { ref message })
+        if message.contains("repeated a continuation marker"))
+    );
+    for page in pages {
+        page.assert_async().await;
+    }
+}
+
+#[tokio::test]
+async fn inline_policy_listing_propagates_later_page_failure_without_partial_success() {
+    let server = MockServer::start_async().await;
+    let first = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .body("Action=ListRolePolicies&Version=2010-05-08&RoleName=test-role");
+            then.status(200).body(inline_policy_page(
+                &["VolumeBackups"],
+                "<IsTruncated>true</IsTruncated><Marker>next</Marker>",
+            ));
+        })
+        .await;
+    let failed = server.mock_async(|when, then| {
+        when.method(POST).body("Action=ListRolePolicies&Version=2010-05-08&RoleName=test-role&Marker=next");
+        then.status(403).body("<ErrorResponse><Error><Code>AccessDenied</Code><Message>denied</Message></Error></ErrorResponse>");
+    }).await;
+    let error = client(&server)
+        .list_role_policies("test-role")
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error.error,
+        Some(ErrorData::RemoteAccessDenied { .. })
+    ));
+    first.assert_async().await;
+    // The shared AWS transport may retry a failed request, but must not restart the listing.
+    assert!(failed.hits_async().await > 0);
+}
+
+#[tokio::test]
+async fn inline_policy_listing_accepts_empty_complete_list() {
+    let server = MockServer::start_async().await;
+    let page = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .body("Action=ListRolePolicies&Version=2010-05-08&RoleName=test-role");
+            then.status(200)
+                .body(inline_policy_page(&[], "<IsTruncated>false</IsTruncated>"));
+        })
+        .await;
+    let result = client(&server)
+        .list_role_policies("test-role")
+        .await
+        .unwrap()
+        .list_role_policies_result;
+    assert!(result.policy_names.unwrap().member.is_empty());
+    assert_eq!(result.is_truncated, Some(false));
+    assert_eq!(result.marker, None);
+    page.assert_async().await;
+}

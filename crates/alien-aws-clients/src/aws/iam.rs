@@ -1,12 +1,12 @@
 mod role_writer;
 pub use role_writer::IamRoleWriter;
 
-use std::fmt::Debug;
+use std::{collections::HashSet, fmt::Debug};
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
-use alien_error::ContextError;
+use alien_error::{AlienError, ContextError};
 use bon::Builder;
 use form_urlencoded;
 
@@ -72,6 +72,7 @@ pub trait IamApi: Send + Sync + Debug {
     async fn list_policy_versions(&self, policy_arn: &str) -> Result<ListPolicyVersionsResponse>;
     async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
     async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
+    /// Lists all inline policies, following pagination before returning any results.
     async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse>;
 
     // Instance Profile Operations
@@ -606,9 +607,55 @@ impl IamApi for IamClient {
     }
 
     async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse> {
-        let params = vec![("RoleName".to_string(), role_name.to_string())];
-        let body = Self::build_form_body("ListRolePolicies", "2010-05-08", params);
-        self.post_xml(body, "ListRolePolicies", role_name).await
+        let mut marker = None;
+        let mut seen_markers = HashSet::new();
+        let mut policy_names = Vec::new();
+        loop {
+            let mut params = vec![("RoleName".to_string(), role_name.to_string())];
+            if let Some(marker) = marker.take() {
+                params.push(("Marker".to_string(), marker));
+            }
+            let body = Self::build_form_body("ListRolePolicies", "2010-05-08", params);
+            let response: ListRolePoliciesResponse =
+                self.post_xml(body, "ListRolePolicies", role_name).await?;
+            let result = response.list_role_policies_result;
+            if let Some(names) = result.policy_names {
+                policy_names.extend(names.member);
+            }
+            match result.is_truncated {
+                Some(false) => {
+                    return Ok(ListRolePoliciesResponse {
+                        list_role_policies_result: ListRolePoliciesResult {
+                            policy_names: Some(PolicyNames {
+                                member: policy_names,
+                            }),
+                            is_truncated: Some(false),
+                            marker: None,
+                        },
+                    });
+                }
+                Some(true) => {
+                    let next = result.marker.filter(|value| !value.is_empty()).ok_or_else(|| {
+                        AlienError::new(ErrorData::GenericError {
+                            message: format!("ListRolePolicies for '{role_name}' returned a truncated page without a continuation marker"),
+                        })
+                    })?;
+                    if !seen_markers.insert(next.clone()) {
+                        return Err(AlienError::new(ErrorData::GenericError {
+                            message: format!(
+                                "ListRolePolicies for '{role_name}' repeated a continuation marker"
+                            ),
+                        }));
+                    }
+                    marker = Some(next);
+                }
+                None => {
+                    return Err(AlienError::new(ErrorData::GenericError {
+                        message: format!("ListRolePolicies for '{role_name}' omitted IsTruncated; cannot verify the policy list is complete"),
+                    }));
+                }
+            }
+        }
     }
 
     async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()> {
