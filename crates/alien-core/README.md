@@ -114,18 +114,38 @@ delivery.
 
 ### Indirect infrastructure privileges
 
-This boundary covers direct value access. Infrastructure management still has
-powers that can change IAM or deploy code using a workload identity:
+The restrictions above cover direct value access. Infrastructure management
+can still deploy code using a workload identity; the available IAM changes
+depend on the cloud and the installed setup:
 
-- AWS management can create/update compute using stack roles and `iam:PassRole`.
-  Management is explicitly denied `sts:AssumeRole` on stack roles, including
-  a self-trusting role it creates; this prevents role chaining without compute.
+- AWS setup creates a permissions boundary for roles management creates or
+  modifies. Direct setup, CloudFormation and Terraform record the installed
+  policy ARN and document. Management's role-creation, policy and trust writes
+  require that boundary; management has no grant to remove it or edit the
+  boundary policy. Existing runtime-owned roles receive it before their first
+  write. Setup-owned roles retain their approved permissions and are not adopted.
+  The default ceiling permits non-IAM actions on the runtime catalog's
+  stack-prefixed resource patterns, plus specific runtime grants for resources
+  that cannot use that prefix. Setup also includes custom inline workload
+  permissions and grants selecting physical resource ARNs, such as KMS keys.
+  These explicit grants can extend the ceiling and need setup review.
+  A boundary limits role permissions; it does not grant access by itself or
+  isolate workloads within one deployment. Prefix patterns can overlap when
+  one deployment prefix begins with another followed by a hyphen.
+  Management can still create/update compute using permitted stack roles and
+  `iam:PassRole`, so it can run code with those roles' effective access.
+  Management is explicitly denied `sts:AssumeRole` on stack roles.
   Automatic setup keeps data access to ordinary Live vaults added later, while
   the explicit reserved-vault deny overrides its stack-wide Allow.
-  The reserved-vault deny applies to management itself, including parameter
-  tags and resource policies; it does not follow a workload role. CloudTrail
-  records `AssumeRole`, `CreateRole`, `CreateFunction`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`,
-  `RunInstances`, and IAM `PutRolePolicy` / `UpdateAssumeRolePolicy` changes.
+  That deny applies to management itself; it does not follow a workload role.
+  Older setups with no recorded boundary ARN keep their existing behavior until
+  setup is rerun. For bounded deployments, a release needing permissions beyond
+  the recorded document stops before mutation and asks for setup again.
+  See [AWS role permissions boundaries](../alien-permissions/README.md#aws-role-permissions-boundaries)
+  for adoption rules and generation limits.
+  CloudTrail records role changes and compute API calls such as `CreateRole`,
+  `PutRolePolicy`, `UpdateAssumeRolePolicy`, `CreateFunction`,
+  `UpdateFunctionCode`, `UpdateFunctionConfiguration`, and `RunInstances`.
   `PassRole` is a permission check, not a separate CloudTrail event; inspect the
   role in the compute API event. KMS decrypt alone does not authorize SSM reads.
 - GCP management, after a Terraform setup, holds no permission that changes
@@ -164,8 +184,9 @@ powers that can change IAM or deploy code using a workload identity:
   `Microsoft.Authorization/roleDefinitions/write`,
   `Microsoft.KeyVault/vaults/write`, and `Microsoft.KeyVault/vaults/delete`.
 
-These are accepted infrastructure privileges, not a hard boundary against a
-compromised infrastructure manager. Customer-owned deny policies (for example,
+These controls limit IAM changes while preserving the workload deployment
+powers described above. They do not prevent management from running code with
+a permitted workload identity. Customer-owned deny policies (for example,
 GCP IAM deny policies) and separately controlled provisioning identities are
 possible follow-up work. On GCP/Azure, custom inline management permissions are
 refused while native slots exist because they can embed arbitrary payload roles
