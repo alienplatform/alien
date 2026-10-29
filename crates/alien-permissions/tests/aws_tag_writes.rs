@@ -159,6 +159,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "dlm:tagresource",
                         "ses:tagresource",
                         "ses:untagresource",
+                        "apigateway:tagresource",
                     ]
                     .iter()
                     .any(|tagging| {
@@ -204,6 +205,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "dlm:tagresource",
                         "ses:tagresource",
                         "ses:untagresource",
+                        "apigateway:tagresource",
                     ]
                     .iter()
                     .any(|tagging| {
@@ -409,6 +411,91 @@ fn email_tag_changes_require_existing_stack_ownership() {
                 Decision::Allowed,
                 "tagged {create_action} remains available"
             );
+        }
+    }
+}
+
+#[test]
+fn api_gateway_tagging_requires_an_owned_endpoint() {
+    let context = PermissionContext::new()
+        .with_stack_prefix("stack-a")
+        .with_resource_name("worker")
+        .with_resource_id("worker")
+        .with_managing_account_id("123456789012")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-west-2");
+    let own_tags = [
+        (ALIEN_STACK_TAG_KEY, "stack-a"),
+        (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+        (alien_core::ALIEN_RESOURCE_TAG_KEY, "worker"),
+    ];
+    for id in ["worker/provision", "worker/management"] {
+        for binding in [BindingTarget::Stack, BindingTarget::Resource] {
+            let policy = AwsRuntimePermissionsGenerator::new()
+                .generate_policy(get_permission_set(id).unwrap(), binding, &context)
+                .unwrap();
+            for path in ["apis", "restapis", "domainnames"] {
+                let collection = format!("arn:aws:apigateway:us-west-2::/{path}");
+                assert_eq!(
+                    evaluate(
+                        &policy.statement,
+                        &Request::new("apigateway:POST", &collection).request_tags(&own_tags)
+                    ),
+                    Decision::Allowed
+                );
+                assert_eq!(
+                    evaluate(
+                        &policy.statement,
+                        &Request::new("apigateway:POST", &collection)
+                    ),
+                    Decision::NotAllowed
+                );
+                let endpoint = format!("{collection}/example");
+                // REST TagResource checks PUT on the tag path and PATCH on the API.
+                // HTTP APIs check PATCH directly on the API. ResourceTag is absent
+                // on the REST tag path, so the endpoint check enforces ownership.
+                let tag_path = format!("arn:aws:apigateway:us-west-2::/tags/arn%3Aaws%3Aapigateway%3Aus-west-2%3A%3A%2F{path}%2Fexample");
+                assert_eq!(
+                    evaluate(
+                        &policy.statement,
+                        &Request::new("apigateway:PUT", &tag_path).request_tags(&own_tags)
+                    ),
+                    Decision::Allowed
+                );
+                for action in [
+                    "apigateway:PATCH",
+                    "apigateway:PUT",
+                    "apigateway:TagResource",
+                ] {
+                    for (owner, manager, resource) in [
+                        ("stack-b", "runtime", "worker"),
+                        ("stack-a", "setup", "worker"),
+                        ("", "", ""),
+                        ("stack-a", "runtime", "worker"),
+                        ("stack-a", "runtime", "sibling"),
+                    ] {
+                        let allowed = owner == "stack-a"
+                            && manager == "runtime"
+                            && (binding == BindingTarget::Stack || resource == "worker");
+                        let request = Request::new(action, &endpoint)
+                            .request_tags(&own_tags)
+                            .resource_tags(&[
+                                (ALIEN_STACK_TAG_KEY, owner),
+                                (ALIEN_MANAGED_BY_TAG_KEY, manager),
+                                (alien_core::ALIEN_RESOURCE_TAG_KEY, resource),
+                            ]);
+                        assert_eq!(
+                            evaluate(&policy.statement, &request),
+                            if allowed {
+                                Decision::Allowed
+                            } else {
+                                Decision::NotAllowed
+                            },
+                            "{id} {binding:?} {action} {path} {owner}/{manager}/{resource}"
+                        );
+                    }
+                }
+            }
         }
     }
 }

@@ -478,15 +478,14 @@
         "label": "create-http-api-endpoints",
         "description": "Create API Gateway HTTP (V2) and REST (V1) APIs and custom domain names for application-owned public endpoints.",
         "grant": {
-          "actions": ["apigateway:POST", "apigateway:PUT"]
+          "actions": ["apigateway:POST"]
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis",
               "arn:aws:apigateway:${awsRegion}::/restapis",
-              "arn:aws:apigateway:${awsRegion}::/domainnames",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
+              "arn:aws:apigateway:${awsRegion}::/domainnames"
             ],
             "condition": {
               "StringEquals": {
@@ -499,8 +498,7 @@
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis",
               "arn:aws:apigateway:${awsRegion}::/restapis",
-              "arn:aws:apigateway:${awsRegion}::/domainnames",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
+              "arn:aws:apigateway:${awsRegion}::/domainnames"
             ],
             "condition": {
               "StringEquals": {
@@ -554,22 +552,16 @@
         }
       },
       {
-        // API Gateway V1/V2 tagged creates can perform implicit TagResource calls.
+        // REST tagging also checks PATCH on the underlying owned resource.
+        // The /tags path itself does not expose ResourceTag condition keys.
         "label": "tag-http-api-endpoints",
-        "description": "Apply deployment tags to API Gateway HTTP (V2) and REST (V1) API resources created for public endpoints.",
+        "description": "Apply deployment tags to API Gateway endpoints with ownership-scoped update permission.",
         "grant": {
-          "actions": ["apigateway:TagResource", "apigateway:PUT"]
+          "actions": ["apigateway:POST", "apigateway:PUT"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:apigateway:${awsRegion}::/apis/*",
-              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
-              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
-              "arn:aws:apigateway:${awsRegion}::/restapis/*",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
-            ],
+            "resources": ["arn:aws:apigateway:${awsRegion}::/tags/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -578,14 +570,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:apigateway:${awsRegion}::/apis/*",
-              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
-              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
-              "arn:aws:apigateway:${awsRegion}::/restapis/*",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
-            ],
+            "resources": ["arn:aws:apigateway:${awsRegion}::/tags/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -601,7 +586,13 @@
         "label": "manage-http-api-endpoints",
         "description": "Read, update, and delete API Gateway HTTP (V2) and REST (V1) APIs, custom domain names, and mappings owned by this application.",
         "grant": {
-          "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"]
+          "actions": [
+            "apigateway:GET",
+            "apigateway:DELETE",
+            "apigateway:PATCH",
+            "apigateway:PUT",
+            "apigateway:TagResource"
+          ]
         },
         "binding": {
           "stack": {
