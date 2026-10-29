@@ -12,8 +12,8 @@ mod iam_policy;
 use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
 use alien_permissions::{
     generators::{
-        aws_permissions_boundary, aws_permissions_boundary_covers, AwsIamStatement,
-        AwsRuntimePermissionsGenerator,
+        aws_permissions_boundary, aws_permissions_boundary_covers, aws_stack_permissions_boundary,
+        AwsIamStatement, AwsRuntimePermissionsGenerator,
     },
     get_permission_set, BindingTarget, PermissionContext,
 };
@@ -342,4 +342,102 @@ fn wildcard_matching_follows_iam() {
         "arn:aws:iam::1:role/app-dlm-1"
     ));
     assert!(!wildcard_match("app", "app-x"));
+}
+
+#[test]
+#[ignore = "Native volume-key grants are missing from the boundary; adding them exceeds the policy limit for combined stacks"]
+fn encrypted_volume_backup_grants_are_covered_without_an_application_profile() {
+    let key_arn = "arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab";
+    let container = alien_core::Container::new("db".to_string())
+        .cluster("compute".to_string())
+        .permissions("execution".to_string())
+        .code(alien_core::ContainerCode::Image {
+            image: "postgres:17".to_string(),
+        })
+        .cpu(alien_core::ResourceSpec {
+            min: "1".to_string(),
+            desired: "1".to_string(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "1Gi".to_string(),
+            desired: "1Gi".to_string(),
+        })
+        .persistent_storage(alien_core::PersistentStorage {
+            size: "10Gi".to_string(),
+            mount_path: "/data".to_string(),
+            encryption_key: Some(alien_core::ResourceRef::new("key".into(), "encryption")),
+            backups: alien_core::VolumeBackups::default(),
+        })
+        .build();
+    let mut second = container.clone();
+    second.id = "db-replica".to_string();
+    second.persistent_storage.as_mut().unwrap().backups.enabled = false;
+    let stack = alien_core::Stack::new("sample".to_string())
+        .add(container, alien_core::ResourceLifecycle::Live)
+        .add(second, alien_core::ResourceLifecycle::Live)
+        .add(
+            alien_core::Key::new("encryption".to_string()).build(),
+            alien_core::ResourceLifecycle::Frozen,
+        )
+        .build();
+    assert!(stack.permission_profiles().is_empty());
+    let context = context().with_managing_account_id("210987654321");
+    let mut resolutions = 0;
+    let boundary = aws_stack_permissions_boundary(&stack, &context, |owner, scope| {
+        resolutions += 1;
+        assert_eq!(owner, "execution");
+        assert_eq!(scope, "encryption");
+        Ok(context.clone().with_resource_name(key_arn))
+    })
+    .unwrap();
+    let key_policy = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(
+            get_permission_set("key/native-volume").unwrap(),
+            BindingTarget::Resource,
+            &context.clone().with_resource_name(key_arn),
+        )
+        .unwrap();
+    let mut backup_policy = rendered(&["container/volume-backups"]);
+    backup_policy.extend(key_policy.statement.clone());
+    assert!(
+        aws_permissions_boundary_covers(
+            &boundary,
+            &serde_json::json!({
+                "Version": "2012-10-17", "Statement": backup_policy,
+            })
+        )
+        .unwrap(),
+        "the complete encrypted backup policy must fit the generated ceiling"
+    );
+    assert_eq!(resolutions, 1, "shared volume keys should resolve once");
+    for mut grant in key_policy.statement {
+        let original = grant.clone();
+        grant.resource = vec![key_arn.replace("1234abcd", "9876abcd")];
+        assert!(
+            !aws_permissions_boundary_covers(
+                &boundary,
+                &serde_json::json!({
+                    "Version": "2012-10-17", "Statement": [grant],
+                })
+            )
+            .unwrap(),
+            "a sibling key must remain outside the ceiling"
+        );
+        let mut grant = original;
+        grant.condition = None;
+        assert!(
+            !aws_permissions_boundary_covers(
+                &boundary,
+                &serde_json::json!({
+                    "Version": "2012-10-17", "Statement": [grant],
+                })
+            )
+            .unwrap(),
+            "EC2-only use and service-created grants must remain conditional"
+        );
+    }
+    assert!(
+        aws_stack_permissions_boundary(&stack, &context, |_, _| Ok(context.clone())).is_err(),
+        "a missing physical key ARN must not silently omit encryption grants"
+    );
 }

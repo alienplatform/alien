@@ -38,6 +38,10 @@ The document defines a ceiling for roles management writes:
   These are setup-approved additions to the ceiling; they are not restricted
   to name-based resources. Management profiles do not contribute to it.
 
+Native volume-key grants derived from container storage settings are not yet
+included unless they also appear in a workload profile. Encrypted node and
+backup policies therefore need further integration before using this ceiling.
+
 Provision, management, heartbeat, telemetry, observation, remote-management and
 protection permission sets are excluded from the runtime catalog ceiling. A
 boundary does not grant permissions by itself: the role still needs an identity
