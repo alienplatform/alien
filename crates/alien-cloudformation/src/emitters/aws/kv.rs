@@ -105,8 +105,9 @@ impl CfEmitter for AwsKvEmitter {
 fn kv_iam_policies(ctx: &EmitContext<'_>, kv: &Kv, table_id: &str) -> Result<Vec<CfResource>> {
     let mut resources = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
-    let context =
-        permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", kv.id()));
+    let context = permission_context()
+        .with_resource_name(format!("${{AWS::StackName}}-{}", kv.id()))
+        .with_resource_id(kv.id());
 
     let mut owners = resource_permission_owners(ctx, PERMISSION_SET_PREFIX);
     if let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(ctx.resource) {
