@@ -103,18 +103,26 @@ fn conditions_hold(statement: &AwsIamStatement, request: &Request) -> bool {
 
 fn statement_matches(statement: &AwsIamStatement, request: &Request) -> bool {
     assert!(
-        statement.not_resource.is_empty(),
-        "the evaluator doesn't model NotResource ({})",
+        statement.resource.is_empty() != statement.not_resource.is_empty(),
+        "a statement must specify Resource or NotResource exclusively ({})",
         statement.sid
     );
+    let resource_matches = if statement.not_resource.is_empty() {
+        statement
+            .resource
+            .iter()
+            .any(|resource| wildcard_match(resource, &request.resource))
+    } else {
+        !statement
+            .not_resource
+            .iter()
+            .any(|resource| wildcard_match(resource, &request.resource))
+    };
     statement
         .action
         .iter()
         .any(|action| wildcard_match(&action.to_lowercase(), &request.action.to_lowercase()))
-        && statement
-            .resource
-            .iter()
-            .any(|resource| wildcard_match(resource, &request.resource))
+        && resource_matches
         && conditions_hold(statement, request)
 }
 

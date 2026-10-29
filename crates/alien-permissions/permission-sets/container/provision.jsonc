@@ -454,7 +454,8 @@
       },
       // Scheduled snapshots: one Data Lifecycle Manager policy per container.
       // AWS authorizes CreateLifecyclePolicy against no resource type, so only the
-      // request tags can bound it. Its implicit TagResource is authorized on the policy.
+      // request tags can bound it. Its implicit TagResource is authorized on the policy
+      // with the new resource tags, so the owned-policy grant also covers creation.
       {
         "grant": {
           "actions": ["dlm:CreateLifecyclePolicy"]
@@ -483,33 +484,8 @@
       },
       {
         "grant": {
-          "actions": ["dlm:TagResource"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
-            "condition": {
-              "StringEquals": {
-                "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          },
-          "resource": {
-            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
-            "condition": {
-              "StringEquals": {
-                "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceId}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
-      },
-      {
-        "grant": {
           "actions": [
+            "dlm:TagResource",
             "dlm:GetLifecyclePolicy",
             "dlm:UpdateLifecyclePolicy",
             "dlm:DeleteLifecyclePolicy"
@@ -845,7 +821,7 @@
       // ACM certificates for HTTPS containers
       {
         "grant": {
-          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+          "actions": ["acm:ImportCertificate"]
         },
         "binding": {
           "stack": {

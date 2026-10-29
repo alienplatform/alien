@@ -29,7 +29,7 @@
       // Launch template creation must include Alien boundary tags in the request.
       {
         "grant": {
-          "actions": ["ec2:CreateLaunchTemplate", "ec2:CreateTags"]
+          "actions": ["ec2:CreateLaunchTemplate"]
         },
         "binding": {
           "stack": {
@@ -52,10 +52,37 @@
           }
         }
       },
-      // Existing launch templates can be deleted only when they carry Alien boundary tags.
       {
         "grant": {
-          "actions": ["ec2:DeleteLaunchTemplate"]
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateLaunchTemplate",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateLaunchTemplate",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Existing launch templates must already carry runtime ownership tags.
+      {
+        "grant": {
+          "actions": ["ec2:DeleteLaunchTemplate", "ec2:CreateTags"]
         },
         "binding": {
           "stack": {
