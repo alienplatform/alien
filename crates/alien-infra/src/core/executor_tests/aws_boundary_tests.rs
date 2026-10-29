@@ -3,8 +3,8 @@
 use super::helpers::default_deployment_config;
 use crate::{
     core::{
-        aws_permissions_boundary_for_stack, MockPlatformServiceProvider, StackExecutor,
-        StackResourceStateExt,
+        aws_permissions_boundary_for_stack, validate_installed_aws_permissions_boundary,
+        MockPlatformServiceProvider, StackExecutor, StackResourceStateExt,
     },
     key::AwsKeyController,
     remote_stack_management::AwsRemoteStackManagementController,
@@ -13,7 +13,8 @@ use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt};
 use alien_core::{
     AwsManagementConfig, ClientConfig, DeploymentConfig, InitialSetupAuthority, Key,
     ManagementConfig, PermissionProfile, PermissionSetReference, Platform, RemoteStackManagement,
-    Resource, ResourceLifecycle, ResourceStatus, Stack, StackResourceState, StackState, Storage,
+    Resource, ResourceEntry, ResourceLifecycle, ResourceStatus, SetupManagement, Stack,
+    StackResourceState, StackState, Storage,
 };
 use alien_permissions::PermissionContext;
 use serde_json::{json, Value};
@@ -135,6 +136,123 @@ async fn covered_and_legacy_deployments_continue_without_provider_calls() {
         executor.step(state.clone()).await.unwrap();
         executor.refresh(state).await.unwrap();
     }
+}
+
+// Keep these old controller documents literal: serializing today's controller would
+// silently add defaults and stop testing whether old persisted records still load.
+#[tokio::test]
+async fn legacy_management_records_load_and_continue_without_setup() {
+    for revision in [None, Some("old-management-revision")] {
+        let (mut stack, mut state, config) = fixture();
+        let mut old = json!({
+            "type": "AwsRemoteStackManagementController",
+            "state": "ready",
+            "roleArn": "arn:aws:iam::123456789012:role/boundary-test-management",
+            "roleName": "boundary-test-management",
+            "internalStayCount": null,
+            "_controllerStateVersion": 1,
+            "managementPermissionsApplied": true
+        });
+        if let Some(revision) = revision {
+            old["managementPermissionsRevision"] = json!(revision);
+            // Exercise a populated direct-setup state as well as the minimal import.
+            for index in 0..29 {
+                let id = format!("objects-{index}");
+                let resource = Storage::new(id.clone()).build();
+                stack.resources.insert(
+                    id.clone(),
+                    ResourceEntry::new(resource.clone(), ResourceLifecycle::Frozen),
+                );
+                let mut saved = StackResourceState::new_pending(
+                    "storage".to_string(),
+                    Resource::new(resource),
+                    Some(ResourceLifecycle::Frozen),
+                    vec![],
+                );
+                saved.status = ResourceStatus::Running;
+                saved
+                    .set_internal_controller(Some(Box::new(
+                        crate::storage::AwsStorageController::mock_ready(&id),
+                    )))
+                    .unwrap();
+                state.resources.insert(id, saved);
+            }
+            assert_eq!(state.resources.len(), 30);
+        }
+        *installed(&mut state) = old.clone();
+        // Include the durable retry checkpoint in version and serde validation.
+        state
+            .resources
+            .get_mut("management")
+            .unwrap()
+            .last_failed_state = Some(old);
+        let state: StackState =
+            serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+        let controller = state.resources["management"]
+            .get_internal_controller_typed::<AwsRemoteStackManagementController>()
+            .unwrap();
+        assert!(controller.permissions_boundary_arn.is_none());
+        assert!(controller.permissions_boundary_document.is_none());
+        assert_eq!(
+            controller.management_permissions_revision.as_deref(),
+            revision
+        );
+        assert!(controller.management_permissions_applied);
+        state.resources["management"]
+            .get_last_failed_controller()
+            .unwrap()
+            .unwrap();
+        validate_installed_aws_permissions_boundary(
+            &stack,
+            &state,
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &config,
+        )
+        .unwrap();
+        let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
+        for result in [
+            executor.step(state.clone()).await,
+            executor.refresh(state.clone()).await,
+        ] {
+            let next = result.unwrap().next_state;
+            assert_eq!(next.resources.len(), state.resources.len());
+            assert!(next
+                .resources
+                .values()
+                .all(|saved| saved.status == ResourceStatus::Running));
+            let controller = next.resources["management"]
+                .get_internal_controller_typed::<AwsRemoteStackManagementController>()
+                .unwrap();
+            assert!(controller.permissions_boundary_arn.is_none());
+            assert_eq!(
+                controller.role_arn.as_deref(),
+                Some("arn:aws:iam::123456789012:role/boundary-test-management")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn empty_legacy_automatic_install_does_not_require_a_boundary() {
+    let (stack, mut state, mut config) = fixture();
+    state.resources.clear();
+    config.stack_settings.setup_management = SetupManagement::Automatic;
+    validate_installed_aws_permissions_boundary(
+        &stack,
+        &state,
+        &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+        &config,
+    )
+    .unwrap();
+    let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
+    // Observation before the first setup import must not invent an installed boundary.
+    assert!(executor
+        .refresh(state)
+        .await
+        .unwrap()
+        .next_state
+        .resources
+        .is_empty());
 }
 
 #[tokio::test]
