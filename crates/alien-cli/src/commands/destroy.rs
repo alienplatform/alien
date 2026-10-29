@@ -663,6 +663,7 @@ async fn destroy_tracked_deployment(
         &tracked_deployment.deployment_id,
         &session,
         stack_settings.deployment_model,
+        "cli",
     )
     .await
     .context(ErrorData::ConfigurationError {

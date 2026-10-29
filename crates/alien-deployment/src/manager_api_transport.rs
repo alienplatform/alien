@@ -519,6 +519,7 @@ pub async fn acquire_setup_delete_deployment(
     deployment_id: &str,
     session: &str,
     deployment_model: DeploymentModel,
+    setup_method: &str,
 ) -> Result<SetupDeleteAcquireOutcome, AlienError> {
     let statuses = vec![
         "retention-required".to_string(),
@@ -538,7 +539,7 @@ pub async fn acquire_setup_delete_deployment(
                 acquire_mode: Some("setup-teardown".to_string()),
                 session: session.to_string(),
                 deployment_ids: Some(vec![deployment_id.to_string()]),
-                setup_method: Some("cli".to_string()),
+                setup_method: Some(setup_method.to_string()),
                 statuses: Some(statuses.clone()),
                 platforms: None,
                 deployment_model: deployment_model_wire(deployment_model),
@@ -923,6 +924,7 @@ mod tests {
             "deployment-1",
             "setup",
             DeploymentModel::Push,
+            "cli",
         )
         .await
         .unwrap();
@@ -955,6 +957,7 @@ mod tests {
             "deployment-1",
             "session-1",
             DeploymentModel::Push,
+            "cli",
         )
         .await
         .expect("confirmed removed record is completed deletion");
@@ -985,6 +988,7 @@ mod tests {
             "deployment-1",
             "session-1",
             DeploymentModel::Push,
+            "cli",
         )
         .await
         .err()
@@ -1028,6 +1032,7 @@ mod tests {
             "deployment-1",
             "session-1",
             DeploymentModel::Push,
+            "cli",
         )
         .await
         .err()
@@ -1093,6 +1098,7 @@ mod tests {
             "deployment-1",
             "session-1",
             DeploymentModel::Push,
+            "cli",
         )
         .await
         .expect("a removed record confirmed by the operator is a completed deletion");
@@ -1178,6 +1184,7 @@ mod tests {
             "deployment-1",
             "session-1",
             DeploymentModel::Push,
+            "cli",
         )
         .await
         .err()
