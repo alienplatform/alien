@@ -73,9 +73,16 @@ async fn adoption_completes_before_policy_write() {
 
 #[tokio::test]
 async fn legacy_setup_does_not_read_or_adopt_roles() {
-    let iam = MockIamApi::new();
+    let mut iam = MockIamApi::new();
+    iam.expect_put_role_policy()
+        .with(eq("test-role"), eq("runtime"), eq("{}"))
+        .once()
+        .returning(|_, _, _| Ok(()));
     IamRoleWriter::new(&iam, None)
         .prepare_existing("test-role", "test", "worker")
+        .await
+        .unwrap();
+    iam.put_role_policy("test-role", "runtime", "{}")
         .await
         .unwrap();
 }
@@ -91,11 +98,23 @@ async fn already_bounded_role_needs_no_adoption() {
 }
 
 #[tokio::test]
-async fn foreign_and_setup_owned_roles_are_never_written_or_adopted() {
+async fn roles_without_current_runtime_ownership_are_never_written_or_adopted() {
     for boundary in [None, Some(BOUNDARY)] {
         for tags in [
             json!(null),
             json!({"member": []}),
+            // Historical tags are not proof of current runtime ownership.
+            // These are the values emitted by tags.rs at 61b149801 and 21f84db6c.
+            json!({"member": [
+                {"Key": "alien.dev/stack", "Value": "test"},
+                {"Key": "alien.dev/resource", "Value": "worker"},
+                {"Key": "alien.dev/managed-by", "Value": "alien"}
+            ]}),
+            json!({"member": [
+                {"Key": "deployment", "Value": "test"},
+                {"Key": "resource", "Value": "worker"},
+                {"Key": "managed-by", "Value": "deployment"}
+            ]}),
             json!({"member": [
                 {"Key": "deployment", "Value": "test-sibling"},
                 {"Key": "resource", "Value": "worker"},
