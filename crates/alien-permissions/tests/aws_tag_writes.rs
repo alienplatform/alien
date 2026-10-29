@@ -13,6 +13,7 @@ fn ec2_tags_require_creation_or_existing_stack_ownership() {
         .with_stack_prefix("stack-a")
         .with_resource_name("worker")
         .with_resource_id("worker")
+        .with_managing_account_id("123456789012")
         .with_aws_account_id("123456789012")
         .with_aws_region("us-west-2");
     for (set_id, resources) in [
@@ -146,13 +147,17 @@ fn assert_tag_ownership(policy: &AwsIamPolicy, resource_type: &str, create_actio
 }
 
 #[test]
-fn catalog_ec2_tag_grants_require_creation_or_existing_stack_ownership() {
+fn catalog_ec2_and_acm_tag_grants_require_creation_or_existing_stack_ownership() {
     for id in alien_permissions::list_permission_set_ids() {
         let set = get_permission_set(id).expect("registered permission set");
         for entry in set.platforms.aws.iter().flatten() {
             if entry.effect != alien_core::AwsPermissionEffect::Allow
                 || !entry.grant.actions.iter().flatten().any(|action| {
-                    iam_policy::wildcard_match(&action.to_ascii_lowercase(), "ec2:createtags")
+                    ["ec2:createtags", "acm:addtagstocertificate"]
+                        .iter()
+                        .any(|tagging| {
+                            iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
+                        })
                 })
             {
                 continue;
@@ -187,8 +192,77 @@ fn catalog_ec2_tag_grants_require_creation_or_existing_stack_ownership() {
                                     | "CreateSnapshot"
                             )
                         });
-                assert!(owned || creation, "{id} allows EC2 tag writes without creation or existing stack ownership: {binding:?}");
+                let acm = entry.grant.actions.iter().flatten().any(|action| {
+                    iam_policy::wildcard_match(
+                        &action.to_ascii_lowercase(),
+                        "acm:addtagstocertificate",
+                    )
+                });
+                assert!(owned || (creation && !acm), "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
             }
+        }
+    }
+}
+
+#[test]
+fn certificate_tags_require_existing_stack_ownership() {
+    let context = PermissionContext::new()
+        .with_stack_prefix("stack-a")
+        .with_resource_name("worker")
+        .with_resource_id("worker")
+        .with_managing_account_id("123456789012")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-west-2");
+    let arn = "arn:aws:acm:us-west-2:123456789012:certificate/example";
+    let own_tags = [
+        (ALIEN_STACK_TAG_KEY, "stack-a"),
+        (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+        (alien_core::ALIEN_RESOURCE_TAG_KEY, "worker"),
+    ];
+    for id in [
+        "container/provision",
+        "container/management",
+        "worker/provision",
+        "worker/management",
+        "daemon/provision",
+        "kubernetes-public-endpoint/management",
+    ] {
+        let set = get_permission_set(id).unwrap();
+        for binding in [BindingTarget::Stack, BindingTarget::Resource] {
+            if id == "kubernetes-public-endpoint/management" && binding == BindingTarget::Stack {
+                continue;
+            }
+            let policy = AwsRuntimePermissionsGenerator::new()
+                .generate_policy(set, binding, &context)
+                .unwrap();
+            let tagging = || Request::new("acm:AddTagsToCertificate", arn).request_tags(&own_tags);
+            for (owner, manager) in [("stack-b", "runtime"), ("stack-a", "setup"), ("", "")] {
+                assert_eq!(
+                    evaluate(
+                        &policy.statement,
+                        &tagging().resource_tags(&[
+                            (ALIEN_STACK_TAG_KEY, owner),
+                            (ALIEN_MANAGED_BY_TAG_KEY, manager),
+                            (alien_core::ALIEN_RESOURCE_TAG_KEY, "worker"),
+                        ])
+                    ),
+                    Decision::NotAllowed,
+                    "{id}: cannot retag foreign, setup-owned or unowned certificates"
+                );
+            }
+            assert_eq!(
+                evaluate(&policy.statement, &tagging().resource_tags(&own_tags)),
+                Decision::Allowed,
+                "{id}: retag own certificate"
+            );
+            assert_eq!(
+                evaluate(
+                    &policy.statement,
+                    &Request::new("acm:ImportCertificate", arn).request_tags(&own_tags)
+                ),
+                Decision::Allowed,
+                "{id}: import tagged certificate"
+            );
         }
     }
 }

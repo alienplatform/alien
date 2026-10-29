@@ -368,7 +368,7 @@
         "label": "import-tls-certificates",
         "description": "Import TLS certificates for application-owned HTTPS endpoints.",
         "grant": {
-          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+          "actions": ["acm:ImportCertificate"]
         },
         "binding": {
           "stack": {
