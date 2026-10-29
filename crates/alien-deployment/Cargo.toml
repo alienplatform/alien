@@ -50,6 +50,7 @@ utoipa = { version = "5", optional = true }
 [dev-dependencies]
 alien-client-core = { workspace = true }
 alien-local = { workspace = true }
+alien-permissions = { workspace = true }
 tokio-test = "0.4"
 tempfile = "3"
 indexmap = "2"
