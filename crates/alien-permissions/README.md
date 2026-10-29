@@ -49,7 +49,7 @@ its document. Setup owns creation, updates and deletion of this managed policy.
 Management's generated grants do not permit editing it or removing a role's
 permissions boundary.
 
-The document defines a ceiling for roles management writes:
+The document limits identity-policy permissions for roles management writes:
 
 - Name-based runtime catalog bindings contribute stack-prefixed ARN patterns.
   Resource-specific names widen to the deployment prefix. One `Allow` statement
@@ -69,12 +69,27 @@ The document defines a ceiling for roles management writes:
 
 Provision, management, heartbeat, telemetry, observation, remote-management and
 protection permission sets are excluded from the runtime catalog ceiling. A
-boundary does not grant permissions by itself: the role still needs an identity
-policy that allows the operation. It is a deployment-wide ceiling, not isolation
-between workloads. The default name-based ceiling excludes IAM operations;
-custom inline grants must be reviewed for any broader access they add. Prefix
+boundary does not grant permissions by itself. Access granted by an identity
+policy must also be allowed by the boundary. It is a deployment-wide ceiling for
+those grants, not isolation between workloads. The default name-based ceiling
+excludes IAM operations; custom inline grants must be reviewed for any broader access they add. Prefix
 patterns can overlap with another deployment whose prefix begins with the same
 prefix followed by a hyphen.
+
+### Resource-policy grants
+
+Resource policies also affect effective access. Within the same AWS account,
+a grant to an IAM role ARN remains limited by the boundary. A grant directly to
+an assumed-role session ARN can allow access omitted from the boundary. A
+resource policy using `Principal: "*"` with an `aws:PrincipalArn` condition can
+also grant access beyond those implicit limits. Applicable explicit denies
+still override these grants. See AWS's [boundary evaluation rules](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html)
+and [role principal rules](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html#principal-role).
+
+The generated boundary therefore does not guarantee denial of all access outside
+the deployment prefix. Resource owners must review their resource-policy grants
+alongside workload identity policies. The boundary itself grants no authority
+to change another resource's policy.
 
 ### Role writes and adoption
 
@@ -94,7 +109,7 @@ obsolete node SSM/CloudWatch policies; they do not allow attaching those policie
 supply the permissions-boundary condition key.
 
 Management can still deploy code using permitted workload roles through
-`iam:PassRole`. The ceiling constrains those roles' effective permissions, but
+`iam:PassRole`. The ceiling constrains their identity-policy grants, but
 management's own data-access denials do not transfer to them. Setup-only roles
 retain their approved policy content. The boundary does not constrain trust
 policy contents.

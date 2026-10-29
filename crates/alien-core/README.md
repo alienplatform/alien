@@ -129,9 +129,14 @@ depend on the cloud and the installed setup:
   that cannot use that prefix. Setup also includes custom inline workload
   permissions and grants selecting physical resource ARNs, such as KMS keys.
   These explicit grants can extend the ceiling and need setup review.
-  A boundary limits role permissions; it does not grant access by itself or
-  isolate workloads within one deployment. Prefix patterns can overlap when
-  one deployment prefix begins with another followed by a hyphen.
+  A boundary limits identity-policy grants; it does not grant access by itself
+  or isolate workloads within one deployment. Same-account resource policies
+  can grant access beyond its implicit limits directly to role sessions, or
+  through a wildcard principal with an `aws:PrincipalArn` condition. Applicable
+  explicit denies still apply. Resource-policy grants need separate review;
+  the boundary does not guarantee denial of all access outside the prefix.
+  Prefix patterns can overlap when one deployment prefix begins with another
+  followed by a hyphen.
   Management can still create/update compute using permitted stack roles and
   `iam:PassRole`, so it can run code with those roles' effective access.
   Management is explicitly denied `sts:AssumeRole` on stack roles.
