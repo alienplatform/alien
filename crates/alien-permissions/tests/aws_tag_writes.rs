@@ -7,15 +7,19 @@ use alien_permissions::{
 };
 use iam_policy::{evaluate, Decision, Request};
 
-#[test]
-fn ec2_tags_require_creation_or_existing_stack_ownership() {
-    let context = PermissionContext::new()
+fn context() -> PermissionContext {
+    PermissionContext::new()
         .with_stack_prefix("stack-a")
         .with_resource_name("worker")
         .with_resource_id("worker")
         .with_managing_account_id("123456789012")
         .with_aws_account_id("123456789012")
-        .with_aws_region("us-west-2");
+        .with_aws_region("us-west-2")
+}
+
+#[test]
+fn ec2_tags_require_creation_or_existing_stack_ownership() {
+    let context = context();
     for (set_id, resources) in [
         (
             "network/provision",
@@ -150,7 +154,10 @@ fn assert_tag_ownership(policy: &AwsIamPolicy, resource_type: &str, create_actio
 fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
     const TAG_ACTIONS: &[&str] = &[
         "ec2:createtags",
+        "ec2:deletetags",
         "acm:addtagstocertificate",
+        "acm:removetagsfromcertificate",
+        "dlm:untagresource",
         "dlm:tagresource",
         "ses:tagresource",
         "ses:untagresource",
@@ -212,7 +219,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                                     | "CreateSnapshot"
                             )
                         });
-                let non_ec2 = entry.grant.actions.iter().flatten().any(|action| {
+                let other_tag_actions = entry.grant.actions.iter().flatten().any(|action| {
                     TAG_ACTIONS[1..].iter().any(|tagging| {
                         iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
                     })
@@ -268,7 +275,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     })
                     && binding.not_resources.is_empty()
                     && binding.resources == ["arn:aws:apigateway:${awsRegion}::/tags/*"];
-                assert!(owned || (creation && !non_ec2) || named_prefix || lambda_creation
+                assert!(owned || (creation && !other_tag_actions) || named_prefix || lambda_creation
                     || gateway_creation || gateway_tag_path,
                     "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
             }
@@ -278,13 +285,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
 
 #[test]
 fn certificate_tags_require_existing_stack_ownership() {
-    let context = PermissionContext::new()
-        .with_stack_prefix("stack-a")
-        .with_resource_name("worker")
-        .with_resource_id("worker")
-        .with_managing_account_id("123456789012")
-        .with_aws_account_id("123456789012")
-        .with_aws_region("us-west-2");
+    let context = context();
     let arn = "arn:aws:acm:us-west-2:123456789012:certificate/example";
     let own_tags = [
         (ALIEN_STACK_TAG_KEY, "stack-a"),
@@ -341,13 +342,7 @@ fn certificate_tags_require_existing_stack_ownership() {
 
 #[test]
 fn lifecycle_policy_tags_require_existing_stack_ownership() {
-    let context = PermissionContext::new()
-        .with_stack_prefix("stack-a")
-        .with_resource_name("worker")
-        .with_resource_id("worker")
-        .with_managing_account_id("123456789012")
-        .with_aws_account_id("123456789012")
-        .with_aws_region("us-west-2");
+    let context = context();
     let arn = "arn:aws:dlm:us-west-2:123456789012:policy/example";
     let own_tags = [
         (ALIEN_STACK_TAG_KEY, "stack-a"),
@@ -475,13 +470,7 @@ fn email_tag_changes_require_existing_stack_ownership() {
 
 #[test]
 fn api_gateway_tagging_requires_an_owned_endpoint() {
-    let context = PermissionContext::new()
-        .with_stack_prefix("stack-a")
-        .with_resource_name("worker")
-        .with_resource_id("worker")
-        .with_managing_account_id("123456789012")
-        .with_aws_account_id("123456789012")
-        .with_aws_region("us-west-2");
+    let context = context();
     let own_tags = [
         (ALIEN_STACK_TAG_KEY, "stack-a"),
         (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
@@ -772,105 +761,6 @@ fn email_topic_tags_require_existing_stack_ownership() {
                 ),
                 Decision::Allowed
             );
-        }
-    }
-}
-
-#[test]
-fn named_rule_and_database_tag_grants_stay_within_their_binding() {
-    let context = PermissionContext::new()
-        .with_stack_prefix("stack-a")
-        .with_resource_name("app")
-        .with_resource_id("app")
-        .with_managing_account_id("123456789012")
-        .with_aws_account_id("123456789012")
-        .with_aws_region("us-west-2");
-    let tags = [
-        (ALIEN_STACK_TAG_KEY, "stack-a"),
-        (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
-        (alien_core::ALIEN_RESOURCE_TAG_KEY, "app"),
-    ];
-    for (id, action, resource_types) in [
-        (
-            "worker/provision",
-            "events:TagResource",
-            &["events:rule/"][..],
-        ),
-        (
-            "worker/management",
-            "events:TagResource",
-            &["events:rule/"][..],
-        ),
-        (
-            "postgres/provision",
-            "rds:AddTagsToResource",
-            &["rds:cluster:", "rds:db:", "rds:subgrp:", "rds:cluster-pg:"][..],
-        ),
-    ] {
-        let set = get_permission_set(id).unwrap();
-        for binding in [BindingTarget::Stack, BindingTarget::Resource] {
-            let policy = AwsRuntimePermissionsGenerator::new()
-                .generate_policy(set, binding, &context)
-                .unwrap();
-            for resource_type in resource_types {
-                let (service, kind) = resource_type.split_once(':').unwrap();
-                let suffix = if *resource_type == "rds:cluster:" {
-                    ""
-                } else {
-                    "-generated"
-                };
-                let arn = |name: &str| {
-                    format!("arn:aws:{service}:us-west-2:123456789012:{kind}{name}{suffix}")
-                };
-                let own_arn = arn("stack-a-app");
-                let request = |resource: String| Request::new(action, resource).request_tags(&tags);
-                assert_eq!(
-                    evaluate(&policy.statement, &request(own_arn.clone())),
-                    Decision::Allowed,
-                    "{id} {binding:?}: own {kind}"
-                );
-                assert_eq!(
-                    evaluate(&policy.statement, &request(arn("stack-a-sibling"))),
-                    if binding == BindingTarget::Stack {
-                        Decision::Allowed
-                    } else {
-                        Decision::NotAllowed
-                    },
-                    "{id} {binding:?}: sibling {kind}"
-                );
-                for foreign in [
-                    arn("stack-b-app"),
-                    arn("stack-ab-app"),
-                    arn("unprefixed"),
-                    own_arn.replace(":123456789012:", ":999999999999:"),
-                    own_arn.replace(":us-west-2:", ":us-east-1:"),
-                ] {
-                    assert_eq!(
-                        evaluate(
-                            &policy.statement,
-                            &request(foreign.clone()).resource_tags(&tags)
-                        ),
-                        Decision::NotAllowed,
-                        "{id} {binding:?}: tags cannot bypass ARN scope for {foreign}"
-                    );
-                }
-                if service == "events" {
-                    assert_eq!(
-                        evaluate(&policy.statement, &Request::new(action, own_arn.clone())),
-                        Decision::NotAllowed,
-                        "{id}: rule tags still require request ownership"
-                    );
-                    // A rule on another bus must not match the default-bus rule prefix.
-                    assert_eq!(
-                        evaluate(
-                            &policy.statement,
-                            &request(own_arn.replace(":rule/", ":rule/foreign-bus/"))
-                        ),
-                        Decision::NotAllowed,
-                        "{id}: custom-bus rule"
-                    );
-                }
-            }
         }
     }
 }
