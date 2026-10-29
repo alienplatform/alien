@@ -52,7 +52,7 @@ pub(super) fn assert_setup_policy_parity(
         },
     )
     .unwrap();
-    let parameters: HashMap<String, Value> = [
+    let mut parameters: HashMap<String, Value> = [
         ("AWS::StackName", json!(prefix)),
         ("AWS::Region", json!(region)),
         ("AWS::AccountId", json!(account)),
@@ -65,6 +65,40 @@ pub(super) fn assert_setup_policy_parity(
     .into_iter()
     .map(|(k, v)| (k.into(), v))
     .collect();
+    let mut locals = json!({"resource_prefix": prefix});
+    let mut key_arns = BTreeSet::new();
+    for (id, resource) in &ctx.state.resources {
+        let Some(key) = resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::KeyOutputs>())
+        else {
+            continue;
+        };
+        // Fixture IDs are first/second; use each key's saved setup output.
+        let logical_id = format!("{}{}", id[..1].to_uppercase(), &id[1..]);
+        parameters.insert(
+            logical_id.clone(),
+            json!(key.wrapping_key_id.rsplit('/').next().unwrap()),
+        );
+        parameters.insert(format!("{logical_id}.Arn"), json!(key.wrapping_key_id));
+        locals[format!("{id}_selected_key")] = json!({"arn": key.wrapping_key_id});
+        key_arns.insert(key.wrapping_key_id.clone());
+    }
+    if !key_arns.is_empty() {
+        assert_eq!(key_arns.len(), 2, "physical keys must remain distinct");
+        for key in &key_arns {
+            let grant = json!({"Version": "2012-10-17", "Statement": [{
+                "Effect": "Allow", "Action": "kms:Decrypt", "Resource": key
+            }]});
+            assert!(aws_permissions_boundary_covers(installed, &grant).unwrap());
+        }
+        let unrelated = json!({"Version": "2012-10-17", "Statement": [{
+            "Effect": "Allow", "Action": "kms:Decrypt",
+            "Resource": format!("arn:aws:kms:{region}:{account}:key/00000000-0000-0000-0000-000000000003")
+        }]});
+        assert!(!aws_permissions_boundary_covers(installed, &unrelated).unwrap());
+    }
     let resolve = |value: &Value| evaluate(value, &template, &parameters);
     let boundary = resolve(
         &serde_json::to_value(
@@ -123,6 +157,13 @@ pub(super) fn assert_setup_policy_parity(
         },
     )
     .unwrap();
+    let files = module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .map(|(path, contents)| (path.to_string(), contents.to_string()))
+        .collect();
+    alien_terraform::test_utils::terraform_validate(&files)
+        .assert_ok("combined setup parity Terraform dependency graph");
     let bodies: Vec<hcl::Body> = module
         .iter()
         .filter(|(path, _)| path.ends_with(".tf"))
@@ -139,7 +180,7 @@ pub(super) fn assert_setup_policy_parity(
         .unwrap();
     let mut context = Context::new();
     for (name, value) in [
-        ("local", json!({"resource_prefix": prefix})),
+        ("local", locals),
         (
             "data",
             json!({"aws_region": {"current": {"region": region}}, "aws_caller_identity": {"current": {"account_id": account}}}),

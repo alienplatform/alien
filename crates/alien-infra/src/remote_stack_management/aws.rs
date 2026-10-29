@@ -1276,17 +1276,20 @@ mod tests {
 
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
-    use crate::core::MockPlatformServiceProvider;
+    use crate::core::{MockPlatformServiceProvider, StackResourceStateExt};
 
     /// Other sets grant role writes on `role/<prefix>-*`; direct setup's management role must deny
     /// them on itself, by the name it is created under, and on every role carrying setup's sandbox
     /// tags, Live or Frozen, and keep PassRole.
     #[rstest::rstest]
-    #[case("test-prefix")]
-    #[case("ssssssssssssssssssssssssssssssssssssssss")]
+    #[case("test-prefix", false)]
+    #[case("ssssssssssssssssssssssssssssssssssssssss", false)]
+    #[case("test-prefix", true)]
+    #[case("ssssssssssssssssssssssssssssssssssssssss", true)]
     #[tokio::test]
     async fn direct_setup_keeps_a_sandboxs_setup_roles_out_of_managements_reach(
         #[case] prefix: &str,
+        #[case] physical_keys: bool,
     ) {
         let documents = Arc::new(Mutex::new(Vec::<String>::new()));
         let created_roles = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -1367,7 +1370,7 @@ mod tests {
                 })
                 .build()
         };
-        let mut executor = SingleControllerExecutor::builder()
+        let mut builder = SingleControllerExecutor::builder()
             .resource(RemoteStackManagement::new("management".to_string()).build())
             .resource_lifecycle(ResourceLifecycle::Frozen)
             .controller(AwsRemoteStackManagementController::default())
@@ -1379,10 +1382,48 @@ mod tests {
             .with_stack_resource(
                 crate::core::controller_test::test_function_1(),
                 ResourceLifecycle::Live,
-            )
-            .build()
-            .await
-            .expect("executor builds");
+            );
+        if physical_keys {
+            builder = builder.permission_profile(
+                "key-user",
+                alien_core::PermissionProfile::new()
+                    .resource("first", ["key/remote-cryptography"])
+                    .resource("second", ["key/remote-cryptography"]),
+            );
+            for id in ["first", "second"] {
+                builder = builder.with_stack_resource(
+                    alien_core::Key::new(id.into()).build(),
+                    ResourceLifecycle::Frozen,
+                );
+            }
+        }
+        let mut executor = builder.build().await.expect("executor builds");
+        if physical_keys {
+            for (id, uuid) in [
+                ("first", "00000000-0000-0000-0000-000000000001"),
+                ("second", "00000000-0000-0000-0000-000000000002"),
+            ] {
+                let arn = format!("arn:aws:kms:us-east-1:123456789012:key/{uuid}");
+                let mut saved = executor.stack_state().resources[id].clone();
+                saved.status = ResourceStatus::Running;
+                let controller: crate::key::AwsKeyController =
+                    serde_json::from_value(serde_json::json!({
+                        "state": "ready", "keyArn": arn, "region": "us-east-1", "available": true
+                    }))
+                    .unwrap();
+                saved
+                    .set_internal_controller(Some(Box::new(controller)))
+                    .unwrap();
+                saved.outputs = Some(ResourceOutputs::new(alien_core::KeyOutputs {
+                    available: Some(true),
+                    fingerprint: alien_core::KeyFingerprint::Aws {
+                        key_arn: arn.clone(),
+                    },
+                    wrapping_key_id: arn,
+                }));
+                executor.insert_saved_resource(id, saved);
+            }
+        }
 
         executor.run_until_terminal().await.expect("setup runs");
         assert_eq!(executor.status(), ResourceStatus::Running);
