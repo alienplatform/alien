@@ -159,6 +159,8 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "dlm:tagresource",
                         "ses:tagresource",
                         "ses:untagresource",
+                        "aoss:tagresource",
+                        "aoss:untagresource",
                         "apigateway:tagresource",
                         "lambda:tagresource",
                         "lambda:untagresource",
@@ -207,6 +209,8 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "dlm:tagresource",
                         "ses:tagresource",
                         "ses:untagresource",
+                        "aoss:tagresource",
+                        "aoss:untagresource",
                         "apigateway:tagresource",
                         "lambda:tagresource",
                         "lambda:untagresource",
@@ -602,6 +606,55 @@ fn sandbox_creation_tag_grants_exclude_existing_lambda_resources() {
                     Decision::NotAllowed
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn opensearch_tag_changes_require_existing_deployment_ownership() {
+    let context = PermissionContext::new()
+        .with_stack_prefix("stack-a")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-west-2");
+    let set = get_permission_set("experimental/aws-opensearch/provision").unwrap();
+    for binding in [BindingTarget::Stack, BindingTarget::Resource] {
+        let policy = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(set, binding, &context)
+            .unwrap();
+        for resource_type in ["collection", "collection-group"] {
+            let arn = format!("arn:aws:aoss:us-west-2:123456789012:{resource_type}/assigned-id");
+            for action in ["aoss:TagResource", "aoss:UntagResource"] {
+                for owner in [None, Some("stack-b"), Some("stack-a")] {
+                    for manager in ["setup", "runtime"] {
+                        let mut request = Request::new(action, &arn)
+                            .request_tags(&[(ALIEN_STACK_TAG_KEY, "stack-a")]);
+                        if let Some(owner) = owner {
+                            request = request.resource_tags(&[
+                                (ALIEN_STACK_TAG_KEY, owner),
+                                (ALIEN_MANAGED_BY_TAG_KEY, manager),
+                            ]);
+                        }
+                        assert_eq!(
+                            evaluate(&policy.statement, &request),
+                            if owner == Some("stack-a") {
+                                Decision::Allowed
+                            } else {
+                                Decision::NotAllowed
+                            },
+                            "{binding:?} {action} {resource_type} {owner:?}/{manager}"
+                        );
+                    }
+                }
+            }
+        }
+        for action in ["aoss:CreateCollection", "aoss:CreateCollectionGroup"] {
+            assert_eq!(
+                evaluate(
+                    &policy.statement,
+                    &Request::new(action, "*").request_tags(&[(ALIEN_STACK_TAG_KEY, "stack-a")])
+                ),
+                Decision::Allowed
+            );
         }
     }
 }
