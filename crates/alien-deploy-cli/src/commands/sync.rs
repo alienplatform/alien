@@ -143,6 +143,8 @@ struct SiteState {
     capabilities: SiteCapabilities,
     #[serde(default)]
     last_bundle_architecture: Option<String>,
+    #[serde(default)]
+    last_bundle_tool_platform: Option<String>,
     /// The manager's bundle key, as the online side last saw it. The site
     /// trusts the key pinned in its install, not this one.
     #[serde(default)]
@@ -1204,7 +1206,11 @@ async fn download_update(
     }
     let installed = site.site_release.as_deref() == Some(release_id.as_str())
         && site.site_target_hash.as_deref() == Some(target_hash.as_str());
-    if installed && !new_ack && site.last_bundle_architecture == architecture {
+    if installed
+        && !new_ack
+        && site.last_bundle_architecture == architecture
+        && site.last_bundle_tool_platform == site.capabilities.tool_platform
+    {
         if !dry_run {
             // A pending older configuration must not undo the installed target.
             for (_, path) in &pending {
@@ -1375,6 +1381,7 @@ async fn download_update(
     site.bundle_key = signature["publicKey"].as_str().map(str::to_string);
     site.ack_sent = site.uploaded_through;
     site.last_bundle_architecture = architecture;
+    site.last_bundle_tool_platform = site.capabilities.tool_platform.clone();
 
     let file = folder
         .join(TO_SITE)
@@ -2623,7 +2630,7 @@ async fn download_tools(
     let listed = serde_json::to_vec_pretty(&downloads)
         .into_alien_error()
         .context(config_error("encoding the tool list"))?;
-    let local_hashes = tool_hashes(folder)?;
+    let local_hashes = tool_hashes(folder);
     let previous: Vec<serde_json::Value> =
         match std::fs::read(folder.join(TOOLS_DIR).join(TOOLS_SOURCES_FILE)) {
             Ok(bytes) => serde_json::from_slice(&bytes)
@@ -2657,8 +2664,12 @@ async fn download_tools(
         let name = format!("{name}-{platform}");
         let expected = download["sha256"].as_str();
         if expected.is_some_and(|hash| {
-            capabilities.tool_sha256.get(&name).map(String::as_str) == Some(hash)
-                || local_hashes.get(&name).map(String::as_str) == Some(hash)
+            let suffix = format!("-{platform}");
+            capabilities
+                .tool_sha256
+                .iter()
+                .chain(local_hashes.iter())
+                .any(|(name, actual)| name.ends_with(&suffix) && actual == hash)
         }) || (expected.is_none()
             && previous.contains(download)
             && local_hashes.contains_key(&name))
@@ -3704,7 +3715,7 @@ async fn collect_capabilities(folder: &Path, settings: &SiteSide) -> Result<Site
         ("linux", "aarch64") => Some("linux-aarch64".to_string()),
         _ => None,
     };
-    let tool_sha256 = tool_hashes(folder)?;
+    let tool_sha256 = tool_hashes(folder);
     Ok(SiteCapabilities {
         node_architectures,
         tool_platform,
@@ -3729,27 +3740,50 @@ fn node_architectures(nodes: &serde_json::Value) -> BTreeSet<String> {
     architectures
 }
 
-fn tool_hashes(folder: &Path) -> Result<BTreeMap<String, String>> {
+fn tool_hashes(folder: &Path) -> BTreeMap<String, String> {
     let path = folder.join(TOOLS_DIR);
     let entries = match std::fs::read_dir(&path) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => return Err(transfer_file_error(&path, error)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return BTreeMap::new(),
+        Err(error) => {
+            eprintln!(
+                "Cannot read optional tool hashes from {}: {error}",
+                path.display()
+            );
+            return BTreeMap::new();
+        }
     };
     let mut hashes = BTreeMap::new();
     for entry in entries {
-        let entry = entry.map_err(|error| transfer_file_error(&path, error))?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!(
+                    "Cannot read an optional tool entry in {}: {error}",
+                    path.display()
+                );
+                continue;
+            }
+        };
         if entry.file_name() == TOOLS_SOURCES_FILE || !entry.path().is_file() {
             continue;
         }
-        let bytes = std::fs::read(entry.path())
-            .map_err(|error| transfer_file_error(&entry.path(), error))?;
+        let bytes = match std::fs::read(entry.path()) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!(
+                    "Cannot hash optional tool {}: {error}",
+                    entry.path().display()
+                );
+                continue;
+            }
+        };
         hashes.insert(
             entry.file_name().to_string_lossy().into_owned(),
             hex::encode(Sha256::digest(bytes)),
         );
     }
-    Ok(hashes)
+    hashes
 }
 
 async fn collect_report(
@@ -6422,6 +6456,25 @@ stringData:
         binary.assert_hits_async(1).await;
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unreadable_optional_tool_does_not_block_hash_collection() {
+        let folder = tempfile::tempdir().unwrap();
+        let tools = folder.path().join(TOOLS_DIR);
+        std::fs::create_dir(&tools).unwrap();
+        std::os::unix::fs::symlink("/proc/self/mem", tools.join("unreadable-linux-x86_64"))
+            .unwrap();
+        assert!(std::fs::read(tools.join("unreadable-linux-x86_64")).is_err());
+        std::fs::write(tools.join("working-linux-x86_64"), b"tool").unwrap();
+        assert_eq!(
+            tool_hashes(folder.path()),
+            BTreeMap::from([(
+                "working-linux-x86_64".to_string(),
+                hex::encode(Sha256::digest(b"tool"))
+            )])
+        );
+    }
+
     #[tokio::test]
     async fn tool_hashes_skip_url_changes_and_detect_missing_or_corrupt_files() {
         let server = MockServer::start_async().await;
@@ -6449,6 +6502,7 @@ stringData:
             // Tool host and node architectures are deliberately different.
             node_architectures: BTreeSet::from(["arm64".to_string()]),
             tool_platform: Some("linux-x86_64".to_string()),
+            tool_sha256: BTreeMap::from([("old-linux-aarch64".into(), digest.clone())]),
             ..Default::default()
         };
         assert_eq!(
@@ -6464,7 +6518,7 @@ stringData:
         let fresh_bundle = tempfile::tempdir().unwrap();
         let mut renamed_sources = sources.clone();
         renamed_sources["deployCli"][0]["url"] =
-            serde_json::json!(format!("{}/third-url/acmectl", server.base_url()));
+            serde_json::json!(format!("{}/third-url/acmectl-v2", server.base_url()));
         assert_eq!(
             download_tools(
                 fresh_bundle.path(),
@@ -6691,6 +6745,52 @@ stringData:
         });
         std::fs::write(dir.path().join(airgap::MANIFEST_FILE), manifest.to_string()).unwrap();
         airgap::pack(dir.path(), path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_changed_tool_host_downloads_without_a_release_or_ack_change() {
+        let target = serde_json::json!({
+            "releaseInfo": {"releaseId": "rel_new", "stack": {"id": "app"}}
+        });
+        for changed in [false, true] {
+            let server = MockServer::start_async().await;
+            server
+                .mock_async(|when, then| {
+                    when.method(GET).path("/v1/deployments/dep_1/target");
+                    then.status(200).json_body(target.clone());
+                })
+                .await;
+            let sources = server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path("/v1/deployments/dep_1/bundle-sources");
+                    then.status(503).body("download reached");
+                })
+                .await;
+            let folder = tempfile::tempdir().unwrap();
+            let mut site: SiteState = serde_json::from_value(serde_json::json!({
+                "deploymentId": "dep_1", "name": "site", "managerUrl": server.base_url(),
+                "siteRelease": "rel_new",
+                "siteTargetHash": hex::encode(Sha256::digest(serde_json::to_vec_pretty(&target).unwrap())),
+                "lastBundleArchitecture": "amd64",
+                "lastBundleToolPlatform": "linux-x86_64",
+                "capabilities": {
+                    "nodeArchitectures": ["amd64"],
+                    "toolPlatform": if changed {"linux-aarch64"} else {"linux-x86_64"},
+                },
+            })).unwrap();
+            let result = download_update(
+                folder.path(),
+                &mut site,
+                &access(&server),
+                false,
+                false,
+                &[],
+            )
+            .await;
+            assert_eq!(result.is_err(), changed);
+            sources.assert_hits_async(usize::from(changed)).await;
+        }
     }
 
     #[tokio::test]
