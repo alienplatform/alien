@@ -260,8 +260,8 @@ pub async fn export_images(
     export_images_for_architecture(layout, images, skip_blobs, None).await
 }
 
-/// Export only the Linux manifest for a known, uniform site architecture.
-/// `None` retains the complete index for unknown or mixed-node sites.
+/// Export a unique Linux manifest for a known, uniform site architecture.
+/// Retain the full index for multiple matching variants or an unknown architecture.
 pub async fn export_images_for_architecture(
     layout: &Path,
     images: &[(String, RegistryAccess)],
@@ -342,8 +342,8 @@ pub async fn export_images_for_architecture(
     Ok((exported, omitted))
 }
 
-/// A single-image manifest needs no selection. An index must contain exactly
-/// one matching runnable image; never substitute another architecture.
+/// Select a unique matching image, preserving the full index when variants
+/// need runtime selection. Never substitute another architecture.
 fn architecture_manifest(
     manifest: &[u8],
     architecture: &str,
@@ -365,10 +365,7 @@ fn architecture_manifest(
         ))
     })?;
     if matching.next().is_some() {
-        return Err(AlienError::new(copy_failed(
-            image,
-            format!("multiple linux/{architecture} variants; use all architectures for this site"),
-        )));
+        return Ok(None);
     }
     child["digest"]
         .as_str()
@@ -1061,6 +1058,15 @@ mod tests {
 
     #[tokio::test]
     async fn architecture_export_downloads_only_selected_layers_and_preserves_source_mapping() {
+        check_architecture_export(false).await;
+    }
+
+    #[tokio::test]
+    async fn architecture_export_keeps_full_index_for_multiple_matching_variants() {
+        check_architecture_export(true).await;
+    }
+
+    async fn check_architecture_export(multiple_variants: bool) {
         let registry = MockServer::start_async().await;
         registry
             .mock_async(|when, then| {
@@ -1071,12 +1077,17 @@ mod tests {
         let mut descriptors = Vec::new();
         let mut layer_requests = Vec::new();
         let mut manifests = Vec::new();
-        for architecture in ["amd64", "arm64"] {
+        let platforms = if multiple_variants {
+            [("arm64", "v8"), ("arm64", "v9")]
+        } else {
+            [("amd64", ""), ("arm64", "")]
+        };
+        for (architecture, variant) in platforms {
             let config = serde_json::to_vec(
-                &serde_json::json!({"os": "linux", "architecture": architecture}),
+                &serde_json::json!({"os": "linux", "architecture": architecture, "variant": variant}),
             )
             .unwrap();
-            let layer = format!("{architecture} image contents").into_bytes();
+            let layer = format!("{architecture}/{variant} image contents").into_bytes();
             let config_digest = format!("sha256:{}", sha256_hex(&config));
             let layer_digest = format!("sha256:{}", sha256_hex(&layer));
             registry
@@ -1113,7 +1124,7 @@ mod tests {
                 .await;
             descriptors.push(serde_json::json!({
                 "mediaType": OCI_IMAGE_MEDIA_TYPE, "digest": digest, "size": manifest.len(),
-                "platform": {"os": "linux", "architecture": architecture},
+                "platform": {"os": "linux", "architecture": architecture, "variant": variant},
             }));
             manifests.push(digest);
         }
@@ -1144,23 +1155,36 @@ mod tests {
             selected.path(),
             &images,
             &BTreeSet::new(),
-            Some("amd64"),
+            Some(platforms[0].0),
         )
         .await
         .unwrap();
         assert_eq!(exported[0].source, source);
-        assert_eq!(exported[0].digest, manifests[0]);
-        assert_eq!(exported[0].media_type, OCI_IMAGE_MEDIA_TYPE);
+        if multiple_variants {
+            assert_eq!(exported[0].digest, index_digest);
+            assert_eq!(exported[0].media_type, OCI_IMAGE_INDEX_MEDIA_TYPE);
+            assert_eq!(
+                std::fs::read(blob_path(selected.path(), &index_digest).unwrap()).unwrap(),
+                index
+            );
+        } else {
+            assert_eq!(exported[0].digest, manifests[0]);
+            assert_eq!(exported[0].media_type, OCI_IMAGE_MEDIA_TYPE);
+        }
         assert!(omitted.is_empty());
         layer_requests[0].assert_hits_async(1).await;
-        layer_requests[1].assert_hits_async(0).await;
+        layer_requests[1]
+            .assert_hits_async(usize::from(multiple_variants))
+            .await;
         let all = tempfile::tempdir().unwrap();
         let (exported, _) = export_images(all.path(), &images, &BTreeSet::new())
             .await
             .unwrap();
         assert_eq!(exported[0].digest, index_digest);
         layer_requests[0].assert_hits_async(2).await;
-        layer_requests[1].assert_hits_async(1).await;
+        layer_requests[1]
+            .assert_hits_async(1 + usize::from(multiple_variants))
+            .await;
         let absent = tempfile::tempdir().unwrap();
         let error =
             export_images_for_architecture(absent.path(), &images, &BTreeSet::new(), Some("s390x"))
@@ -1168,7 +1192,9 @@ mod tests {
                 .unwrap_err();
         assert!(error.message.contains("no linux/s390x"));
         layer_requests[0].assert_hits_async(2).await;
-        layer_requests[1].assert_hits_async(1).await;
+        layer_requests[1]
+            .assert_hits_async(1 + usize::from(multiple_variants))
+            .await;
     }
 
     #[cfg(target_os = "linux")]
