@@ -54,8 +54,7 @@ fn compile(stack: &Stack, bounded: bool) -> Vec<AwsIamStatement> {
         .collect()
 }
 
-#[tokio::test]
-async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_boundary() {
+async fn automatic_stack() -> Stack {
     let stack = Stack::new("sample".to_string())
         .add(
             Storage::new("uploads".to_string()).build(),
@@ -89,10 +88,15 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
         .allow_frozen_changes(false)
         .external_bindings(ExternalBindings::default())
         .build();
-    let stack = ManagementPermissionProfileMutation
+    ManagementPermissionProfileMutation
         .mutate(stack, &StackState::new(Platform::Aws), &config)
         .await
-        .unwrap();
+        .unwrap()
+}
+
+#[tokio::test]
+async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_boundary() {
+    let stack = automatic_stack().await;
     let ids: BTreeSet<_> = stack.management().profile().unwrap().0["*"]
         .iter()
         .map(|reference| reference.id())
@@ -329,4 +333,46 @@ fn assert_backup_role_handoff(bounded: &[AwsIamStatement], legacy: &[AwsIamState
             "legacy backup role: {action}"
         );
     }
+}
+
+#[tokio::test]
+async fn legacy_automatic_iam_permissions_match_the_pre_boundary_policy() {
+    let stack = automatic_stack().await;
+    let legacy = compile(&stack, false);
+    let baseline: Vec<AwsIamStatement> =
+        serde_json::from_str(include_str!("fixtures/legacy_automatic_iam_policy.json")).unwrap();
+    let iam = |statements: &[AwsIamStatement]| {
+        let statements: Vec<_> = statements
+            .iter()
+            .filter_map(|statement| {
+                let mut statement = statement.clone();
+                statement.action.retain(|action| {
+                    action == "*"
+                        || action.split_once(':').is_some_and(|(service, _)| {
+                            wildcard_match(&service.to_ascii_lowercase(), "iam")
+                        })
+                });
+                (!statement.action.is_empty()).then_some(statement)
+            })
+            .collect();
+        json!({"Version": "2012-10-17", "Statement": statements})
+    };
+    let baseline_policy = iam(&baseline);
+    let legacy_policy = iam(&legacy);
+    assert!(
+        alien_permissions::generators::aws_permissions_boundary_covers(
+            &baseline_policy,
+            &legacy_policy
+        )
+        .unwrap(),
+        "legacy compilation must not add IAM grants or remove existing denies"
+    );
+    assert!(
+        alien_permissions::generators::aws_permissions_boundary_covers(
+            &legacy_policy,
+            &baseline_policy
+        )
+        .unwrap(),
+        "legacy compilation must preserve existing IAM grants and denies"
+    );
 }
