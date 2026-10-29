@@ -152,63 +152,63 @@ fn assert_tag_ownership(policy: &AwsIamPolicy, resource_type: &str, create_actio
 
 #[test]
 fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
-    const TAG_ACTIONS: &[&str] = &[
-        "ec2:createtags",
-        "ec2:deletetags",
-        "iam:tagrole",
-        "iam:untagrole",
-        "iam:taginstanceprofile",
-        "iam:untaginstanceprofile",
-        "iam:tagpolicy",
-        "iam:untagpolicy",
-        "ecr:tagresource",
-        "ecr:untagresource",
-        "dynamodb:tagresource",
-        "dynamodb:untagresource",
-        "s3:putbuckettagging",
-        "s3:putobjecttagging",
-        "s3:putobjectversiontagging",
-        "s3:deleteobjecttagging",
-        "s3:deleteobjectversiontagging",
-        "s3:tagresource",
-        "s3:untagresource",
-        "sqs:tagqueue",
-        "sqs:untagqueue",
-        "acm:addtagstocertificate",
-        "acm:removetagsfromcertificate",
-        "dlm:untagresource",
-        "dlm:tagresource",
-        "ses:tagresource",
-        "ses:untagresource",
-        "sns:tagresource",
-        "sns:untagresource",
-        "aoss:tagresource",
-        "aoss:untagresource",
-        "secretsmanager:tagresource",
-        "secretsmanager:untagresource",
-        "elasticloadbalancing:addtags",
-        "elasticloadbalancing:removetags",
-        "events:tagresource",
-        "events:untagresource",
-        "rds:addtagstoresource",
-        "rds:removetagsfromresource",
-        "apigateway:tagresource",
-        "apigateway:post",
-        "apigateway:put",
-        "apigateway:patch",
-        "apigateway:delete",
-        "lambda:tagresource",
-        "lambda:untagresource",
+    // Match shared tagging operations across services, including services not yet
+    // used by the catalog. Wildcard grants are checked against the same operations.
+    const TAG_OPERATIONS: &[&str] = &[
+        "createtags",
+        "deletetags",
+        "tagresource",
+        "untagresource",
+        "tagresources",
+        "untagresources",
+        "addtags",
+        "removetags",
+        "addtagstoresource",
+        "removetagsfromresource",
+        "changetagsforresource",
+        "createorupdatetags",
+        "tagrole",
+        "untagrole",
+        "taginstanceprofile",
+        "untaginstanceprofile",
+        "tagpolicy",
+        "untagpolicy",
+        "taguser",
+        "untaguser",
+        "tagservercertificate",
+        "untagservercertificate",
+        "tagqueue",
+        "untagqueue",
+        "tagloggroup",
+        "untagloggroup",
+        "addtagstocertificate",
+        "removetagsfromcertificate",
+        "putbuckettagging",
+        "putobjecttagging",
+        "putobjectversiontagging",
+        "deleteobjecttagging",
+        "deleteobjectversiontagging",
     ];
+    let allows_tag_write = |action: &str, include_ec2_create: bool| {
+        let action = action.to_ascii_lowercase();
+        let (service, operation) = action.split_once(':').unwrap_or(("*", action.as_str()));
+        TAG_OPERATIONS.iter().any(|tagging| {
+            (include_ec2_create || service != "ec2" || *tagging != "createtags")
+                && iam_policy::wildcard_match(operation, tagging)
+        }) || ["post", "put", "patch", "delete"]
+            .iter()
+            .any(|method| iam_policy::wildcard_match(&action, &format!("apigateway:{method}")))
+    };
     for id in alien_permissions::list_permission_set_ids() {
         let set = get_permission_set(id).expect("registered permission set");
         for entry in set.platforms.aws.iter().flatten() {
             if entry.effect != alien_core::AwsPermissionEffect::Allow
-                || !entry.grant.actions.iter().flatten().any(|action| {
-                    TAG_ACTIONS.iter().any(|tagging| {
-                        iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
-                    })
-                })
+                || !entry
+                    .grant
+                    .actions
+                    .iter()
+                    .flatten()
+                    .any(|action| allows_tag_write(action, true))
             {
                 continue;
             }
@@ -242,11 +242,12 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                                     | "CreateSnapshot"
                             )
                         });
-                let other_tag_actions = entry.grant.actions.iter().flatten().any(|action| {
-                    TAG_ACTIONS[1..].iter().any(|tagging| {
-                        iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
-                    })
-                });
+                let other_tag_actions = entry
+                    .grant
+                    .actions
+                    .iter()
+                    .flatten()
+                    .any(|action| allows_tag_write(action, false));
                 // CreateAction is supplied by ELB only during resource creation.
                 // Request tags alone must never authorize standalone AddTags.
                 let elb_creation = entry.grant.actions.as_ref().is_some_and(|actions| {
