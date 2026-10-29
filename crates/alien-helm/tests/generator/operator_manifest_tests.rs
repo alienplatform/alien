@@ -1,3 +1,4 @@
+use alien_core::{Stack, StackSettings};
 use alien_helm::{
     generate_operator_manifest, generate_operator_manifest_with_image_identity,
     generate_product_operator_manifest, HelmChart, OperatorImageIdentityOptions,
@@ -10,7 +11,7 @@ use serde::Deserialize;
 use serde_yaml::Value as YamlValue;
 use std::collections::BTreeSet;
 
-use super::test_utils;
+use super::{helpers::render, test_utils};
 
 const TEST_ENCRYPTION_KEY: &str =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -847,6 +848,65 @@ fn compiled_operation_grants_match_rendered_rbac_in_both_scopes_and_modes() {
             )
             .unwrap();
             assert_eq!(role_grants(&actual), expected);
+        }
+    }
+}
+
+#[test]
+fn chart_version_keeps_pod_templates_but_image_changes_roll_them() {
+    let stack = Stack::new("stable-operator".into()).build();
+    let chart = render(&stack, StackSettings::default());
+    let values = "logCollector:\n  enabled: true\n  mode: nodeAgent\n";
+    let workloads = |files: &IndexMap<String, String>, values: &str| {
+        let rendered = test_utils::helm_template(files, Some(values));
+        rendered.assert_ok("workload version upgrade");
+        parse_manifest(&rendered.stdout)
+            .into_iter()
+            .filter(|doc| !doc["spec"]["template"].is_null())
+            .map(|doc| (doc["metadata"]["name"].as_str().unwrap().to_owned(), doc))
+            .collect::<IndexMap<_, _>>()
+    };
+    let before = workloads(&chart.files, values);
+    assert!(before.values().any(|doc| doc["kind"] == "Deployment"));
+    assert!(before.values().any(|doc| doc["kind"] == "DaemonSet"));
+    assert!(before.values().any(|doc| doc["kind"] == "Job"));
+    let mut upgraded = chart.files.clone();
+    let mut metadata: YamlValue = serde_yaml::from_str(&upgraded["Chart.yaml"]).unwrap();
+    metadata["version"] = YamlValue::String("99.0.0".into());
+    upgraded.insert(
+        "Chart.yaml".into(),
+        serde_yaml::to_string(&metadata).unwrap(),
+    );
+    let after = workloads(&upgraded, values);
+    assert_eq!(before.len(), after.len());
+    for (name, original) in &before {
+        assert_eq!(
+            original["spec"]["selector"],
+            after[name]["spec"]["selector"]
+        );
+        assert_eq!(
+            original["spec"]["template"], after[name]["spec"]["template"],
+            "{name}"
+        );
+        assert_ne!(
+            original["metadata"]["labels"]["helm.sh/chart"],
+            after[name]["metadata"]["labels"]["helm.sh/chart"]
+        );
+    }
+    let changed_image = workloads(
+        &upgraded,
+        &format!("{values}  image:\n    repository: registry.example.com/collector\n    tag: next\nruntime:\n  image:\n    repository: registry.example.com/operator\n    tag: next\n"),
+    );
+    for (name, original) in &after {
+        if original["kind"] == "Deployment" || original["kind"] == "DaemonSet" {
+            assert_ne!(
+                original["spec"]["template"], changed_image[name]["spec"]["template"],
+                "{name}"
+            );
+            assert_eq!(
+                original["spec"]["selector"],
+                changed_image[name]["spec"]["selector"]
+            );
         }
     }
 }

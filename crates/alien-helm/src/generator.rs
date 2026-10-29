@@ -5552,9 +5552,9 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "deployment.hookLabels" -}}
-{{- $labels := include "deployment.labels" . | fromYaml -}}
-{{- $_ := set $labels "app.kubernetes.io/name" (ternary "remote-operator-hook" "lifecycle-hook" (eq (include "deployment.name" .) "lifecycle-hook")) -}}
-{{- toYaml $labels -}}
+app.kubernetes.io/name: {{ ternary "remote-operator-hook" "lifecycle-hook" (eq (include "deployment.name" .) "lifecycle-hook") }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "deployment.managerServiceAccountName" -}}
@@ -6625,7 +6625,9 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.labels" . | nindent 8 }}
+        app.kubernetes.io/name: {{ include "deployment.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/managed-by: {{ .Release.Service }}
         alien.dev/log-collector-exclude: "true"
         {{- with .Values.runtime.podLabels }}
         {{- toYaml . | nindent 8 }}
@@ -7112,7 +7114,9 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "deployment.logCollectorLabels" . | nindent 8 }}
+        app.kubernetes.io/name: {{ include "deployment.logCollectorNameLabel" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/managed-by: {{ .Release.Service }}
         app.kubernetes.io/component: log-collector
         alien.dev/log-collector-exclude: "true"
       annotations:
