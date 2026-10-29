@@ -18,6 +18,7 @@ mod generator {
     pub mod aws_open_search_tests;
     pub mod aws_sandbox_gateway_tests;
     pub mod aws_sandbox_tests;
+    pub mod boundary_tests;
     pub mod enabled_queue_tests;
     pub mod enabled_storage_tests;
     pub mod enabled_tests;

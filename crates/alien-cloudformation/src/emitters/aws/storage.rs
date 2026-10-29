@@ -13,7 +13,7 @@ use crate::{
             stack_id_short_suffix, storage_notification_configuration,
             storage_notification_dependencies, tags, uniquify_iam_statement_sids,
         },
-        service_account::permission_context,
+        service_account::stack_permission_context,
     },
     template::{CfExpression, CfResource},
 };
@@ -339,8 +339,8 @@ fn storage_iam_policies(
 ) -> Result<Vec<CfResource>> {
     let mut resources = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
-    let context =
-        permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", storage.id()));
+    let context = stack_permission_context(ctx)
+        .with_resource_name(format!("${{AWS::StackName}}-{}", storage.id()));
 
     for (owner_index, (role_id, permission_refs)) in storage_permission_owners(ctx) {
         for (permission_index, permission_ref) in permission_refs.iter().enumerate() {

@@ -14,7 +14,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, Build, ComputeCluster, ErrorData, Result, ServiceAccount, Worker,
+    import::EmitContext, Build, ComputeCluster, ErrorData, RemoteStackManagement, Result,
+    ServiceAccount, Worker,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -213,7 +214,7 @@ fn service_account_policy_document(
 ) -> Result<Option<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
-    let context = permission_context().with_resource_name(service_account.id.clone());
+    let context = stack_permission_context(ctx).with_resource_name(service_account.id.clone());
 
     let mut grants: Vec<_> = service_account
         .stack_permission_sets
@@ -282,4 +283,20 @@ pub(crate) fn permission_context() -> PermissionContext {
         .with_aws_region("${AWS::Region}")
         .with_aws_account_id("${AWS::AccountId}")
         .with_managing_role_arn("${ManagingRoleArn}")
+}
+
+/// Compile setup grants with the ceiling installed by this package's management emitter.
+pub(crate) fn stack_permission_context(ctx: &EmitContext<'_>) -> PermissionContext {
+    let mut context = permission_context();
+    if ctx
+        .stack
+        .resources()
+        .any(|(_, entry)| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+    {
+        context.aws_permissions_boundary_arn = Some(
+            "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-permissions-boundary"
+                .to_string(),
+        );
+    }
+    context
 }

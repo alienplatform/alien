@@ -23,7 +23,8 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    generators::AwsCloudFormationPermissionsGenerator, BindingTarget, PermissionContext,
+    generators::{aws_stack_permissions_boundary, AwsCloudFormationPermissionsGenerator},
+    BindingTarget, PermissionContext,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -46,8 +47,17 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
         );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
+        let boundary_id = boundary_logical_id(logical_id);
+        let mut boundary = CfResource::new(boundary_id, "AWS::IAM::ManagedPolicy".to_string());
+        boundary.properties.insert(
+            "ManagedPolicyName".to_string(),
+            CfExpression::sub("${AWS::StackName}-permissions-boundary"),
+        );
+        boundary
+            .properties
+            .insert("PolicyDocument".to_string(), boundary_document(ctx)?);
         let policy_documents = remote_management_policy_documents(ctx)?;
-        let mut resources = vec![role];
+        let mut resources = vec![role, boundary];
         resources.extend(management_policy_resources(&role_id, policy_documents));
 
         Ok(resources)
@@ -61,9 +71,149 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
             ("roleName", CfExpression::ref_(&role_id)),
             ("roleArn", CfExpression::get_att(&role_id, "Arn")),
             ("managementPermissionsApplied", CfExpression::from(true)),
+            (
+                "permissionsBoundaryArn",
+                CfExpression::ref_(boundary_logical_id(logical_id)),
+            ),
+            ("permissionsBoundaryDocument", boundary_document(ctx)?),
         ];
         Ok(CfExpression::object(fields))
     }
+}
+
+fn boundary_logical_id(resource_logical_id: &str) -> String {
+    format!("{resource_logical_id}PermissionsBoundary")
+}
+
+fn boundary_document(ctx: &EmitContext<'_>) -> Result<CfExpression> {
+    // Validate the resolved document at the supported maximum input lengths too.
+    // Short template tokens must not hide an oversized installed IAM policy.
+    let generate = |context: &PermissionContext| {
+        aws_stack_permissions_boundary(ctx.stack, context, |_, scope| {
+            boundary_grant_context(ctx, context, scope)
+        })
+        .context(ErrorData::GenericError {
+            message: "failed to generate AWS permissions boundary".to_string(),
+        })
+    };
+    generate(
+        &PermissionContext::new()
+            .with_stack_prefix("s".repeat(40))
+            .with_aws_region("r".repeat(16))
+            .with_aws_account_id("123456789012")
+            .with_managing_role_arn(format!(
+                "arn:aws:iam::210987654321:role/{}",
+                "r".repeat(2019)
+            ))
+            .with_managing_account_id("210987654321")
+            .with_aws_permissions_boundary_arn(format!(
+                "arn:aws:iam::123456789012:policy/{}-permissions-boundary",
+                "s".repeat(40)
+            )),
+    )?;
+    let document = generate(
+        &PermissionContext::new()
+            .with_stack_prefix("${AWS::StackName}")
+            .with_aws_region("${AWS::Region}")
+            .with_aws_account_id("${AWS::AccountId}")
+            .with_managing_role_arn("${ManagingRoleArn}")
+            .with_managing_account_id("${managingAccountId}")
+            .with_aws_permissions_boundary_arn(
+                "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-permissions-boundary",
+            ),
+    )?;
+    let rendered = AwsCloudFormationPermissionsGenerator::new()
+        .render_document(&document)
+        .context(ErrorData::GenericError {
+            message: "failed to render AWS permissions boundary".to_string(),
+        })?;
+    let mut rendered = cf_from_json(rendered)?;
+    for (id, entry) in ctx.stack.resources() {
+        if entry.config.resource_type() != alien_core::Key::RESOURCE_TYPE {
+            continue;
+        }
+        if let Some(logical_id) = ctx.name_for(id) {
+            replace_expression(
+                &mut rendered,
+                &CfExpression::sub(format!("arn:${{AWS::Partition}}:kms:${{AWS::Region}}:${{AWS::AccountId}}:key/${{{logical_id}}}")),
+                &CfExpression::get_att(logical_id, "Arn"),
+            );
+        }
+    }
+    Ok(rendered)
+}
+
+fn boundary_grant_context(
+    ctx: &EmitContext<'_>,
+    base: &PermissionContext,
+    scope: &str,
+) -> alien_permissions::Result<PermissionContext> {
+    if scope == "*" {
+        return Ok(base.clone());
+    }
+    let entry = ctx.stack.resources.get(scope).ok_or_else(|| {
+        AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+            message: format!("AWS permissions boundary scope '{scope}' is missing"),
+        })
+    })?;
+    let mut context = base.clone().with_resource_id(scope.to_string());
+    if let Some(cluster) = entry.config.downcast_ref::<KubernetesCluster>() {
+        context.resource_name = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.cluster_name.clone())
+            .or_else(|| {
+                base.stack_prefix
+                    .as_ref()
+                    .map(|prefix| format!("{prefix}-k8s"))
+            });
+        if let Some(cloud) = &cluster.cloud {
+            if let Some(account) = &cloud.account_id {
+                context.aws_account_id = Some(account.clone());
+            }
+            if let Some(region) = &cloud.region {
+                context.aws_region = Some(region.clone());
+            }
+        }
+    } else if entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE {
+        if entry.enabled_when.is_some() {
+            return Err(AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+                message: format!("AWS permissions boundary key '{scope}' must be unconditional; remove its enabledWhen input before generating setup"),
+            }));
+        }
+        let logical_id = ctx.name_for(scope).ok_or_else(|| {
+            AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+                message: format!("AWS permissions boundary key '{scope}' has no setup resource"),
+            })
+        })?;
+        // Ref returns the generated key ID. Use that exact ID, never the stack prefix.
+        let key_id = if base.stack_prefix.as_deref() == Some("${AWS::StackName}") {
+            format!("${{{logical_id}}}")
+        } else {
+            // Keep keys distinct while budgeting their provider-assigned UUIDs.
+            let index = ctx.stack.resources.get_index_of(scope).ok_or_else(|| {
+                AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+                    message: format!("AWS permissions boundary key '{scope}' is missing"),
+                })
+            })?;
+            format!("00000000-0000-0000-0000-{index:012x}")
+        };
+        context.resource_name = Some(format!(
+            "arn:aws:kms:{}:{}:key/{key_id}",
+            base.aws_region.as_deref().unwrap_or_default(),
+            base.aws_account_id.as_deref().unwrap_or_default(),
+        ));
+    } else {
+        context.resource_name = match entry.config.resource_type().as_ref() {
+            "artifact-registry" | "service-account" | "ai" | "sandbox" => Some(scope.to_string()),
+            "storage" | "queue" | "kv" | "build" | "worker" | "vault" => base
+                .stack_prefix
+                .as_ref()
+                .map(|prefix| format!("{prefix}-{scope}")),
+            _ => None,
+        };
+    }
+    Ok(context)
 }
 
 fn role_logical_id(resource_logical_id: &str) -> String {
@@ -111,7 +261,8 @@ fn remote_management_trust_policy(ctx: &EmitContext<'_>) -> CfExpression {
 fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
-    let context = permission_context();
+    let boundary_arn = "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-permissions-boundary";
+    let context = permission_context().with_aws_permissions_boundary_arn(boundary_arn);
 
     if let Some(profile) = ctx.stack.management().profile() {
         for permission_set_ref in global_permission_refs(ctx, profile) {
@@ -204,7 +355,37 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
         ),
     ]));
 
-    chunk_managed_policy_statements(uniquify_iam_statement_sids(statements))
+    // Chunk against the complete expanded ARN before replacing it with a short Ref.
+    let mut documents = chunk_managed_policy_statements(uniquify_iam_statement_sids(statements))?;
+    let boundary_id = boundary_logical_id(required_logical_id(ctx)?);
+    for document in &mut documents {
+        replace_expression(
+            document,
+            &CfExpression::sub(boundary_arn),
+            &CfExpression::ref_(&boundary_id),
+        );
+    }
+    Ok(documents)
+}
+
+fn replace_expression(value: &mut CfExpression, from: &CfExpression, to: &CfExpression) {
+    if value == from {
+        *value = to.clone();
+        return;
+    }
+    match value {
+        CfExpression::List(values) => {
+            for value in values {
+                replace_expression(value, from, to);
+            }
+        }
+        CfExpression::Object(values) => {
+            for value in values.values_mut() {
+                replace_expression(value, from, to);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn management_policy_resources(

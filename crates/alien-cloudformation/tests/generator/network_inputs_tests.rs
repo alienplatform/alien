@@ -12,7 +12,11 @@ use super::helpers::render_built_ins_template;
 
 // Fail on unsupported intrinsics so new generator behavior cannot silently bypass
 // the assertions. Conditions come from the generated template, not test answers.
-fn evaluate(value: &Value, template: &CfTemplate, parameters: &HashMap<String, Value>) -> Value {
+pub(super) fn evaluate(
+    value: &Value,
+    template: &CfTemplate,
+    parameters: &HashMap<String, Value>,
+) -> Value {
     let eval = |v| evaluate(v, template, parameters);
     match value {
         Value::Object(fields) => {
@@ -21,6 +25,46 @@ fn evaluate(value: &Value, template: &CfTemplate, parameters: &HashMap<String, V
                     return Value::Null;
                 }
                 return parameters[name.as_str().unwrap()].clone();
+            }
+            if let Some(args) = fields.get("Fn::GetAtt") {
+                return parameters[&format!(
+                    "{}.{}",
+                    args[0].as_str().unwrap(),
+                    args[1].as_str().unwrap()
+                )]
+                    .clone();
+            }
+            if let Some(args) = fields.get("Fn::Split") {
+                return json!(eval(&args[1])
+                    .as_str()
+                    .unwrap()
+                    .split(args[0].as_str().unwrap())
+                    .collect::<Vec<_>>());
+            }
+            if let Some(args) = fields.get("Fn::Sub") {
+                let (text, locals) = match args {
+                    Value::String(text) => (text.as_str(), None),
+                    Value::Array(args) => (args[0].as_str().unwrap(), args[1].as_object()),
+                    _ => panic!("invalid substitution: {args}"),
+                };
+                let mut result = String::new();
+                let mut rest = text;
+                while let Some((before, after)) = rest.split_once("${") {
+                    result.push_str(before);
+                    let (name, tail) = after.split_once('}').unwrap();
+                    if let Some(literal) = name.strip_prefix('!') {
+                        result.push_str(&format!("${{{literal}}}"));
+                    } else {
+                        let replacement = locals
+                            .and_then(|locals| locals.get(name))
+                            .map(eval)
+                            .unwrap_or_else(|| parameters[name].clone());
+                        result.push_str(replacement.as_str().unwrap());
+                    }
+                    rest = tail;
+                }
+                result.push_str(rest);
+                return json!(result);
             }
             if let Some(args) = fields.get("Fn::If") {
                 let condition =
