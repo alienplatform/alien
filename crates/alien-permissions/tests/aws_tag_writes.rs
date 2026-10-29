@@ -147,17 +147,21 @@ fn assert_tag_ownership(policy: &AwsIamPolicy, resource_type: &str, create_actio
 }
 
 #[test]
-fn catalog_ec2_and_acm_tag_grants_require_creation_or_existing_stack_ownership() {
+fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
     for id in alien_permissions::list_permission_set_ids() {
         let set = get_permission_set(id).expect("registered permission set");
         for entry in set.platforms.aws.iter().flatten() {
             if entry.effect != alien_core::AwsPermissionEffect::Allow
                 || !entry.grant.actions.iter().flatten().any(|action| {
-                    ["ec2:createtags", "acm:addtagstocertificate"]
-                        .iter()
-                        .any(|tagging| {
-                            iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
-                        })
+                    [
+                        "ec2:createtags",
+                        "acm:addtagstocertificate",
+                        "dlm:tagresource",
+                    ]
+                    .iter()
+                    .any(|tagging| {
+                        iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
+                    })
                 })
             {
                 continue;
@@ -192,13 +196,14 @@ fn catalog_ec2_and_acm_tag_grants_require_creation_or_existing_stack_ownership()
                                     | "CreateSnapshot"
                             )
                         });
-                let acm = entry.grant.actions.iter().flatten().any(|action| {
-                    iam_policy::wildcard_match(
-                        &action.to_ascii_lowercase(),
-                        "acm:addtagstocertificate",
-                    )
+                let non_ec2 = entry.grant.actions.iter().flatten().any(|action| {
+                    ["acm:addtagstocertificate", "dlm:tagresource"]
+                        .iter()
+                        .any(|tagging| {
+                            iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
+                        })
                 });
-                assert!(owned || (creation && !acm), "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
+                assert!(owned || (creation && !non_ec2), "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
             }
         }
     }
@@ -262,6 +267,88 @@ fn certificate_tags_require_existing_stack_ownership() {
                 ),
                 Decision::Allowed,
                 "{id}: import tagged certificate"
+            );
+        }
+    }
+}
+
+#[test]
+fn lifecycle_policy_tags_require_existing_stack_ownership() {
+    let context = PermissionContext::new()
+        .with_stack_prefix("stack-a")
+        .with_resource_name("worker")
+        .with_resource_id("worker")
+        .with_managing_account_id("123456789012")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-west-2");
+    let arn = "arn:aws:dlm:us-west-2:123456789012:policy/example";
+    let own_tags = [
+        (ALIEN_STACK_TAG_KEY, "stack-a"),
+        (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+        (alien_core::ALIEN_RESOURCE_TAG_KEY, "worker"),
+    ];
+    for binding in [BindingTarget::Stack, BindingTarget::Resource] {
+        let policy = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(
+                get_permission_set("container/provision").unwrap(),
+                binding,
+                &context,
+            )
+            .unwrap();
+        let tagging = || Request::new("dlm:TagResource", arn).request_tags(&own_tags);
+        for tags in [
+            vec![],
+            vec![
+                (ALIEN_STACK_TAG_KEY, "stack-b"),
+                (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+                (alien_core::ALIEN_RESOURCE_TAG_KEY, "worker"),
+            ],
+            vec![
+                (ALIEN_STACK_TAG_KEY, "stack-a"),
+                (ALIEN_MANAGED_BY_TAG_KEY, "setup"),
+                (alien_core::ALIEN_RESOURCE_TAG_KEY, "worker"),
+            ],
+        ] {
+            assert_eq!(
+                evaluate(&policy.statement, &tagging().resource_tags(&tags)),
+                Decision::NotAllowed
+            );
+        }
+        assert_eq!(
+            evaluate(
+                &policy.statement,
+                &Request::new("dlm:TagResource", arn)
+                    .resource_tags(&own_tags)
+                    .request_tags(&[("Name", "renamed")])
+            ),
+            Decision::Allowed
+        );
+        assert_eq!(
+            evaluate(
+                &policy.statement,
+                &Request::new("dlm:CreateLifecyclePolicy", "*").request_tags(&own_tags)
+            ),
+            Decision::Allowed
+        );
+        assert_eq!(
+            evaluate(
+                &policy.statement,
+                &Request::new("dlm:CreateLifecyclePolicy", "*")
+            ),
+            Decision::NotAllowed
+        );
+        if binding == BindingTarget::Resource {
+            assert_eq!(
+                evaluate(
+                    &policy.statement,
+                    &tagging().resource_tags(&[
+                        (ALIEN_STACK_TAG_KEY, "stack-a"),
+                        (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+                        (alien_core::ALIEN_RESOURCE_TAG_KEY, "sibling"),
+                    ])
+                ),
+                Decision::NotAllowed,
+                "resource binding must preserve resource ownership"
             );
         }
     }
