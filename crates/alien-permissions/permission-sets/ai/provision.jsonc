@@ -5,11 +5,7 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "iam:PutRolePolicy",
-            "iam:DeleteRolePolicy",
-            "iam:PutRolePermissionsBoundary"
-          ]
+          "actions": ["iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary"]
         },
         "binding": {
           "stack": {
@@ -33,11 +29,7 @@
       },
       {
         "grant": {
-          "actions": [
-            "iam:PutRolePolicy",
-            "iam:DeleteRolePolicy",
-            "iam:PutRolePermissionsBoundary"
-          ]
+          "actions": ["iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary"]
         },
         "binding": {
           "stack": {

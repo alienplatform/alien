@@ -358,7 +358,9 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"],
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+            ],
             "condition": {
               "StringEquals": {
                 "iam:AWSServiceName": "autoscaling.amazonaws.com"
@@ -366,7 +368,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"],
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+            ],
             "condition": {
               "StringEquals": {
                 "iam:AWSServiceName": "autoscaling.amazonaws.com"
@@ -382,7 +386,9 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"],
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -391,7 +397,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"],
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -412,7 +420,9 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"],
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -421,7 +431,9 @@
             }
           },
           "resource": {
-            "resources": ["arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"],
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",

@@ -176,10 +176,7 @@
       },
       {
         "grant": {
-          "actions": [
-            "iam:TagRole",
-            "iam:DeleteRole"
-          ]
+          "actions": ["iam:TagRole", "iam:DeleteRole"]
         },
         "binding": {
           "stack": {
