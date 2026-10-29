@@ -1449,6 +1449,7 @@ mod tests {
     use super::*;
     use crate::core::{
         controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
+        StackResourceStateExt,
     };
     use alien_aws_clients::iam::{
         ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames,
@@ -1482,6 +1483,26 @@ mod tests {
         bounded: bool,
         account: ServiceAccount,
     ) -> SingleControllerExecutor {
+        executor_with_controller(
+            iam,
+            AwsServiceAccountController {
+                state,
+                role_name: Some("test-execution-sa".to_string()),
+                role_arn: Some("arn:aws:iam::123456789012:role/test-execution-sa".to_string()),
+                ..Default::default()
+            },
+            bounded,
+            account,
+        )
+        .await
+    }
+
+    async fn executor_with_controller(
+        iam: MockIamApi,
+        controller: AwsServiceAccountController,
+        bounded: bool,
+        account: ServiceAccount,
+    ) -> SingleControllerExecutor {
         let iam = Arc::new(iam);
         let mut provider = MockPlatformServiceProvider::new();
         provider
@@ -1497,12 +1518,7 @@ mod tests {
         SingleControllerExecutor::builder()
             .resource(account)
             .previous_resource(policy_account(10))
-            .controller(AwsServiceAccountController {
-                state,
-                role_name: Some("test-execution-sa".to_string()),
-                role_arn: Some("arn:aws:iam::123456789012:role/test-execution-sa".to_string()),
-                ..Default::default()
-            })
+            .controller(controller)
             .platform(Platform::Aws)
             .with_dependency(
                 alien_core::RemoteStackManagement::new("management".to_string()).build(),
@@ -1618,6 +1634,212 @@ mod tests {
                 AwsServiceAccountState::UpdatingStackPermissions
             );
         }
+    }
+
+    /// A successful attachment can outlive a failed policy write and process restart.
+    #[tokio::test]
+    async fn policy_write_failure_resumes_from_checkpoint_with_existing_boundary() {
+        for state in [
+            AwsServiceAccountState::ApplyingStackPermissions,
+            AwsServiceAccountState::UpdatingStackPermissions,
+        ] {
+            let mut iam = MockIamApi::new();
+            let mut sequence = mockall::Sequence::new();
+            expect_adoption(&mut iam, &mut sequence);
+            iam.expect_put_role_policy()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _, _| {
+                    Err(AlienError::new(
+                        alien_client_core::ErrorData::InvalidInput {
+                            message: "injected policy write failure".into(),
+                            field_name: None,
+                        },
+                    ))
+                });
+            let mut first = executor(iam, state.clone(), true).await;
+            let error = first.step().await.unwrap_err();
+            assert!(error.to_string().contains("injected policy write failure"));
+            let checkpoint = first
+                .internal_state::<AwsServiceAccountController>()
+                .unwrap()
+                .clone();
+            assert_eq!(checkpoint.state, state);
+            assert!(!checkpoint.stack_permissions_applied);
+            assert_eq!(checkpoint.role_name.as_deref(), Some("test-execution-sa"));
+            assert_eq!(
+                checkpoint.role_arn.as_deref(),
+                Some("arn:aws:iam::123456789012:role/test-execution-sa")
+            );
+            // Persist the retry checkpoint separately from the failed display state,
+            // as the executor does for last_failed_state.
+            let mut record = first.stack_state().resources["execution-sa"].clone();
+            record
+                .set_last_failed_controller(Some(Box::new(checkpoint.clone())))
+                .unwrap();
+            let mut failed = checkpoint;
+            failed.transition_to_failure();
+            assert_eq!(
+                failed.get_status(),
+                if state == AwsServiceAccountState::ApplyingStackPermissions {
+                    ResourceStatus::ProvisionFailed
+                } else {
+                    ResourceStatus::UpdateFailed
+                }
+            );
+            record.status = failed.get_status();
+            record.retry_attempt = 3;
+            record.error = Some(error.into_generic());
+            record
+                .set_internal_controller(Some(Box::new(failed)))
+                .unwrap();
+            let saved = serde_json::to_vec(&record).unwrap();
+            drop(first);
+            let mut record: alien_core::StackResourceState =
+                serde_json::from_slice(&saved).unwrap();
+            assert!(record.retry_failed().unwrap());
+            assert!(!record.has_last_failed_state());
+            assert_eq!(record.retry_attempt, 0);
+            assert!(record.error.is_none());
+            assert_eq!(
+                record.status,
+                if state == AwsServiceAccountState::ApplyingStackPermissions {
+                    ResourceStatus::Provisioning
+                } else {
+                    ResourceStatus::Updating
+                }
+            );
+
+            let mut iam = MockIamApi::new();
+            let mut sequence = mockall::Sequence::new();
+            iam.expect_get_role()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|name| {
+                    assert_eq!(name, "test-execution-sa");
+                    let mut role = role();
+                    role["PermissionsBoundary"] = serde_json::json!({
+                        "PermissionsBoundaryType": "Policy", "PermissionsBoundaryArn": BOUNDARY
+                    });
+                    Ok(
+                        serde_json::from_value(
+                            serde_json::json!({"GetRoleResult": {"Role": role}}),
+                        )
+                        .unwrap(),
+                    )
+                });
+            // No audit or attachment is expected after IAM confirms the boundary.
+            iam.expect_put_role_policy()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|name, policy, document| {
+                    assert_eq!((name, policy), ("test-execution-sa", MANAGED_POLICY_NAME));
+                    let policy: serde_json::Value = serde_json::from_str(document).unwrap();
+                    assert_eq!(
+                        policy["Statement"][0]["Resource"].as_array().unwrap().len(),
+                        10
+                    );
+                    Ok(())
+                });
+            let restored = record
+                .get_internal_controller_typed::<AwsServiceAccountController>()
+                .unwrap();
+            let mut resumed =
+                executor_with_controller(iam, restored, true, policy_account(10)).await;
+            resumed.step().await.unwrap();
+            let controller = resumed
+                .internal_state::<AwsServiceAccountController>()
+                .unwrap();
+            assert!(controller.stack_permissions_applied);
+            assert_eq!(
+                controller.state,
+                if state == AwsServiceAccountState::ApplyingStackPermissions {
+                    AwsServiceAccountState::ApplyingResourcePermissions
+                } else {
+                    AwsServiceAccountState::UpdatingResourcePermissions
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_boundary_attachment_preserves_checkpoint_and_retries_adoption() {
+        let mut iam = MockIamApi::new();
+        let mut sequence = mockall::Sequence::new();
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| {
+                Ok(
+                    serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": role()}}))
+                        .unwrap(),
+                )
+            });
+        iam.expect_list_attached_role_policies()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| {
+                Ok(serde_json::from_value(
+                    serde_json::json!({"ListAttachedRolePoliciesResult": {"IsTruncated": false}}),
+                )
+                .unwrap())
+            });
+        iam.expect_put_role_permissions_boundary()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|name, boundary| {
+                assert_eq!((name, boundary), ("test-execution-sa", BOUNDARY));
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::InvalidInput {
+                        message: "injected attachment failure".into(),
+                        field_name: None,
+                    },
+                ))
+            });
+        // Any policy write before attachment succeeds is an unexpected mock call.
+        let mut first = executor(iam, AwsServiceAccountState::UpdatingStackPermissions, true).await;
+        let error = first.step().await.unwrap_err();
+        assert!(error.to_string().contains("injected attachment failure"));
+        let checkpoint = first
+            .internal_state::<AwsServiceAccountController>()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            checkpoint.state,
+            AwsServiceAccountState::UpdatingStackPermissions
+        );
+        assert!(!checkpoint.stack_permissions_applied);
+        let saved = serde_json::to_vec(&checkpoint).unwrap();
+        drop(first);
+
+        let mut iam = MockIamApi::new();
+        let mut sequence = mockall::Sequence::new();
+        expect_adoption(&mut iam, &mut sequence);
+        iam.expect_put_role_policy()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|name, policy, _| {
+                assert_eq!((name, policy), ("test-execution-sa", MANAGED_POLICY_NAME));
+                Ok(())
+            });
+        let mut resumed = executor_with_controller(
+            iam,
+            serde_json::from_slice(&saved).unwrap(),
+            true,
+            policy_account(10),
+        )
+        .await;
+        resumed.step().await.unwrap();
+        let controller = resumed
+            .internal_state::<AwsServiceAccountController>()
+            .unwrap();
+        assert_eq!(
+            controller.state,
+            AwsServiceAccountState::UpdatingResourcePermissions
+        );
+        assert!(controller.stack_permissions_applied);
+        assert_eq!(controller.role_name, checkpoint.role_name);
+        assert_eq!(controller.role_arn, checkpoint.role_arn);
     }
 
     #[tokio::test]
