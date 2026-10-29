@@ -2,7 +2,7 @@
 
 use std::{borrow::Cow, collections::BTreeSet};
 
-use alien_core::{AwsBindingSpec, PermissionSetReference, Stack};
+use alien_core::{AwsBindingSpec, PermissionSet, PermissionSetReference, Stack};
 
 use alien_error::AlienError;
 use serde_json::{json, Value};
@@ -16,14 +16,15 @@ use super::{AwsIamStatement, AwsRuntimePermissionsGenerator};
 
 const MANAGED_POLICY_LIMIT: usize = 6_144;
 
-/// Render the boundary including inline grants from application permission profiles.
+/// Render the boundary including inline and ARN-selected application grants.
 ///
 /// The resolver receives the profile name and scope (`"*"` or a resource id). It must
 /// return the same context used to compile that identity's grants, including actual
 /// resource names for resource scopes. It is called only for scopes with inline AWS
-/// permissions. Management permissions are deliberately not part of this ceiling.
-/// Named catalog grants are already included by [`aws_permissions_boundary`].
-/// Global inline sets also contribute their resource binding to matching resource
+/// permissions or catalog bindings that select complete resource ARNs. Management
+/// permissions are deliberately not part of this ceiling. Other named catalog grants
+/// are already included by [`aws_permissions_boundary`].
+/// Global selected sets also contribute their resource binding to matching resource
 /// types, just as workload policy writers do. Those calls resolve the physical
 /// resource context, even when the profile does not explicitly name the resource.
 pub fn aws_stack_permissions_boundary(
@@ -35,14 +36,11 @@ pub fn aws_stack_permissions_boundary(
     let mut statements = Vec::new();
     for (profile_name, profile) in stack.permission_profiles() {
         for (scope, references) in &profile.0 {
-            let inline_sets: Vec<_> = references
+            let resolved_sets: Vec<_> = references
                 .iter()
-                .filter_map(|reference| match reference {
-                    PermissionSetReference::Inline(set) if set.platforms.aws.is_some() => Some(set),
-                    _ => None,
-                })
+                .filter_map(resolved_boundary_set)
                 .collect();
-            if inline_sets.is_empty() {
+            if resolved_sets.is_empty() {
                 continue;
             }
             let grant_context = resolve_context(profile_name, scope)?;
@@ -51,7 +49,7 @@ pub fn aws_stack_permissions_boundary(
             } else {
                 BindingTarget::Resource
             };
-            for set in inline_sets {
+            for set in resolved_sets {
                 statements.extend(
                     generator
                         .generate_policy(set, target, &grant_context)?
@@ -67,8 +65,8 @@ pub fn aws_stack_permissions_boundary(
                 .into_iter()
                 .flatten()
                 .filter(|reference| {
-                    matches!(reference, PermissionSetReference::Inline(set)
-                        if set.platforms.aws.is_some() && set.id.starts_with(&type_prefix))
+                    reference.id().starts_with(&type_prefix)
+                        && resolved_boundary_set(reference).is_some()
                 })
                 .cloned()
                 .collect();
@@ -85,16 +83,10 @@ pub fn aws_stack_permissions_boundary(
                 &generator,
                 &grant_context,
             )?;
-            for set in references
-                .into_iter()
-                .filter_map(|reference| match reference {
-                    PermissionSetReference::Inline(set) => Some(set),
-                    _ => None,
-                })
-            {
+            for set in references.iter().filter_map(resolved_boundary_set) {
                 statements.extend(
                     generator
-                        .generate_policy(&set, BindingTarget::Resource, &grant_context)?
+                        .generate_policy(set, BindingTarget::Resource, &grant_context)?
                         .statement,
                 );
             }
@@ -105,9 +97,11 @@ pub fn aws_stack_permissions_boundary(
 
 /// Render the stack permissions boundary from the runtime catalog and compiled inline grants.
 ///
-/// `custom_statements` must contain only inline AWS grants from runtime profiles, compiled with
-/// their actual resource contexts. Setup must approve changes to these grants. Catalog resource
-/// bindings are widened to the stack prefix; unprefixed grants retain their actions and conditions.
+/// `custom_statements` contains runtime inline grants and catalog grants selecting complete
+/// resource ARNs, compiled with their actual resource contexts. Use [`aws_stack_permissions_boundary`]
+/// to collect these from a stack. Setup must approve changes to these grants. Only name-based
+/// catalog bindings are widened to the stack prefix; complete ARN selectors cannot be widened.
+/// Unprefixed grants retain their actions and conditions.
 /// Returns an error if interpolation fails or the document exceeds IAM's managed-policy limit.
 pub fn aws_permissions_boundary(
     context: &PermissionContext,
@@ -144,6 +138,13 @@ pub fn aws_permissions_boundary(
             {
                 let mut entry = entry.clone();
                 let mut binding = binding.clone();
+                // Complete ARN selectors (such as KMS keys) require the stack resolver.
+                binding
+                    .resources
+                    .retain(|resource| resource != "${resourceName}");
+                if binding.resources.is_empty() && binding.not_resources.is_empty() {
+                    continue;
+                }
                 // Some resource bindings already include the prefix before resourceName.
                 for resource in &mut binding.resources {
                     *resource =
@@ -256,6 +257,32 @@ pub(super) fn role_write_binding<'a>(
     (Cow::Owned(binding), Cow::Owned(actions))
 }
 
+fn resolved_boundary_set(reference: &PermissionSetReference) -> Option<&PermissionSet> {
+    match reference {
+        PermissionSetReference::Inline(set) if set.platforms.aws.is_some() => Some(set),
+        PermissionSetReference::Name(id) if is_runtime_set(id) => {
+            let set = get_permission_set(id)?;
+            set.platforms
+                .aws
+                .as_ref()?
+                .iter()
+                .any(|entry| {
+                    [&entry.binding.stack, &entry.binding.resource]
+                        .into_iter()
+                        .flatten()
+                        .any(|binding| {
+                            binding
+                                .resources
+                                .iter()
+                                .any(|resource| resource == "${resourceName}")
+                        })
+                })
+                .then_some(set)
+        }
+        _ => None,
+    }
+}
+
 fn is_runtime_set(id: &str) -> bool {
     let (category, operation) = id.split_once('/').unwrap_or((id, ""));
     !matches!(category, "guard" | "remote-stack-management" | "observe")
@@ -300,12 +327,12 @@ mod tests {
     }
 
     #[test]
-    fn full_catalog_fits_and_covers_runtime_actions_and_resources() {
+    fn catalog_and_individual_arn_grants_fit_and_cover_runtime_permissions() {
         let context = context();
         let policy = aws_permissions_boundary(&context, &[]).unwrap();
         assert!(policy.to_string().len() <= MANAGED_POLICY_LIMIT);
         eprintln!(
-            "Full runtime boundary: {} characters",
+            "Name-scoped runtime catalog boundary: {} characters",
             policy.to_string().len()
         );
         let context = context.with_resource_name(format!("{}-example", "s".repeat(40)));
@@ -331,12 +358,21 @@ mod tests {
                     }
                     let mut single = set.clone();
                     single.platforms.aws = Some(vec![entry.clone()]);
+                    let key_context = context.clone().with_resource_name("arn:aws:kms:ap-southeast-7:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab");
+                    let arn_selected =
+                        resolved_boundary_set(&PermissionSetReference::from_name(id)).is_some();
+                    let actual_context = if arn_selected { &key_context } else { &context };
                     let required = generator
-                        .generate_policy(&single, target, &context)
+                        .generate_policy(&single, target, actual_context)
                         .unwrap();
+                    let boundary = if arn_selected {
+                        aws_permissions_boundary(&context, &required.statement).unwrap()
+                    } else {
+                        policy.clone()
+                    };
                     assert!(
                         super::super::aws_permissions_boundary_covers(
-                            &policy,
+                            &boundary,
                             &serde_json::to_value(required).unwrap(),
                         )
                         .unwrap(),
@@ -345,6 +381,121 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn arn_selected_catalog_grants_use_exact_resources_and_conditions() {
+        let key_arn =
+            "arn:aws:kms:ap-southeast-7:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab";
+        for id in [
+            "key/availability",
+            "key/native-storage",
+            "key/native-volume",
+            "key/remote-cryptography",
+        ] {
+            for global in [false, true] {
+                let profile = alien_core::PermissionProfile(indexmap::indexmap! {
+                    (if global { "*" } else { "encryption" }).to_string() => vec![PermissionSetReference::from_name(id)]
+                });
+                let stack = Stack::new("test".to_string())
+                    .permission("application", profile)
+                    .add(
+                        alien_core::Key::new("encryption".to_string()).build(),
+                        alien_core::ResourceLifecycle::Frozen,
+                    )
+                    .build();
+                if global {
+                    assert_eq!(
+                        aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context()))
+                            .unwrap_err()
+                            .code,
+                        "BINDING_TARGET_NOT_SUPPORTED"
+                    );
+                    continue;
+                }
+                let boundary = aws_stack_permissions_boundary(&stack, &context(), |_, scope| {
+                    Ok(if scope == "*" {
+                        context()
+                    } else {
+                        context().with_resource_name(key_arn)
+                    })
+                })
+                .unwrap();
+                let required = serde_json::to_value(
+                    AwsRuntimePermissionsGenerator::new()
+                        .generate_policy(
+                            get_permission_set(id).unwrap(),
+                            BindingTarget::Resource,
+                            &context().with_resource_name(key_arn),
+                        )
+                        .unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    super::super::aws_permissions_boundary_covers(&boundary, &required).unwrap(),
+                    "{id}, global={global}"
+                );
+                let sibling = serde_json::from_str(&required.to_string().replace(
+                    "1234abcd-12ab-34cd-56ef-1234567890ab",
+                    "9876abcd-12ab-34cd-56ef-1234567890ab",
+                ))
+                .unwrap();
+                assert!(
+                    !super::super::aws_permissions_boundary_covers(&boundary, &sibling).unwrap()
+                );
+                if required["Statement"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|statement| statement.get("Condition").is_some())
+                {
+                    let mut unconditional = required.clone();
+                    for statement in unconditional["Statement"].as_array_mut().unwrap() {
+                        statement.as_object_mut().unwrap().remove("Condition");
+                    }
+                    assert!(!super::super::aws_permissions_boundary_covers(
+                        &boundary,
+                        &unconditional
+                    )
+                    .unwrap());
+                }
+                assert_eq!(
+                    aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context()))
+                        .unwrap_err()
+                        .code,
+                    "VARIABLE_NOT_FOUND"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn combined_arn_selected_grants_enforce_the_managed_policy_limit() {
+        let stack = Stack::new("test".to_string())
+            .permission(
+                "application",
+                alien_core::PermissionProfile::new().resource(
+                    "encryption",
+                    [
+                        "key/availability",
+                        "key/native-storage",
+                        "key/native-volume",
+                        "key/remote-cryptography",
+                    ],
+                ),
+            )
+            .add(
+                alien_core::Key::new("encryption".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let error = aws_stack_permissions_boundary(&stack, &context(), |_, _| {
+            Ok(context().with_resource_name(
+                "arn:aws:kms:ap-southeast-7:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
     }
 
     fn custom_statement(resource: String) -> AwsIamStatement {
