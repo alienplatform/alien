@@ -113,8 +113,10 @@ budget maximum resolved input lengths, so a package can be rejected even when a
 shorter concrete prefix would fit. Runtime grants selecting KMS keys use physical
 key ARNs: templates reference key ARN attributes, and direct setup requires the
 ARNs already present in imported state. A missing ARN is an error. Templates
-reject conditional keys selected by runtime boundary grants; unused conditional
-keys remain supported.
+include conditional catalog key grants only while the key is enabled, including
+keys selected for native volume encryption. Inline grants referencing conditional
+keys still require an unconditional key. Disabled keys contribute no ARN to the
+installed or recorded boundary.
 
 Teardown must remove runtime roles before setup deletes the boundary policy.
 The setup registration dependencies preserve that ordering for generated

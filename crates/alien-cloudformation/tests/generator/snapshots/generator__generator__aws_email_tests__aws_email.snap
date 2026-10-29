@@ -152,6 +152,13 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${AWS::StackName}-*
           - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
           - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
+        - Condition:
+            StringEquals:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+          Effect: Allow
+          NotAction: iam:*
+          Resource: '*'
         - Action:
           - bedrock-mantle:CreateInference
           - bedrock:InvokeModel
@@ -180,8 +187,6 @@ Resources:
           - aoss:ListCollections
           - aoss:ListSecurityPolicies
           - aoss:ListTagsForResource
-          - aoss:TagResource
-          - aoss:UntagResource
           - aoss:UpdateAccessPolicy
           - aoss:UpdateCollection
           - aoss:UpdateCollectionGroup
@@ -213,40 +218,6 @@ Resources:
                 - Fn::Split:
                   - ':'
                   - Ref: ManagingRoleArn
-        - Action:
-          - ec2:AttachVolume
-          - ec2:DetachVolume
-          Condition:
-            StringEquals:
-              aws:ResourceTag/deployment:
-                Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: runtime
-          Effect: Allow
-          Resource:
-            Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
-        - Action:
-          - ec2:AttachVolume
-          - ec2:CreateSnapshot
-          - ec2:DetachVolume
-          Condition:
-            StringEquals:
-              aws:ResourceTag/deployment:
-                Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: runtime
-          Effect: Allow
-          Resource:
-            Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*
-        - Action:
-          - elasticloadbalancing:DeregisterTargets
-          - elasticloadbalancing:RegisterTargets
-          Condition:
-            StringEquals:
-              aws:ResourceTag/deployment:
-                Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: runtime
-          Effect: Allow
-          Resource:
-            Fn::Sub: arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/*/*
         - Action: ec2:CreateSnapshot
           Condition:
             StringEquals:
@@ -263,15 +234,6 @@ Resources:
                 Fn::Sub: ${AWS::StackName}
               aws:RequestTag/managed-by: runtime
               ec2:CreateAction: CreateSnapshot
-          Effect: Allow
-          Resource:
-            Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
-        - Action: ec2:DeleteSnapshot
-          Condition:
-            StringEquals:
-              aws:ResourceTag/deployment:
-                Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
             Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
@@ -757,13 +719,15 @@ Outputs:
         - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
         - '","'
         - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
-        - '"]},{"Action":["bedrock-mantle:CreateInference","bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Effect":"Allow","Resource":["'
+        - '"]},{"Condition":{"StringEquals":{"aws:ResourceTag/deployment":"'
+        - Fn::Sub: ${AWS::StackName}
+        - '"}},"Effect":"Allow","NotAction":"iam:*","Resource":"*"},{"Action":["bedrock-mantle:CreateInference","bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Effect":"Allow","Resource":["'
         - Fn::Sub: arn:${AWS::Partition}:bedrock-mantle:*:${AWS::AccountId}:project/default
         - '","'
         - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
         - '","'
         - Fn::Sub: arn:${AWS::Partition}:bedrock:*::foundation-model/*
-        - '"]},{"Action":["aoss:AddCollectionToCollectionGroup","aoss:BatchGetCollection","aoss:BatchGetCollectionGroup","aoss:CreateAccessPolicy","aoss:CreateCollection","aoss:CreateCollectionGroup","aoss:CreateSecurityPolicy","aoss:DeleteAccessPolicy","aoss:DeleteCollection","aoss:DeleteCollectionGroup","aoss:DeleteSecurityPolicy","aoss:GetAccessPolicy","aoss:GetSecurityPolicy","aoss:ListAccessPolicies","aoss:ListCollectionGroups","aoss:ListCollections","aoss:ListSecurityPolicies","aoss:ListTagsForResource","aoss:TagResource","aoss:UntagResource","aoss:UpdateAccessPolicy","aoss:UpdateCollection","aoss:UpdateCollectionGroup","aoss:UpdateSecurityPolicy","ec2:AssignPrivateIpAddresses","ec2:CreateNetworkInterface","ec2:DeleteNetworkInterface","ec2:DescribeInstances","ec2:DescribeNetworkInterfaces","ec2:DescribeSnapshots","ec2:DescribeTags","ec2:DescribeVolumes","ec2:UnassignPrivateIpAddresses","ecr:GetAuthorizationToken","elasticloadbalancing:DescribeTargetHealth","ses:ListEmailIdentities"],"Effect":"Allow","Resource":"*"},{"Action":["ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"],"Effect":"Allow","Resource":"'
+        - '"]},{"Action":["aoss:AddCollectionToCollectionGroup","aoss:BatchGetCollection","aoss:BatchGetCollectionGroup","aoss:CreateAccessPolicy","aoss:CreateCollection","aoss:CreateCollectionGroup","aoss:CreateSecurityPolicy","aoss:DeleteAccessPolicy","aoss:DeleteCollection","aoss:DeleteCollectionGroup","aoss:DeleteSecurityPolicy","aoss:GetAccessPolicy","aoss:GetSecurityPolicy","aoss:ListAccessPolicies","aoss:ListCollectionGroups","aoss:ListCollections","aoss:ListSecurityPolicies","aoss:ListTagsForResource","aoss:UpdateAccessPolicy","aoss:UpdateCollection","aoss:UpdateCollectionGroup","aoss:UpdateSecurityPolicy","ec2:AssignPrivateIpAddresses","ec2:CreateNetworkInterface","ec2:DeleteNetworkInterface","ec2:DescribeInstances","ec2:DescribeNetworkInterfaces","ec2:DescribeSnapshots","ec2:DescribeTags","ec2:DescribeVolumes","ec2:UnassignPrivateIpAddresses","ecr:GetAuthorizationToken","elasticloadbalancing:DescribeTargetHealth","ses:ListEmailIdentities"],"Effect":"Allow","Resource":"*"},{"Action":["ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"],"Effect":"Allow","Resource":"'
         - Fn::Sub:
           - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
           - ManagingAccountId:
@@ -772,18 +736,6 @@ Outputs:
               - Fn::Split:
                 - ':'
                 - Ref: ManagingRoleArn
-        - '"},{"Action":["ec2:AttachVolume","ec2:DetachVolume"],"Condition":{"StringEquals":{"aws:ResourceTag/deployment":"'
-        - Fn::Sub: ${AWS::StackName}
-        - '","aws:ResourceTag/managed-by":"runtime"}},"Effect":"Allow","Resource":"'
-        - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
-        - '"},{"Action":["ec2:AttachVolume","ec2:CreateSnapshot","ec2:DetachVolume"],"Condition":{"StringEquals":{"aws:ResourceTag/deployment":"'
-        - Fn::Sub: ${AWS::StackName}
-        - '","aws:ResourceTag/managed-by":"runtime"}},"Effect":"Allow","Resource":"'
-        - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*
-        - '"},{"Action":["elasticloadbalancing:DeregisterTargets","elasticloadbalancing:RegisterTargets"],"Condition":{"StringEquals":{"aws:ResourceTag/deployment":"'
-        - Fn::Sub: ${AWS::StackName}
-        - '","aws:ResourceTag/managed-by":"runtime"}},"Effect":"Allow","Resource":"'
-        - Fn::Sub: arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/*/*
         - '"},{"Action":"ec2:CreateSnapshot","Condition":{"StringEquals":{"aws:RequestTag/deployment":"'
         - Fn::Sub: ${AWS::StackName}
         - '","aws:RequestTag/managed-by":"runtime"}},"Effect":"Allow","Resource":"'
@@ -791,10 +743,6 @@ Outputs:
         - '"},{"Action":"ec2:CreateTags","Condition":{"StringEquals":{"aws:RequestTag/deployment":"'
         - Fn::Sub: ${AWS::StackName}
         - '","aws:RequestTag/managed-by":"runtime","ec2:CreateAction":"CreateSnapshot"}},"Effect":"Allow","Resource":"'
-        - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
-        - '"},{"Action":"ec2:DeleteSnapshot","Condition":{"StringEquals":{"aws:ResourceTag/deployment":"'
-        - Fn::Sub: ${AWS::StackName}
-        - '","aws:ResourceTag/managed-by":"runtime"}},"Effect":"Allow","Resource":"'
         - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
         - '"},{"Action":["ses:CreateEmailIdentity","ses:DeleteEmailIdentity","ses:GetEmailIdentity","ses:PutEmailIdentityConfigurationSetAttributes","ses:PutEmailIdentityDkimAttributes","ses:PutEmailIdentityFeedbackAttributes","ses:PutEmailIdentityMailFromAttributes","ses:SendEmail","ses:SendRawEmail"],"Effect":"Allow","Resource":"'
         - Fn::Sub: arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*

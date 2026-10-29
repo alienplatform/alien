@@ -261,18 +261,66 @@ fn boundary_document(ctx: &EmitContext<'_>) -> Result<Expression> {
     for (index, (id, entry)) in ctx.stack.resources.iter().enumerate() {
         if entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE {
             if let Some(label) = ctx.name_for(id) {
-                replacements.insert(
-                    0,
-                    (
-                        format!("arn:aws:kms:${{Region}}:${{Account}}:key/${{Key{index}}}"),
-                        format!("${{local.{label}_selected_key.arn}}"),
-                    ),
-                );
+                let key = format!("arn:aws:kms:${{Region}}:${{Account}}:key/${{Key{index}}}");
+                let value = if let Some(input) = &entry.enabled_when {
+                    if document["Statement"].as_array().is_some_and(|statements| {
+                        statements.iter().any(|statement| {
+                            statement["NotAction"] != "iam:*"
+                                && statement.to_string().contains(&key)
+                        })
+                    }) {
+                        return Err(AlienError::new(ErrorData::GenericError {
+                            message: format!("AWS permissions boundary key '{id}' used by inline grants must be unconditional"),
+                        }));
+                    }
+                    format!(
+                        "${{var.{} ? local.{label}_selected_key.arn : \"\"}}",
+                        crate::generator::stack_input_variable_name(input)
+                    )
+                } else {
+                    format!("${{local.{label}_selected_key.arn}}")
+                };
+                replacements.insert(0, (key, value));
             }
         }
     }
     replace_boundary_tokens(&mut document, &replacements);
-    Ok(jsonencode_policy_value(document))
+    let mut expression = jsonencode_policy_value(document);
+    // Disabled keys contribute no ARN, while the shared ceiling retains its
+    // unconditional stack-prefixed resources. Never dereference a disabled key.
+    if ctx.stack.resources.values().any(|entry| {
+        entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE
+            && entry.enabled_when.is_some()
+    }) {
+        if let Expression::FuncCall(call) = &mut expression {
+            if let Some(Expression::Object(fields)) = call.args.first_mut() {
+                if let Some(Expression::Array(statements)) =
+                    fields.get_mut(&hcl::Identifier::sanitized("Statement").into())
+                {
+                    for statement in statements {
+                        let Expression::Object(fields) = statement else {
+                            continue;
+                        };
+                        if fields.get(&hcl::Identifier::sanitized("NotAction").into())
+                            != Some(&Expression::String("iam:*".into()))
+                        {
+                            continue;
+                        }
+                        if let Some(resource @ Expression::Array(_)) =
+                            fields.get_mut(&hcl::Identifier::sanitized("Resource").into())
+                        {
+                            *resource = Expression::FuncCall(Box::new(
+                                hcl::expr::FuncCall::builder("compact")
+                                    .arg(std::mem::replace(resource, Expression::Null))
+                                    .build(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(expression)
 }
 
 fn replace_boundary_tokens(value: &mut serde_json::Value, replacements: &[(String, String)]) {
@@ -332,11 +380,6 @@ fn boundary_grant_context(
             }
         }
     } else if entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE {
-        if entry.enabled_when.is_some() {
-            return Err(AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
-                message: format!("AWS permissions boundary key '{scope}' must be unconditional; remove its enabledWhen input before generating setup"),
-            }));
-        }
         let _label = ctx.name_for(scope).ok_or_else(|| {
             AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
                 message: format!("AWS permissions boundary key '{scope}' has no setup resource"),

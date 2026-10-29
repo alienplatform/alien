@@ -133,11 +133,56 @@ fn boundary_document(ctx: &EmitContext<'_>) -> Result<CfExpression> {
             continue;
         }
         if let Some(logical_id) = ctx.name_for(id) {
+            let key = format!("${{{logical_id}}}");
+            if entry.enabled_when.is_some()
+                && document["Statement"].as_array().is_some_and(|statements| {
+                    statements.iter().any(|statement| {
+                        statement["NotAction"] != "iam:*" && statement.to_string().contains(&key)
+                    })
+                })
+            {
+                return Err(AlienError::new(ErrorData::GenericError {
+                    message: format!("AWS permissions boundary key '{id}' used by inline grants must be unconditional"),
+                }));
+            }
             replace_expression(
                 &mut rendered,
                 &CfExpression::sub(format!("arn:${{AWS::Partition}}:kms:${{AWS::Region}}:${{AWS::AccountId}}:key/${{{logical_id}}}")),
-                &CfExpression::get_att(logical_id, "Arn"),
+                &crate::emitters::enabled::when_enabled(
+                    entry.enabled_when.as_deref(),
+                    CfExpression::get_att(logical_id, "Arn"),
+                    CfExpression::no_value(),
+                ),
             );
+        }
+    }
+    // Resolve conditional ARN elements before JSON registration serialization:
+    // ToJsonString would otherwise preserve NoValue as a literal null.
+    if ctx.stack.resources.values().any(|entry| {
+        entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE
+            && entry.enabled_when.is_some()
+    }) {
+        if let CfExpression::Object(fields) = &mut rendered {
+            if let Some(CfExpression::List(statements)) = fields.get_mut("Statement") {
+                for statement in statements {
+                    let CfExpression::Object(fields) = statement else {
+                        continue;
+                    };
+                    if fields.get("NotAction") != Some(&CfExpression::from("iam:*")) {
+                        continue;
+                    }
+                    if let Some(resources @ CfExpression::List(_)) = fields.get_mut("Resource") {
+                        let list = std::mem::replace(resources, CfExpression::Null);
+                        *resources = CfExpression::object([(
+                            "Fn::Split",
+                            CfExpression::list([
+                                CfExpression::from(","),
+                                CfExpression::join(",", list),
+                            ]),
+                        )]);
+                    }
+                }
+            }
         }
     }
     Ok(rendered)
@@ -176,11 +221,6 @@ fn boundary_grant_context(
             }
         }
     } else if entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE {
-        if entry.enabled_when.is_some() {
-            return Err(AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
-                message: format!("AWS permissions boundary key '{scope}' must be unconditional; remove its enabledWhen input before generating setup"),
-            }));
-        }
         let logical_id = ctx.name_for(scope).ok_or_else(|| {
             AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
                 message: format!("AWS permissions boundary key '{scope}' has no setup resource"),

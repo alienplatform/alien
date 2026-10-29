@@ -97,13 +97,30 @@ fn find_import(expression: &Expression) -> Option<&Expression> {
             fields.values().find_map(find_import)
         }
         Expression::Array(items) => items.iter().find_map(find_import),
+        Expression::FuncCall(call) => call.args.iter().find_map(find_import),
         _ => None,
     }
 }
 
 #[test]
 fn terraform_installs_and_registers_the_runtime_boundary_with_distinct_keys() {
-    let stack = stack();
+    for enabled in [None, Some(true), Some(false)] {
+        check_boundary(enabled);
+    }
+}
+
+fn check_boundary(enabled: Option<bool>) {
+    let mut stack = stack();
+    if enabled.is_some() {
+        stack.inputs.push(gate_input(
+            "keyEnabled",
+            "Enable keys",
+            "Create encryption keys",
+        ));
+        for id in ["first", "second"] {
+            stack.resources.get_mut(id).unwrap().enabled_when = Some("keyEnabled".into());
+        }
+    }
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     assert_terraform_valid(&module, "permissions boundary with distinct selected keys");
     let bodies: Vec<hcl::Body> = module
@@ -153,6 +170,42 @@ fn terraform_installs_and_registers_the_runtime_boundary_with_distinct_keys() {
         ] {
             context.declare_var(name, hcl::to_value(value).unwrap());
         }
+        if let Some(enabled) = enabled {
+            context.declare_var(
+                "var",
+                hcl::to_value(json!({
+                    "managing_account_id": "210987654321",
+                    "managing_role_arn": "arn:aws:iam::210987654321:role/manager",
+                    "input_key_enabled": enabled,
+                }))
+                .unwrap(),
+            );
+            if !enabled {
+                context.declare_var(
+                    "local",
+                    hcl::to_value(json!({
+                        "resource_prefix": prefix,
+                        "first_selected_key": null,
+                        "second_selected_key": null,
+                    }))
+                    .unwrap(),
+                );
+            }
+            context.declare_func(
+                "compact",
+                FuncDef::builder().param(ParamType::Any).build(|args| {
+                    Ok(hcl::Value::Array(
+                        args[0]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|value| !value.is_null() && value.as_str() != Some(""))
+                            .cloned()
+                            .collect(),
+                    ))
+                }),
+            );
+        }
         let installed = document(attribute(boundary, "policy"), &context);
         assert_eq!(
             serde_json::to_value(attribute(boundary, "name").evaluate(&context).unwrap()).unwrap(),
@@ -164,7 +217,7 @@ fn terraform_installs_and_registers_the_runtime_boundary_with_distinct_keys() {
             .with_aws_account_id(account)
             .with_managing_account_id("210987654321")
             .with_managing_role_arn("arn:aws:iam::210987654321:role/manager");
-        let expected = aws_stack_permissions_boundary(&stack, &runtime, |_, scope| {
+        let mut expected = aws_stack_permissions_boundary(&stack, &runtime, |_, scope| {
             Ok(runtime
                 .clone()
                 .with_resource_id(scope)
@@ -175,9 +228,26 @@ fn terraform_installs_and_registers_the_runtime_boundary_with_distinct_keys() {
                 }))
         })
         .unwrap();
-        assert!(aws_permissions_boundary_covers(&installed, &expected).unwrap());
+        if enabled == Some(false) {
+            for statement in expected["Statement"].as_array_mut().unwrap() {
+                if let Some(resources) = statement["Resource"].as_array_mut() {
+                    resources.retain(|resource| {
+                        resource != &json!(key1.clone()) && resource != &json!(key2.clone())
+                    });
+                }
+            }
+        }
+        assert!(aws_permissions_boundary_covers(&installed, &expected)
+            .unwrap_or_else(|error| panic!("{error}: {installed}")));
         assert!(aws_permissions_boundary_covers(&expected, &installed).unwrap());
-        assert!(installed.to_string().contains(&key1) && installed.to_string().contains(&key2));
+        assert_eq!(
+            installed.to_string().contains(&key1),
+            enabled != Some(false)
+        );
+        assert_eq!(
+            installed.to_string().contains(&key2),
+            enabled != Some(false)
+        );
         context.declare_var("aws_iam_policy", hcl::to_value(json!({"management_permissions_boundary": {"arn": arn, "policy": installed.to_string()}})).unwrap());
         context.declare_func(
             "jsondecode",
@@ -241,15 +311,31 @@ fn terraform_installs_and_registers_the_runtime_boundary_with_distinct_keys() {
 }
 
 #[test]
-fn conditional_key_boundary_grants_are_rejected() {
+fn conditional_inline_key_grants_remain_rejected() {
     let mut stack = stack();
     stack
         .inputs
         .push(gate_input("keyEnabled", "Enable key", "Create key"));
     stack.resources.get_mut("first").unwrap().enabled_when = Some("keyEnabled".into());
+    stack
+        .permissions
+        .profiles
+        .get_mut("application")
+        .unwrap()
+        .0
+        .insert(
+            "first".into(),
+            vec![alien_core::PermissionSetReference::Inline(
+                alien_permissions::get_permission_set("key/remote-cryptography")
+                    .unwrap()
+                    .clone(),
+            )],
+        );
     let error = try_render(&stack, TerraformTarget::Aws, StackSettings::default()).unwrap_err();
     assert!(
-        error.to_string().contains("must be unconditional"),
+        error
+            .to_string()
+            .contains("inline grants must be unconditional"),
         "{error}"
     );
 }

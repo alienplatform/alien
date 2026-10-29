@@ -73,7 +73,23 @@ fn stack() -> Stack {
 
 #[test]
 fn boundary_creation_registration_and_runtime_generation_agree() {
-    let stack = stack();
+    for enabled in [None, Some(true), Some(false)] {
+        check_boundary(enabled);
+    }
+}
+
+fn check_boundary(enabled: Option<bool>) {
+    let mut stack = stack();
+    if enabled.is_some() {
+        stack.inputs.push(gate_input(
+            "keyEnabled",
+            "Enable keys",
+            "Create encryption keys",
+        ));
+        for id in ["first", "second"] {
+            stack.resources.get_mut(id).unwrap().enabled_when = Some("keyEnabled".into());
+        }
+    }
     let (template, yaml) = render_built_ins_template(
         &stack,
         StackSettings::default(),
@@ -105,7 +121,7 @@ fn boundary_creation_registration_and_runtime_generation_agree() {
         let arn = format!("arn:aws:iam::{account}:policy/{prefix}-permissions-boundary");
         let first = "00000000-0000-0000-0000-000000000001";
         let second = "00000000-0000-0000-0000-000000000002";
-        let parameters: HashMap<String, Value> = [
+        let mut parameters: HashMap<String, Value> = [
             ("AWS::StackName", json!(prefix)),
             ("AWS::Region", json!(region)),
             ("AWS::AccountId", json!(account)),
@@ -134,6 +150,14 @@ fn boundary_creation_registration_and_runtime_generation_agree() {
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
         .collect();
+        if let Some(enabled) = enabled {
+            parameters.insert("InputKeyEnabled".into(), json!(enabled.to_string()));
+            if !enabled {
+                for name in ["First", "Second", "First.Arn", "Second.Arn"] {
+                    parameters.remove(name);
+                }
+            }
+        }
         let resolve = |expression: &Value| evaluate(expression, &template, &parameters);
         let installed =
             resolve(&serde_json::to_value(&boundary.properties["PolicyDocument"]).unwrap());
@@ -143,7 +167,7 @@ fn boundary_creation_registration_and_runtime_generation_agree() {
             .with_aws_region(region)
             .with_managing_role_arn("arn:aws:iam::210987654321:role/manager")
             .with_managing_account_id("210987654321");
-        let expected = aws_stack_permissions_boundary(&stack, &context, |_, scope| {
+        let mut expected = aws_stack_permissions_boundary(&stack, &context, |_, scope| {
             let id = match scope {
                 "first" => first,
                 "second" => second,
@@ -155,9 +179,27 @@ fn boundary_creation_registration_and_runtime_generation_agree() {
                 .with_resource_name(format!("arn:aws:kms:{region}:{account}:key/{id}")))
         })
         .unwrap();
+        if enabled == Some(false) {
+            for statement in expected["Statement"].as_array_mut().unwrap() {
+                if let Some(resources) = statement["Resource"].as_array_mut() {
+                    resources.retain(|resource| {
+                        resource != &json!(format!("arn:aws:kms:{region}:{account}:key/{first}"))
+                            && resource
+                                != &json!(format!("arn:aws:kms:{region}:{account}:key/{second}"))
+                    });
+                }
+            }
+        }
         assert!(aws_permissions_boundary_covers(&installed, &expected).unwrap());
         assert!(aws_permissions_boundary_covers(&expected, &installed).unwrap());
-        assert!(installed.to_string().contains(first) && installed.to_string().contains(second));
+        assert_eq!(
+            installed.to_string().contains(first),
+            enabled != Some(false)
+        );
+        assert_eq!(
+            installed.to_string().contains(second),
+            enabled != Some(false)
+        );
         let payload = resolve(
             &serde_json::to_value(
                 &template.resources["DeploymentRegistration"].properties["Resources"],
@@ -257,24 +299,41 @@ fn boundary_creation_registration_and_runtime_generation_agree() {
 }
 
 #[test]
-fn conditional_key_grants_fail_before_emitting_an_unresolvable_boundary() {
+fn conditional_inline_key_grants_remain_rejected() {
     let mut stack = stack();
-    stack.inputs.push(gate_input(
-        "keyEnabled",
-        "Enable key",
-        "Create the first key",
-    ));
+    stack
+        .inputs
+        .push(gate_input("keyEnabled", "Enable key", "Create key"));
     stack.resources.get_mut("first").unwrap().enabled_when = Some("keyEnabled".into());
+    stack
+        .permissions
+        .profiles
+        .get_mut("application")
+        .unwrap()
+        .0
+        .insert(
+            "first".into(),
+            vec![alien_core::PermissionSetReference::Inline(
+                alien_permissions::get_permission_set("key/remote-cryptography")
+                    .unwrap()
+                    .clone(),
+            )],
+        );
     let error = try_render_built_ins(
         &stack,
         StackSettings::default(),
         custom_resource_registration(),
         CloudFormationTarget::Aws,
         "aws",
-        "conditional key boundary",
+        "conditional inline key",
     )
     .unwrap_err();
-    assert!(format!("{error:?}").contains("must be unconditional"));
+    assert!(
+        error
+            .to_string()
+            .contains("inline grants must be unconditional"),
+        "{error}"
+    );
 }
 
 #[test]

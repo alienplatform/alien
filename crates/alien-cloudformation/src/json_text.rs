@@ -14,7 +14,7 @@
 //! produced:
 //!
 //! - literals serialize as JSON, and objects and lists keep their order;
-//! - a `Ref` to a list parameter becomes a JSON array of strings, and any other
+//! - a `Ref` to a list parameter or `Fn::Split` becomes a JSON array of strings; any other
 //!   `Ref`, `Fn::GetAtt`, `Fn::Sub`, `Fn::Join`, `Fn::Select` or `Fn::FindInMap`
 //!   becomes a JSON string, numbers included (the transform renders a `Number`
 //!   parameter as `"2"` too);
@@ -220,7 +220,7 @@ impl Lowering<'_> {
             "Ref" if intrinsic == CfExpression::no_value() => {
                 parts.push(Part::Text("null".to_string()));
             }
-            "Ref" if self.is_list_parameter(arguments) => {
+            function if function == "Fn::Split" || (function == "Ref" && self.is_list_parameter(arguments)) => {
                 self.require_json_safe(&intrinsic)?;
                 parts.push(Part::Text("[\"".to_string()));
                 parts.push(Part::Value(CfExpression::join("\",\"", intrinsic)));

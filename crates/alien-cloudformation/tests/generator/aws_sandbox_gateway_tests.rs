@@ -575,25 +575,6 @@ async fn the_management_role_cannot_decrypt_or_read_the_deployments_secrets() {
         )
         .build();
     let settings = settings();
-    let prepared = prepare_for_setup_template(stack.clone(), &settings).await;
-    let error = render(
-        &prepared,
-        settings.clone(),
-        "combined key permissions exceed the boundary limit",
-    )
-    .expect_err("the full key and sandbox fixture exceeds IAM's policy limit");
-    assert!(format!("{error:?}").contains("PERMISSIONS_BOUNDARY_TOO_LARGE"));
-
-    // Keep the secret-access checks below independent of the combined policy-size limit.
-    // This smaller fixture does not let the application drive the sandbox.
-    let mut stack = stack;
-    stack
-        .permissions
-        .profiles
-        .get_mut("api")
-        .unwrap()
-        .0
-        .shift_remove("*");
     let prepared = prepare_for_setup_template(stack, &settings).await;
     let template = render(&prepared, settings, "deployment key and internet sandbox")
         .expect("template renders");
