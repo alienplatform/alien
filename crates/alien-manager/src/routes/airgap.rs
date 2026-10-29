@@ -1181,6 +1181,91 @@ mod tests {
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn mixed_signal_fallback_resumes_without_splitting_healthy_logs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+        let backend = Arc::new(RejectTraces {
+            logs: SlowBackend {
+                delay: Duration::from_secs(1),
+                ..Default::default()
+            },
+            log_calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut input = batches(1..=1024);
+        for (id, signal, _) in &mut input {
+            if matches!(id, Some(2 | 120)) {
+                *signal = TelemetrySignal::Traces;
+            }
+        }
+        // The first grouped log write completes after the deadline. Its paired
+        // trace rejection must leave a saved fallback for the next request.
+        let partial = forward_telemetry(
+            backend,
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input.clone(),
+            Duration::from_millis(500),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (partial.accepted, partial.rejected, partial.through),
+            (0, 0, None)
+        );
+
+        // A fresh backend ensures resume relies only on the shared KV store.
+        let resumed_backend = Arc::new(RejectTraces {
+            logs: SlowBackend {
+                delay: Duration::from_secs(1),
+                ..Default::default()
+            },
+            log_calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let start = Instant::now();
+        let resumed = forward_telemetry(
+            resumed_backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input,
+            TELEMETRY_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (resumed.accepted, resumed.rejected, resumed.through),
+            (1022, 2, Some(1024))
+        );
+        assert!(start.elapsed() < Duration::from_secs(10));
+        assert!(
+            resumed_backend
+                .log_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
+                < 20
+        );
+        let received: std::collections::BTreeSet<_> = resumed_backend
+            .logs
+            .received
+            .lock()
+            .unwrap()
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(
+            received,
+            (1..=1024).filter(|id| !matches!(id, 2 | 120)).collect()
+        );
+        for id in [2, 120] {
+            assert!(kv
+                .get(&format!("mark:rejected:{id}"))
+                .await
+                .unwrap()
+                .is_some());
+        }
+    }
+
     struct RejectMalformed {
         status: u16,
         delay: Duration,
