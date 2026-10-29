@@ -137,6 +137,9 @@ depend on the cloud and the installed setup:
   Management is explicitly denied `sts:AssumeRole` on stack roles.
   Automatic setup keeps data access to ordinary Live vaults added later, while
   the explicit reserved-vault deny overrides its stack-wide Allow.
+  AWS containers with persistent storage require manual setup to install their
+  snapshot execution role. Automatic setup rejects them before provisioning,
+  including when scheduled backups are disabled.
   That deny applies to management itself; it does not follow a workload role.
   Older setups with no recorded boundary ARN keep their existing behavior until
   setup is rerun. For bounded deployments, a release needing permissions beyond

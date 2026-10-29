@@ -1,5 +1,5 @@
 use crate::{
-    ownership_policy_for_resource_type, ErrorData, Key, ManagementPermissions, Platform,
+    ownership_policy_for_resource_type, Container, ErrorData, Key, ManagementPermissions, Platform,
     ResourceEntry, ResourceLifecycle, Result, Sandbox, SetupManagement, Stack, Storage,
 };
 use alien_error::AlienError;
@@ -67,6 +67,16 @@ fn automatic_setup_unsupported_resource(
 ) -> Option<String> {
     if entry.config.downcast_ref::<Key>().is_some() {
         return Some("key".to_string());
+    }
+    // Persistent volumes require a setup-owned snapshot role even when scheduled
+    // backups are disabled. Automatic packages omit it, and management cannot write it.
+    if platform == Platform::Aws
+        && entry
+            .config
+            .downcast_ref::<Container>()
+            .is_some_and(|container| container.persistent_storage.is_some())
+    {
+        return Some("container with persistent storage".to_string());
     }
     let resource_type = entry.config.resource_type();
     // These controllers refuse runtime creation: only a setup package can provision them.
@@ -149,8 +159,87 @@ pub fn removed_by_runtime_cleanup(
 }
 
 #[cfg(test)]
-mod cors_tests {
+mod tests {
     use super::*;
+    use crate::{ContainerCode, PersistentStorage, ResourceSpec, VolumeBackups};
+
+    #[test]
+    fn automatic_aws_persistent_containers_require_manual_setup() {
+        for backups_enabled in [true, false] {
+            let container = Container::new("db".into())
+                .permissions("execution".into())
+                .stateful(true)
+                .cpu(ResourceSpec {
+                    min: "1".into(),
+                    desired: "1".into(),
+                })
+                .memory(ResourceSpec {
+                    min: "1Gi".into(),
+                    desired: "1Gi".into(),
+                })
+                .code(ContainerCode::Image {
+                    image: "postgres:17".into(),
+                })
+                .persistent_storage(PersistentStorage {
+                    size: "10Gi".into(),
+                    mount_path: "/data".into(),
+                    encryption_key: None,
+                    backups: VolumeBackups {
+                        enabled: backups_enabled,
+                        ..Default::default()
+                    },
+                })
+                .build();
+            let stack = Stack::new("persistent".into())
+                .add(container, ResourceLifecycle::Live)
+                .build();
+            let error = validate_automatic_setup_resources(
+                &stack,
+                Platform::Aws,
+                SetupManagement::Automatic,
+            )
+            .expect_err("automatic setup cannot install the snapshot role");
+            assert!(matches!(
+                error.error,
+                Some(ErrorData::AutomaticSetupResourceUnsupported {
+                    resource_type,
+                    resource_id,
+                    platform: Platform::Aws,
+                }) if resource_id == "db" && resource_type == "container with persistent storage"
+            ));
+            validate_automatic_setup_resources(&stack, Platform::Aws, SetupManagement::Manual)
+                .expect("manual setup owns the snapshot role");
+            for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
+                validate_automatic_setup_resources(&stack, platform, SetupManagement::Automatic)
+                    .expect("the restriction is specific to AWS");
+            }
+        }
+    }
+
+    #[test]
+    fn automatic_aws_containers_without_persistent_storage_remain_supported() {
+        let stack = Stack::new("stateless".into())
+            .add(
+                Container::new("web".into())
+                    .permissions("execution".into())
+                    .cpu(ResourceSpec {
+                        min: "1".into(),
+                        desired: "1".into(),
+                    })
+                    .memory(ResourceSpec {
+                        min: "1Gi".into(),
+                        desired: "1Gi".into(),
+                    })
+                    .code(ContainerCode::Image {
+                        image: "nginx:stable".into(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        validate_automatic_setup_resources(&stack, Platform::Aws, SetupManagement::Automatic)
+            .expect("no snapshot role is required");
+    }
 
     #[test]
     fn automatic_cors_requires_an_implementing_controller() {
