@@ -734,37 +734,59 @@ async fn forward_telemetry(
     batches.retain(|(id, _, _)| !id.is_some_and(|id| mark.is_some_and(|mark| id <= mark)));
     batches.sort_by_key(|(id, _, _)| *id);
 
-    // A rejected group is retried one batch at a time. Persist the upper bound
-    // so the next request can resume within the normal time budget.
+    // Older managers persisted a request-wide fallback. Honor its bound while
+    // new failures isolate only the rejected signal within the failed group.
     let split_key = format!("{mark_key}:individual-through");
-    let split_through = read_telemetry_mark(kv.as_ref(), &split_key)
+    let legacy_split = read_telemetry_mark(kv.as_ref(), &split_key)
         .await
         .map_err(IntoResponse::into_response)?;
-    let individual = split_through.is_some_and(|end| through.is_none_or(|mark| mark < end));
-    let max_batches = if individual {
-        1
-    } else {
-        TELEMETRY_GROUP_BATCHES
+    let mut split_signals = Vec::new();
+    for signal in [
+        TelemetrySignal::Logs,
+        TelemetrySignal::Metrics,
+        TelemetrySignal::Traces,
+    ] {
+        let key = format!("{split_key}:{signal:?}");
+        let end = read_telemetry_mark(kv.as_ref(), &key)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        split_signals.push((signal, end));
+    }
+    let individual = |batch: &DecodedBatch| {
+        batch.0.is_some_and(|id| {
+            legacy_split.is_some_and(|end| id <= end)
+                || split_signals
+                    .iter()
+                    .any(|(signal, end)| *signal == batch.1 && end.is_some_and(|end| id <= end))
+        })
     };
-    let last_id = batches.iter().filter_map(|(id, _, _)| *id).max();
-    let signals = group_telemetry(batches.clone(), max_batches)
-        .into_iter()
-        .flat_map(|group| {
-            let signals = group.signals.len();
-            group
-                .signals
-                .into_iter()
-                .enumerate()
-                .map(move |(index, (signal, data))| {
-                    (
-                        group.through,
-                        signal,
-                        data,
-                        group.count,
-                        (index + 1 == signals).then_some(group.count),
-                    )
-                })
-        });
+    let groups: Vec<_> = batches
+        .chunk_by(|left, right| individual(left) == individual(right))
+        .flat_map(|chunk| {
+            let max_batches = if individual(&chunk[0]) {
+                1
+            } else {
+                TELEMETRY_GROUP_BATCHES
+            };
+            group_telemetry(chunk.to_vec(), max_batches)
+        })
+        .collect();
+    let signals = groups.into_iter().flat_map(|group| {
+        let signals = group.signals.len();
+        group
+            .signals
+            .into_iter()
+            .enumerate()
+            .map(move |(index, (signal, data))| {
+                (
+                    group.through,
+                    signal,
+                    data,
+                    group.count,
+                    (index + 1 == signals).then_some(group.count),
+                )
+            })
+    });
     let mut written = stream::iter(signals)
         .take_while(|(id, _, _, _, _)| ready(id.is_none() || Instant::now() < deadline))
         .map(|(id, signal, data, count, completed_count)| {
@@ -782,30 +804,30 @@ async fn forward_telemetry(
                     }
                     Err(error) => Err(error),
                 };
-                (id, completed_count, result)
+                (id, signal, count, completed_count, result)
             }
         })
         .buffered(TELEMETRY_CONCURRENCY);
 
     let mut accepted = 0;
-    while let Some((id, completed_count, result)) = written.next().await {
+    while let Some((id, signal, count, completed_count, result)) = written.next().await {
         let rejected_count = match result {
             Ok(count) => count,
-            Err(error)
-                if !individual && permanent_payload_rejection(&error) && last_id.is_some() =>
-            {
+            Err(error) if count > 1 && permanent_payload_rejection(&error) && id.is_some() => {
                 drop(written);
-                let Some(end) = last_id else {
+                let Some(end) = id else {
                     return Err(error.into_response());
                 };
-                kv.put(&split_key, end.to_string().into_bytes(), None)
-                    .await
-                    .map_err(|error| {
-                        ErrorData::internal(format!(
-                            "recording individual telemetry retry: {error}"
-                        ))
+                kv.put(
+                    &format!("{split_key}:{signal:?}"),
+                    end.to_string().into_bytes(),
+                    None,
+                )
+                .await
+                .map_err(|error| {
+                    ErrorData::internal(format!("recording individual telemetry retry: {error}"))
                         .into_response()
-                    })?;
+                })?;
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 // Completed batches and their warnings are already counted above.
                 batches
@@ -923,7 +945,7 @@ mod tests {
             logs::v1::ExportLogsServiceRequest, metrics::v1::ExportMetricsServiceRequest,
             trace::v1::ExportTraceServiceRequest,
         },
-        common::v1::{AnyValue, KeyValue, any_value::Value},
+        common::v1::{any_value::Value, AnyValue, KeyValue},
         logs::v1::ResourceLogs,
         resource::v1::Resource,
     };
@@ -1062,6 +1084,186 @@ mod tests {
             read_telemetry_mark(kv.as_ref(), "mark").await.unwrap(),
             Some(4096)
         );
+    }
+
+    struct RejectTraces {
+        logs: SlowBackend,
+        log_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl TelemetryBackend for RejectTraces {
+        async fn ingest(
+            &self,
+            signal: TelemetrySignal,
+            caller: &TelemetryCaller,
+            data: bytes::Bytes,
+        ) -> Result<(), AlienError> {
+            if signal == TelemetrySignal::Traces {
+                let mut error = ErrorData::bad_request("traces are unsupported").into_generic();
+                error.http_status_code = Some(422);
+                return Err(error);
+            }
+            self.log_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.logs.ingest(signal, caller, data).await
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rejected_traces_keep_logs_grouped_and_acknowledge_every_batch() {
+        for count in [123, 1024] {
+            let tmp = tempfile::tempdir().unwrap();
+            let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+            let backend = Arc::new(RejectTraces {
+                logs: SlowBackend {
+                    delay: Duration::from_secs(1),
+                    ..Default::default()
+                },
+                log_calls: std::sync::atomic::AtomicUsize::new(0),
+            });
+            let mut input = batches(1..=count);
+            for (id, signal, _) in &mut input {
+                if matches!(id, Some(2 | 120)) {
+                    *signal = TelemetrySignal::Traces;
+                }
+            }
+            let start = Instant::now();
+            let result = forward_telemetry(
+                backend.clone(),
+                kv.clone(),
+                caller(),
+                "mark".into(),
+                input.clone(),
+                TELEMETRY_BUDGET,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                (result.accepted, result.rejected, result.through),
+                (count as usize - 2, 2, Some(count))
+            );
+            assert!(start.elapsed() < Duration::from_secs(10));
+            assert!(backend.log_calls.load(std::sync::atomic::Ordering::SeqCst) < 20);
+            let received: std::collections::BTreeSet<_> = backend
+                .logs
+                .received
+                .lock()
+                .unwrap()
+                .iter()
+                .copied()
+                .collect();
+            assert_eq!(
+                received,
+                (1..=count).filter(|id| !matches!(id, 2 | 120)).collect()
+            );
+            for id in [2, 120] {
+                assert!(kv
+                    .get(&format!("mark:rejected:{id}"))
+                    .await
+                    .unwrap()
+                    .is_some());
+            }
+            let replay = forward_telemetry(
+                backend,
+                kv,
+                caller(),
+                "mark".into(),
+                input,
+                TELEMETRY_BUDGET,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                (replay.accepted, replay.rejected, replay.through),
+                (0, 2, Some(count))
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn mixed_signal_fallback_resumes_without_splitting_healthy_logs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kv: Arc<dyn Kv> = Arc::new(LocalKv::new(tmp.path().join("kv")).await.unwrap());
+        let backend = Arc::new(RejectTraces {
+            logs: SlowBackend {
+                delay: Duration::from_secs(1),
+                ..Default::default()
+            },
+            log_calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut input = batches(1..=1024);
+        for (id, signal, _) in &mut input {
+            if matches!(id, Some(2 | 120)) {
+                *signal = TelemetrySignal::Traces;
+            }
+        }
+        // The first grouped log write completes after the deadline. Its paired
+        // trace rejection must leave a saved fallback for the next request.
+        let partial = forward_telemetry(
+            backend,
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input.clone(),
+            Duration::from_millis(500),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (partial.accepted, partial.rejected, partial.through),
+            (0, 0, None)
+        );
+
+        // A fresh backend ensures resume relies only on the shared KV store.
+        let resumed_backend = Arc::new(RejectTraces {
+            logs: SlowBackend {
+                delay: Duration::from_secs(1),
+                ..Default::default()
+            },
+            log_calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let start = Instant::now();
+        let resumed = forward_telemetry(
+            resumed_backend.clone(),
+            kv.clone(),
+            caller(),
+            "mark".into(),
+            input,
+            TELEMETRY_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (resumed.accepted, resumed.rejected, resumed.through),
+            (1022, 2, Some(1024))
+        );
+        assert!(start.elapsed() < Duration::from_secs(10));
+        assert!(
+            resumed_backend
+                .log_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
+                < 20
+        );
+        let received: std::collections::BTreeSet<_> = resumed_backend
+            .logs
+            .received
+            .lock()
+            .unwrap()
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(
+            received,
+            (1..=1024).filter(|id| !matches!(id, 2 | 120)).collect()
+        );
+        for id in [2, 120] {
+            assert!(kv
+                .get(&format!("mark:rejected:{id}"))
+                .await
+                .unwrap()
+                .is_some());
+        }
     }
 
     struct RejectMalformed {
