@@ -20202,6 +20202,13 @@
             "type": "string",
             "description": "`<os>-<arch>`, e.g. `linux-x86_64`."
           },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the exact downloaded bytes, when supplied by the publisher."
+          },
           "url": {
             "type": "string"
           }

@@ -83,6 +83,12 @@ pub struct SyncArgs {
     /// Manager URL from the vendor. Branded CLIs discover it automatically.
     #[arg(long)]
     pub manager: Option<String>,
+    /// Node architecture for the first download; later reports detect it from the cluster.
+    #[arg(long, value_parser = ["amd64", "arm64", "all"])]
+    pub site_architecture: Option<String>,
+    /// CLI host platform for the first download (independent of the cluster nodes).
+    #[arg(long, value_parser = ["linux-x86_64", "linux-aarch64", "all"])]
+    pub site_tool_platform: Option<String>,
     /// Site registry (and optional path) for the images. Needed once inside the site.
     #[arg(long)]
     pub registry: Option<String>,
@@ -133,6 +139,10 @@ struct SiteState {
     deployment_id: String,
     name: String,
     manager_url: String,
+    #[serde(default)]
+    capabilities: SiteCapabilities,
+    #[serde(default)]
+    last_bundle_architecture: Option<String>,
     /// The manager's bundle key, as the online side last saw it. The site
     /// trusts the key pinned in its install, not this one.
     #[serde(default)]
@@ -159,11 +169,35 @@ struct SiteState {
     ack_sent: i64,
 }
 
+/// Unknown and mixed-node sites retain all image architectures.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SiteCapabilities {
+    #[serde(default)]
+    node_architectures: BTreeSet<String>,
+    #[serde(default)]
+    tool_platform: Option<String>,
+    /// Exact hashes of the tool files carried back from the site, by filename.
+    #[serde(default)]
+    tool_sha256: BTreeMap<String, String>,
+}
+
+impl SiteCapabilities {
+    fn image_architecture(&self) -> Option<&str> {
+        if self.node_architectures.len() != 1 {
+            return None;
+        }
+        self.node_architectures.first().map(String::as_str)
+    }
+}
+
 /// A report file: what the site sends back.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SiteReport {
     deployment_id: String,
+    #[serde(default)]
+    capabilities: SiteCapabilities,
     written_at: String,
     installed_release: Option<String>,
     /// Signed target digest, only after this exact bundle reaches Running.
@@ -270,6 +304,16 @@ pub async fn sync_command(
             Some(super::up::resolve_manager_url_option(None, base_url, token, "kubernetes").await?);
     }
     let (folder, mut site) = open_folder(&args).await?;
+    if let Some(architecture) = &args.site_architecture {
+        site.capabilities.node_architectures = if architecture == "all" {
+            BTreeSet::new()
+        } else {
+            BTreeSet::from([architecture.clone()])
+        };
+    }
+    if let Some(platform) = &args.site_tool_platform {
+        site.capabilities.tool_platform = (platform != "all").then(|| platform.clone());
+    }
     let mut machine = load_machine(&site.deployment_id)?;
     let site_side = site_side_settings(&args, &mut machine)?;
     save_machine(&site.deployment_id, &machine)?;
@@ -894,6 +938,7 @@ async fn send_reports(
             continue;
         }
         send_report(folder, site, token, &report).await?;
+        site.capabilities = report.capabilities;
         site.site_has = report.inventory;
         site.site_release = report.installed_release.clone();
         site.site_target_hash = report.installed_target_hash.clone();
@@ -1115,6 +1160,14 @@ async fn download_update(
         .into_alien_error()
         .context(config_error("encoding the target"))?;
     let target_hash = hex::encode(Sha256::digest(&target_bytes));
+    let architecture = site.capabilities.image_architecture().map(str::to_string);
+    let selection = serde_json::to_vec(&serde_json::json!({
+        "imageArchitecture": architecture,
+        "toolPlatform": site.capabilities.tool_platform,
+    }))
+    .into_alien_error()
+    .context(config_error("encoding site architecture selection"))?;
+    let selection_hash = hex::encode(Sha256::digest(&selection));
     let pending = by_sequence(&folder.join(TO_SITE), Some(BUNDLE_EXTENSION))?;
     let mut already_carried = None;
     for (_, path) in &pending {
@@ -1131,6 +1184,10 @@ async fn download_update(
         if manifest.deployment_id == site.deployment_id
             && manifest.release_id == release_id
             && manifest.files.get(airgap::TARGET_FILE) == Some(&target_hash)
+            && (manifest.files.get("site-selection.json") == Some(&selection_hash)
+                || (!manifest.files.contains_key("site-selection.json")
+                    && architecture.is_none()
+                    && site.capabilities.tool_platform.is_none()))
             && manifest.telemetry_ack.unwrap_or_default() >= site.uploaded_through
         {
             already_carried = Some(path);
@@ -1147,7 +1204,7 @@ async fn download_update(
     }
     let installed = site.site_release.as_deref() == Some(release_id.as_str())
         && site.site_target_hash.as_deref() == Some(target_hash.as_str());
-    if installed && !new_ack {
+    if installed && !new_ack && site.last_bundle_architecture == architecture {
         if !dry_run {
             // A pending older configuration must not undo the installed target.
             for (_, path) in &pending {
@@ -1257,16 +1314,23 @@ async fn download_update(
         .iter()
         .map(|image| source_access(image, false))
         .collect();
-    let (mut exported, omitted) = airgap::export_images(&dir.join(airgap::OCI_DIR), &pulls, &skip)
-        .await
-        .map_err(|error| bundle_error(error, "copying images"))?;
+    let (mut exported, omitted) = airgap::export_images_for_architecture(
+        &dir.join(airgap::OCI_DIR),
+        &pulls,
+        &skip,
+        architecture.as_deref(),
+    )
+    .await
+    .map_err(|error| bundle_error(error, "copying images"))?;
     for (image, source) in exported.iter_mut().zip(images.iter()) {
         image.source = source.clone();
     }
 
     std::fs::write(dir.join(airgap::TARGET_FILE), &target_bytes)
         .map_err(|error| transfer_file_error(dir, error))?;
-    let tools = download_tools(dir, folder, &sources).await?;
+    std::fs::write(dir.join("site-selection.json"), selection)
+        .map_err(|error| transfer_file_error(dir, error))?;
+    let tools = download_tools(dir, folder, &sources, &site.capabilities).await?;
 
     let sequence = chrono::Utc::now().timestamp_millis() as u64;
     let manifest = BundleManifest {
@@ -1310,6 +1374,7 @@ async fn download_update(
         .map_err(|error| transfer_file_error(dir, error))?;
     site.bundle_key = signature["publicKey"].as_str().map(str::to_string);
     site.ack_sent = site.uploaded_through;
+    site.last_bundle_architecture = architecture;
 
     let file = folder
         .join(TO_SITE)
@@ -2534,18 +2599,39 @@ enum Tools {
 /// Put the `alien-deploy` builds bundle-sources lists into `<dir>/tools/`,
 /// unless the folder already carries them. A missing build doesn't hold up
 /// the update.
-async fn download_tools(dir: &Path, folder: &Path, sources: &serde_json::Value) -> Result<Tools> {
-    let downloads = sources["deployCli"].as_array().cloned().unwrap_or_default();
+async fn download_tools(
+    dir: &Path,
+    folder: &Path,
+    sources: &serde_json::Value,
+    capabilities: &SiteCapabilities,
+) -> Result<Tools> {
+    let downloads: Vec<_> = sources["deployCli"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|download| {
+            capabilities
+                .tool_platform
+                .as_deref()
+                .is_none_or(|platform| download["platform"] == platform)
+        })
+        .cloned()
+        .collect();
     if downloads.is_empty() {
         return Ok(Tools::Unavailable);
     }
     let listed = serde_json::to_vec_pretty(&downloads)
         .into_alien_error()
         .context(config_error("encoding the tool list"))?;
-    if std::fs::read(folder.join(TOOLS_DIR).join(TOOLS_SOURCES_FILE)).is_ok_and(|had| had == listed)
-    {
-        return Ok(Tools::AlreadyThere);
-    }
+    let local_hashes = tool_hashes(folder)?;
+    let previous: Vec<serde_json::Value> =
+        match std::fs::read(folder.join(TOOLS_DIR).join(TOOLS_SOURCES_FILE)) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .into_alien_error()
+                .context(config_error("decoding carried tool sources"))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(transfer_file_error(folder, error)),
+        };
     let client = http()?;
     let mut builds = Vec::new();
     for download in &downloads {
@@ -2553,6 +2639,32 @@ async fn download_tools(dir: &Path, folder: &Path, sources: &serde_json::Value) 
         else {
             continue;
         };
+        let parsed_url = url::Url::parse(url)
+            .into_alien_error()
+            .context(config_error("parsing the deploy CLI download URL"))?;
+        let name = parsed_url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .filter(|name| {
+                !name.is_empty()
+                    && name.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    })
+            })
+            .ok_or_else(|| {
+                AlienError::new(config_error("deploy CLI URL needs a binary filename"))
+            })?;
+        let name = format!("{name}-{platform}");
+        let expected = download["sha256"].as_str();
+        if expected.is_some_and(|hash| {
+            capabilities.tool_sha256.get(&name).map(String::as_str) == Some(hash)
+                || local_hashes.get(&name).map(String::as_str) == Some(hash)
+        }) || (expected.is_none()
+            && previous.contains(download)
+            && local_hashes.contains_key(&name))
+        {
+            continue;
+        }
         let response = match client.get(url).send().await {
             Ok(response) if response.status().is_success() => response,
             Ok(response) => {
@@ -2574,23 +2686,23 @@ async fn download_tools(dir: &Path, folder: &Path, sources: &serde_json::Value) 
             .context(config_error(format!(
                 "downloading alien-deploy for {platform}"
             )))?;
-        let parsed_url = url::Url::parse(url)
-            .into_alien_error()
-            .context(config_error("parsing the deploy CLI download URL"))?;
-        let name = parsed_url
-            .path_segments()
-            .and_then(|mut segments| segments.next_back())
-            .filter(|name| {
-                !name.is_empty()
-                    && name.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-                    })
-            })
-            .ok_or_else(|| {
-                AlienError::new(config_error("deploy CLI URL needs a binary filename"))
-            })?;
-        builds.push((format!("{name}-{platform}"), bytes));
+        if let Some(expected) = expected {
+            if hex::encode(Sha256::digest(&bytes)) != expected {
+                return Err(AlienError::new(config_error(format!(
+                    "downloaded tool {name} does not match its sha256"
+                ))));
+            }
+        }
+        builds.push((name, bytes));
     }
+    if builds.is_empty() {
+        return Ok(Tools::AlreadyThere);
+    }
+    let tool_bytes: usize = builds.iter().map(|(_, bytes)| bytes.len()).sum();
+    println!(
+        "Including {} tool build(s), {tool_bytes} bytes",
+        builds.len()
+    );
     std::fs::create_dir_all(dir.join(TOOLS_DIR))
         .map_err(|error| transfer_file_error(dir, error))?;
     for (name, bytes) in builds {
@@ -3562,11 +3674,82 @@ async fn write_report_for_install(
     settings: &SiteSide,
     record: &InstalledBundle,
 ) -> Result<()> {
-    if let Some(report) = collect_report(site, settings, record).await? {
+    if let Some(mut report) = collect_report(site, settings, record).await? {
+        report.capabilities = collect_capabilities(folder, settings).await?;
         remember_successful_rollout(folder, &report.state)?;
         save_report(folder, &report)?;
     }
     Ok(())
+}
+
+async fn collect_capabilities(folder: &Path, settings: &SiteSide) -> Result<SiteCapabilities> {
+    let mut command = kubectl(settings.kube_context.as_deref());
+    command.args(["get", "nodes", "-o", "json"]);
+    // Node access is optional for a namespace-scoped installer. Failure means
+    // the next transfer keeps every architecture, not a guessed host platform.
+    let node_architectures = match run(command, "reading node architectures").await {
+        Ok(bytes) => {
+            let nodes: serde_json::Value = serde_json::from_slice(&bytes)
+                .into_alien_error()
+                .context(config_error("decoding node architectures"))?;
+            node_architectures(&nodes)
+        }
+        Err(error) => {
+            eprintln!("Cannot detect node architectures; future bundles will include all architectures: {error}");
+            BTreeSet::new()
+        }
+    };
+    let tool_platform = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Some("linux-x86_64".to_string()),
+        ("linux", "aarch64") => Some("linux-aarch64".to_string()),
+        _ => None,
+    };
+    let tool_sha256 = tool_hashes(folder)?;
+    Ok(SiteCapabilities {
+        node_architectures,
+        tool_platform,
+        tool_sha256,
+    })
+}
+
+fn node_architectures(nodes: &serde_json::Value) -> BTreeSet<String> {
+    let Some(items) = nodes["items"].as_array() else {
+        return BTreeSet::new();
+    };
+    let mut architectures = BTreeSet::new();
+    for node in items {
+        let Some(architecture) = node["status"]["nodeInfo"]["architecture"].as_str() else {
+            return BTreeSet::new();
+        };
+        if node["status"]["nodeInfo"]["operatingSystem"] != "linux" {
+            return BTreeSet::new();
+        }
+        architectures.insert(architecture.to_string());
+    }
+    architectures
+}
+
+fn tool_hashes(folder: &Path) -> Result<BTreeMap<String, String>> {
+    let path = folder.join(TOOLS_DIR);
+    let entries = match std::fs::read_dir(&path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(transfer_file_error(&path, error)),
+    };
+    let mut hashes = BTreeMap::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| transfer_file_error(&path, error))?;
+        if entry.file_name() == TOOLS_SOURCES_FILE || !entry.path().is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(entry.path())
+            .map_err(|error| transfer_file_error(&entry.path(), error))?;
+        hashes.insert(
+            entry.file_name().to_string_lossy().into_owned(),
+            hex::encode(Sha256::digest(bytes)),
+        );
+    }
+    Ok(hashes)
 }
 
 async fn collect_report(
@@ -3605,6 +3788,7 @@ fn report_from_status(
         && current_release(&status).as_deref() == Some(record.release_id.as_str());
     let report = SiteReport {
         deployment_id: site.deployment_id.clone(),
+        capabilities: SiteCapabilities::default(),
         written_at: status["writtenAt"]
             .as_str()
             .ok_or_else(|| AlienError::new(config_error("the Operator status has no writtenAt")))?
@@ -6203,9 +6387,14 @@ stringData:
         let bundle = tempfile::tempdir().unwrap();
         let folder = tempfile::tempdir().unwrap();
         assert_eq!(
-            download_tools(bundle.path(), folder.path(), &sources)
-                .await
-                .unwrap(),
+            download_tools(
+                bundle.path(),
+                folder.path(),
+                &sources,
+                &SiteCapabilities::default()
+            )
+            .await
+            .unwrap(),
             Tools::Included
         );
         copy_tools(bundle.path(), folder.path()).unwrap();
@@ -6220,12 +6409,126 @@ stringData:
             0o755
         );
         assert_eq!(
-            download_tools(bundle.path(), folder.path(), &sources)
-                .await
-                .unwrap(),
+            download_tools(
+                bundle.path(),
+                folder.path(),
+                &sources,
+                &SiteCapabilities::default()
+            )
+            .await
+            .unwrap(),
             Tools::AlreadyThere
         );
         binary.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn tool_hashes_skip_url_changes_and_detect_missing_or_corrupt_files() {
+        let server = MockServer::start_async().await;
+        let bytes = b"branded executable bytes";
+        let digest = hex::encode(Sha256::digest(bytes));
+        let download = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/new-url/acmectl");
+                then.status(200).body(bytes);
+            })
+            .await;
+        let other = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/arm/acmectl");
+                then.status(200).body("ARM binary");
+            })
+            .await;
+        let sources = serde_json::json!({"deployCli": [
+            {"platform": "linux-x86_64", "url": format!("{}/new-url/acmectl", server.base_url()), "sha256": digest},
+            {"platform": "linux-aarch64", "url": format!("{}/arm/acmectl", server.base_url()), "sha256": hex::encode(Sha256::digest(b"ARM binary"))},
+        ]});
+        let folder = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        let mut capabilities = SiteCapabilities {
+            // Tool host and node architectures are deliberately different.
+            node_architectures: BTreeSet::from(["arm64".to_string()]),
+            tool_platform: Some("linux-x86_64".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            download_tools(bundle.path(), folder.path(), &sources, &capabilities)
+                .await
+                .unwrap(),
+            Tools::Included
+        );
+        copy_tools(bundle.path(), folder.path()).unwrap();
+        let executable = folder.path().join("tools/acmectl-linux-x86_64");
+        assert_eq!(std::fs::read(&executable).unwrap(), bytes);
+        other.assert_hits_async(0).await;
+        let fresh_bundle = tempfile::tempdir().unwrap();
+        let mut renamed_sources = sources.clone();
+        renamed_sources["deployCli"][0]["url"] =
+            serde_json::json!(format!("{}/third-url/acmectl", server.base_url()));
+        assert_eq!(
+            download_tools(
+                fresh_bundle.path(),
+                folder.path(),
+                &renamed_sources,
+                &capabilities
+            )
+            .await
+            .unwrap(),
+            Tools::AlreadyThere
+        );
+        assert!(!fresh_bundle.path().join(TOOLS_DIR).exists());
+        download.assert_hits_async(1).await;
+        std::fs::write(&executable, b"corrupt").unwrap();
+        assert_eq!(
+            download_tools(fresh_bundle.path(), folder.path(), &sources, &capabilities)
+                .await
+                .unwrap(),
+            Tools::Included
+        );
+        download.assert_hits_async(2).await;
+        std::fs::remove_file(&executable).unwrap();
+        assert_eq!(
+            download_tools(fresh_bundle.path(), folder.path(), &sources, &capabilities)
+                .await
+                .unwrap(),
+            Tools::Included
+        );
+        download.assert_hits_async(3).await;
+        capabilities
+            .tool_sha256
+            .insert("acmectl-linux-x86_64".into(), digest);
+        assert_eq!(
+            download_tools(
+                fresh_bundle.path(),
+                folder.path(),
+                &renamed_sources,
+                &capabilities
+            )
+            .await
+            .unwrap(),
+            Tools::AlreadyThere
+        );
+        other.assert_hits_async(0).await;
+    }
+
+    #[test]
+    fn node_reports_keep_all_architectures_for_mixed_or_unknown_nodes() {
+        let nodes = |architectures: &[&str]| serde_json::json!({"items": architectures.iter().map(|architecture| serde_json::json!({"status": {"nodeInfo": {"architecture": architecture, "operatingSystem": "linux"}}})).collect::<Vec<_>>()});
+        let uniform = SiteCapabilities {
+            node_architectures: node_architectures(&nodes(&["amd64", "amd64"])),
+            ..Default::default()
+        };
+        assert_eq!(uniform.image_architecture(), Some("amd64"));
+        let mixed = SiteCapabilities {
+            node_architectures: node_architectures(&nodes(&["amd64", "arm64"])),
+            ..Default::default()
+        };
+        assert_eq!(mixed.image_architecture(), None);
+        let mut incomplete = nodes(&["amd64", "arm64"]);
+        incomplete["items"][1]["status"]["nodeInfo"] = serde_json::Value::Null;
+        assert!(node_architectures(&incomplete).is_empty());
+        assert!(node_architectures(&nodes(&[])).is_empty());
+        assert_eq!(SiteCapabilities::default().image_architecture(), None);
     }
 
     #[cfg(unix)]
@@ -6245,9 +6548,14 @@ stringData:
             "platform": "linux-x86_64", "url": format!("{}/acmectl", server.base_url())
         }]});
         assert_eq!(
-            download_tools(bundle.path(), folder.path(), &sources)
-                .await
-                .unwrap(),
+            download_tools(
+                bundle.path(),
+                folder.path(),
+                &sources,
+                &SiteCapabilities::default()
+            )
+            .await
+            .unwrap(),
             Tools::Included
         );
         let manifest = BundleManifest {
@@ -6336,6 +6644,7 @@ stringData:
         std::fs::create_dir_all(dir.path().join(FROM_SITE)).unwrap();
         let report = SiteReport {
             deployment_id: "dep_1".to_string(),
+            capabilities: SiteCapabilities::default(),
             written_at: "2026-01-01T00:00:00Z".to_string(),
             installed_release: Some("rel_old".to_string()),
             installed_target_hash: None,
