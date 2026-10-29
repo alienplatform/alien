@@ -165,6 +165,10 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
         "sns:untagresource",
         "aoss:tagresource",
         "aoss:untagresource",
+        "secretsmanager:tagresource",
+        "secretsmanager:untagresource",
+        "elasticloadbalancing:addtags",
+        "elasticloadbalancing:removetags",
         "events:tagresource",
         "events:untagresource",
         "rds:addtagstoresource",
@@ -224,11 +228,26 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
                     })
                 });
+                // CreateAction is supplied by ELB only during resource creation.
+                // Request tags alone must never authorize standalone AddTags.
+                let elb_creation = entry.grant.actions.as_ref().is_some_and(|actions| {
+                    actions.len() == 1 && actions[0] == "elasticloadbalancing:AddTags"
+                }) && binding
+                    .condition
+                    .as_ref()
+                    .and_then(|c| c.get("StringLike"))
+                    .and_then(|c| c.get("elasticloadbalancing:CreateAction"))
+                    .is_some_and(|action| action == "Create*")
+                    && equals
+                        .and_then(|c| c.get("aws:RequestTag/${stackTag}"))
+                        .is_some_and(|value| value == "${stackPrefix}");
                 let named_prefix = binding.not_resources.is_empty()
                     && !binding.resources.is_empty()
                     && binding.resources.iter().all(|arn| {
                         [
                             "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-",
+                            "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-",
+                            "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-",
                             "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-",
                             "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-",
                             "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-",
@@ -276,7 +295,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     && binding.not_resources.is_empty()
                     && binding.resources == ["arn:aws:apigateway:${awsRegion}::/tags/*"];
                 assert!(owned || (creation && !other_tag_actions) || named_prefix || lambda_creation
-                    || gateway_creation || gateway_tag_path,
+                    || elb_creation || gateway_creation || gateway_tag_path,
                     "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
             }
         }
