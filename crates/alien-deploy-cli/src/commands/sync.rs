@@ -1510,13 +1510,36 @@ struct DeletionObject {
     volume: Option<DeletionVolume>,
 }
 
+// Helm uninstall bypasses resource controllers. Use the installed vault outputs,
+// not a name prefix, to include their data in the UID-checked erase inventory.
+fn owned_vault_prefixes(state: &serde_json::Value, namespace: &str) -> BTreeSet<String> {
+    let Some(resources) = state
+        .pointer("/stackState/resources")
+        .and_then(|v| v.as_object())
+    else {
+        return BTreeSet::new();
+    };
+    resources
+        .values()
+        .filter_map(|resource| {
+            if resource["type"] != "vault" || resource["lifecycle"] == "frozen" {
+                return None;
+            }
+            let vault = resource["outputs"]["vaultId"].as_str()?;
+            let (vault_namespace, prefix) =
+                vault.strip_prefix("kubernetes-secret:")?.split_once(':')?;
+            (vault_namespace == namespace && !prefix.is_empty()).then(|| prefix.to_string())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 async fn deletion_inventory(
     settings: &SiteSide,
     stack_id: &str,
     namespace: &str,
 ) -> Result<DeletionInventory> {
-    deletion_inventory_with_previous(settings, stack_id, namespace, None).await
+    deletion_inventory_with_previous(settings, stack_id, namespace, None, &BTreeSet::new()).await
 }
 
 async fn deletion_inventory_with_previous(
@@ -1524,6 +1547,7 @@ async fn deletion_inventory_with_previous(
     stack_id: &str,
     namespace: &str,
     previous: Option<&DeletionInventory>,
+    vault_prefixes: &BTreeSet<String>,
 ) -> Result<DeletionInventory> {
     let mut command = Command::new("helm");
     command.args(["get", "manifest", stack_id, "--namespace", namespace]);
@@ -1636,7 +1660,12 @@ async fn deletion_inventory_with_previous(
                     !ordinal.is_empty() && ordinal.bytes().all(|b| b.is_ascii_digit())
                 })
             });
-        if helm_owned || runtime_owned(object) || runtime_claim {
+        let vault_owned = resource == "secrets"
+            && object["metadata"]["labels"]["managed-by"] == "operator"
+            && object["metadata"]["labels"]["vault-prefix"]
+                .as_str()
+                .is_some_and(|prefix| vault_prefixes.contains(prefix));
+        if helm_owned || runtime_owned(object) || runtime_claim || vault_owned {
             let uid = object["metadata"]["uid"]
                 .as_str()
                 .ok_or_else(|| AlienError::new(config_error("data object has no UID")))?;
@@ -2238,6 +2267,7 @@ async fn uninstall_site(
             wait_for_deleted_pods(settings, &namespace, &selector).await?;
         }
     }
+    let vault_prefixes = owned_vault_prefixes(&report.state, &namespace);
     // This receipt stays on the site machine, outside the carried folder.
     // It survives Helm removal and never authorizes deletion of a replacement UID.
     if values.is_some() {
@@ -2249,6 +2279,7 @@ async fn uninstall_site(
                 &manifest.stack_id,
                 &namespace,
                 machine.deletion_inventory.as_ref(),
+                &vault_prefixes,
             )
             .await?,
         );
@@ -2267,6 +2298,7 @@ async fn uninstall_site(
                 &manifest.stack_id,
                 &namespace,
                 machine.deletion_inventory.as_ref(),
+                &vault_prefixes,
             )
             .await?,
         );
@@ -5161,6 +5193,23 @@ metadata:
         let mut original: SiteReport =
             serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
         original.deployment_id = site.deployment_id.clone();
+        let mut vault = alien_core::StackResourceState::new_pending(
+            "vault".into(),
+            alien_core::Resource::new(alien_core::Vault::new("vault".into()).build()),
+            Some(alien_core::ResourceLifecycle::Live),
+            Vec::new(),
+        );
+        vault.outputs = Some(alien_core::ResourceOutputs::new(alien_core::VaultOutputs {
+            vault_id: format!("kubernetes-secret:{namespace}:app-vault"),
+        }));
+        let mut frozen = vault.clone();
+        frozen.lifecycle = Some(alien_core::ResourceLifecycle::Frozen);
+        frozen.outputs = Some(alien_core::ResourceOutputs::new(alien_core::VaultOutputs {
+            vault_id: format!("kubernetes-secret:{namespace}:external-vault"),
+        }));
+        original.state["stackState"] = serde_json::json!({"resources": {
+            "vault": vault, "frozen": frozen,
+        }});
         std::fs::write(&snapshot, serde_json::to_vec(&original).unwrap()).unwrap();
         let settings = SiteSide {
             registry: "registry.example.com/site".into(),
@@ -5254,6 +5303,28 @@ stringData:
         // Container claim templates have names but no ownership labels.
         let workloads = tempfile::NamedTempFile::new().unwrap();
         let mut objects = Vec::new();
+        for (name, labels) in [
+            (
+                "vault-entry",
+                serde_json::json!({"managed-by":"operator", "vault-prefix":"app-vault"}),
+            ),
+            ("site-entry", serde_json::json!({})),
+            (
+                "other-vault-entry",
+                serde_json::json!({"managed-by":"operator", "vault-prefix":"other-vault"}),
+            ),
+            (
+                "frozen-vault-entry",
+                serde_json::json!({"managed-by":"operator", "vault-prefix":"external-vault"}),
+            ),
+            (
+                "site-labelled-entry",
+                serde_json::json!({"vault-prefix":"app-vault"}),
+            ),
+        ] {
+            objects.push(serde_json::json!({"apiVersion":"v1", "kind":"Secret",
+                "metadata":{"name":name,"labels":labels}, "stringData":{"value":"fixture"}}));
+        }
         for (name, labels) in [
             (
                 "app-data",
@@ -5547,6 +5618,20 @@ stringData:
                     original_claim["spec"]["volumeName"]
                 );
             }
+        }
+        for name in [
+            "vault-entry",
+            "site-entry",
+            "other-vault-entry",
+            "frozen-vault-entry",
+            "site-labelled-entry",
+        ] {
+            let exists = remaining.iter().any(|v| v["metadata"]["name"] == name);
+            assert_eq!(
+                exists,
+                name != "vault-entry" || policy == "retain",
+                "unexpected retention of {name} under {policy}"
+            );
         }
         let saved = load_machine(&site.deployment_id)
             .unwrap()
