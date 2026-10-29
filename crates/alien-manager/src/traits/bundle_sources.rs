@@ -35,6 +35,9 @@ pub struct ToolDownload {
     /// `<os>-<arch>`, e.g. `linux-x86_64`.
     pub platform: String,
     pub url: String,
+    /// SHA-256 of the exact downloaded bytes, when supplied by the publisher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 /// `alien-deploy` builds for Linux sites from a releases server, the version
@@ -45,6 +48,7 @@ pub fn deploy_cli_downloads(releases_url: &str) -> Vec<ToolDownload> {
         .into_iter()
         .map(|arch| ToolDownload {
             platform: format!("linux-{arch}"),
+            sha256: None,
             url: format!(
                 "{}/alien-deploy/v{version}/linux-{arch}/alien-deploy",
                 releases_url.trim_end_matches('/')
