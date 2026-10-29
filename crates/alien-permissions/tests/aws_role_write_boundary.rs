@@ -50,7 +50,7 @@ fn render(bounded: bool) -> Vec<AwsIamStatement> {
 }
 
 #[test]
-fn role_writes_require_our_boundary_but_reads_tags_and_deletion_do_not() {
+fn role_writes_require_our_boundary_and_ownership() {
     let policies = render(true);
     for action in WRITES {
         // Not every writer needs every operation, but none may allow it unbounded.
@@ -79,18 +79,16 @@ fn role_writes_require_our_boundary_but_reads_tags_and_deletion_do_not() {
         assert_eq!(
             evaluate(
                 &policies,
-                &Request::new(action, ROLE).with("iam:PermissionsBoundary", BOUNDARY)
+                &Request::new(action, ROLE)
+                    .with("iam:PermissionsBoundary", BOUNDARY)
+                    .resource_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
+                    .request_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
             ),
             Decision::Allowed,
             "{action}"
         );
     }
-    for action in [
-        "iam:GetRole",
-        "iam:ListAttachedRolePolicies",
-        "iam:TagRole",
-        "iam:DeleteRole",
-    ] {
+    for action in ["iam:GetRole", "iam:ListAttachedRolePolicies"] {
         assert_eq!(
             evaluate(&policies, &Request::new(action, ROLE)),
             Decision::Allowed,
@@ -108,7 +106,10 @@ fn role_writes_require_our_boundary_but_reads_tags_and_deletion_do_not() {
             assert_eq!(
                 evaluate(
                     &policies,
-                    &Request::new(action, resource).with("iam:PermissionsBoundary", BOUNDARY)
+                    &Request::new(action, resource)
+                        .with("iam:PermissionsBoundary", BOUNDARY)
+                        .resource_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
+                        .request_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
                 ),
                 Decision::NotAllowed,
                 "{action}"
@@ -138,13 +139,15 @@ fn legacy_setup_keeps_role_writes_without_granting_boundary_adoption() {
             &policies,
             &Request::new("iam:PutRolePermissionsBoundary", ROLE)
                 .with("iam:PermissionsBoundary", BOUNDARY)
+                .resource_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
+                .request_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
         ),
         Decision::NotAllowed
     );
 }
 
 #[test]
-fn catalog_management_role_writes_are_conditioned_except_exact_obsolete_policy_removal() {
+fn catalog_management_role_writes_require_boundary_and_ownership() {
     let context = common::create_test_context().with_aws_permissions_boundary_arn(BOUNDARY);
     let generator = AwsRuntimePermissionsGenerator::new();
     for id in list_permission_set_ids() {
@@ -201,45 +204,50 @@ fn catalog_management_role_writes_are_conditioned_except_exact_obsolete_policy_r
                         !wildcard_match(action, "iam:DeleteRolePermissionsBoundary"),
                         "{id}"
                     );
+                    if ["iam:TagRole", "iam:UntagRole", "iam:DeleteRole"]
+                        .iter()
+                        .any(|write| wildcard_match(action, write))
+                    {
+                        let conditions = &statement.condition.as_ref().unwrap()["StringEquals"];
+                        assert_eq!(
+                            conditions["aws:ResourceTag/managed-by"].as_string(),
+                            Some("runtime"),
+                            "{id}: {action}"
+                        );
+                        assert_eq!(
+                            conditions["aws:ResourceTag/deployment"].as_string(),
+                            Some("my-stack"),
+                            "{id}: {action}"
+                        );
+                        assert!(
+                            !conditions.contains_key("iam:PermissionsBoundary"),
+                            "unsupported key for {action}"
+                        );
+                    }
                     if !WRITES.iter().any(|write| wildcard_match(action, write)) {
                         continue;
                     }
-                    if id == "container/provision" && action == "iam:DetachRolePolicy" {
-                        assert_eq!(statement.action, ["iam:DetachRolePolicy"]);
-                        assert_eq!(
-                            statement.resource,
-                            ["arn:aws:iam::123456789012:role/my-stack-dlm-*"]
-                        );
-                        assert_eq!(
-                            json!(statement.condition),
-                            json!({"StringEquals": {"iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"}})
-                        );
-                    } else if id == "compute-cluster/provision" && action == "iam:DetachRolePolicy"
-                    {
-                        assert_eq!(statement.action, ["iam:DetachRolePolicy"]);
-                        let policy =
-                            &statement.condition.as_ref().unwrap()["StringEquals"]["iam:PolicyARN"];
-                        assert!([
-                            "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-                            "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
-                        ]
-                        .contains(&policy.as_string().unwrap()));
-                        assert_eq!(
-                            json!(statement.condition),
-                            json!({"StringEquals": {"iam:PolicyARN": policy}})
-                        );
+                    let conditions = &statement.condition.as_ref().unwrap()["StringEquals"];
+                    assert_eq!(
+                        conditions["iam:PermissionsBoundary"].as_string(),
+                        Some(BOUNDARY),
+                        "{id}: {action}"
+                    );
+                    let tag_source = if action == "iam:CreateRole" {
+                        "aws:RequestTag"
                     } else {
-                        assert_eq!(
-                            statement
-                                .condition
-                                .as_ref()
-                                .and_then(|c| c.get("StringEquals"))
-                                .and_then(|v| v.get("iam:PermissionsBoundary"))
-                                .and_then(|value| value.as_string()),
-                            Some(BOUNDARY),
-                            "{id}: {action}"
-                        );
-                    }
+                        "aws:ResourceTag"
+                    };
+                    assert_eq!(
+                        conditions[&format!("{tag_source}/managed-by")].as_string(),
+                        Some("runtime"),
+                        "{id}: {action}"
+                    );
+                    assert_eq!(
+                        conditions[&format!("{tag_source}/deployment")].as_string(),
+                        Some("my-stack"),
+                        "{id}: {action}"
+                    );
                 }
             }
         }
@@ -315,7 +323,10 @@ fn explicit_custom_boundary_conditions_are_not_removed_for_legacy_setups() {
     assert_eq!(
         evaluate(
             &policy.statement,
-            &Request::new("iam:CreateRole", ROLE).with("iam:PermissionsBoundary", BOUNDARY)
+            &Request::new("iam:CreateRole", ROLE)
+                .with("iam:PermissionsBoundary", BOUNDARY)
+                .resource_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
+                .request_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
         ),
         Decision::Allowed
     );

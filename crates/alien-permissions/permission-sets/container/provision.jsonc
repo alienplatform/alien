@@ -552,56 +552,6 @@
         }
       },
       {
-        "label": "bounded-volume-backup-role-writes",
-        "grant": {
-          "actions": [
-            "iam:CreateRole",
-            "iam:PutRolePolicy",
-            "iam:DeleteRolePolicy",
-            "iam:UpdateAssumeRolePolicy",
-            "iam:PutRolePermissionsBoundary"
-          ]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"],
-            "condition": {
-              "StringEquals": {
-                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
-              }
-            }
-          },
-          "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"],
-            "condition": {
-              "StringEquals": {
-                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
-              }
-            }
-          }
-        }
-      },
-      {
-        "label": "bounded-volume-backup-role-lifecycle",
-        "grant": {
-          "actions": [
-            "iam:GetRolePolicy",
-            "iam:ListRolePolicies",
-            "iam:ListAttachedRolePolicies",
-            "iam:TagRole",
-            "iam:DeleteRole"
-          ]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"]
-          },
-          "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"]
-          }
-        }
-      },
-      {
         "label": "deny-volume-backup-role-changes",
         "effect": "Deny",
         "grant": {
@@ -655,7 +605,7 @@
       },
       {
         "grant": {
-          "actions": ["iam:GetRole", "iam:DeleteRole"]
+          "actions": ["iam:GetRole"]
         },
         "binding": {
           "stack": {
@@ -665,6 +615,46 @@
             "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"]
           }
         }
+      },
+      {
+        "grant": {
+          "actions": ["iam:DeleteRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"]
+          }
+        },
+        "label": "legacy-role-24"
+      },
+      {
+        "grant": {
+          "actions": ["iam:DeleteRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-delete-24"
       },
       {
         "grant": {
@@ -687,7 +677,38 @@
               }
             }
           }
-        }
+        },
+        "label": "legacy-role-25"
+      },
+      {
+        "grant": {
+          "actions": ["iam:DetachRolePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole",
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole",
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-write-25"
       },
       {
         // AWS requires Resource: "*" for these read APIs.

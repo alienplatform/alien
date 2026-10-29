@@ -117,97 +117,42 @@ fn management_cannot_make_or_rewrite_a_role_dlm_runs_as() {
 }
 
 #[test]
-fn bounded_backup_role_lifecycle_requires_the_stack_boundary() {
+fn bounded_container_grants_do_not_write_setup_backup_roles() {
     let boundary = format!("arn:aws:iam::{ACCOUNT}:policy/{PREFIX}-permissions-boundary");
-    let context = context().with_aws_permissions_boundary_arn(&boundary);
-    let set = get_permission_set("container/provision").unwrap();
+    let context = legacy_context().with_aws_permissions_boundary_arn(&boundary);
     for target in [BindingTarget::Stack, BindingTarget::Resource] {
-        let context = context
-            .clone()
-            .with_resource_name("db")
-            .with_resource_id("db");
+        let set = get_permission_set("container/provision").unwrap();
         let runtime = AwsRuntimePermissionsGenerator::new()
             .generate_policy(set, target, &context)
             .unwrap();
         let cfn = AwsCloudFormationPermissionsGenerator::new()
             .generate_policy(set, target, &context)
             .unwrap();
-        // Both generators must select the same statements before CFN substitution.
         assert_eq!(
             runtime.statement.iter().map(|s| &s.sid).collect::<Vec<_>>(),
             cfn.statement.iter().map(|s| &s.sid).collect::<Vec<_>>()
         );
-        let role = role_arn("app-volume-backups-compute");
-        for action in [
-            "iam:CreateRole",
-            "iam:PutRolePolicy",
-            "iam:DeleteRolePolicy",
-            "iam:UpdateAssumeRolePolicy",
-            "iam:PutRolePermissionsBoundary",
-        ] {
-            for supplied in [None, Some("foreign-boundary"), Some(boundary.as_str())] {
-                let mut request = Request::new(action, role.clone());
-                if let Some(value) = supplied {
-                    request = request.with("iam:PermissionsBoundary", value);
-                }
+        for owner in ["setup", "runtime"] {
+            for action in [
+                "iam:CreateRole",
+                "iam:PutRolePolicy",
+                "iam:DeleteRolePolicy",
+                "iam:UpdateAssumeRolePolicy",
+                "iam:PutRolePermissionsBoundary",
+                "iam:TagRole",
+                "iam:DeleteRole",
+            ] {
+                let request = Request::new(action, role_arn("app-volume-backups-compute"))
+                    .with("iam:PermissionsBoundary", &boundary)
+                    .resource_tags(&[("managed-by", owner), ("deployment", PREFIX)])
+                    .request_tags(&[("managed-by", owner), ("deployment", PREFIX)]);
                 assert_eq!(
                     evaluate(&runtime.statement, &request),
-                    if supplied == Some(boundary.as_str()) {
-                        Decision::Allowed
-                    } else {
-                        Decision::NotAllowed
-                    },
-                    "{action} with {supplied:?}"
+                    Decision::NotAllowed,
+                    "{owner}: {action}"
                 );
             }
-            let foreign = Request::new(action, role_arn("other-volume-backups-compute"))
-                .with("iam:PermissionsBoundary", &boundary);
-            assert_eq!(evaluate(&runtime.statement, &foreign), Decision::NotAllowed);
         }
-        for action in [
-            "iam:GetRole",
-            "iam:GetRolePolicy",
-            "iam:ListRolePolicies",
-            "iam:ListAttachedRolePolicies",
-            "iam:TagRole",
-            "iam:DeleteRole",
-        ] {
-            assert_eq!(
-                evaluate(&runtime.statement, &Request::new(action, role.clone())),
-                Decision::Allowed,
-                "{action} must not require an unsupported boundary key"
-            );
-        }
-        for action in ["iam:DeleteRolePermissionsBoundary", "iam:AttachRolePolicy"] {
-            assert_eq!(
-                evaluate(
-                    &runtime.statement,
-                    &Request::new(action, role.clone()).with("iam:PermissionsBoundary", &boundary)
-                ),
-                Decision::NotAllowed
-            );
-        }
-        let legacy = AwsCloudFormationPermissionsGenerator::new()
-            .generate_policy(set, target, &legacy_context())
-            .unwrap();
-        let legacy_runtime = AwsRuntimePermissionsGenerator::new()
-            .generate_policy(set, target, &legacy_context())
-            .unwrap();
-        assert_eq!(
-            legacy.statement.iter().map(|s| &s.sid).collect::<Vec<_>>(),
-            legacy_runtime
-                .statement
-                .iter()
-                .map(|s| &s.sid)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            evaluate(
-                &legacy_runtime.statement,
-                &Request::new("iam:PutRolePolicy", role).with("iam:PermissionsBoundary", &boundary)
-            ),
-            Decision::ExplicitlyDenied
-        );
     }
 }
 

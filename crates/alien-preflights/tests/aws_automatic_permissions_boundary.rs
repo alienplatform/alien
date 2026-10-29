@@ -130,38 +130,13 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
             );
             for write in WRITES.iter().filter(|write| matches_action(write)) {
                 observed_writes.insert(*write);
-                if statement.action == ["iam:DetachRolePolicy"]
-                    && statement.resource == ["arn:aws:iam::123456789012:role/sample-dlm-*"]
-                {
-                    assert_eq!(
-                        json!(statement.condition),
-                        json!({"StringEquals": {"iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"}})
-                    );
-                    continue;
-                }
-                if statement.action == ["iam:DetachRolePolicy"]
-                    && statement.resource == ["arn:aws:iam::123456789012:role/sample-*-role"]
-                {
-                    let policy =
-                        &statement.condition.as_ref().unwrap()["StringEquals"]["iam:PolicyARN"];
-                    assert!([
-                        "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-                        "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
-                    ]
-                    .contains(&policy.as_str()));
-                    assert_eq!(
-                        json!(statement.condition),
-                        json!({"StringEquals": {"iam:PolicyARN": policy}})
-                    );
-                    continue;
-                }
                 assert_eq!(
                     statement
                         .condition
                         .as_ref()
                         .and_then(|c| c.get("StringEquals"))
                         .and_then(|c| c.get("iam:PermissionsBoundary"))
-                        .map(String::as_str),
+                        .and_then(|value| value.as_string()),
                     Some(BOUNDARY),
                     "{statement:?}"
                 );
@@ -197,32 +172,34 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
     );
     for action in WRITES {
         for boundary in [None, Some("arn:aws:iam::123456789012:policy/other")] {
-            let mut request = Request::new(action, ROLE);
+            let mut request = Request::new(action, ROLE)
+                .resource_tags(&[("managed-by", "runtime"), ("deployment", "sample")])
+                .request_tags(&[("managed-by", "runtime"), ("deployment", "sample")]);
             if let Some(boundary) = boundary {
                 request = request.with("iam:PermissionsBoundary", boundary);
             }
             assert_ne!(evaluate(&bounded, &request), Decision::Allowed, "{action}");
         }
     }
-    // Cleanup must work before boundary adoption without permitting reattachment or
-    // removal of arbitrary policies from an unbounded role.
+    // Obsolete-policy cleanup also requires runtime ownership and the boundary.
     for policy in [
         "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
         "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
         "arn:aws:iam::aws:policy/AdministratorAccess",
     ] {
         for action in ["iam:DetachRolePolicy", "iam:AttachRolePolicy"] {
-            let expected =
-                if action == "iam:DetachRolePolicy" && !policy.ends_with("/AdministratorAccess") {
-                    Decision::Allowed
-                } else {
-                    Decision::NotAllowed
-                };
+            let expected = if action == "iam:DetachRolePolicy" {
+                Decision::Allowed
+            } else {
+                Decision::NotAllowed
+            };
             assert_eq!(
                 evaluate(
                     &bounded,
                     &Request::new(action, "arn:aws:iam::123456789012:role/sample-compute-role")
                         .with("iam:PolicyARN", policy)
+                        .with("iam:PermissionsBoundary", BOUNDARY)
+                        .resource_tags(&[("managed-by", "runtime"), ("deployment", "sample")])
                 ),
                 expected,
                 "{action}: {policy}"
@@ -230,7 +207,7 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
         }
     }
     let legacy = compile(&stack, false);
-    assert_backup_role_handoff(&bounded, &legacy);
+    assert_role_ownership_matrix(&bounded);
     for action in [
         "iam:CreateRole",
         "iam:PutRolePolicy",
@@ -239,7 +216,10 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
         assert_eq!(
             evaluate(
                 &bounded,
-                &Request::new(action, ROLE).with("iam:PermissionsBoundary", BOUNDARY)
+                &Request::new(action, ROLE)
+                    .with("iam:PermissionsBoundary", BOUNDARY)
+                    .resource_tags(&[("managed-by", "runtime"), ("deployment", "sample")])
+                    .request_tags(&[("managed-by", "runtime"), ("deployment", "sample")])
             ),
             Decision::Allowed,
             "{action}"
@@ -260,79 +240,91 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
     );
 }
 
-fn assert_backup_role_handoff(bounded: &[AwsIamStatement], legacy: &[AwsIamStatement]) {
-    let role = "arn:aws:iam::123456789012:role/sample-volume-backups-compute";
-    for action in [
-        "iam:CreateRole",
-        "iam:PutRolePolicy",
-        "iam:DeleteRolePolicy",
-        "iam:UpdateAssumeRolePolicy",
-        "iam:PutRolePermissionsBoundary",
+fn assert_role_ownership_matrix(policy: &[AwsIamStatement]) {
+    for role in [
+        ROLE,
+        "arn:aws:iam::123456789012:role/sample-volume-backups-compute",
+        "arn:aws:iam::123456789012:role/sample-compute-role",
+        "arn:aws:iam::123456789012:role/sample-dlm-old",
     ] {
-        for boundary in [None, Some("foreign-boundary"), Some(BOUNDARY)] {
-            let mut request = Request::new(action, role);
-            if let Some(boundary) = boundary {
-                request = request.with("iam:PermissionsBoundary", boundary);
+        for owner in [None, Some("runtime"), Some("setup")] {
+            for deployment in [None, Some("sample"), Some("foreign")] {
+                for boundary in [None, Some(BOUNDARY), Some("foreign-boundary")] {
+                    for action in [
+                        "iam:PutRolePolicy",
+                        "iam:DeleteRolePolicy",
+                        "iam:UpdateAssumeRolePolicy",
+                        "iam:PutRolePermissionsBoundary",
+                        "iam:DetachRolePolicy",
+                        "iam:DeleteRole",
+                        "iam:TagRole",
+                    ] {
+                        let mut request = Request::new(action, role).request_tags(&[
+                            ("managed-by", "runtime"),
+                            ("deployment", "sample"),
+                            ("resource", "jobs"),
+                            ("resource-type", "worker"),
+                            ("Name", "jobs"),
+                        ]);
+                        if let Some(owner) = owner {
+                            request = request.with("aws:ResourceTag/managed-by", owner);
+                        }
+                        if let Some(deployment) = deployment {
+                            request = request.with("aws:ResourceTag/deployment", deployment);
+                        }
+                        if let Some(boundary) = boundary {
+                            request = request.with("iam:PermissionsBoundary", boundary);
+                        }
+                        let owned = owner == Some("runtime") && deployment == Some("sample");
+                        let needs_boundary = !matches!(action, "iam:TagRole" | "iam:DeleteRole");
+                        assert_eq!(evaluate(policy, &request) == Decision::Allowed, owned && (!needs_boundary || boundary == Some(BOUNDARY)), "{role} {action} owner={owner:?} deployment={deployment:?} boundary={boundary:?}");
+                    }
+                }
             }
-            assert_eq!(
-                evaluate(bounded, &request),
-                if boundary == Some(BOUNDARY) {
-                    Decision::Allowed
-                } else {
-                    Decision::NotAllowed
-                },
-                "backup role {action} with {boundary:?}"
-            );
         }
-        let foreign = Request::new(
-            action,
-            "arn:aws:iam::123456789012:role/other-volume-backups-compute",
-        )
-        .with("iam:PermissionsBoundary", BOUNDARY);
-        assert_ne!(evaluate(bounded, &foreign), Decision::Allowed, "{action}");
-    }
-    for action in [
-        "iam:GetRole",
-        "iam:GetRolePolicy",
-        "iam:ListRolePolicies",
-        "iam:ListAttachedRolePolicies",
-        "iam:TagRole",
-        "iam:DeleteRole",
-    ] {
-        assert_eq!(
-            evaluate(bounded, &Request::new(action, role)),
-            Decision::Allowed,
-            "backup role lifecycle: {action}"
-        );
-    }
-    for action in ["iam:AttachRolePolicy", "iam:DeleteRolePermissionsBoundary"] {
-        assert_ne!(
-            evaluate(
-                bounded,
-                &Request::new(action, role).with("iam:PermissionsBoundary", BOUNDARY)
-            ),
-            Decision::Allowed,
-            "backup role must not allow {action}"
-        );
-    }
-    // The legacy setup-owned role stays protected even when another provision set
-    // grants prefix-wide role writes, and even if the caller supplies a boundary.
-    for action in [
-        "iam:PutRolePolicy",
-        "iam:DeleteRolePolicy",
-        "iam:UpdateAssumeRolePolicy",
-        "iam:PutRolePermissionsBoundary",
-        "iam:TagRole",
-        "iam:DeleteRole",
-    ] {
-        assert_eq!(
-            evaluate(
-                legacy,
-                &Request::new(action, role).with("iam:PermissionsBoundary", BOUNDARY)
-            ),
-            Decision::ExplicitlyDenied,
-            "legacy backup role: {action}"
-        );
+        for action in ["iam:CreateRole", "iam:TagRole"] {
+            for owner in [None, Some("runtime"), Some("setup")] {
+                for deployment in [None, Some("sample"), Some("foreign")] {
+                    for owner_key in ["managed-by", "Managed-By"] {
+                        for deployment_key in ["deployment", "Deployment"] {
+                            let mut tags = vec![("resource", "jobs")];
+                            if let Some(owner) = owner {
+                                tags.push((owner_key, owner));
+                            }
+                            if let Some(deployment) = deployment {
+                                tags.push((deployment_key, deployment));
+                            }
+                            let request = Request::new(action, role)
+                                .with("iam:PermissionsBoundary", BOUNDARY)
+                                .resource_tags(&[
+                                    ("managed-by", "runtime"),
+                                    ("deployment", "sample"),
+                                ])
+                                .request_tags(&tags);
+                            assert_eq!(
+                                evaluate(policy, &request) == Decision::Allowed,
+                                owner == Some("runtime")
+                                    && deployment == Some("sample")
+                                    && owner_key == "managed-by"
+                                    && deployment_key == "deployment",
+                                "{role} {action}: {tags:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // No catalog grant currently needs tag removal; ownership cannot be removed.
+        for keys in [
+            vec!["managed-by"],
+            vec!["deployment"],
+            vec!["resource", "Managed-By"],
+        ] {
+            let request = Request::new("iam:UntagRole", role)
+                .resource_tags(&[("managed-by", "runtime"), ("deployment", "sample")])
+                .with_values("aws:TagKeys", &keys);
+            assert_ne!(evaluate(policy, &request), Decision::Allowed);
+        }
     }
 }
 

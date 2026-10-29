@@ -120,7 +120,13 @@ fn node_cleanup_only_detaches_the_two_obsolete_policies_within_its_scope() {
                     assert_eq!(
                         evaluate(
                             &policy.statement,
-                            &Request::new(action, &role).with("iam:PolicyARN", managed_policy)
+                            &Request::new(action, &role)
+                                .with("iam:PolicyARN", managed_policy)
+                                .with("iam:PermissionsBoundary", BOUNDARY)
+                                .resource_tags(&[
+                                    ("managed-by", "runtime"),
+                                    ("deployment", "my-stack")
+                                ])
                         ),
                         expected,
                         "{action}: {role}: {managed_policy}"

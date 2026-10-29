@@ -320,20 +320,25 @@ fn render_boundary(
     Ok(policy)
 }
 
-/// Backup roles remain setup-owned until setup installs a boundary.
+/// Select legacy or bounded role grants using the installed setup boundary.
 pub(super) fn include_role_statement(
     permission_set: &PermissionSet,
     label: Option<&str>,
     context: &PermissionContext,
 ) -> bool {
+    if let Some(label) = label {
+        if label.starts_with("bounded-role-") {
+            return context.aws_permissions_boundary_arn.is_some();
+        }
+        if label.starts_with("legacy-role-") {
+            return context.aws_permissions_boundary_arn.is_none();
+        }
+    }
     if permission_set.id != "container/provision" {
         return true;
     }
     match label {
         Some("deny-volume-backup-role-changes") => context.aws_permissions_boundary_arn.is_none(),
-        Some("bounded-volume-backup-role-writes" | "bounded-volume-backup-role-lifecycle") => {
-            context.aws_permissions_boundary_arn.is_some()
-        }
         _ => true,
     }
 }

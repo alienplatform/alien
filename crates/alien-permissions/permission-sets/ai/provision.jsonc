@@ -4,9 +4,12 @@
   "platforms": {
     "aws": [
       {
-        // Provisioning attaches the Bedrock invoke policy to the workload role.
         "grant": {
-          "actions": ["iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary"]
+          "actions": [
+            "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:PutRolePermissionsBoundary"
+          ]
         },
         "binding": {
           "stack": {
@@ -25,7 +28,40 @@
               }
             }
           }
-        }
+        },
+        "label": "legacy-role-1"
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:PutRolePermissionsBoundary"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-write-1"
       },
       {
         "grant": {
