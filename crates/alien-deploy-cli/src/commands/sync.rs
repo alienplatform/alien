@@ -148,6 +148,9 @@ struct SiteState {
     /// Release the site last reported running.
     #[serde(default)]
     site_release: Option<String>,
+    /// Digest of the target the site has confirmed running.
+    #[serde(default)]
+    site_target_hash: Option<String>,
     #[serde(default)]
     deleted: bool,
 
@@ -163,6 +166,9 @@ struct SiteReport {
     deployment_id: String,
     written_at: String,
     installed_release: Option<String>,
+    /// Signed target digest, only after this exact bundle reaches Running.
+    #[serde(default)]
+    installed_target_hash: Option<String>,
     state: serde_json::Value,
     #[serde(default)]
     heartbeats: Vec<ResourceHeartbeat>,
@@ -189,6 +195,10 @@ struct InstalledBundle {
     /// Older records are unknown until the site observes their running release.
     #[serde(default)]
     rollout_succeeded: bool,
+    #[serde(default)]
+    sequence: Option<u64>,
+    #[serde(default)]
+    target_hash: Option<String>,
     release_id: String,
     stack_id: String,
     chart: String,
@@ -882,6 +892,7 @@ async fn send_reports(
         send_report(folder, site, token, &report).await?;
         site.site_has = report.inventory;
         site.site_release = report.installed_release.clone();
+        site.site_target_hash = report.installed_target_hash.clone();
         site.deleted = report.state["status"].as_str() == Some("deleted");
         // Saved before the report is removed, so progress is never lost.
         save_site(folder, site)?;
@@ -1093,27 +1104,48 @@ async fn download_update(
         return download_deletion(folder, site, token, &target, &stack_id, dry_run).await;
     }
 
+    // This is the same target-file digest included in the signed manifest and
+    // the site's Helm install receipt, before registry references are rewritten.
+    let target_bytes = serde_json::to_vec_pretty(&target)
+        .into_alien_error()
+        .context(config_error("encoding the target"))?;
+    let target_hash = hex::encode(Sha256::digest(&target_bytes));
     let pending = by_sequence(&folder.join(TO_SITE), Some(BUNDLE_EXTENSION))?;
-    let already_carried = pending.iter().find(|(_, path)| {
-        path.file_stem()
-            .and_then(|stem| stem.to_str())
-            .is_some_and(|stem| stem.ends_with(&format!("-{release_id}")))
-    });
+    let mut already_carried = None;
+    for (_, path) in &pending {
+        let manifest = pending_manifest(path)?;
+        if manifest.deployment_id == site.deployment_id
+            && manifest.release_id == release_id
+            && manifest.files.get(airgap::TARGET_FILE) == Some(&target_hash)
+            && manifest.telemetry_ack.unwrap_or_default() >= site.uploaded_through
+        {
+            already_carried = Some(path);
+            break;
+        }
+    }
     let new_ack = site.uploaded_through > site.ack_sent;
-    if let Some((_, carried)) = already_carried {
+    if let Some(carried) = already_carried {
         if !dry_run {
             remove_superseded_bundles(&pending, carried)?;
         }
         println!("Update {release_id} is already in the folder.");
         return Ok(());
     }
-    if site.site_release.as_deref() == Some(release_id.as_str()) && !new_ack {
+    let installed = site.site_release.as_deref() == Some(release_id.as_str())
+        && site.site_target_hash.as_deref() == Some(target_hash.as_str());
+    if installed && !new_ack {
+        if !dry_run {
+            // A pending older configuration must not undo the installed target.
+            for (_, path) in &pending {
+                std::fs::remove_file(path)
+                    .into_alien_error()
+                    .context(config_error("removing a superseded bundle"))?;
+            }
+        }
         println!("{} is up to date ({release_id}).", site.name);
         return Ok(());
     }
-    // The site already runs this release: the update only carries the
-    // acknowledgement that frees the telemetry the manager received.
-    let what = if site.site_release.as_deref() == Some(release_id.as_str()) {
+    let what = if installed {
         format!("an acknowledgement of the site's reports ({release_id}, already running)")
     } else {
         format!("update {release_id}")
@@ -1218,13 +1250,8 @@ async fn download_update(
         image.source = source.clone();
     }
 
-    std::fs::write(
-        dir.join(airgap::TARGET_FILE),
-        serde_json::to_vec_pretty(&target)
-            .into_alien_error()
-            .context(config_error("encoding the target"))?,
-    )
-    .map_err(|error| transfer_file_error(dir, error))?;
+    std::fs::write(dir.join(airgap::TARGET_FILE), &target_bytes)
+        .map_err(|error| transfer_file_error(dir, error))?;
     let tools = download_tools(dir, folder, &sources).await?;
 
     let sequence = chrono::Utc::now().timestamp_millis() as u64;
@@ -1293,6 +1320,38 @@ async fn download_update(
         size as f64 / 1_000_000.0
     );
     Ok(())
+}
+
+/// Read metadata without extracting or scanning image blobs in the tar file.
+fn pending_manifest(path: &Path) -> Result<BundleManifest> {
+    let file = std::fs::File::open(path)
+        .into_alien_error()
+        .context(config_error("opening the pending bundle"))?;
+    let mut archive = tar::Archive::new(file);
+    for entry in archive
+        .entries_with_seek()
+        .into_alien_error()
+        .context(config_error("reading the pending bundle"))?
+    {
+        let entry = entry
+            .into_alien_error()
+            .context(config_error("reading a pending bundle entry"))?;
+        if entry
+            .path()
+            .into_alien_error()
+            .context(config_error("reading a pending bundle path"))?
+            .components()
+            .filter(|part| *part != std::path::Component::CurDir)
+            .eq(Path::new(airgap::MANIFEST_FILE).components())
+        {
+            return serde_json::from_reader(entry)
+                .into_alien_error()
+                .context(config_error("parsing the pending manifest"));
+        }
+    }
+    Err(AlienError::new(config_error(
+        "the pending bundle has no manifest",
+    )))
 }
 
 /// Cleanup is safe to retry after the replacement was published.
@@ -2307,6 +2366,7 @@ async fn uninstall_site(
         }
     }
     report.installed_release = None;
+    report.installed_target_hash = None;
     report.written_at = chrono::Utc::now().to_rfc3339();
     report.heartbeats.clear();
     save_report(folder, &report)?;
@@ -2983,6 +3043,8 @@ fn installed_record(
     }
     Ok(InstalledBundle {
         rollout_succeeded: false,
+        sequence: Some(manifest.sequence),
+        target_hash: manifest.files.get(airgap::TARGET_FILE).cloned(),
         release_id: manifest.release_id.clone(),
         stack_id: manifest.stack_id.clone(),
         chart: manifest.chart.clone(),
@@ -3427,6 +3489,12 @@ fn report_from_status(
             .ok_or_else(|| AlienError::new(config_error("the Operator status has no writtenAt")))?
             .to_string(),
         installed_release: current_release(&status),
+        installed_target_hash: (record.sequence.is_some()
+            && status["sequence"].as_u64() == record.sequence
+            && status["state"]["status"] == "running"
+            && current_release(&status).as_deref() == Some(record.release_id.as_str()))
+        .then(|| record.target_hash.clone())
+        .flatten(),
         state: status["state"].clone(),
         heartbeats: serde_json::from_value(
             status
@@ -4161,6 +4229,8 @@ mod tests {
         };
         let mut record = InstalledBundle {
             rollout_succeeded: false,
+            sequence: None,
+            target_hash: None,
             release_id: "release".into(),
             stack_id: "app".into(),
             chart: "app-0.1.0.tgz".into(),
@@ -6056,6 +6126,7 @@ stringData:
             deployment_id: "dep_1".to_string(),
             written_at: "2026-01-01T00:00:00Z".to_string(),
             installed_release: Some("rel_old".to_string()),
+            installed_target_hash: None,
             state: serde_json::json!({ "status": "running" }),
             heartbeats: Vec::new(),
             telemetry: (1..=4)
@@ -6087,6 +6158,126 @@ stringData:
         }
     }
 
+    fn pending_test_bundle(path: &Path, target: &serde_json::Value, ack: i64) {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = serde_json::json!({
+            "formatVersion": 1, "deploymentId": "dep_1", "deploymentName": "site",
+            "releaseId": target["releaseInfo"]["releaseId"], "sequence": 2,
+            "createdAt": "now", "stackId": "app", "chart": "chart/app.tgz",
+            "images": [], "chartImages": {}, "telemetryAck": ack,
+            "files": {"target.json": hex::encode(Sha256::digest(serde_json::to_vec_pretty(target).unwrap()))}
+        });
+        std::fs::write(dir.path().join(airgap::MANIFEST_FILE), manifest.to_string()).unwrap();
+        airgap::pack(dir.path(), path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn same_release_configuration_changes_download_for_pending_and_installed_targets() {
+        let old = serde_json::json!({
+            "releaseInfo": {"releaseId": "rel_new", "stack": {"id": "app"}},
+            "config": {"inputValues": {"message": "before"}}
+        });
+        let mut new = old.clone();
+        new["config"]["inputValues"]["message"] = "after".into();
+        for pending in [false, true] {
+            for changed in [false, true] {
+                let server = MockServer::start_async().await;
+                let desired = if changed { &new } else { &old };
+                server
+                    .mock_async(|when, then| {
+                        when.method(GET).path("/v1/deployments/dep_1/target");
+                        then.status(200).json_body(desired.clone());
+                    })
+                    .await;
+                let sources = server
+                    .mock_async(|when, then| {
+                        when.method(GET)
+                            .path("/v1/deployments/dep_1/bundle-sources");
+                        then.status(503).body("download reached");
+                    })
+                    .await;
+                let folder = tempfile::tempdir().unwrap();
+                let mut site = SiteState {
+                    deployment_id: "dep_1".into(),
+                    site_release: Some("rel_new".into()),
+                    site_target_hash: Some(hex::encode(Sha256::digest(
+                        serde_json::to_vec_pretty(&old).unwrap(),
+                    ))),
+                    ..Default::default()
+                };
+                if pending {
+                    std::fs::create_dir_all(folder.path().join(TO_SITE)).unwrap();
+                    pending_test_bundle(
+                        &folder.path().join(TO_SITE).join("2-rel_new.bundle"),
+                        &old,
+                        0,
+                    );
+                }
+                let result = download_update(
+                    folder.path(),
+                    &mut site,
+                    &access(&server),
+                    false,
+                    false,
+                    &[],
+                )
+                .await;
+                assert_eq!(
+                    result.is_err(),
+                    changed,
+                    "pending={pending}, changed={changed}"
+                );
+                sources.assert_hits_async(usize::from(changed)).await;
+                if pending {
+                    assert!(
+                        folder
+                            .path()
+                            .join(TO_SITE)
+                            .join("2-rel_new.bundle")
+                            .exists(),
+                        "failed download must preserve the pending bundle"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn report_confirms_configuration_only_for_the_running_bundle_sequence() {
+        let mut record = InstalledBundle {
+            rollout_succeeded: true,
+            sequence: Some(7),
+            target_hash: Some("target-digest".into()),
+            release_id: "rel_1".into(),
+            stack_id: "app".into(),
+            chart: "app.tgz".into(),
+            chart_images: BTreeMap::new(),
+            telemetry_ack: None,
+            inventory: BTreeSet::new(),
+            registry: None,
+        };
+        let site = SiteState::default();
+        let mut status = serde_json::json!({"writtenAt": "now", "sequence": 7,
+            "state": {"status": "running", "currentRelease": {"releaseId": "rel_1"}}});
+        let report = |record: &InstalledBundle, status: &serde_json::Value| {
+            report_from_status(&site, record, status.clone(), vec![], 0)
+                .unwrap()
+                .installed_target_hash
+        };
+        assert_eq!(report(&record, &status).as_deref(), Some("target-digest"));
+        status["sequence"] = 6.into();
+        assert_eq!(report(&record, &status), None);
+        status["sequence"] = 7.into();
+        status["state"]["status"] = "update-failed".into();
+        assert_eq!(report(&record, &status), None);
+        status["state"]["status"] = "running".into();
+        status["state"]["currentRelease"]["releaseId"] = "rel_other".into();
+        assert_eq!(report(&record, &status), None);
+        status["state"]["currentRelease"]["releaseId"] = "rel_1".into();
+        record.sequence = None;
+        assert_eq!(report(&record, &status), None);
+    }
+
     #[tokio::test]
     async fn carried_update_retries_failed_cleanup_without_downloading_again() {
         let server = MockServer::start_async().await;
@@ -6107,7 +6298,14 @@ stringData:
         std::fs::create_dir_all(&pending).unwrap();
         let carried = pending.join("2-rel_new.bundle");
         let obsolete = pending.join("1-rel_old.bundle");
-        std::fs::write(&carried, b"published update").unwrap();
+        pending_test_bundle(
+            &carried,
+            &serde_json::json!({
+                "releaseInfo": {"releaseId": "rel_new", "stack": {"id": "app"}}
+            }),
+            0,
+        );
+        let carried_bytes = std::fs::read(&carried).unwrap();
         // A directory at the old filename forces a removal error even as root.
         std::fs::create_dir(&obsolete).unwrap();
         download_update(folder.path(), &mut site, &access(&server), false, true, &[])
@@ -6137,7 +6335,7 @@ stringData:
         .await
         .unwrap();
         assert!(!obsolete.exists());
-        assert_eq!(std::fs::read(carried).unwrap(), b"published update");
+        assert_eq!(std::fs::read(carried).unwrap(), carried_bytes);
         target.assert_hits_async(3).await;
     }
 
@@ -6169,7 +6367,13 @@ stringData:
         // The update is already in the folder, so the download step stops
         // there instead of pulling images.
         std::fs::create_dir_all(dir.path().join(TO_SITE)).unwrap();
-        std::fs::write(dir.path().join(TO_SITE).join("2-rel_new.bundle"), b"x").unwrap();
+        pending_test_bundle(
+            &dir.path().join(TO_SITE).join("2-rel_new.bundle"),
+            &serde_json::json!({
+                "releaseInfo": {"releaseId": "rel_new", "stack": {"id": "app"}}
+            }),
+            0,
+        );
 
         let unsent = exchange_online(dir.path(), &mut site, &access(&server), false, false, &[])
             .await
@@ -6254,6 +6458,8 @@ stringData:
         });
         let record = InstalledBundle {
             rollout_succeeded: false,
+            sequence: None,
+            target_hash: None,
             release_id: "rel_1".into(),
             stack_id: "site".into(),
             chart: "chart.tgz".into(),
