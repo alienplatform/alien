@@ -192,12 +192,15 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
     let allows_tag_write = |action: &str, include_ec2_create: bool| {
         let action = action.to_ascii_lowercase();
         let (service, operation) = action.split_once(':').unwrap_or(("*", action.as_str()));
+        // CodeBuild replaces project tags through UpdateProject, with no
+        // separate TagResource permission check.
         TAG_OPERATIONS.iter().any(|tagging| {
             (include_ec2_create || service != "ec2" || *tagging != "createtags")
                 && iam_policy::wildcard_match(operation, tagging)
-        }) || ["post", "put", "patch", "delete"]
-            .iter()
-            .any(|method| iam_policy::wildcard_match(&action, &format!("apigateway:{method}")))
+        }) || iam_policy::wildcard_match(&action, "codebuild:updateproject")
+            || ["post", "put", "patch", "delete"]
+                .iter()
+                .any(|method| iam_policy::wildcard_match(&action, &format!("apigateway:{method}")))
     };
     for id in alien_permissions::list_permission_set_ids() {
         let set = get_permission_set(id).expect("registered permission set");
@@ -274,6 +277,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                             "arn:aws:iam::${awsAccountId}:policy/",
                             "arn:aws:iam::${awsAccountId}:instance-profile/",
                             "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/",
+                            "arn:aws:codebuild:${awsRegion}:${awsAccountId}:project/",
                             "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:",
                             "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:",
                             "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/",
@@ -364,19 +368,22 @@ fn certificate_tags_require_existing_stack_ownership() {
                 .generate_policy(set, binding, &context)
                 .unwrap();
             let tagging = || Request::new("acm:AddTagsToCertificate", arn).request_tags(&own_tags);
+            // ACM rejects tags on reimport; only new imports can use request tags.
             for (owner, manager) in [("stack-b", "runtime"), ("stack-a", "setup"), ("", "")] {
-                assert_eq!(
-                    evaluate(
-                        &policy.statement,
-                        &tagging().resource_tags(&[
-                            (ALIEN_STACK_TAG_KEY, owner),
-                            (ALIEN_MANAGED_BY_TAG_KEY, manager),
-                            (alien_core::ALIEN_RESOURCE_TAG_KEY, "worker"),
-                        ])
-                    ),
-                    Decision::NotAllowed,
-                    "{id}: cannot retag foreign, setup-owned or unowned certificates"
-                );
+                for request in [tagging(), Request::new("acm:ImportCertificate", arn)] {
+                    assert_eq!(
+                        evaluate(
+                            &policy.statement,
+                            &request.resource_tags(&[
+                                (ALIEN_STACK_TAG_KEY, owner),
+                                (ALIEN_MANAGED_BY_TAG_KEY, manager),
+                                (alien_core::ALIEN_RESOURCE_TAG_KEY, "worker"),
+                            ])
+                        ),
+                        Decision::NotAllowed,
+                        "{id}: cannot retag or reimport foreign, setup-owned or unowned certificates"
+                    );
+                }
             }
             assert_eq!(
                 evaluate(&policy.statement, &tagging().resource_tags(&own_tags)),
