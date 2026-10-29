@@ -14,8 +14,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    LifecycleRule, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
-    ServiceAccount, Storage, import::EmitContext,
+    import::EmitContext, LifecycleRule, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, Result, ServiceAccount, Storage,
 };
 use alien_permissions::BindingTarget;
 use hcl::{
@@ -346,6 +346,7 @@ fn bucket_path(label: &str, attribute: &str) -> String {
 fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
     for (owner_label, permission_refs) in storage_permission_owners(ctx) {
         let context = aws_terraform_permission_context()
+            .with_resource_id(ctx.resource_id)
             .with_resource_name(format!("${{{}}}", bucket_path(label, "bucket")));
 
         for (idx, permission_ref) in permission_refs.iter().enumerate() {
