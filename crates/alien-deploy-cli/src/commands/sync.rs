@@ -1510,13 +1510,38 @@ struct DeletionObject {
     volume: Option<DeletionVolume>,
 }
 
+// Helm uninstall bypasses resource controllers. Use the installed vault outputs,
+// not a name prefix, to include their data in the UID-checked erase inventory.
+fn owned_vault_prefixes(state: &serde_json::Value, namespace: &str) -> BTreeSet<String> {
+    let Some(resources) = state
+        .pointer("/stackState/resources")
+        .and_then(|v| v.as_object())
+    else {
+        return BTreeSet::new();
+    };
+    resources
+        .values()
+        .filter_map(|resource| {
+            // Signed erase includes setup teardown, so both lifecycle modes apply.
+            // External bindings publish outputs without a controller checkpoint.
+            if resource["type"] != "vault" || resource["_internal"].is_null() {
+                return None;
+            }
+            let vault = resource["outputs"]["vaultId"].as_str()?;
+            let (vault_namespace, prefix) =
+                vault.strip_prefix("kubernetes-secret:")?.split_once(':')?;
+            (vault_namespace == namespace && !prefix.is_empty()).then(|| prefix.to_string())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 async fn deletion_inventory(
     settings: &SiteSide,
     stack_id: &str,
     namespace: &str,
 ) -> Result<DeletionInventory> {
-    deletion_inventory_with_previous(settings, stack_id, namespace, None).await
+    deletion_inventory_with_previous(settings, stack_id, namespace, None, &BTreeSet::new()).await
 }
 
 async fn deletion_inventory_with_previous(
@@ -1524,6 +1549,7 @@ async fn deletion_inventory_with_previous(
     stack_id: &str,
     namespace: &str,
     previous: Option<&DeletionInventory>,
+    vault_prefixes: &BTreeSet<String>,
 ) -> Result<DeletionInventory> {
     let mut command = Command::new("helm");
     command.args(["get", "manifest", stack_id, "--namespace", namespace]);
@@ -1636,27 +1662,12 @@ async fn deletion_inventory_with_previous(
                     !ordinal.is_empty() && ordinal.bytes().all(|b| b.is_ascii_digit())
                 })
             });
-        if helm_owned || runtime_owned(object) || runtime_claim {
-            let uid = object["metadata"]["uid"]
-                .as_str()
-                .ok_or_else(|| AlienError::new(config_error("data object has no UID")))?;
-            if let Some(saved) = data
-                .iter()
-                .find(|saved| saved.resource == resource && saved.name == name)
-            {
-                if saved.uid != uid {
-                    return Err(AlienError::new(config_error(format!(
-                        "{resource}/{name} was replaced; refusing to erase a different object"
-                    ))));
-                }
-            } else {
-                data.push(DeletionObject {
-                    resource: resource.into(),
-                    name: name.into(),
-                    uid: uid.into(),
-                    volume: None,
-                });
-            }
+        if helm_owned
+            || runtime_owned(object)
+            || runtime_claim
+            || owned_vault_secret(object, vault_prefixes)
+        {
+            record_deletion_object(&mut data, resource, object)?;
         }
     }
     Ok(DeletionInventory {
@@ -1668,6 +1679,78 @@ async fn deletion_inventory_with_previous(
         runtime_selector: scope.map(|(key, prefix)| format!("managed-by=runtime,{key}={prefix}")),
         report: None,
     })
+}
+
+fn owned_vault_secret(object: &serde_json::Value, prefixes: &BTreeSet<String>) -> bool {
+    object["kind"] == "Secret"
+        && object["metadata"]["labels"]["managed-by"] == "operator"
+        && object["metadata"]["labels"]["vault-prefix"]
+            .as_str()
+            .is_some_and(|prefix| prefixes.contains(prefix))
+}
+
+fn record_deletion_object(
+    data: &mut Vec<DeletionObject>,
+    resource: &str,
+    object: &serde_json::Value,
+) -> Result<()> {
+    let name = object["metadata"]["name"]
+        .as_str()
+        .ok_or_else(|| AlienError::new(config_error("data object has no name")))?;
+    let uid = object["metadata"]["uid"]
+        .as_str()
+        .ok_or_else(|| AlienError::new(config_error("data object has no UID")))?;
+    if let Some(saved) = data
+        .iter()
+        .find(|saved| saved.resource == resource && saved.name == name)
+    {
+        if saved.uid != uid {
+            return Err(AlienError::new(config_error(format!(
+                "{resource}/{name} was replaced; refusing to erase a different object"
+            ))));
+        }
+    } else {
+        data.push(DeletionObject {
+            resource: resource.into(),
+            name: name.into(),
+            uid: uid.into(),
+            volume: None,
+        });
+    }
+    Ok(())
+}
+
+async fn refresh_vault_inventory(
+    settings: &SiteSide,
+    inventory: &mut DeletionInventory,
+    prefixes: &BTreeSet<String>,
+) -> Result<()> {
+    if prefixes.is_empty() {
+        return Ok(());
+    }
+    let mut get = kubectl(settings.kube_context.as_deref());
+    get.args([
+        "get",
+        "secrets",
+        "--namespace",
+        &inventory.namespace,
+        "-o",
+        "json",
+    ]);
+    let objects: serde_json::Value =
+        serde_json::from_slice(&run(get, "reading final vault inventory").await?)
+            .into_alien_error()
+            .context(config_error("parsing final vault inventory"))?;
+    let items = objects["items"]
+        .as_array()
+        .ok_or_else(|| AlienError::new(config_error("missing final vault inventory")))?;
+    for object in items
+        .iter()
+        .filter(|object| owned_vault_secret(object, prefixes))
+    {
+        record_deletion_object(&mut inventory.objects, "secrets", object)?;
+    }
+    Ok(())
 }
 
 /// Stop claim creation before the final inventory. Orphan deletion preserves data
@@ -2238,6 +2321,7 @@ async fn uninstall_site(
             wait_for_deleted_pods(settings, &namespace, &selector).await?;
         }
     }
+    let vault_prefixes = owned_vault_prefixes(&report.state, &namespace);
     // This receipt stays on the site machine, outside the carried folder.
     // It survives Helm removal and never authorizes deletion of a replacement UID.
     if values.is_some() {
@@ -2249,6 +2333,7 @@ async fn uninstall_site(
                 &manifest.stack_id,
                 &namespace,
                 machine.deletion_inventory.as_ref(),
+                &vault_prefixes,
             )
             .await?,
         );
@@ -2267,6 +2352,7 @@ async fn uninstall_site(
                 &manifest.stack_id,
                 &namespace,
                 machine.deletion_inventory.as_ref(),
+                &vault_prefixes,
             )
             .await?,
         );
@@ -2328,6 +2414,17 @@ async fn uninstall_site(
         wait_for_deleted_pods(settings, &namespace, selector).await?;
     }
     if policy == DeletionPolicy::Erase {
+        // Workloads may write vault entries until Helm stops their pods.
+        // Persist the final UIDs before erasing, including on uninstall retries.
+        refresh_vault_inventory(
+            settings,
+            machine
+                .deletion_inventory
+                .as_mut()
+                .expect("checked erase inventory"),
+            &vault_prefixes,
+        )
+        .await?;
         prepare_volume_erasure(
             settings,
             machine
@@ -5161,6 +5258,34 @@ metadata:
         let mut original: SiteReport =
             serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
         original.deployment_id = site.deployment_id.clone();
+        let mut vault = alien_core::StackResourceState::new_pending(
+            "vault".into(),
+            alien_core::Resource::new(alien_core::Vault::new("vault".into()).build()),
+            Some(alien_core::ResourceLifecycle::Live),
+            Vec::new(),
+        );
+        vault.outputs = Some(alien_core::ResourceOutputs::new(alien_core::VaultOutputs {
+            vault_id: format!("kubernetes-secret:{namespace}:app-vault"),
+        }));
+        vault.internal_state = Some(serde_json::json!({
+            "type": "KubernetesVaultController", "state": "Ready",
+            "namespace": namespace, "vaultPrefix": "app-vault",
+        }));
+        let mut frozen = vault.clone();
+        frozen.lifecycle = Some(alien_core::ResourceLifecycle::Frozen);
+        frozen.internal_state.as_mut().unwrap()["vaultPrefix"] = "frozen-vault".into();
+        frozen.outputs = Some(alien_core::ResourceOutputs::new(alien_core::VaultOutputs {
+            vault_id: format!("kubernetes-secret:{namespace}:frozen-vault"),
+        }));
+        let mut external = frozen.clone();
+        // External binding adoption publishes outputs without a controller checkpoint.
+        external.internal_state = None;
+        external.outputs = Some(alien_core::ResourceOutputs::new(alien_core::VaultOutputs {
+            vault_id: format!("kubernetes-secret:{namespace}:external-vault"),
+        }));
+        original.state["stackState"] = serde_json::json!({"resources": {
+            "vault": vault, "frozen": frozen, "external": external,
+        }});
         std::fs::write(&snapshot, serde_json::to_vec(&original).unwrap()).unwrap();
         let settings = SiteSide {
             registry: "registry.example.com/site".into(),
@@ -5228,6 +5353,25 @@ stringData:
 "#,
         )
         .unwrap();
+        // A hook creates a vault entry after the pre-uninstall inventory.
+        std::fs::write(
+            chart.path().join("templates/late-vault.yaml"),
+            r#"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: late-vault-entry
+  labels:
+    managed-by: operator
+    vault-prefix: app-vault
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-delete-policy: before-hook-creation
+stringData:
+  value: late-write
+"#,
+        )
+        .unwrap();
         let mut install = Command::new("helm");
         install.args(["install", "app"]).arg(chart.path()).args([
             "--namespace",
@@ -5254,6 +5398,32 @@ stringData:
         // Container claim templates have names but no ownership labels.
         let workloads = tempfile::NamedTempFile::new().unwrap();
         let mut objects = Vec::new();
+        for (name, labels) in [
+            (
+                "vault-entry",
+                serde_json::json!({"managed-by":"operator", "vault-prefix":"app-vault"}),
+            ),
+            ("site-entry", serde_json::json!({})),
+            (
+                "other-vault-entry",
+                serde_json::json!({"managed-by":"operator", "vault-prefix":"other-vault"}),
+            ),
+            (
+                "frozen-vault-entry",
+                serde_json::json!({"managed-by":"operator", "vault-prefix":"frozen-vault"}),
+            ),
+            (
+                "external-vault-entry",
+                serde_json::json!({"managed-by":"operator", "vault-prefix":"external-vault"}),
+            ),
+            (
+                "site-labelled-entry",
+                serde_json::json!({"vault-prefix":"app-vault"}),
+            ),
+        ] {
+            objects.push(serde_json::json!({"apiVersion":"v1", "kind":"Secret",
+                "metadata":{"name":name,"labels":labels}, "stringData":{"value":"fixture"}}));
+        }
         for (name, labels) in [
             (
                 "app-data",
@@ -5547,6 +5717,25 @@ stringData:
                     original_claim["spec"]["volumeName"]
                 );
             }
+        }
+        for name in [
+            "vault-entry",
+            "late-vault-entry",
+            "site-entry",
+            "other-vault-entry",
+            "frozen-vault-entry",
+            "external-vault-entry",
+            "site-labelled-entry",
+        ] {
+            let exists = remaining.iter().any(|v| v["metadata"]["name"] == name);
+            assert_eq!(
+                exists,
+                !matches!(
+                    name,
+                    "vault-entry" | "late-vault-entry" | "frozen-vault-entry"
+                ) || policy == "retain",
+                "unexpected retention of {name} under {policy}"
+            );
         }
         let saved = load_machine(&site.deployment_id)
             .unwrap()
