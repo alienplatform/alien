@@ -1,8 +1,12 @@
 //! Setup must install and register the same ceiling the runtime generates.
 use super::helpers::{assert_terraform_valid, gate_input, render, try_render};
 use alien_core::{
-    import::data::AwsRemoteStackManagementImportData, Ai, Key, ManagementPermissions,
-    PermissionProfile, RemoteStackManagement, ResourceLifecycle, Stack, StackSettings,
+    import::{
+        data::{AwsAiImportData, AwsRemoteStackManagementImportData},
+        ImportedResource,
+    },
+    Ai, Key, ManagementPermissions, PermissionProfile, RemoteStackManagement, ResourceLifecycle,
+    Stack, StackSettings,
 };
 use alien_permissions::{
     generators::{aws_permissions_boundary_covers, aws_stack_permissions_boundary},
@@ -229,7 +233,7 @@ fn conditional_key_boundary_grants_are_rejected() {
 }
 
 #[test]
-fn gated_ai_role_writes_keep_the_boundary_reference() {
+fn gated_ai_registration_and_role_writes_preserve_the_boundary() {
     let stack = Stack::new("gated".into())
         .inputs(vec![gate_input("aiEnabled", "Enable AI", "Create gateway")])
         .management(ManagementPermissions::extend(
@@ -285,6 +289,102 @@ fn gated_ai_role_writes_keep_the_boundary_reference() {
         }
     }
     assert!(writes > 0);
+    let bodies: Vec<hcl::Body> = module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .map(|(_, text)| hcl::from_str(text).unwrap())
+        .collect();
+    let blocks: Vec<_> = bodies.iter().flat_map(|body| body.blocks()).collect();
+    let boundary = blocks
+        .iter()
+        .find(|block| {
+            block
+                .labels()
+                .iter()
+                .any(|label| label.as_str() == "management_permissions_boundary")
+        })
+        .unwrap();
+    let registration = blocks
+        .iter()
+        .filter(|block| block.identifier() == "locals")
+        .flat_map(|block| block.body.attributes())
+        .find(|attribute| attribute.key() == "deployment_resources")
+        .unwrap();
+    for enabled in [true, false] {
+        let arn = "arn:aws:iam::123456789012:policy/bounded-permissions-boundary";
+        let mut context = Context::new();
+        for (name, value) in [
+            ("local", json!({"resource_prefix": "bounded"})),
+            (
+                "data",
+                json!({"aws_region": {"current": {"region": "us-east-1"}}, "aws_caller_identity": {"current": {"account_id": "123456789012"}}}),
+            ),
+            (
+                "var",
+                json!({"input_ai_enabled": enabled, "managing_account_id": "210987654321", "managing_role_arn": "arn:aws:iam::210987654321:role/manager"}),
+            ),
+            (
+                "aws_iam_role",
+                json!({"management": {"name": "bounded-management", "arn": "arn:aws:iam::123456789012:role/bounded-management"}}),
+            ),
+        ] {
+            context.declare_var(name, hcl::to_value(value).unwrap());
+        }
+        let installed = document(attribute(boundary, "policy"), &context);
+        context.declare_var("aws_iam_policy", hcl::to_value(json!({"management_permissions_boundary": {"arn": arn, "policy": installed.to_string()}})).unwrap());
+        context.declare_func(
+            "jsondecode",
+            FuncDef::builder().param(ParamType::String).build(|args| {
+                serde_json::from_str(args[0].as_str().unwrap()).map_err(|error| error.to_string())
+            }),
+        );
+        context.declare_func(
+            "concat",
+            FuncDef::builder()
+                .variadic_param(ParamType::Any)
+                .build(|args| {
+                    let mut items = Vec::new();
+                    for arg in args.iter() {
+                        items.extend(
+                            arg.as_array()
+                                .ok_or("concat requires lists")?
+                                .iter()
+                                .cloned(),
+                        );
+                    }
+                    Ok(hcl::Value::Array(items))
+                }),
+        );
+        // Evaluate the complete list so a disabled entry or dangling indexed
+        // provider reference fails instead of being hidden by entry selection.
+        let entries: Vec<ImportedResource> = serde_json::from_value(
+            serde_json::to_value(registration.expr().evaluate(&context).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let mut ids: Vec<_> = entries.iter().map(|entry| entry.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            if enabled {
+                vec!["gateway", "management"]
+            } else {
+                vec!["management"]
+            }
+        );
+        for entry in entries {
+            if entry.id == "gateway" {
+                assert_eq!(entry.resource_type.0, "ai");
+                let data: AwsAiImportData = serde_json::from_value(entry.import_data).unwrap();
+                assert_eq!(data.region, "us-east-1");
+            } else {
+                assert_eq!(entry.resource_type.0, "remote-stack-management");
+                let data: AwsRemoteStackManagementImportData =
+                    serde_json::from_value(entry.import_data).unwrap();
+                assert_eq!(data.permissions_boundary_arn.as_deref(), Some(arn));
+                assert_eq!(data.permissions_boundary_document, Some(installed.clone()));
+            }
+        }
+    }
 }
 
 #[test]

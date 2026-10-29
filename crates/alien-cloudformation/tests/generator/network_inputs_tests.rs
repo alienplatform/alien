@@ -24,7 +24,10 @@ pub(super) fn evaluate(
                 if name == "AWS::NoValue" {
                     return Value::Null;
                 }
-                return parameters[name.as_str().unwrap()].clone();
+                return parameters
+                    .get(name.as_str().unwrap())
+                    .unwrap_or_else(|| panic!("missing Ref parameter: {name}"))
+                    .clone();
             }
             if let Some(args) = fields.get("Fn::GetAtt") {
                 return parameters[&format!(
@@ -92,6 +95,8 @@ pub(super) fn evaluate(
                     .as_array()
                     .unwrap()
                     .iter()
+                    // NoValue removes conditional fragments from the join list.
+                    .filter(|v| !v.is_null())
                     .map(|v| v.as_str().unwrap())
                     .collect::<Vec<_>>()
                     .join(args[0].as_str().unwrap()));

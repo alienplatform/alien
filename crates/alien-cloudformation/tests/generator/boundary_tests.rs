@@ -8,8 +8,12 @@ use super::{
 };
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
-    import::data::AwsRemoteStackManagementImportData, Ai, Key, ManagementPermissions,
-    PermissionProfile, RemoteStackManagement, ResourceLifecycle, Stack, StackSettings,
+    import::{
+        data::{AwsAiImportData, AwsRemoteStackManagementImportData},
+        ImportedResource,
+    },
+    Ai, Key, ManagementPermissions, PermissionProfile, RemoteStackManagement, ResourceLifecycle,
+    Stack, StackSettings,
 };
 use alien_permissions::{
     generators::{aws_permissions_boundary_covers, aws_stack_permissions_boundary},
@@ -252,7 +256,7 @@ fn conditional_key_grants_fail_before_emitting_an_unresolvable_boundary() {
 }
 
 #[test]
-fn gated_resource_role_writes_keep_the_boundary_condition() {
+fn gated_ai_registration_and_role_writes_preserve_the_boundary() {
     let stack = Stack::new("gated-boundary".into())
         .inputs(vec![gate_input(
             "aiEnabled",
@@ -275,7 +279,10 @@ fn gated_resource_role_writes_keep_the_boundary_condition() {
     let (template, _) = render_built_ins_template(
         &stack,
         StackSettings::default(),
-        custom_resource_registration(),
+        RegistrationMode::Both {
+            lambda_arn: "arn:aws:lambda:us-east-1:123456789012:function:register".into(),
+            callback_url: None,
+        },
         CloudFormationTarget::Aws,
         "aws",
         "gated role writes",
@@ -306,6 +313,111 @@ fn gated_resource_role_writes_keep_the_boundary_condition() {
         }
     }
     assert!(writes > 0);
+    for enabled in [true, false] {
+        let arn = "arn:aws:iam::123456789012:policy/bounded-permissions-boundary";
+        let parameters = [
+            ("AWS::StackName", json!("bounded")),
+            ("AWS::Region", json!("us-east-1")),
+            ("AWS::AccountId", json!("123456789012")),
+            ("AWS::Partition", json!("aws")),
+            (
+                "ManagingRoleArn",
+                json!("arn:aws:iam::210987654321:role/manager"),
+            ),
+            ("ManagementRole", json!("bounded-management")),
+            (
+                "ManagementRole.Arn",
+                json!("arn:aws:iam::123456789012:role/bounded-management"),
+            ),
+            ("ManagementPermissionsBoundary", json!(arn)),
+            ("InputAiEnabled", json!(enabled.to_string())),
+            ("ManagementExternalId", json!("")),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect();
+        let payload = serde_json::to_value(
+            &template.resources["DeploymentRegistration"].properties["Resources"],
+        )
+        .unwrap();
+        // CloudFormation removes NoValue entries from resource-property lists.
+        // Ordinary null entries must fail typed deserialization.
+        let entries: Vec<ImportedResource> = payload
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| {
+                let selected = if let Some(branches) = entry.get("Fn::If") {
+                    let condition = &template.conditions[branches[0].as_str().unwrap()];
+                    let accepted = evaluate(
+                        &serde_json::to_value(condition).unwrap(),
+                        &template,
+                        &parameters,
+                    )
+                    .as_bool()
+                    .unwrap();
+                    &branches[if accepted { 1 } else { 2 }]
+                } else {
+                    entry
+                };
+                if selected == &json!({"Ref": "AWS::NoValue"}) {
+                    return None;
+                }
+                Some(serde_json::from_value(evaluate(selected, &template, &parameters)).unwrap())
+            })
+            .collect();
+        let expected_ids = if enabled {
+            vec!["gateway", "management"]
+        } else {
+            vec!["management"]
+        };
+        let mut ids: Vec<_> = entries.iter().map(|entry| entry.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, expected_ids);
+        for entry in &entries {
+            if entry.id == "gateway" {
+                assert_eq!(entry.resource_type.0, "ai");
+                let data: AwsAiImportData =
+                    serde_json::from_value(entry.import_data.clone()).unwrap();
+                assert_eq!(data.region, "us-east-1");
+            } else {
+                assert_eq!(entry.resource_type.0, "remote-stack-management");
+                let data: AwsRemoteStackManagementImportData =
+                    serde_json::from_value(entry.import_data.clone()).unwrap();
+                assert_eq!(data.permissions_boundary_arn.as_deref(), Some(arn));
+                let installed = evaluate(
+                    &serde_json::to_value(
+                        &template.resources["ManagementPermissionsBoundary"].properties
+                            ["PolicyDocument"],
+                    )
+                    .unwrap(),
+                    &template,
+                    &parameters,
+                );
+                assert_eq!(data.permissions_boundary_document, Some(installed));
+            }
+        }
+        let mut output_entries = Vec::<ImportedResource>::new();
+        for (name, output) in &template.outputs {
+            if name.starts_with("DeploymentResources") {
+                let text = evaluate(
+                    &serde_json::to_value(&output.value).unwrap(),
+                    &template,
+                    &parameters,
+                );
+                output_entries.extend(
+                    serde_json::from_str::<Vec<ImportedResource>>(text.as_str().unwrap()).unwrap(),
+                );
+            }
+        }
+        output_entries.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut entries = entries;
+        entries.sort_by(|left, right| left.id.cmp(&right.id));
+        assert_eq!(
+            output_entries, entries,
+            "both registration transports must agree"
+        );
+    }
 }
 
 #[test]
