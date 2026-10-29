@@ -43,6 +43,52 @@ Use `SingleControllerExecutor` for controller tests. Every controller needs: cre
 
 The executor triggers updates by comparing resource configs via `resource_eq()`. Values owned by management after setup should live in management config or controller state, not in Frozen resource config.
 
+## AWS IAM role write ownership
+
+The deployment's optional permissions boundary ARN comes from the saved
+`RemoteStackManagement` controller. With no ARN, role writers retain the legacy
+behavior. With an ARN, runtime role creation and policy/trust changes go through
+[`IamRoleWriter`](../alien-aws-clients/src/aws/iam/role_writer.rs). Existing roles
+must have the expected deployment, resource, and runtime ownership tags before
+adoption. A different boundary, an incomplete attached-policy listing, or an
+unbounded role carrying an AWS-managed policy stops the write and requires setup
+repair. An already matching boundary does not trigger another policy audit.
+
+The relevant call paths in this crate are:
+
+| Writer | Authority and boundary handling |
+| --- | --- |
+| [Service accounts](src/service_account/aws.rs) | Creation uses the helper; trust changes, inline policy changes, and cleanup prepare existing roles. Stack-profile reconciliation also checks direct setup authority. |
+| [Artifact registry pull/push roles](src/artifact_registry/aws.rs) | Creation, trust and policy reconciliation, and policy cleanup use the helper, including roles recovered after a create conflict. |
+| [Remote binding roles](src/remote_bindings/aws.rs) | Creation, trust updates, and inline policy cleanup use the helper. |
+| [Resource permission helper](src/core/resource_permissions_helper.rs) | Workload and remote-binding role writes prepare existing roles. Resource-scoped management-role grants are setup-owned: Live resources skip them, and Frozen resources require direct setup authority before any IAM access. |
+| [Remote management identity](src/remote_stack_management/aws.rs) | Setup owns its policies and the boundary policy itself. The management identity is not a workload role and must not adopt the workload boundary. |
+| [Sandbox scaffolding](src/setup_scaffolding/mod.rs) | Build and egress role creation, reconciliation, and removal require setup credentials. These paths use the supplied client configuration directly, without runtime adoption. |
+
+For sandbox scaffolding, `alien-deployment`'s `initial_setup` path calls
+`reconcile` only with `DirectSetup`; imported handoffs use the objects created by
+their setup package. Runtime updates call `changes_requiring_setup` before
+accepting scaffolding changes. Runtime deletion stops at the setup handoff.
+`run_setup_teardown_after_handoff` then removes direct-setup scaffolding with the
+caller's setup credentials; imported scaffolding remains the package's job.
+These ownership decisions apply even when the sandbox itself is Live.
+
+Policy removal needs the same care as policy addition: ordinary role cleanup
+prepares the role before `DeleteRolePolicy` or `DetachRolePolicy`. The permission
+catalog also has narrowly scoped legacy cleanup grants, restricted to named
+AWS-managed policies with `iam:PolicyARN`. Those removal-only grants do not
+authorize attaching policies, changing trust, or removing the permissions
+boundary. Do not broaden them to make an unsupported role adoptable.
+
+When adding a writer, trace its create, retry, update, and delete entry points.
+A Frozen resource or `DirectSetup` value alone is not proof that every handler
+has setup credentials: authority controls execution routing, while the caller
+supplies the client configuration. Trace automatic setup separately from a
+privileged setup invocation. Check the teardown handoff, and test
+that denied adoption prevents the subsequent IAM write. Local controller and
+package tests establish call ordering and generated permissions; a complete
+cloud setup/destroy run is separate validation.
+
 ## AWS service-account teardown
 
 With automatic setup, runtime cleanup removes service-account roles created by
