@@ -34,7 +34,7 @@ use std::os::unix::fs::PermissionsExt as _;
 
 use alien_cli_common::airgap::{self, BundleManifest, RegistryAccess};
 use alien_core::{embedded_config::DeployCliConfig, DeletionPolicy, ResourceHeartbeat};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::Engine as _;
 use clap::Parser;
 use oci_client::secrets::RegistryAuth;
@@ -1094,13 +1094,16 @@ async fn download_update(
     }
 
     let pending = by_sequence(&folder.join(TO_SITE), Some(BUNDLE_EXTENSION))?;
-    let already_carried = pending.iter().any(|(_, path)| {
+    let already_carried = pending.iter().find(|(_, path)| {
         path.file_stem()
             .and_then(|stem| stem.to_str())
             .is_some_and(|stem| stem.ends_with(&format!("-{release_id}")))
     });
     let new_ack = site.uploaded_through > site.ack_sent;
-    if already_carried {
+    if let Some((_, carried)) = already_carried {
+        if !dry_run {
+            remove_superseded_bundles(&pending, carried)?;
+        }
         println!("Update {release_id} is already in the folder.");
         return Ok(());
     }
@@ -1159,9 +1162,7 @@ async fn download_update(
         (pull, access)
     };
 
-    let work = tempfile::tempdir()
-        .into_alien_error()
-        .context(config_error("creating a working directory"))?;
+    let work = tempfile::tempdir_in(folder).map_err(|error| transfer_file_error(folder, error))?;
     let dir = work.path();
     println!("Downloading {what} for {}", site.name);
     let chart_reference = sources["chart"]["reference"].as_str().ok_or_else(|| {
@@ -1175,7 +1176,7 @@ async fn download_update(
     );
     let chart = airgap::pull_chart(dir, &chart_pull, &chart_access)
         .await
-        .context(config_error("downloading the chart"))?;
+        .map_err(|error| bundle_error(error, "downloading the chart"))?;
     // The chart names the images it runs itself: the Operator and its hooks.
     let values = values
         .iter()
@@ -1212,7 +1213,7 @@ async fn download_update(
         .collect();
     let (mut exported, omitted) = airgap::export_images(&dir.join(airgap::OCI_DIR), &pulls, &skip)
         .await
-        .context(config_error("copying images"))?;
+        .map_err(|error| bundle_error(error, "copying images"))?;
     for (image, source) in exported.iter_mut().zip(images.iter()) {
         image.source = source.clone();
     }
@@ -1223,8 +1224,7 @@ async fn download_update(
             .into_alien_error()
             .context(config_error("encoding the target"))?,
     )
-    .into_alien_error()
-    .context(config_error("writing the target"))?;
+    .map_err(|error| transfer_file_error(dir, error))?;
     let tools = download_tools(dir, folder, &sources).await?;
 
     let sequence = chrono::Utc::now().timestamp_millis() as u64;
@@ -1250,8 +1250,7 @@ async fn download_update(
         .into_alien_error()
         .context(config_error("encoding the manifest"))?;
     std::fs::write(dir.join(airgap::MANIFEST_FILE), &manifest_bytes)
-        .into_alien_error()
-        .context(config_error("writing the manifest"))?;
+        .map_err(|error| transfer_file_error(dir, error))?;
     let signature: serde_json::Value = manager_post(
         manager,
         &token.token,
@@ -1267,17 +1266,10 @@ async fn download_update(
         })
     })?;
     std::fs::write(dir.join(airgap::SIGNATURE_FILE), signature_text)
-        .into_alien_error()
-        .context(config_error("writing the signature"))?;
+        .map_err(|error| transfer_file_error(dir, error))?;
     site.bundle_key = signature["publicKey"].as_str().map(str::to_string);
     site.ack_sent = site.uploaded_through;
 
-    // A newer update replaces bundles that haven't been carried in yet.
-    for (_, path) in &pending {
-        std::fs::remove_file(path)
-            .into_alien_error()
-            .context(config_error("removing a superseded bundle"))?;
-    }
     let file = folder
         .join(TO_SITE)
         .join(format!("{sequence}-{release_id}.{BUNDLE_EXTENSION}"));
@@ -1285,6 +1277,8 @@ async fn download_update(
         AlienError::new(config_error("the manager returned no bundle signing key"))
     })?;
     write_update_bundle(dir, &file, folder, trusted_key).await?;
+    remove_superseded_bundles(&pending, &file)?;
+
     let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
     let mut delta = if omitted.is_empty() {
         String::new()
@@ -1301,6 +1295,18 @@ async fn download_update(
     Ok(())
 }
 
+/// Cleanup is safe to retry after the replacement was published.
+fn remove_superseded_bundles(pending: &[(u64, PathBuf)], carried: &Path) -> Result<()> {
+    for (_, path) in pending {
+        if path != carried {
+            std::fs::remove_file(path)
+                .into_alien_error()
+                .context(config_error("removing a superseded bundle"))?;
+        }
+    }
+    Ok(())
+}
+
 /// Publish verified tools alongside the bundle so a first-time site can run sync.
 async fn write_update_bundle(
     dir: &Path,
@@ -1311,8 +1317,16 @@ async fn write_update_bundle(
     airgap::verify(dir, trusted_key)
         .await
         .context(config_error("verifying the downloaded update"))?;
-    airgap::pack(dir, file).context(config_error("writing the bundle"))?;
-    copy_tools(dir, folder)
+    let parent = file.parent().unwrap_or(folder);
+    let temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| transfer_file_error(parent, error))?;
+    airgap::pack(dir, temporary.path())
+        .map_err(|error| bundle_error(error, "writing the bundle"))?;
+    copy_tools(dir, folder)?;
+    temporary
+        .persist(file)
+        .map_err(|error| transfer_file_error(file, error.error))?;
+    Ok(())
 }
 
 /// A deletion carries no images or chart: the installed chart owns cleanup.
@@ -2406,16 +2420,13 @@ async fn download_tools(dir: &Path, folder: &Path, sources: &serde_json::Value) 
         builds.push((format!("{name}-{platform}"), bytes));
     }
     std::fs::create_dir_all(dir.join(TOOLS_DIR))
-        .into_alien_error()
-        .context(config_error("creating the tools directory"))?;
+        .map_err(|error| transfer_file_error(dir, error))?;
     for (name, bytes) in builds {
         std::fs::write(dir.join(TOOLS_DIR).join(name), bytes)
-            .into_alien_error()
-            .context(config_error("writing alien-deploy"))?;
+            .map_err(|error| transfer_file_error(dir, error))?;
     }
     std::fs::write(dir.join(TOOLS_DIR).join(TOOLS_SOURCES_FILE), listed)
-        .into_alien_error()
-        .context(config_error("writing the tool list"))?;
+        .map_err(|error| transfer_file_error(dir, error))?;
     Ok(Tools::Included)
 }
 
@@ -2426,8 +2437,7 @@ fn copy_tools(bundle_dir: &Path, folder: &Path) -> Result<()> {
         return Ok(());
     }
     std::fs::create_dir_all(folder.join(TOOLS_DIR))
-        .into_alien_error()
-        .context(config_error("creating the tools directory"))?;
+        .map_err(|error| transfer_file_error(folder, error))?;
     for entry in std::fs::read_dir(&tools)
         .into_alien_error()
         .context(config_error("reading the bundle's tools"))?
@@ -2464,11 +2474,9 @@ fn copy_tools(bundle_dir: &Path, folder: &Path) -> Result<()> {
             continue;
         }
         let temporary = tempfile::NamedTempFile::new_in(folder.join(TOOLS_DIR))
-            .into_alien_error()
-            .context(config_error("creating the replacement tool"))?;
+            .map_err(|error| transfer_file_error(folder, error))?;
         std::fs::copy(&path, temporary.path())
-            .into_alien_error()
-            .context(config_error("copying alien-deploy"))?;
+            .map_err(|error| transfer_file_error(folder, error))?;
         #[cfg(unix)]
         if name != TOOLS_SOURCES_FILE {
             std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o755))
@@ -2479,8 +2487,7 @@ fn copy_tools(bundle_dir: &Path, folder: &Path) -> Result<()> {
         temporary
             .persist(&destination)
             .map_err(|error| error.error)
-            .into_alien_error()
-            .context(config_error("replacing the carried tool"))?;
+            .map_err(|error| transfer_file_error(folder, error))?;
     }
     Ok(())
 }
@@ -4082,6 +4089,23 @@ async fn run(mut cmd: Command, what: &str) -> Result<Vec<u8>> {
         }));
     }
     Ok(output.stdout)
+}
+
+fn bundle_error(error: AlienError<airgap::ErrorData>, operation: &str) -> AlienError<ErrorData> {
+    let data = match error.error.as_ref() {
+        Some(airgap::ErrorData::DiskFull { .. }) => ErrorData::DiskFull {
+            message: error.message.clone(),
+        },
+        _ => config_error(operation),
+    };
+    error.context(data)
+}
+
+fn transfer_file_error(path: &Path, error: std::io::Error) -> AlienError<ErrorData> {
+    bundle_error(
+        airgap::file_error(path, error),
+        &format!("writing {}", path.display()),
+    )
 }
 
 fn config_error(message: impl Into<String>) -> ErrorData {
@@ -5975,6 +5999,31 @@ stringData:
         assert_eq!(result.stdout, b"site CLI ready");
         binary.assert_hits_async(1).await;
 
+        // Failure after packing must preserve the previous published bundle.
+        let original = std::fs::read(&output).unwrap();
+        let mut next_manifest = manifest.clone();
+        next_manifest.sequence += 1;
+        let next_bytes = serde_json::to_vec(&next_manifest).unwrap();
+        std::fs::write(bundle.path().join(airgap::MANIFEST_FILE), &next_bytes).unwrap();
+        std::fs::write(
+            bundle.path().join(airgap::SIGNATURE_FILE),
+            key.sign(&next_bytes),
+        )
+        .unwrap();
+        let tools = folder.path().join(TOOLS_DIR);
+        let saved_tools = folder.path().join("saved-tools");
+        std::fs::rename(&tools, &saved_tools).unwrap();
+        std::fs::write(&tools, b"not a directory").unwrap();
+        assert!(
+            write_update_bundle(bundle.path(), &output, folder.path(), &key.public_key())
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), original);
+        assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 3);
+        std::fs::remove_file(&tools).unwrap();
+        std::fs::rename(saved_tools, tools).unwrap();
+
         // Changed downloads must not replace the carried executable.
         std::fs::write(bundle.path().join("tools/acmectl-linux-x86_64"), b"changed").unwrap();
         assert!(
@@ -6036,6 +6085,60 @@ stringData:
             url: server.base_url(),
             token: "ax_deploy_test".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn carried_update_retries_failed_cleanup_without_downloading_again() {
+        let server = MockServer::start_async().await;
+        let target = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/v1/deployments/dep_1/target");
+                then.status(200).json_body(serde_json::json!({
+                    "releaseInfo": {"releaseId": "rel_new", "stack": {"id": "app"}}
+                }));
+            })
+            .await;
+        let folder = tempfile::tempdir().unwrap();
+        let mut site = SiteState {
+            deployment_id: "dep_1".into(),
+            ..Default::default()
+        };
+        let pending = folder.path().join(TO_SITE);
+        std::fs::create_dir_all(&pending).unwrap();
+        let carried = pending.join("2-rel_new.bundle");
+        let obsolete = pending.join("1-rel_old.bundle");
+        std::fs::write(&carried, b"published update").unwrap();
+        // A directory at the old filename forces a removal error even as root.
+        std::fs::create_dir(&obsolete).unwrap();
+        download_update(folder.path(), &mut site, &access(&server), false, true, &[])
+            .await
+            .unwrap();
+        assert!(obsolete.is_dir(), "dry-run must leave the folder untouched");
+        assert!(download_update(
+            folder.path(),
+            &mut site,
+            &access(&server),
+            false,
+            false,
+            &[]
+        )
+        .await
+        .is_err());
+        std::fs::remove_dir(&obsolete).unwrap();
+        std::fs::write(&obsolete, b"obsolete update").unwrap();
+        download_update(
+            folder.path(),
+            &mut site,
+            &access(&server),
+            false,
+            false,
+            &[],
+        )
+        .await
+        .unwrap();
+        assert!(!obsolete.exists());
+        assert_eq!(std::fs::read(carried).unwrap(), b"published update");
+        target.assert_hits_async(3).await;
     }
 
     /// The first telemetry batch id in a status report.

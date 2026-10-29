@@ -71,20 +71,28 @@ pub(super) async fn check(
         .into_alien_error()
         .context(error("Preparing registry checks"))?;
     let mut failures = Vec::new();
+    let mut details = Vec::new();
     for (name, images) in repositories {
         if let Err(error) = check_repository(name, images, access, &oci, &http).await {
+            let mut message = match error.error.as_ref() {
+                Some(ErrorData::RegistryPreflightFailed { message, .. }) => message.clone(),
+                _ => error.message.clone(),
+            };
+            let mut cause = error.source.as_deref();
+            while let Some(source) = cause {
+                message.push_str(": ");
+                message.push_str(&source.message);
+                cause = source.source.as_deref();
+            }
+            details.push(message);
             failures.push(error.into_generic());
         }
     }
     if !failures.is_empty() {
-        let details = failures
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n  ");
+        let details = details.join("\n  ");
         return Err(AlienError::new(ErrorData::RegistryPreflightFailed {
             message: format!(
-                "These repositories could not be verified for upload:\n  {details}\nCreate missing repositories or correct registry access before running sync again. For Amazon ECR, configure a repository creation template for the site prefix with appliedFor=[\"CREATE_ON_PUSH\"]. No image layers were uploaded."
+                "Access denied or repository unavailable:\n  {details}\nCheck registry access and create any missing repositories before running sync again. For Amazon ECR, configure a repository creation template for the site prefix with appliedFor=[\"CREATE_ON_PUSH\"]. No image layers were uploaded."
             ),
             failures,
         }));
@@ -201,6 +209,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preflight_reports_the_connection_failure_cause() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let destinations = repositories(&[image("app")], &format!("{address}/site")).unwrap();
+        let error = check(
+            &destinations,
+            &RegistryAccess {
+                auth: RegistryAuth::Anonymous,
+                insecure: true,
+            },
+        )
+        .await
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.to_lowercase().contains("connection refused"),
+            "{message}"
+        );
+        assert_eq!(message.matches("REGISTRY_PREFLIGHT_FAILED").count(), 1);
+    }
+
+    #[tokio::test]
     async fn preflight_allows_create_on_push_and_cancels_without_sending_layers() {
         let server = MockServer::start_async().await;
         server
@@ -312,6 +343,10 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, "REGISTRY_PREFLIGHT_FAILED");
         let message = error.to_string();
+        assert_eq!(message.matches("REGISTRY_PREFLIGHT_FAILED").count(), 1);
+        assert!(error
+            .message
+            .contains("Access denied or repository unavailable"));
         for expected in [
             "site/app (HTTP 404)",
             "site/tools/operator (HTTP 403)",
