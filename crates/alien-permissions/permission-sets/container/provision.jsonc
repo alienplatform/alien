@@ -564,9 +564,7 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"
-            ],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"],
             "condition": {
               "StringEquals": {
                 "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
@@ -574,9 +572,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"
-            ],
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"],
             "condition": {
               "StringEquals": {
                 "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
@@ -598,14 +594,10 @@
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"
-            ]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"]
           }
         }
       },

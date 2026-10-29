@@ -225,6 +225,7 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
         }
     }
     let legacy = compile(&stack, false);
+    assert_backup_role_handoff(&bounded, &legacy);
     for action in [
         "iam:CreateRole",
         "iam:PutRolePolicy",
@@ -252,4 +253,80 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
         ),
         Decision::Allowed
     );
+}
+
+fn assert_backup_role_handoff(bounded: &[AwsIamStatement], legacy: &[AwsIamStatement]) {
+    let role = "arn:aws:iam::123456789012:role/sample-volume-backups-compute";
+    for action in [
+        "iam:CreateRole",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePermissionsBoundary",
+    ] {
+        for boundary in [None, Some("foreign-boundary"), Some(BOUNDARY)] {
+            let mut request = Request::new(action, role);
+            if let Some(boundary) = boundary {
+                request = request.with("iam:PermissionsBoundary", boundary);
+            }
+            assert_eq!(
+                evaluate(bounded, &request),
+                if boundary == Some(BOUNDARY) {
+                    Decision::Allowed
+                } else {
+                    Decision::NotAllowed
+                },
+                "backup role {action} with {boundary:?}"
+            );
+        }
+        let foreign = Request::new(
+            action,
+            "arn:aws:iam::123456789012:role/other-volume-backups-compute",
+        )
+        .with("iam:PermissionsBoundary", BOUNDARY);
+        assert_ne!(evaluate(bounded, &foreign), Decision::Allowed, "{action}");
+    }
+    for action in [
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:TagRole",
+        "iam:DeleteRole",
+    ] {
+        assert_eq!(
+            evaluate(bounded, &Request::new(action, role)),
+            Decision::Allowed,
+            "backup role lifecycle: {action}"
+        );
+    }
+    for action in ["iam:AttachRolePolicy", "iam:DeleteRolePermissionsBoundary"] {
+        assert_ne!(
+            evaluate(
+                bounded,
+                &Request::new(action, role).with("iam:PermissionsBoundary", BOUNDARY)
+            ),
+            Decision::Allowed,
+            "backup role must not allow {action}"
+        );
+    }
+    // The legacy setup-owned role stays protected even when another provision set
+    // grants prefix-wide role writes, and even if the caller supplies a boundary.
+    for action in [
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePermissionsBoundary",
+        "iam:TagRole",
+        "iam:DeleteRole",
+    ] {
+        assert_eq!(
+            evaluate(
+                legacy,
+                &Request::new(action, role).with("iam:PermissionsBoundary", BOUNDARY)
+            ),
+            Decision::ExplicitlyDenied,
+            "legacy backup role: {action}"
+        );
+    }
 }
