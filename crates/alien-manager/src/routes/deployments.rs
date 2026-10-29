@@ -1491,6 +1491,7 @@ mod tests {
             runtime_metadata: None,
             current_release_id: None,
             desired_release_id: None,
+            configuration_revision: None,
             import_source: None,
             setup_method: None,
             setup_metadata: None,
@@ -2146,6 +2147,7 @@ mod tests {
             status: "update-pending".to_string(),
             current_release_id: Some("rel_installed".to_string()),
             desired_release_id: Some("rel_target".to_string()),
+            configuration_revision: None,
             ..deployment_record()
         };
         let (status, json) = retry_route_response(deployment, true).await;
@@ -2159,6 +2161,7 @@ mod tests {
             status: "update-pending".to_string(),
             current_release_id: Some("rel_installed".to_string()),
             desired_release_id: Some("rel_target".to_string()),
+            configuration_revision: None,
             ..deployment_record()
         };
         let refusal = ErrorData::bad_request("Pending work cannot safely recover").into_generic();
@@ -2214,6 +2217,7 @@ mod tests {
             status: "provisioning".to_string(),
             current_release_id: Some("rel_installed".to_string()),
             desired_release_id: None,
+            configuration_revision: None,
             ..deployment_record()
         };
 
@@ -2235,6 +2239,7 @@ mod tests {
                 status: "provisioning".to_string(),
                 current_release_id: current.map(str::to_string),
                 desired_release_id: desired.map(str::to_string),
+                configuration_revision: None,
                 ..deployment_record()
             };
 

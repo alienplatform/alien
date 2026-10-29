@@ -133,6 +133,7 @@ fn deployment_on_platform(stack_state: StackState, platform: Platform) -> Deploy
         runtime_metadata: None,
         current_release_id: None,
         desired_release_id: None,
+        configuration_revision: None,
         import_source: None,
         setup_method: None,
         setup_metadata: None,

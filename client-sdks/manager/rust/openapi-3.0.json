@@ -17510,6 +17510,11 @@
           "state"
         ],
         "properties": {
+          "appliedConfigurationRevision": {
+            "type": "string",
+            "description": "Approved configuration revision confirmed Running by the site.",
+            "nullable": true
+          },
           "heartbeats": {
             "type": "array",
             "items": {

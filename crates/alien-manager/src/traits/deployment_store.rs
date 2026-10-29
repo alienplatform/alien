@@ -5,11 +5,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind,
-    sync::{ObservedApplicationReport, OperatorCapabilityReport, OperatorImageReport},
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentInfo,
     EnvironmentVariable, GcpEnvironmentInfo, ManagementConfig, ObservedInventoryBatch, Platform,
     ResourceHeartbeat, RuntimeMetadata, Stack, StackSettings, StackState,
+    import::ImportSourceKind,
+    sync::{ObservedApplicationReport, OperatorCapabilityReport, OperatorImageReport},
 };
 use alien_error::AlienError;
 
@@ -59,6 +59,9 @@ pub struct DeploymentRecord {
     pub runtime_metadata: Option<RuntimeMetadata>,
     pub current_release_id: Option<String>,
     pub desired_release_id: Option<String>,
+    /// Opaque revision supplied with the resolved configuration by its owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_revision: Option<String>,
     /// Setup source that created this deployment, if it was imported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_source: Option<ImportSourceKind>,
@@ -422,6 +425,7 @@ pub struct ReconcileInput {
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
+    applied_configuration_revision: Option<String>,
 }
 
 impl ReconcileInput {
@@ -432,7 +436,13 @@ impl ReconcileInput {
             application: None,
             dynamic_containers: None,
             operations_config: None,
+            applied_configuration_revision: None,
         }
+    }
+
+    /// Approved configuration revision confirmed Running by an offline site.
+    pub fn applied_configuration_revision(&self) -> Option<&str> {
+        self.applied_configuration_revision.as_deref()
     }
 
     /// Operations an Operator installed without a release declares, without
@@ -464,9 +474,16 @@ pub struct ReconcileInputBuilder {
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
+    applied_configuration_revision: Option<String>,
 }
 
 impl ReconcileInputBuilder {
+    /// Attach the approved configuration revision confirmed by the site.
+    pub fn applied_configuration_revision(mut self, revision: String) -> Self {
+        self.applied_configuration_revision = Some(revision);
+        self
+    }
+
     pub fn operations_config(mut self, config: alien_core::OperationsConfig) -> Self {
         self.operations_config = Some(config);
         self
@@ -497,6 +514,7 @@ impl ReconcileInputBuilder {
             application: self.application,
             dynamic_containers: self.dynamic_containers,
             operations_config: self.operations_config,
+            applied_configuration_revision: self.applied_configuration_revision,
         }
     }
 }

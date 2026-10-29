@@ -169,6 +169,8 @@ struct SiteReport {
     /// Signed target digest, only after this exact bundle reaches Running.
     #[serde(default)]
     installed_target_hash: Option<String>,
+    #[serde(default)]
+    applied_configuration_revision: Option<String>,
     state: serde_json::Value,
     #[serde(default)]
     heartbeats: Vec<ResourceHeartbeat>,
@@ -199,6 +201,8 @@ struct InstalledBundle {
     sequence: Option<u64>,
     #[serde(default)]
     target_hash: Option<String>,
+    #[serde(default)]
+    configuration_revision: Option<String>,
     release_id: String,
     stack_id: String,
     chart: String,
@@ -956,7 +960,8 @@ async fn send_report(
     loop {
         let mut body = serde_json::json!({
             "state": report.state, "telemetry": [], "writtenAt": report.written_at,
-            "heartbeats": report.heartbeats
+            "heartbeats": report.heartbeats,
+            "appliedConfigurationRevision": report.applied_configuration_revision
         });
         let mut bytes = serde_json::to_vec(&body)
             .into_alien_error()
@@ -2376,6 +2381,7 @@ async fn uninstall_site(
     }
     report.installed_release = None;
     report.installed_target_hash = None;
+    report.applied_configuration_revision = None;
     report.written_at = chrono::Utc::now().to_rfc3339();
     report.heartbeats.clear();
     save_report(folder, &report)?;
@@ -2818,13 +2824,17 @@ async fn install_pending(
     .into_alien_error()
     .context(config_error("parsing the target"))?;
     airgap::rewrite_references(&mut target, &mapping);
-    let record = installed_record(
+    let mut record = installed_record(
         &manifest,
         &settings.registry,
         airgap::blob_inventory(&work.path().join(airgap::OCI_DIR), &manifest.images)
             .await
             .context(config_error("listing the update's layers"))?,
     )?;
+
+    record.configuration_revision = verified_target["configurationRevision"]
+        .as_str()
+        .map(str::to_owned);
 
     let pull_secret = match settings
         .registry_credentials
@@ -3054,6 +3064,7 @@ fn installed_record(
         rollout_succeeded: false,
         sequence: Some(manifest.sequence),
         target_hash: manifest.files.get(airgap::TARGET_FILE).cloned(),
+        configuration_revision: None,
         release_id: manifest.release_id.clone(),
         stack_id: manifest.stack_id.clone(),
         chart: manifest.chart.clone(),
@@ -3491,6 +3502,10 @@ fn report_from_status(
     telemetry: Vec<ReportedBatch>,
     dropped: u64,
 ) -> Result<SiteReport> {
+    let installed = record.sequence.is_some()
+        && status["sequence"].as_u64() == record.sequence
+        && status["state"]["status"] == "running"
+        && current_release(&status).as_deref() == Some(record.release_id.as_str());
     let report = SiteReport {
         deployment_id: site.deployment_id.clone(),
         written_at: status["writtenAt"]
@@ -3498,12 +3513,10 @@ fn report_from_status(
             .ok_or_else(|| AlienError::new(config_error("the Operator status has no writtenAt")))?
             .to_string(),
         installed_release: current_release(&status),
-        installed_target_hash: (record.sequence.is_some()
-            && status["sequence"].as_u64() == record.sequence
-            && status["state"]["status"] == "running"
-            && current_release(&status).as_deref() == Some(record.release_id.as_str()))
-        .then(|| record.target_hash.clone())
-        .flatten(),
+        installed_target_hash: installed.then(|| record.target_hash.clone()).flatten(),
+        applied_configuration_revision: installed
+            .then(|| record.configuration_revision.clone())
+            .flatten(),
         state: status["state"].clone(),
         heartbeats: serde_json::from_value(
             status
@@ -4240,6 +4253,7 @@ mod tests {
             rollout_succeeded: false,
             sequence: None,
             target_hash: None,
+            configuration_revision: None,
             release_id: "release".into(),
             stack_id: "app".into(),
             chart: "app-0.1.0.tgz".into(),
@@ -6136,6 +6150,7 @@ stringData:
             written_at: "2026-01-01T00:00:00Z".to_string(),
             installed_release: Some("rel_old".to_string()),
             installed_target_hash: None,
+            applied_configuration_revision: None,
             state: serde_json::json!({ "status": "running" }),
             heartbeats: Vec::new(),
             telemetry: (1..=4)
@@ -6405,6 +6420,7 @@ stringData:
             rollout_succeeded: true,
             sequence: Some(7),
             target_hash: Some("target-digest".into()),
+            configuration_revision: Some("configuration-7".into()),
             release_id: "rel_1".into(),
             stack_id: "app".into(),
             chart: "app.tgz".into(),
@@ -6417,22 +6433,27 @@ stringData:
         let mut status = serde_json::json!({"writtenAt": "now", "sequence": 7,
             "state": {"status": "running", "currentRelease": {"releaseId": "rel_1"}}});
         let report = |record: &InstalledBundle, status: &serde_json::Value| {
-            report_from_status(&site, record, status.clone(), vec![], 0)
-                .unwrap()
-                .installed_target_hash
+            let report = report_from_status(&site, record, status.clone(), vec![], 0).unwrap();
+            (
+                report.installed_target_hash,
+                report.applied_configuration_revision,
+            )
         };
-        assert_eq!(report(&record, &status).as_deref(), Some("target-digest"));
+        assert_eq!(
+            report(&record, &status),
+            (Some("target-digest".into()), Some("configuration-7".into()))
+        );
         status["sequence"] = 6.into();
-        assert_eq!(report(&record, &status), None);
+        assert_eq!(report(&record, &status), (None, None));
         status["sequence"] = 7.into();
         status["state"]["status"] = "update-failed".into();
-        assert_eq!(report(&record, &status), None);
+        assert_eq!(report(&record, &status), (None, None));
         status["state"]["status"] = "running".into();
         status["state"]["currentRelease"]["releaseId"] = "rel_other".into();
-        assert_eq!(report(&record, &status), None);
+        assert_eq!(report(&record, &status), (None, None));
         status["state"]["currentRelease"]["releaseId"] = "rel_1".into();
         record.sequence = None;
-        assert_eq!(report(&record, &status), None);
+        assert_eq!(report(&record, &status), (None, None));
     }
 
     #[tokio::test]
@@ -6617,6 +6638,7 @@ stringData:
             rollout_succeeded: false,
             sequence: None,
             target_hash: None,
+            configuration_revision: None,
             release_id: "rel_1".into(),
             stack_id: "site".into(),
             chart: "chart.tgz".into(),
@@ -6659,12 +6681,13 @@ stringData:
         });
         let request = server.mock_async(|when, then| {
             when.method(POST).path("/v1/deployments/dep_1/status-report")
-                .json_body_partial(serde_json::json!({"heartbeats": [heartbeat.clone()], "writtenAt": "2026-01-01T00:00:00Z"}).to_string());
+                .json_body_partial(serde_json::json!({"heartbeats": [heartbeat.clone()], "writtenAt": "2026-01-01T00:00:00Z", "appliedConfigurationRevision": "configuration-7"}).to_string());
             then.status(200).json_body(serde_json::json!({"telemetryThrough": 4}));
         }).await;
         let (dir, mut site) = folder_with_report();
         let mut report: serde_json::Value =
             serde_json::from_slice(&std::fs::read(report_path(dir.path())).unwrap()).unwrap();
+        report["appliedConfigurationRevision"] = "configuration-7".into();
         report["heartbeats"] = serde_json::json!([heartbeat]);
         std::fs::write(
             report_path(dir.path()),

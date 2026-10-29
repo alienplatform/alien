@@ -19650,6 +19650,13 @@
           "state"
         ],
         "properties": {
+          "appliedConfigurationRevision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Approved configuration revision confirmed Running by the site."
+          },
           "heartbeats": {
             "type": "array",
             "items": {

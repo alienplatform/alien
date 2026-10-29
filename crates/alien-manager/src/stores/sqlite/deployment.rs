@@ -223,6 +223,7 @@ impl SqliteDeploymentStore {
             runtime_metadata: None,
             current_release_id: None,
             desired_release_id: None,
+            configuration_revision: None,
             import_source: reservation
                 .as_ref()
                 .map(|value| value.import_source.clone()),
@@ -517,6 +518,7 @@ impl SqliteDeploymentStore {
             runtime_metadata: p.optional_json(10, "runtime_metadata")?,
             current_release_id: p.optional_string(11, "current_release_id")?,
             desired_release_id: p.optional_string(12, "desired_release_id")?,
+            configuration_revision: None,
             import_source,
             setup_method: None,
             setup_metadata: p.optional_json(14, "setup_metadata")?,
@@ -665,6 +667,7 @@ mod tests {
             runtime_metadata: None,
             current_release_id: None,
             desired_release_id: None,
+            configuration_revision: None,
             import_source: None,
             setup_method: None,
             setup_metadata: None,
@@ -887,6 +890,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             runtime_metadata: Some(params.runtime_metadata),
             current_release_id: params.current_release_id,
             desired_release_id: params.desired_release_id,
+            configuration_revision: None,
             import_source: params.import_source.clone(),
             setup_method: params.import_source.as_ref().and_then(|source| {
                 serde_json::to_value(source)

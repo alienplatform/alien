@@ -213,6 +213,7 @@ mod tests {
             runtime_metadata: None,
             current_release_id: Some("rel_test".to_string()),
             desired_release_id: Some("rel_test".to_string()),
+            configuration_revision: None,
             import_source: None,
             setup_method: None,
             setup_metadata: None,
