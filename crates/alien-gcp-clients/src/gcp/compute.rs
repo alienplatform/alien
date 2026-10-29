@@ -196,13 +196,34 @@ pub trait ComputeApi: Send + Sync + Debug {
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/healthChecks/get
     async fn get_health_check(&self, health_check_name: String) -> Result<HealthCheck>;
 
+    /// Regional counterpart of `get_health_check`; returns provider operations without polling.
+    async fn get_regional_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+    ) -> Result<HealthCheck>;
+
     /// Creates a health check.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/healthChecks/insert
     async fn insert_health_check(&self, health_check: HealthCheck) -> Result<Operation>;
 
+    /// Regional counterpart of `insert_health_check`; returns provider operations without polling.
+    async fn insert_regional_health_check(
+        &self,
+        region: String,
+        health_check: HealthCheck,
+    ) -> Result<Operation>;
+
     /// Deletes a health check.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/healthChecks/delete
     async fn delete_health_check(&self, health_check_name: String) -> Result<Operation>;
+
+    /// Regional counterpart of `delete_health_check`; returns provider operations without polling.
+    async fn delete_regional_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+    ) -> Result<Operation>;
 
     /// Patches a health check (PATCH update).
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/healthChecks/patch
@@ -218,6 +239,13 @@ pub trait ComputeApi: Send + Sync + Debug {
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/backendServices/get
     async fn get_backend_service(&self, backend_service_name: String) -> Result<BackendService>;
 
+    /// Regional counterpart of `get_backend_service`; returns provider operations without polling.
+    async fn get_regional_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+    ) -> Result<BackendService>;
+
     /// Gets the health of a backend group attached to a backend service.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/backendServices/getHealth
     async fn get_backend_service_health(
@@ -226,18 +254,48 @@ pub trait ComputeApi: Send + Sync + Debug {
         group: String,
     ) -> Result<BackendServiceGroupHealth>;
 
+    /// Regional counterpart of `get_backend_service_health`; returns provider operations without polling.
+    async fn get_regional_backend_service_health(
+        &self,
+        region: String,
+        backend_service_name: String,
+        group: String,
+    ) -> Result<BackendServiceGroupHealth>;
+
     /// Creates a backend service.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/backendServices/insert
     async fn insert_backend_service(&self, backend_service: BackendService) -> Result<Operation>;
+
+    /// Regional counterpart of `insert_backend_service`; returns provider operations without polling.
+    async fn insert_regional_backend_service(
+        &self,
+        region: String,
+        backend_service: BackendService,
+    ) -> Result<Operation>;
 
     /// Deletes a backend service.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/backendServices/delete
     async fn delete_backend_service(&self, backend_service_name: String) -> Result<Operation>;
 
+    /// Regional counterpart of `delete_backend_service`; returns provider operations without polling.
+    async fn delete_regional_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+    ) -> Result<Operation>;
+
     /// Updates a backend service (PATCH).
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/backendServices/patch
     async fn patch_backend_service(
         &self,
+        backend_service_name: String,
+        backend_service: BackendService,
+    ) -> Result<Operation>;
+
+    /// Regional counterpart of `patch_backend_service`; returns provider operations without polling.
+    async fn patch_regional_backend_service(
+        &self,
+        region: String,
         backend_service_name: String,
         backend_service: BackendService,
     ) -> Result<Operation>;
@@ -1063,8 +1121,49 @@ impl ComputeApi for ComputeClient {
             .await
     }
 
+    async fn get_regional_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+    ) -> Result<HealthCheck> {
+        let path = format!(
+            "projects/{}/regions/{}/healthChecks/{}",
+            self.project_id, region, health_check_name
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &health_check_name,
+            )
+            .await
+    }
+
     async fn insert_health_check(&self, health_check: HealthCheck) -> Result<Operation> {
         let path = format!("projects/{}/global/healthChecks", self.project_id);
+        let resource_name = health_check.name.clone().unwrap_or_default();
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(health_check),
+                &resource_name,
+            )
+            .await
+    }
+
+    async fn insert_regional_health_check(
+        &self,
+        region: String,
+        health_check: HealthCheck,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{}/healthChecks",
+            self.project_id, region
+        );
         let resource_name = health_check.name.clone().unwrap_or_default();
         self.base
             .execute_request(
@@ -1081,6 +1180,26 @@ impl ComputeApi for ComputeClient {
         let path = format!(
             "projects/{}/global/healthChecks/{}",
             self.project_id, health_check_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &health_check_name,
+            )
+            .await
+    }
+
+    async fn delete_regional_health_check(
+        &self,
+        region: String,
+        health_check_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{}/healthChecks/{}",
+            self.project_id, region, health_check_name
         );
         self.base
             .execute_request(
@@ -1131,6 +1250,26 @@ impl ComputeApi for ComputeClient {
             .await
     }
 
+    async fn get_regional_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+    ) -> Result<BackendService> {
+        let path = format!(
+            "projects/{}/regions/{}/backendServices/{}",
+            self.project_id, region, backend_service_name
+        );
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                None,
+                Option::<()>::None,
+                &backend_service_name,
+            )
+            .await
+    }
+
     async fn get_backend_service_health(
         &self,
         backend_service_name: String,
@@ -1151,8 +1290,50 @@ impl ComputeApi for ComputeClient {
             .await
     }
 
+    async fn get_regional_backend_service_health(
+        &self,
+        region: String,
+        backend_service_name: String,
+        group: String,
+    ) -> Result<BackendServiceGroupHealth> {
+        let path = format!(
+            "projects/{}/regions/{}/backendServices/{}/getHealth",
+            self.project_id, region, backend_service_name
+        );
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(ResourceGroupReference { group }),
+                &backend_service_name,
+            )
+            .await
+    }
+
     async fn insert_backend_service(&self, backend_service: BackendService) -> Result<Operation> {
         let path = format!("projects/{}/global/backendServices", self.project_id);
+        let resource_name = backend_service.name.clone().unwrap_or_default();
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(backend_service),
+                &resource_name,
+            )
+            .await
+    }
+
+    async fn insert_regional_backend_service(
+        &self,
+        region: String,
+        backend_service: BackendService,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{}/backendServices",
+            self.project_id, region
+        );
         let resource_name = backend_service.name.clone().unwrap_or_default();
         self.base
             .execute_request(
@@ -1181,6 +1362,26 @@ impl ComputeApi for ComputeClient {
             .await
     }
 
+    async fn delete_regional_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{}/backendServices/{}",
+            self.project_id, region, backend_service_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &backend_service_name,
+            )
+            .await
+    }
+
     async fn patch_backend_service(
         &self,
         backend_service_name: String,
@@ -1189,6 +1390,27 @@ impl ComputeApi for ComputeClient {
         let path = format!(
             "projects/{}/global/backendServices/{}",
             self.project_id, backend_service_name
+        );
+        self.base
+            .execute_request(
+                Method::PATCH,
+                &path,
+                None,
+                Some(backend_service),
+                &backend_service_name,
+            )
+            .await
+    }
+
+    async fn patch_regional_backend_service(
+        &self,
+        region: String,
+        backend_service_name: String,
+        backend_service: BackendService,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/regions/{}/backendServices/{}",
+            self.project_id, region, backend_service_name
         );
         self.base
             .execute_request(
@@ -3743,6 +3965,10 @@ pub struct BackendService {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub self_link: Option<String>,
 
+    /// Network used by an internal passthrough load balancer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+
     /// List of backends.
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -4532,6 +4758,14 @@ pub struct ForwardingRule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_balancing_scheme: Option<LoadBalancingScheme>,
 
+    /// Regional backend service for an internal passthrough load balancer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_service: Option<String>,
+
+    /// Allow clients in other regions of the same VPC to use the internal VIP.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_global_access: Option<bool>,
+
     /// Network tier for this forwarding rule.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network_tier: Option<NetworkTier>,
@@ -4707,6 +4941,8 @@ pub struct NetworkEndpointGroupCloudFunction {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum NetworkEndpointType {
+    /// VM primary IP endpoint for passthrough load balancing; no endpoint port.
+    GceVmIp,
     /// GCE VM IP port endpoint.
     GceVmIpPort,
     /// Non-GCP private IP port endpoint.
