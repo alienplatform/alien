@@ -137,7 +137,7 @@ fn request_variables_survive_runtime_cloudformation_and_boundary_compilation() {
                 assert!(aws_permissions_boundary_covers(&boundary, &document).unwrap());
                 assert!(boundary["Statement"].as_array().unwrap().iter().any(
                     |statement| statement.get("Resource")
-                        == document["Statement"][0].get("Resource")
+                        == document["Statement"][0]["Resource"].get(0)
                         && statement.get("Condition") == document["Statement"][0].get("Condition")
                 ));
             }
