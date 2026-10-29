@@ -1,8 +1,8 @@
 use alien_client_core::{ErrorData, Result};
-use alien_core::standard_resource_tags;
+use alien_core::{setup_resource_tags, standard_resource_tags};
 use alien_error::AlienError;
 
-use super::{CreateRoleRequest, CreateRoleResponse, IamApi};
+use super::{CreateRoleRequest, CreateRoleResponse, CreateRoleTag, IamApi};
 
 /// Prepares management-written roles for the deployment's permissions boundary.
 /// Call `prepare_existing` before changing policies, trust, or removing policies
@@ -65,6 +65,79 @@ impl<'a> IamRoleWriter<'a> {
             }));
         }
 
+        self.audit_attached_policies(role_name).await?;
+        self.iam
+            .put_role_permissions_boundary(role_name, boundary)
+            .await
+    }
+
+    /// Transfers a setup role to runtime ownership using setup credentials.
+    /// The caller must first release the role and its policies from any template
+    /// state and validate its service trust. This does not transfer template ownership.
+    /// Attaches the boundary before retagging; a failed tag write can be retried.
+    /// A deployment without a boundary cannot transfer a setup role.
+    pub async fn adopt_from_setup(
+        &self,
+        role_name: &str,
+        deployment_prefix: &str,
+        resource_id: &str,
+        resource_type: &str,
+    ) -> Result<()> {
+        let boundary = self.permissions_boundary.ok_or_else(|| {
+            AlienError::new(ErrorData::InvalidInput {
+                message: format!("Cannot transfer setup role '{role_name}' without a deployment permissions boundary"),
+                field_name: Some("permissionsBoundary".to_owned()),
+            })
+        })?;
+        let role = self.iam.get_role(role_name).await?.get_role_result.role;
+        let runtime_tags = standard_resource_tags(deployment_prefix, resource_id);
+        let has_tags = |expected: &[(String, String)]| {
+            role.tags.as_ref().is_some_and(|tags| {
+                expected.iter().all(|(key, value)| {
+                    tags.member
+                        .iter()
+                        .any(|tag| &tag.key == key && &tag.value == value)
+                })
+            })
+        };
+        let runtime_tags: Vec<_> = runtime_tags.into_iter().collect();
+        let already_runtime = has_tags(&runtime_tags);
+        let setup_tags: Vec<_> = setup_resource_tags(deployment_prefix, resource_id, resource_type)
+            .into_iter()
+            .collect();
+        if !already_runtime && !has_tags(&setup_tags) {
+            return Err(AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
+                resource_id: resource_id.to_owned(),
+                object: format!("IAM role '{role_name}'"),
+            }));
+        }
+        if let Some(attached) = &role.permissions_boundary {
+            if attached.permissions_boundary_arn.as_deref() != Some(boundary) {
+                return Err(AlienError::new(ErrorData::InvalidInput {
+                    message: format!("Role '{role_name}' has a different permissions boundary; reconcile it in setup before transferring ownership"),
+                    field_name: Some("permissionsBoundary".to_owned()),
+                }));
+            }
+        }
+        // Audit even a bounded setup role: a previous attempt may have attached
+        // the boundary but failed before ownership tags were written.
+        self.audit_attached_policies(role_name).await?;
+        if role.permissions_boundary.is_none() {
+            self.iam
+                .put_role_permissions_boundary(role_name, boundary)
+                .await?;
+        }
+        if !already_runtime {
+            let tags: Vec<_> = runtime_tags
+                .into_iter()
+                .map(|(key, value)| CreateRoleTag { key, value })
+                .collect();
+            self.iam.tag_role(role_name, &tags).await?;
+        }
+        Ok(())
+    }
+
+    async fn audit_attached_policies(&self, role_name: &str) -> Result<()> {
         let policies = self
             .iam
             .list_attached_role_policies(role_name)
@@ -89,8 +162,6 @@ impl<'a> IamRoleWriter<'a> {
                 }
             }
         }
-        self.iam
-            .put_role_permissions_boundary(role_name, boundary)
-            .await
+        Ok(())
     }
 }
