@@ -114,10 +114,9 @@ shorter concrete prefix would fit. Runtime grants selecting KMS keys use physica
 key ARNs: templates reference key ARN attributes, and direct setup requires the
 ARNs already present in imported state. A missing ARN is an error. Templates
 include conditional catalog key grants only while the key is enabled, including
-keys selected for native volume encryption. Terraform also gates inline statements
-referencing conditional keys, preserving their actions, conditions and denials.
-CloudFormation inline grants still require unconditional keys. Disabled keys
-contribute no ARN to the installed or recorded boundary.
+keys selected for native volume encryption. Inline grants referencing conditional
+keys still require an unconditional key. Disabled keys contribute no ARN to the
+installed or recorded boundary.
 
 Teardown must remove runtime roles before setup deletes the boundary policy.
 The setup registration dependencies preserve that ordering for generated

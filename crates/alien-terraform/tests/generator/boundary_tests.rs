@@ -105,57 +105,20 @@ fn find_import(expression: &Expression) -> Option<&Expression> {
 #[test]
 fn terraform_installs_and_registers_the_runtime_boundary_with_distinct_keys() {
     for enabled in [None, Some(true), Some(false)] {
-        check_boundary(enabled, false);
+        check_boundary(enabled);
     }
 }
 
-fn check_boundary(enabled: Option<bool>, inline: bool) {
+fn check_boundary(enabled: Option<bool>) {
     let mut stack = stack();
-    if inline {
-        let mut set = serde_json::to_value(
-            alien_permissions::get_permission_set("key/remote-cryptography").unwrap(),
-        )
-        .unwrap();
-        set["platforms"]["aws"] = json!([
-            {
-                "effect": "Allow",
-                "grant": {"actions": ["kms:Decrypt"]},
-                "binding": {"resource": {
-                    "resources": ["${resourceName}"],
-                    "condition": {"StringEquals": {"kms:EncryptionContext:purpose": "archive"}}
-                }}
-            },
-            {
-                "effect": "Deny",
-                "grant": {"actions": ["kms:Encrypt"]},
-                "binding": {"resource": {"resources": [], "notResources": ["${resourceName}"]}}
-            }
-        ]);
-        stack
-            .permissions
-            .profiles
-            .get_mut("application")
-            .unwrap()
-            .0
-            .insert(
-                "first".into(),
-                vec![alien_core::PermissionSetReference::Inline(
-                    serde_json::from_value(set).unwrap(),
-                )],
-            );
-    }
     if enabled.is_some() {
         stack.inputs.push(gate_input(
             "keyEnabled",
             "Enable keys",
             "Create encryption keys",
         ));
-        for id in if inline {
-            &["first"][..]
-        } else {
-            &["first", "second"][..]
-        } {
-            stack.resources.get_mut(*id).unwrap().enabled_when = Some("keyEnabled".into());
+        for id in ["first", "second"] {
+            stack.resources.get_mut(id).unwrap().enabled_when = Some("keyEnabled".into());
         }
     }
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
@@ -223,7 +186,7 @@ fn check_boundary(enabled: Option<bool>, inline: bool) {
                     hcl::to_value(json!({
                         "resource_prefix": prefix,
                         "first_selected_key": null,
-                        "second_selected_key": if inline { json!({"arn": key2}) } else { Value::Null },
+                        "second_selected_key": null,
                     }))
                     .unwrap(),
                 );
@@ -243,18 +206,6 @@ fn check_boundary(enabled: Option<bool>, inline: bool) {
                 }),
             );
         }
-        context.declare_func(
-            "concat",
-            FuncDef::builder()
-                .variadic_param(ParamType::Any)
-                .build(|args| {
-                    Ok(hcl::Value::Array(
-                        args.iter()
-                            .flat_map(|arg| arg.as_array().unwrap().iter().cloned())
-                            .collect(),
-                    ))
-                }),
-        );
         let installed = document(attribute(boundary, "policy"), &context);
         assert_eq!(
             serde_json::to_value(attribute(boundary, "name").evaluate(&context).unwrap()).unwrap(),
@@ -269,6 +220,8 @@ fn check_boundary(enabled: Option<bool>, inline: bool) {
         let mut resolved_stack = stack.clone();
         if enabled == Some(false) {
             resolved_stack.resources.shift_remove("first");
+            resolved_stack.resources.shift_remove("second");
+            resolved_stack.resources.shift_remove("db");
             resolved_stack
                 .permissions
                 .profiles
@@ -276,10 +229,6 @@ fn check_boundary(enabled: Option<bool>, inline: bool) {
                 .unwrap()
                 .0
                 .shift_remove("first");
-            if !inline {
-                resolved_stack.resources.shift_remove("second");
-                resolved_stack.resources.shift_remove("db");
-            }
         }
         let expected = aws_stack_permissions_boundary(&resolved_stack, &runtime, |_, scope| {
             Ok(runtime
@@ -292,29 +241,6 @@ fn check_boundary(enabled: Option<bool>, inline: bool) {
                 }))
         })
         .unwrap();
-        if inline {
-            // Compare complete inline statements, so conditions and explicit denials
-            // cannot disappear behind the broader catalog Allow ceiling.
-            let custom = |policy: &Value| -> Vec<Value> {
-                policy["Statement"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter(|statement| {
-                        statement["Effect"] == "Deny"
-                            || !statement["Condition"]["StringEquals"]
-                                ["kms:EncryptionContext:purpose"]
-                                .is_null()
-                    })
-                    .cloned()
-                    .collect()
-            };
-            assert_eq!(custom(&installed), custom(&expected));
-            assert_eq!(
-                custom(&installed).len(),
-                if enabled == Some(false) { 0 } else { 2 }
-            );
-        }
         assert!(aws_permissions_boundary_covers(&installed, &expected)
             .unwrap_or_else(|error| panic!("{error}: {installed}")));
         assert!(aws_permissions_boundary_covers(&expected, &installed).unwrap());
@@ -324,7 +250,7 @@ fn check_boundary(enabled: Option<bool>, inline: bool) {
         );
         assert_eq!(
             installed.to_string().contains(&key2),
-            inline || enabled != Some(false)
+            enabled != Some(false)
         );
         context.declare_var("aws_iam_policy", hcl::to_value(json!({"management_permissions_boundary": {"arn": arn, "policy": installed.to_string()}})).unwrap());
         context.declare_func(
@@ -389,10 +315,33 @@ fn check_boundary(enabled: Option<bool>, inline: bool) {
 }
 
 #[test]
-fn conditional_inline_key_grants_preserve_actions_conditions_and_denials() {
-    for enabled in [None, Some(true), Some(false)] {
-        check_boundary(enabled, true);
-    }
+fn conditional_inline_key_grants_remain_rejected() {
+    let mut stack = stack();
+    stack
+        .inputs
+        .push(gate_input("keyEnabled", "Enable key", "Create key"));
+    stack.resources.get_mut("first").unwrap().enabled_when = Some("keyEnabled".into());
+    stack
+        .permissions
+        .profiles
+        .get_mut("application")
+        .unwrap()
+        .0
+        .insert(
+            "first".into(),
+            vec![alien_core::PermissionSetReference::Inline(
+                alien_permissions::get_permission_set("key/remote-cryptography")
+                    .unwrap()
+                    .clone(),
+            )],
+        );
+    let error = try_render(&stack, TerraformTarget::Aws, StackSettings::default()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("inline grants must be unconditional"),
+        "{error}"
+    );
 }
 
 #[test]
