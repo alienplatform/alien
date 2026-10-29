@@ -41,15 +41,11 @@
       // Tag-on-create grants name the creation action; later tagging requires ownership.
       {
         "grant": {
-          "actions": [
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "CreateVpc",
@@ -62,15 +58,11 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:internet-gateway/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:internet-gateway/*"],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "CreateInternetGateway",
@@ -83,15 +75,11 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*"],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "CreateSubnet",
@@ -104,15 +92,11 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:route-table/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:route-table/*"],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "CreateRouteTable",
@@ -125,15 +109,11 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:natgateway/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:natgateway/*"],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "CreateNatGateway",
@@ -146,15 +126,11 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:elastic-ip/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:elastic-ip/*"],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "AllocateAddress",
@@ -167,15 +143,11 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateTags"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
-            ],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
                 "ec2:CreateAction": "CreateSecurityGroup",
