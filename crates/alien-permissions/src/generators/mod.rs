@@ -1,5 +1,6 @@
 pub mod aws_boundary;
 mod aws_boundary_coverage;
+mod aws_boundary_scope;
 pub mod aws_cloudformation;
 pub mod aws_runtime;
 pub mod azure_runtime;
@@ -9,6 +10,7 @@ mod labels;
 
 pub use aws_boundary::{aws_permissions_boundary, aws_stack_permissions_boundary};
 pub use aws_boundary_coverage::aws_permissions_boundary_covers;
+pub use aws_boundary_scope::aws_boundary_scope_context;
 pub use aws_cloudformation::{
     AwsCloudFormationIamPolicy, AwsCloudFormationIamStatement,
     AwsCloudFormationPermissionsGenerator,

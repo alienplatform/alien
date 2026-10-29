@@ -1,12 +1,11 @@
 //! Resolve boundary grants using the same names as AWS workload policy writers.
 
 use alien_core::{
-    ClientConfig, DeploymentConfig, KubernetesCluster, ManagementConfig, Platform,
-    RemoteStackManagement, ResourceStatus, Stack, StackResourceState, StackState,
+    ClientConfig, DeploymentConfig, ManagementConfig, Platform, RemoteStackManagement,
+    ResourceStatus, Stack, StackResourceState, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    aws_resource_policies::aws_prefixed_resource_name,
     generators::{aws_permissions_boundary_covers, aws_stack_permissions_boundary},
     ErrorData as PermissionErrorData, PermissionContext,
 };
@@ -15,7 +14,7 @@ use serde_json::Value;
 
 use crate::{
     build::AwsBuildController,
-    core::{state_utils::StackResourceStateExt, ResourcePermissionsHelper},
+    core::state_utils::StackResourceStateExt,
     error::{ErrorData, Result},
     key::AwsKeyController,
     kv::AwsKvController,
@@ -134,40 +133,25 @@ fn boundary_grant_context(
     base: &PermissionContext,
     scope: &str,
 ) -> Result<PermissionContext> {
-    if scope == "*" {
-        return Ok(base.clone());
-    }
-    let entry = stack
-        .resources
-        .get(scope)
-        .ok_or_else(|| unresolved(scope, "resource is absent from the desired stack"))?;
-    let prefix = base
-        .stack_prefix
-        .as_deref()
-        .ok_or_else(|| unresolved(scope, "deployment prefix is missing"))?;
-    let mut context = base.clone().with_resource_id(scope.to_string());
-    if let Some(cluster) = entry.config.downcast_ref::<KubernetesCluster>() {
-        context.resource_name = Some(
-            ResourcePermissionsHelper::kubernetes_cluster_name_for_permissions(prefix, cluster),
-        );
-        if let Some(cloud) = &cluster.cloud {
-            if let Some(account) = &cloud.account_id {
-                context.aws_account_id = Some(account.clone());
-            }
-            if let Some(region) = &cloud.region {
-                context.aws_region = Some(region.clone());
-            }
-        }
-        return Ok(context);
-    }
-    let resource_type = entry.config.resource_type().to_string();
-    // These writers intentionally pass the logical id, not a physical role or ARN.
-    if matches!(
-        resource_type.as_str(),
-        "artifact-registry" | "service-account" | "ai" | "sandbox"
-    ) {
-        return Ok(context.with_resource_name(scope.to_string()));
-    }
+    alien_permissions::generators::aws_boundary_scope_context(stack, base, scope, |scope| {
+        recorded_boundary_name(stack, state, scope).context(PermissionErrorData::GeneratorError {
+            platform: "aws".to_string(),
+            message: format!("Cannot read permissions boundary resource '{scope}'"),
+        })
+    })
+    .context(ErrorData::InfrastructureError {
+        message: format!("Cannot resolve AWS permissions boundary resource '{scope}'"),
+        operation: Some("generate_permissions_boundary".to_string()),
+        resource_id: Some(scope.to_string()),
+    })
+}
+
+fn recorded_boundary_name(
+    stack: &Stack,
+    state: &StackState,
+    scope: &str,
+) -> Result<Option<String>> {
+    let resource_type = stack.resources[scope].config.resource_type().to_string();
     let saved = state.resources.get(scope);
     if let Some(saved) = saved {
         if saved.resource_type != resource_type
@@ -189,7 +173,7 @@ fn boundary_grant_context(
     });
     let name = match resource_type.as_str() {
         "storage" | "queue" | "kv" | "build" | "worker" | "vault" if unstarted => {
-            Some(aws_prefixed_resource_name(prefix, scope))
+            return Ok(None);
         }
         "storage" => read_controller::<AwsStorageController>(saved, scope)?.bucket_name,
         "queue" => read_controller::<AwsQueueController>(saved, scope)?.queue_name,
@@ -200,15 +184,11 @@ fn boundary_grant_context(
         // Key IDs are provider-assigned. Setup imports their exact ARN; a prefix
         // cannot predict it, including when the key has not been imported yet.
         "key" => read_controller::<AwsKeyController>(saved, scope)?.key_arn,
-        // A custom grant may use only resourceId or literal ARNs. Leave resourceName
-        // unresolved for other writers so interpolation fails if it is needed.
-        _ => return Ok(context),
+        _ => return Ok(None),
     };
-    context.resource_name =
-        Some(name.filter(|name| !name.is_empty()).ok_or_else(|| {
-            unresolved(scope, "the controller has not recorded its physical name")
-        })?);
-    Ok(context)
+    Ok(Some(name.filter(|name| !name.is_empty()).ok_or_else(
+        || unresolved(scope, "the controller has not recorded its physical name"),
+    )?))
 }
 
 fn read_controller<T: DeserializeOwned>(
@@ -240,7 +220,7 @@ fn unresolved(scope: &str, reason: &str) -> AlienError<ErrorData> {
 mod tests {
     use super::*;
     use alien_core::{
-        Build, Key, KubernetesCloudReference, KubernetesClusterOwnership,
+        Build, Key, KubernetesCloudReference, KubernetesCluster, KubernetesClusterOwnership,
         KubernetesClusterProvider, KubernetesHeartbeatMode, Kv, PermissionProfile,
         PermissionSetReference, Queue, ResourceLifecycle, Storage, Vault, Worker, WorkerCode,
     };

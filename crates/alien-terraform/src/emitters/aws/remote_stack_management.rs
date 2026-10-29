@@ -349,37 +349,10 @@ fn boundary_grant_context(
     base: &PermissionContext,
     scope: &str,
 ) -> alien_permissions::Result<PermissionContext> {
-    if scope == "*" {
-        return Ok(base.clone());
-    }
-    let entry = ctx.stack.resources.get(scope).ok_or_else(|| {
-        AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
-            message: format!("AWS permissions boundary scope '{scope}' is missing"),
-        })
-    })?;
-    let mut context = base.clone().with_resource_id(scope.to_string());
-    if let Some(cluster) = entry.config.downcast_ref::<KubernetesCluster>() {
-        context.resource_name = cluster
-            .cloud
-            .as_ref()
-            .and_then(|cloud| cloud.cluster_name.clone())
-            .or_else(|| {
-                if base.stack_prefix.as_deref() == Some("${Prefix}") {
-                    return Some(kubernetes_cluster_name(cluster));
-                }
-                base.stack_prefix
-                    .as_ref()
-                    .map(|prefix| format!("{prefix}-k8s"))
-            });
-        if let Some(cloud) = &cluster.cloud {
-            if let Some(account) = &cloud.account_id {
-                context.aws_account_id = Some(account.clone());
-            }
-            if let Some(region) = &cloud.region {
-                context.aws_region = Some(region.clone());
-            }
+    alien_permissions::generators::aws_boundary_scope_context(ctx.stack, base, scope, |scope| {
+        if ctx.stack.resources[scope].config.resource_type() != alien_core::Key::RESOURCE_TYPE {
+            return Ok(None);
         }
-    } else if entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE {
         let _label = ctx.name_for(scope).ok_or_else(|| {
             AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
                 message: format!("AWS permissions boundary key '{scope}' has no setup resource"),
@@ -390,7 +363,7 @@ fn boundary_grant_context(
                 message: format!("AWS permissions boundary key '{scope}' is missing"),
             })
         })?;
-        context.resource_name = Some(if base.stack_prefix.as_deref() == Some("${Prefix}") {
+        Ok(Some(if base.stack_prefix.as_deref() == Some("${Prefix}") {
             format!("arn:aws:kms:${{Region}}:${{Account}}:key/${{Key{index}}}")
         } else {
             format!(
@@ -398,27 +371,8 @@ fn boundary_grant_context(
                 base.aws_region.as_deref().unwrap_or_default(),
                 base.aws_account_id.as_deref().unwrap_or_default()
             )
-        });
-    } else {
-        context.resource_name = match entry.config.resource_type().as_ref() {
-            "artifact-registry" | "service-account" | "ai" | "sandbox" => Some(scope.to_string()),
-            "storage" | "queue" | "kv" | "build" | "worker" | "vault" => base
-                .stack_prefix
-                .as_ref()
-                .map(|prefix| format!("{prefix}-{scope}")),
-            _ => {
-                return Err(AlienError::new(
-                    alien_permissions::ErrorData::InvalidPermissionSet {
-                        message: format!(
-                            "AWS permissions boundary resource '{scope}' has unsupported type '{}'",
-                            entry.config.resource_type()
-                        ),
-                    },
-                ))
-            }
-        };
-    }
-    Ok(context)
+        }))
+    })
 }
 
 fn trust_policy() -> Expression {
@@ -505,7 +459,13 @@ fn kubernetes_cluster_name(cluster: &KubernetesCluster) -> String {
 mod tests {
     use super::*;
     use crate::emitters::aws::helpers::aws_terraform_permission_context;
-    use alien_core::{Resource, ResourceEntry, ResourceLifecycle, Storage, Worker, WorkerCode};
+    use alien_core::{
+        KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesHeartbeatMode, Network,
+        NetworkSettings, PermissionSet, Platform, Resource, ResourceEntry, ResourceLifecycle,
+        Stack, StackSettings, Storage, Worker, WorkerCode,
+    };
+    use hcl::eval::{Context, Evaluate};
+    use serde_json::json;
 
     fn live_worker_entry(id: &str) -> ResourceEntry {
         ResourceEntry {
@@ -524,6 +484,90 @@ mod tests {
             remote_access: false,
             enabled_when: None,
         }
+    }
+
+    #[test]
+    fn installed_boundary_matches_runtime_for_default_cluster_and_literal_grants() {
+        let grant = |resource: &str| -> PermissionSet {
+            serde_json::from_value(json!({
+                "id": "custom/read", "description": "Read the approved resource",
+                "platforms": {"aws": [{"grant": {"actions": ["eks:DescribeCluster"]},
+                    "binding": {"resource": {"resources": [resource]}}}]}
+            }))
+            .unwrap()
+        };
+        let stack = Stack::new("test".to_string())
+            .add(
+                KubernetesCluster::new("cluster".to_string())
+                    .provider(KubernetesClusterProvider::Eks)
+                    .ownership(KubernetesClusterOwnership::Managed)
+                    .namespace("workloads".to_string())
+                    .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApi)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Network::new("network".to_string())
+                    .settings(NetworkSettings::UseDefault)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .permission(
+                "reader",
+                PermissionProfile::new()
+                    .resource(
+                        "cluster",
+                        [grant(
+                            "arn:aws:eks:${awsRegion}:${awsAccountId}:cluster/${resourceName}",
+                        )],
+                    )
+                    .resource(
+                        "network",
+                        [grant("arn:aws:eks:us-east-1:123456789012:cluster/approved")],
+                    ),
+            )
+            .build();
+        let ctx = EmitContext {
+            stack: &stack,
+            resource: &stack.resources["cluster"],
+            resource_id: "cluster",
+            platform: Platform::Aws,
+            targets_kubernetes: true,
+            stack_settings: &StackSettings::default(),
+            names: &Default::default(),
+        };
+        let emitted = boundary_document(&ctx).unwrap();
+        let Expression::FuncCall(call) = emitted else {
+            panic!("expected jsonencode")
+        };
+        let mut evaluation = Context::new();
+        for (name, value) in [
+            ("local", json!({"resource_prefix": "app"})),
+            (
+                "data",
+                json!({"aws_region": {"current": {"region": "us-east-1"}}, "aws_caller_identity": {"current": {"account_id": "123456789012"}}}),
+            ),
+            (
+                "var",
+                json!({"managing_account_id": "210987654321", "managing_role_arn": "arn:aws:iam::210987654321:role/manager"}),
+            ),
+        ] {
+            evaluation.declare_var(name, hcl::to_value(value).unwrap());
+        }
+        let installed = serde_json::to_value(call.args[0].evaluate(&evaluation).unwrap()).unwrap();
+        let base = PermissionContext::new()
+            .with_stack_prefix("app")
+            .with_aws_region("us-east-1")
+            .with_aws_account_id("123456789012")
+            .with_managing_account_id("210987654321")
+            .with_managing_role_arn("arn:aws:iam::210987654321:role/manager");
+        let required = aws_stack_permissions_boundary(&stack, &base, |_, scope| {
+            alien_permissions::generators::aws_boundary_scope_context(&stack, &base, scope, |_| {
+                Ok(None)
+            })
+        })
+        .unwrap();
+        assert_eq!(installed, required);
     }
 
     #[test]

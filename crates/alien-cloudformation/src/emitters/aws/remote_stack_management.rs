@@ -193,34 +193,10 @@ fn boundary_grant_context(
     base: &PermissionContext,
     scope: &str,
 ) -> alien_permissions::Result<PermissionContext> {
-    if scope == "*" {
-        return Ok(base.clone());
-    }
-    let entry = ctx.stack.resources.get(scope).ok_or_else(|| {
-        AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
-            message: format!("AWS permissions boundary scope '{scope}' is missing"),
-        })
-    })?;
-    let mut context = base.clone().with_resource_id(scope.to_string());
-    if let Some(cluster) = entry.config.downcast_ref::<KubernetesCluster>() {
-        context.resource_name = cluster
-            .cloud
-            .as_ref()
-            .and_then(|cloud| cloud.cluster_name.clone())
-            .or_else(|| {
-                base.stack_prefix
-                    .as_ref()
-                    .map(|prefix| format!("{prefix}-k8s"))
-            });
-        if let Some(cloud) = &cluster.cloud {
-            if let Some(account) = &cloud.account_id {
-                context.aws_account_id = Some(account.clone());
-            }
-            if let Some(region) = &cloud.region {
-                context.aws_region = Some(region.clone());
-            }
+    alien_permissions::generators::aws_boundary_scope_context(ctx.stack, base, scope, |scope| {
+        if ctx.stack.resources[scope].config.resource_type() != alien_core::Key::RESOURCE_TYPE {
+            return Ok(None);
         }
-    } else if entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE {
         let logical_id = ctx.name_for(scope).ok_or_else(|| {
             AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
                 message: format!("AWS permissions boundary key '{scope}' has no setup resource"),
@@ -238,22 +214,12 @@ fn boundary_grant_context(
             })?;
             format!("00000000-0000-0000-0000-{index:012x}")
         };
-        context.resource_name = Some(format!(
+        Ok(Some(format!(
             "arn:aws:kms:{}:{}:key/{key_id}",
             base.aws_region.as_deref().unwrap_or_default(),
             base.aws_account_id.as_deref().unwrap_or_default(),
-        ));
-    } else {
-        context.resource_name = match entry.config.resource_type().as_ref() {
-            "artifact-registry" | "service-account" | "ai" | "sandbox" => Some(scope.to_string()),
-            "storage" | "queue" | "kv" | "build" | "worker" | "vault" => base
-                .stack_prefix
-                .as_ref()
-                .map(|prefix| format!("{prefix}-{scope}")),
-            _ => None,
-        };
-    }
-    Ok(context)
+        )))
+    })
 }
 
 fn role_logical_id(resource_logical_id: &str) -> String {
