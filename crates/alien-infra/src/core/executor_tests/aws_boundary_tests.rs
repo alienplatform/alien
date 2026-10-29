@@ -21,6 +21,15 @@ use std::sync::Arc;
 
 const ARN: &str = "arn:aws:iam::123456789012:policy/boundary-test-permissions-boundary";
 
+fn permission_context(prefix: &str) -> PermissionContext {
+    PermissionContext::new()
+        .with_stack_prefix(prefix)
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-east-1")
+        .with_managing_account_id("210987654321")
+        .with_managing_role_arn("arn:aws:iam::210987654321:role/manager")
+}
+
 fn fixture() -> (Stack, StackState, DeploymentConfig) {
     let management = RemoteStackManagement::new("management".to_string()).build();
     let stack = Stack::new("boundary".to_string())
@@ -28,12 +37,7 @@ fn fixture() -> (Stack, StackState, DeploymentConfig) {
         .build();
     let mut state = StackState::new(Platform::Aws);
     state.resource_prefix = "boundary-test".to_string();
-    let context = PermissionContext::new()
-        .with_stack_prefix(state.resource_prefix.clone())
-        .with_aws_account_id("123456789012")
-        .with_aws_region("us-east-1")
-        .with_managing_account_id("210987654321")
-        .with_managing_role_arn("arn:aws:iam::210987654321:role/manager");
+    let context = permission_context(&state.resource_prefix);
     let mut controller = AwsRemoteStackManagementController::mock_ready("management");
     controller.permissions_boundary_arn = Some(ARN.to_string());
     controller.permissions_boundary_document =
@@ -290,27 +294,70 @@ async fn key_grants_require_the_installed_boundary_to_cover_the_imported_arn() {
         .unwrap();
     state.resources.insert("encryption".to_string(), saved);
     let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
-    for approved_arn in ["arn:aws:kms:us-east-1:123456789012:key/sibling", key_arn] {
-        installed(&mut state)["permissionsBoundaryDocument"]["Statement"].as_array_mut().unwrap().push(json!({
-            "Effect": "Allow", "Action": ["kms:Decrypt", "kms:GenerateDataKey"], "Resource": approved_arn
-        }));
+    let original_document = installed(&mut state)["permissionsBoundaryDocument"].clone();
+    // Setup approves the exact resource ceiling, not only today's identity actions.
+    for grant in [
+        None,
+        Some(json!({
+            "Effect": "Allow", "NotAction": "iam:*",
+            "Resource": "arn:aws:kms:us-east-1:123456789012:key/sibling"
+        })),
+        Some(json!({
+            "Effect": "Allow", "Action": ["kms:Decrypt", "kms:GenerateDataKey"],
+            "Resource": key_arn
+        })),
+    ] {
+        installed(&mut state)["permissionsBoundaryDocument"] = original_document.clone();
+        if let Some(grant) = grant {
+            installed(&mut state)["permissionsBoundaryDocument"]["Statement"]
+                .as_array_mut()
+                .unwrap()
+                .push(grant);
+        }
         for refresh in [false, true] {
             let result = if refresh {
                 executor.refresh(state.clone()).await
             } else {
                 executor.step(state.clone()).await
             };
-            if approved_arn == key_arn {
-                result.unwrap();
-            } else {
-                assert_eq!(
-                    result
-                        .err()
-                        .expect("a sibling key grant cannot authorize this key")
-                        .code,
-                    "SETUP_RERUN_REQUIRED"
-                );
-            }
+            let error = result
+                .err()
+                .expect("setup must approve the exact key ceiling");
+            assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
+            assert!(!error.retryable);
         }
+    }
+
+    let approved = aws_permissions_boundary_for_stack(
+        &stack,
+        &state,
+        &permission_context(&state.resource_prefix),
+    )
+    .unwrap();
+    installed(&mut state)["permissionsBoundaryDocument"] = approved;
+    executor.step(state.clone()).await.unwrap();
+    executor.refresh(state.clone()).await.unwrap();
+
+    // The saved setup approval cannot authorize a replacement imported key.
+    state
+        .resources
+        .get_mut("encryption")
+        .unwrap()
+        .set_internal_controller(Some(Box::new(AwsKeyController {
+            key_arn: Some("arn:aws:kms:us-east-1:123456789012:key/replacement".to_string()),
+            ..Default::default()
+        })))
+        .unwrap();
+    for refresh in [false, true] {
+        let result = if refresh {
+            executor.refresh(state.clone()).await
+        } else {
+            executor.step(state.clone()).await
+        };
+        let error = result
+            .err()
+            .expect("replacement key requires setup approval");
+        assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
+        assert!(!error.retryable);
     }
 }
