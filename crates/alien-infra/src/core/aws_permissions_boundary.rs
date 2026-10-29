@@ -17,6 +17,7 @@ use crate::{
     build::AwsBuildController,
     core::{state_utils::StackResourceStateExt, ResourcePermissionsHelper},
     error::{ErrorData, Result},
+    key::AwsKeyController,
     kv::AwsKvController,
     queue::aws::AwsQueueController,
     remote_stack_management::AwsRemoteStackManagementController,
@@ -196,6 +197,9 @@ fn boundary_grant_context(
         "build" => read_controller::<AwsBuildController>(saved, scope)?.project_name,
         "worker" => read_controller::<AwsWorkerController>(saved, scope)?.worker_name,
         "vault" => read_controller::<AwsVaultController>(saved, scope)?.vault_prefix,
+        // Key IDs are provider-assigned. Setup imports their exact ARN; a prefix
+        // cannot predict it, including when the key has not been imported yet.
+        "key" => read_controller::<AwsKeyController>(saved, scope)?.key_arn,
         // A custom grant may use only resourceId or literal ARNs. Leave resourceName
         // unresolved for other writers so interpolation fails if it is needed.
         _ => return Ok(context),
@@ -236,9 +240,9 @@ fn unresolved(scope: &str, reason: &str) -> AlienError<ErrorData> {
 mod tests {
     use super::*;
     use alien_core::{
-        Build, KubernetesCloudReference, KubernetesClusterOwnership, KubernetesClusterProvider,
-        KubernetesHeartbeatMode, Kv, PermissionProfile, PermissionSetReference, Queue,
-        ResourceLifecycle, Storage, Vault, Worker, WorkerCode,
+        Build, Key, KubernetesCloudReference, KubernetesClusterOwnership,
+        KubernetesClusterProvider, KubernetesHeartbeatMode, Kv, PermissionProfile,
+        PermissionSetReference, Queue, ResourceLifecycle, Storage, Vault, Worker, WorkerCode,
     };
     use alien_permissions::generators::aws_permissions_boundary_covers;
     use serde_json::json;
@@ -362,6 +366,110 @@ mod tests {
         ] {
             let state = saved_resource(&stack, "objects", controller);
             assert!(aws_permissions_boundary_for_stack(&stack, &state, &context()).is_err());
+        }
+    }
+
+    #[test]
+    fn imported_key_boundary_preserves_exact_arn_and_runtime_conditions() {
+        let key_arn = "arn:aws:kms:us-east-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab";
+        for set in [
+            "key/availability",
+            "key/native-storage",
+            "key/native-volume",
+            "key/remote-cryptography",
+        ] {
+            let stack = Stack::new("boundary".to_string())
+                .permission(
+                    "application",
+                    PermissionProfile::new().resource("encryption", [set]),
+                )
+                .add(
+                    Key::new("encryption".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let controller = AwsKeyController {
+                key_arn: Some(key_arn.to_string()),
+                ..Default::default()
+            };
+            let state = saved_resource(
+                &stack,
+                "encryption",
+                serde_json::to_value(controller).unwrap(),
+            );
+            let boundary = aws_permissions_boundary_for_stack(&stack, &state, &context()).unwrap();
+            let policy = alien_permissions::generators::AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    alien_permissions::get_permission_set(set).unwrap(),
+                    alien_permissions::BindingTarget::Resource,
+                    &context().with_resource_name(key_arn),
+                )
+                .unwrap();
+            let required = serde_json::to_value(policy).unwrap();
+            assert!(
+                aws_permissions_boundary_covers(&boundary, &required).unwrap(),
+                "{set}"
+            );
+            let mut sibling = required.clone();
+            for statement in sibling["Statement"].as_array_mut().unwrap() {
+                statement["Resource"] = json!("arn:aws:kms:us-east-1:111122223333:key/another-key");
+            }
+            assert!(
+                !aws_permissions_boundary_covers(&boundary, &sibling).unwrap(),
+                "{set}"
+            );
+            for statement in required["Statement"].as_array().unwrap() {
+                if statement.get("Condition").is_some() {
+                    let mut unconditional = statement.clone();
+                    unconditional.as_object_mut().unwrap().remove("Condition");
+                    assert!(
+                        !aws_permissions_boundary_covers(
+                            &boundary,
+                            &json!({"Version": "2012-10-17", "Statement": [unconditional]})
+                        )
+                        .unwrap(),
+                        "{set}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn keys_without_durable_arns_never_use_a_prefixed_name() {
+        let stack = Stack::new("boundary".to_string())
+            .permission(
+                "application",
+                PermissionProfile::new().resource("encryption", ["key/native-storage"]),
+            )
+            .add(
+                Key::new("encryption".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let empty = StackState::new(Platform::Aws);
+        let error = aws_permissions_boundary_for_stack(&stack, &empty, &context()).unwrap_err();
+        assert!(
+            error.to_string().contains("resource state is missing"),
+            "{error}"
+        );
+        for arn in [None, Some(String::new())] {
+            let controller = AwsKeyController {
+                key_arn: arn,
+                ..Default::default()
+            };
+            let state = saved_resource(
+                &stack,
+                "encryption",
+                serde_json::to_value(controller).unwrap(),
+            );
+            let error = aws_permissions_boundary_for_stack(&stack, &state, &context()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("has not recorded its physical name"),
+                "{error}"
+            );
         }
     }
 

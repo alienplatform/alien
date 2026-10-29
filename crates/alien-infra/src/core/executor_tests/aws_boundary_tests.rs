@@ -6,13 +6,14 @@ use crate::{
         aws_permissions_boundary_for_stack, MockPlatformServiceProvider, StackExecutor,
         StackResourceStateExt,
     },
+    key::AwsKeyController,
     remote_stack_management::AwsRemoteStackManagementController,
 };
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt};
 use alien_core::{
-    AwsManagementConfig, ClientConfig, DeploymentConfig, InitialSetupAuthority, ManagementConfig,
-    PermissionProfile, PermissionSetReference, Platform, RemoteStackManagement, Resource,
-    ResourceLifecycle, ResourceStatus, Stack, StackResourceState, StackState, Storage,
+    AwsManagementConfig, ClientConfig, DeploymentConfig, InitialSetupAuthority, Key,
+    ManagementConfig, PermissionProfile, PermissionSetReference, Platform, RemoteStackManagement,
+    Resource, ResourceLifecycle, ResourceStatus, Stack, StackResourceState, StackState, Storage,
 };
 use alien_permissions::PermissionContext;
 use serde_json::{json, Value};
@@ -254,6 +255,62 @@ async fn unresolved_or_malformed_extra_grants_stop_before_provider_access() {
             .expect("must reject before provider access");
             assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
             assert!(!error.retryable);
+        }
+    }
+}
+
+#[tokio::test]
+async fn key_grants_require_the_installed_boundary_to_cover_the_imported_arn() {
+    let (_, mut state, config) = fixture();
+    let key_arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555";
+    let key = Key::new("encryption".to_string()).build();
+    let stack = Stack::new("boundary".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(key.clone(), ResourceLifecycle::Frozen)
+        .permission(
+            "application",
+            PermissionProfile::new().resource("encryption", ["key/native-storage"]),
+        )
+        .build();
+    let mut saved = StackResourceState::new_pending(
+        "key".to_string(),
+        Resource::new(key),
+        Some(ResourceLifecycle::Frozen),
+        vec![],
+    );
+    saved.status = ResourceStatus::Running;
+    saved
+        .set_internal_controller(Some(Box::new(AwsKeyController {
+            key_arn: Some(key_arn.to_string()),
+            ..Default::default()
+        })))
+        .unwrap();
+    state.resources.insert("encryption".to_string(), saved);
+    let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
+    for approved_arn in ["arn:aws:kms:us-east-1:123456789012:key/sibling", key_arn] {
+        installed(&mut state)["permissionsBoundaryDocument"]["Statement"].as_array_mut().unwrap().push(json!({
+            "Effect": "Allow", "Action": ["kms:Decrypt", "kms:GenerateDataKey"], "Resource": approved_arn
+        }));
+        for refresh in [false, true] {
+            let result = if refresh {
+                executor.refresh(state.clone()).await
+            } else {
+                executor.step(state.clone()).await
+            };
+            if approved_arn == key_arn {
+                result.unwrap();
+            } else {
+                assert_eq!(
+                    result
+                        .err()
+                        .expect("a sibling key grant cannot authorize this key")
+                        .code,
+                    "SETUP_RERUN_REQUIRED"
+                );
+            }
         }
     }
 }
