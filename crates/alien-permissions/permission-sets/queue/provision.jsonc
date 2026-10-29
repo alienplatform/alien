@@ -11,7 +11,8 @@
             "sqs:DeleteQueue",
             "sqs:GetQueueAttributes",
             "sqs:SetQueueAttributes",
-            "sqs:ListQueues"
+            "sqs:ListQueues",
+            "sqs:TagQueue"
           ]
         },
         "binding": {
@@ -20,17 +21,6 @@
           },
           "resource": {
             "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${resourceName}"]
-          }
-        }
-      },
-      {
-        "grant": { "actions": ["sqs:TagQueue"] },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
-          },
-          "resource": {
-            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-${resourceId}"]
           }
         }
       }

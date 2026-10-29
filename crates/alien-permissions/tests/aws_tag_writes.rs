@@ -261,26 +261,35 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     && equals
                         .and_then(|c| c.get("aws:RequestTag/${stackTag}"))
                         .is_some_and(|value| value == "${stackPrefix}");
-                let named_prefix = binding.not_resources.is_empty()
+                // Resource bindings use the assigned or imported physical name, which
+                // need not share the stack prefix (for example, CloudFormation names).
+                let named_resource = binding.not_resources.is_empty()
                     && !binding.resources.is_empty()
                     && binding.resources.iter().all(|arn| {
                         [
-                            "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-",
-                            "arn:aws:s3:::${stackPrefix}-",
-                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-",
-                            "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-",
-                            "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-",
-                            "arn:aws:iam::${awsAccountId}:instance-profile/${stackPrefix}-",
-                            "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-",
-                            "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-",
-                            "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:${stackPrefix}-",
-                            "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-",
-                            "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-",
-                            "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:${stackPrefix}-",
-                            "arn:aws:rds:${awsRegion}:${awsAccountId}:db:${stackPrefix}-",
-                            "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:${stackPrefix}-",
-                            "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:${stackPrefix}-",
-                        ].iter().any(|prefix| arn.starts_with(prefix))
+                            "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/",
+                            "arn:aws:s3:::",
+                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:",
+                            "arn:aws:iam::${awsAccountId}:role/",
+                            "arn:aws:iam::${awsAccountId}:policy/",
+                            "arn:aws:iam::${awsAccountId}:instance-profile/",
+                            "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/",
+                            "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:",
+                            "arn:aws:secretsmanager:${awsRegion}:${awsAccountId}:secret:",
+                            "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/",
+                            "arn:aws:events:${awsRegion}:${awsAccountId}:rule/",
+                            "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster:",
+                            "arn:aws:rds:${awsRegion}:${awsAccountId}:db:",
+                            "arn:aws:rds:${awsRegion}:${awsAccountId}:subgrp:",
+                            "arn:aws:rds:${awsRegion}:${awsAccountId}:cluster-pg:",
+                        ].iter().any(|prefix| {
+                            arn.strip_prefix(prefix).is_some_and(|name| {
+                                name.starts_with("${stackPrefix}-")
+                                    || name == "${resourceName}"
+                                    || name.starts_with("${resourceName}/")
+                                    || name.starts_with("${resourceName}-")
+                            })
+                        })
                     });
                 // MicroVM image creation checks TagResource on "*". Excluding every
                 // Lambda ARN permits that check without permitting existing-resource tags.
@@ -321,7 +330,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     })
                     && binding.not_resources.is_empty()
                     && binding.resources == ["arn:aws:apigateway:${awsRegion}::/tags/*"];
-                assert!(owned || (creation && !other_tag_actions) || named_prefix || lambda_creation
+                assert!(owned || (creation && !other_tag_actions) || named_resource || lambda_creation
                     || elb_creation || gateway_creation || gateway_tag_path,
                     "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
             }
