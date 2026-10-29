@@ -8207,6 +8207,17 @@
                 "description": "Kubernetes TLS Secret reference for Secret-backed route profiles."
               }
             ]
+          },
+          "managed": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedCustomCertificateConfig",
+                "description": "Issue and renew a certificate for the configured endpoint hostnames."
+              }
+            ]
           }
         }
       },
@@ -8214,17 +8225,26 @@
         "type": "object",
         "description": "Custom domain configuration for a single resource.",
         "required": [
-          "domain",
           "certificate"
         ],
         "properties": {
           "certificate": {
             "$ref": "#/components/schemas/CustomCertificateConfig",
-            "description": "Customer-provided certificate reference."
+            "description": "Supplied certificate reference or managed issuance."
           },
           "domain": {
             "type": "string",
-            "description": "Fully qualified domain name to use."
+            "description": "Fully qualified domain name for a supplied certificate."
+          },
+          "endpoints": {
+            "type": "object",
+            "description": "Hostnames keyed by endpoint name for a managed certificate.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -8661,7 +8681,7 @@
       },
       "DomainSettings": {
         "type": "object",
-        "description": "Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains and certificates. Otherwise, Alien auto-generates domains.",
+        "description": "Domain configuration for the stack.\n\nWhen `custom_domains` is set, the specified resources use customer-provided\ndomains with supplied or managed certificates. Otherwise, Alien auto-generates domains.",
         "properties": {
           "customDomains": {
             "type": [
@@ -14354,6 +14374,11 @@
             "minimum": 0
           }
         }
+      },
+      "ManagedCustomCertificateConfig": {
+        "type": "object",
+        "description": "Managed certificate issuance settings.",
+        "additionalProperties": false
       },
       "ManagedRuntimeEventInvolvedObject": {
         "type": "object",
