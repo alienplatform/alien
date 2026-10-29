@@ -258,20 +258,20 @@ fn boundary_document(ctx: &EmitContext<'_>) -> Result<Expression> {
             "${var.managing_role_arn}".to_string(),
         ),
     ];
+    let mut statement_gates = std::collections::BTreeMap::<usize, Vec<&str>>::new();
     for (index, (id, entry)) in ctx.stack.resources.iter().enumerate() {
         if entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE {
             if let Some(label) = ctx.name_for(id) {
                 let key = format!("arn:aws:kms:${{Region}}:${{Account}}:key/${{Key{index}}}");
                 let value = if let Some(input) = &entry.enabled_when {
-                    if document["Statement"].as_array().is_some_and(|statements| {
-                        statements.iter().any(|statement| {
-                            statement["NotAction"] != "iam:*"
+                    if let Some(statements) = document["Statement"].as_array() {
+                        for (index, statement) in statements.iter().enumerate() {
+                            if statement["NotAction"] != "iam:*"
                                 && statement.to_string().contains(&key)
-                        })
-                    }) {
-                        return Err(AlienError::new(ErrorData::GenericError {
-                            message: format!("AWS permissions boundary key '{id}' used by inline grants must be unconditional"),
-                        }));
+                            {
+                                statement_gates.entry(index).or_default().push(input);
+                            }
+                        }
                     }
                     format!(
                         "${{var.{} ? local.{label}_selected_key.arn : \"\"}}",
@@ -315,6 +315,40 @@ fn boundary_document(ctx: &EmitContext<'_>) -> Result<Expression> {
                                     .build(),
                             ));
                         }
+                    }
+                }
+            }
+        }
+    }
+    // Gate whole inline statements, including Deny, NotResource and conditions.
+    // Removing just the ARN could change their meaning or leave an invalid policy.
+    if !statement_gates.is_empty() {
+        if let Expression::FuncCall(call) = &mut expression {
+            if let Some(Expression::Object(fields)) = call.args.first_mut() {
+                if let Some(statements @ Expression::Array(_)) =
+                    fields.get_mut(&hcl::Identifier::sanitized("Statement").into())
+                {
+                    if let Expression::Array(items) = statements {
+                        let mut concat = hcl::expr::FuncCall::builder("concat");
+                        for (index, statement) in std::mem::take(items).into_iter().enumerate() {
+                            let mut list = Expression::Array(vec![statement]);
+                            if let Some(gates) = statement_gates.get(&index) {
+                                for input in gates {
+                                    list = Expression::Conditional(Box::new(
+                                        hcl::expr::Conditional::new(
+                                            expr::traversal([
+                                                "var",
+                                                &crate::generator::stack_input_variable_name(input),
+                                            ]),
+                                            list,
+                                            Expression::Array(Vec::new()),
+                                        ),
+                                    ));
+                                }
+                            }
+                            concat = concat.arg(list);
+                        }
+                        *statements = Expression::FuncCall(Box::new(concat.build()));
                     }
                 }
             }
