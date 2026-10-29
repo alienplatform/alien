@@ -102,6 +102,7 @@ policy contents.
 ### Existing setups and generation limits
 
 An absent recorded ARN means an older setup and preserves its existing behavior.
+Deployments created before June 2026 should be recreated before rerunning setup.
 Rerunning setup installs the boundary and records it. For a bounded deployment,
 a deployment-time check compares the next release's required ceiling with the
 recorded installed document. An expansion requires setup again before runtime

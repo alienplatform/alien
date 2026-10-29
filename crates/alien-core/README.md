@@ -139,7 +139,8 @@ depend on the cloud and the installed setup:
   the explicit reserved-vault deny overrides its stack-wide Allow.
   That deny applies to management itself; it does not follow a workload role.
   Older setups with no recorded boundary ARN keep their existing behavior until
-  setup is rerun. For bounded deployments, a release needing permissions beyond
+  setup is rerun. Deployments created before June 2026 should be recreated before
+  rerunning setup. For bounded deployments, a release needing permissions beyond
   the recorded document stops before mutation and asks for setup again.
   See [AWS role permissions boundaries](../alien-permissions/README.md#aws-role-permissions-boundaries)
   for adoption rules and generation limits.
