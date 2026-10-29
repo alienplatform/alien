@@ -50,6 +50,11 @@ pub trait EcrApi: Send + Sync + Debug {
         &self,
         request: GetDownloadUrlForLayerRequest,
     ) -> Result<GetDownloadUrlForLayerResponse>;
+    /// Read provider-recorded ownership tags before destructive repository operations.
+    async fn list_tags_for_resource(
+        &self,
+        resource_arn: &str,
+    ) -> Result<ListTagsForResourceResponse>;
     async fn describe_registry(&self) -> Result<DescribeRegistryResponse>;
     async fn put_replication_configuration(
         &self,
@@ -374,6 +379,18 @@ impl EcrApi for EcrClient {
             .await
     }
 
+    async fn list_tags_for_resource(
+        &self,
+        resource_arn: &str,
+    ) -> Result<ListTagsForResourceResponse> {
+        self.post_json(
+            "ListTagsForResource",
+            serde_json::json!({ "resourceArn": resource_arn }).to_string(),
+            resource_arn,
+        )
+        .await
+    }
+
     async fn set_repository_policy(
         &self,
         request: SetRepositoryPolicyRequest,
@@ -532,6 +549,14 @@ pub struct CreateRepositoryRequest {
     pub encryption_configuration: Option<EncryptionConfiguration>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<Tag>>,
+}
+
+/// ECR returns capitalized tag members inside a camelCase response envelope.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ListTagsForResourceResponse {
+    #[serde(default)]
+    pub tags: Vec<Tag>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -874,6 +899,26 @@ mod tests {
         assert_eq!(error.code, "REMOTE_RESOURCE_CONFLICT");
         assert!(error.to_string().contains("acme"), "{error}");
     }
+    #[tokio::test]
+    async fn repository_tags_are_read_from_the_exact_arn_with_aws_wire_casing() {
+        let server = MockServer::start_async().await;
+        let arn = "arn:aws:ecr:us-east-1:123456789012:repository/owned-images-api";
+        let request = server.mock_async(|when, then| {
+            when.method(POST).path("/")
+                .header("x-amz-target", "AmazonEC2ContainerRegistry_V20150921.ListTagsForResource")
+                .json_body(serde_json::json!({"resourceArn": arn}));
+            then.status(200).header("content-type", "application/x-amz-json-1.1")
+                .json_body(serde_json::json!({"tags": [{"Key": "deployment", "Value": "owned"}, {"Key": "resource", "Value": "images"}]}));
+        }).await;
+        let result = client(&server).list_tags_for_resource(arn).await.unwrap();
+        assert_eq!(request.hits_async().await, 1);
+        assert_eq!(result.tags.len(), 2);
+        assert_eq!(result.tags[0].key, "deployment");
+        assert_eq!(result.tags[0].value, "owned");
+        assert_eq!(result.tags[1].key, "resource");
+        assert_eq!(result.tags[1].value, "images");
+    }
+
     #[tokio::test]
     async fn a_missing_repository_policy_is_not_a_quota_failure() {
         let server = MockServer::start_async().await;

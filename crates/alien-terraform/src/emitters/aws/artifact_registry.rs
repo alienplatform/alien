@@ -210,6 +210,44 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
         ]),
     ];
     if push {
+        // Tag-on-create needs TagResource, but existing foreign or untagged repositories
+        // must not acquire this role's ownership marker.
+        statements.push(expr::object([
+            ("Sid", Expression::String("RepositoryCreationOwner".into())),
+            ("Effect", Expression::String("Allow".into())),
+            ("Action", Expression::String("ecr:TagResource".into())),
+            (
+                "Resource",
+                expr::raw(format!(
+                    "format(\"%s-*\", aws_ecr_repository.{repo_label}.arn)"
+                )),
+            ),
+            (
+                "Condition",
+                expr::object([
+                    (
+                        "StringEquals",
+                        expr::object([
+                            (
+                                "aws:ResourceTag/registry-owner",
+                                expr::traversal(["aws_iam_role", role_label, "arn"]),
+                            ),
+                            (
+                                "aws:RequestTag/registry-owner",
+                                expr::traversal(["aws_iam_role", role_label, "arn"]),
+                            ),
+                        ]),
+                    ),
+                    (
+                        "ForAllValues:StringEquals",
+                        expr::object([(
+                            "aws:TagKeys",
+                            Expression::Array(vec![Expression::String("registry-owner".into())]),
+                        )]),
+                    ),
+                ]),
+            ),
+        ]));
         // Keep image access in the source region; policy management also covers replicas.
         let regional_arn = format!(
             "replace(aws_ecr_repository.{repo_label}.arn, format(\":%s:\", data.aws_region.current.region), \":*:\")"
