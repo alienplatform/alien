@@ -343,6 +343,62 @@ mod tests {
     };
     use std::io::Write;
 
+    #[tokio::test]
+    async fn setup_delete_acquire_sends_the_platform_setup_method() {
+        for (platform, expected) in [
+            (Platform::Kubernetes, "helm"),
+            (Platform::Aws, "cli"),
+            (Platform::Gcp, "cli"),
+            (Platform::Azure, "cli"),
+            (Platform::Machines, "cli"),
+            (Platform::Local, "cli"),
+            (Platform::Test, "cli"),
+        ] {
+            let server = MockServer::start_async().await;
+            server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET)
+                        .path("/v1/deployments/dep_demo");
+                    then.status(200).json_body(recorded_deployment(
+                        "teardown-required",
+                        platform,
+                        alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        None,
+                    ));
+                })
+                .await;
+            let acquire = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/v1/sync/acquire")
+                        .json_body_partial(
+                            serde_json::json!({
+                                "acquireMode": "setup-teardown",
+                                "deploymentIds": ["dep_demo"],
+                                "setupMethod": expected,
+                            })
+                            .to_string(),
+                        );
+                    then.status(409).json_body(serde_json::json!({
+                        "code": "STOP_AFTER_ACQUIRE",
+                        "message": "stop after acquire",
+                        "retryable": false, "internal": false,
+                    }));
+                })
+                .await;
+            let client = create_manager_client("setup-token", &server.base_url()).unwrap();
+            // Stop at acquire, before any provider resources are accessed.
+            let error = push_deletion(&client, "dep_demo", platform, kubernetes_client_config())
+                .await
+                .expect_err("the mock stops teardown at acquire");
+            acquire.assert_hits_async(1).await;
+            assert!(
+                error.to_string().contains("stop after acquire"),
+                "{platform}: {error:?}"
+            );
+        }
+    }
+
     #[test]
     fn kubernetes_install_retry_reuses_resource_prefix() {
         let first = kubernetes_resource_prefix("setup-token", "production");
@@ -6764,7 +6820,7 @@ async fn initialize_deployment(
         permission: None,
         // The Kubernetes CLI installs the Operator with Helm. Runtime work
         // starts inside that Operator, so this must use Helm's setup handoff.
-        setup_method: (platform == Platform::Kubernetes).then(|| "helm".to_string()),
+        setup_method: Some(setup_method(platform).to_string()),
         // Lets the manager show the exact `helm uninstall` command at teardown.
         helm_release,
     };
@@ -8528,6 +8584,18 @@ async fn run_runtime_deletion(
     }
 }
 
+fn setup_method(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Kubernetes => "helm",
+        Platform::Aws
+        | Platform::Gcp
+        | Platform::Azure
+        | Platform::Machines
+        | Platform::Local
+        | Platform::Test => "cli",
+    }
+}
+
 async fn run_setup_deletion(
     client: &ServerClient,
     deployment_id: &str,
@@ -8538,12 +8606,18 @@ async fn run_setup_deletion(
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
 ) -> Result<()> {
     let session = format!("push-setup-deletion-{}", uuid::Uuid::new_v4());
-    let acquire_outcome =
-        acquire_setup_delete_deployment(client, client, deployment_id, &session, deployment_model)
-            .await
-            .context(ErrorData::DeploymentFailed {
-                operation: "acquire setup teardown lock".to_string(),
-            })?;
+    let acquire_outcome = acquire_setup_delete_deployment(
+        client,
+        client,
+        deployment_id,
+        &session,
+        deployment_model,
+        setup_method(state.platform),
+    )
+    .await
+    .context(ErrorData::DeploymentFailed {
+        operation: "acquire setup teardown lock".to_string(),
+    })?;
 
     let execution_claim = match acquire_outcome {
         SetupDeleteAcquireOutcome::Acquired { execution_claim } => execution_claim,
