@@ -1281,8 +1281,13 @@ mod tests {
     /// Other sets grant role writes on `role/<prefix>-*`; direct setup's management role must deny
     /// them on itself, by the name it is created under, and on every role carrying setup's sandbox
     /// tags, Live or Frozen, and keep PassRole.
+    #[rstest::rstest]
+    #[case("test-prefix")]
+    #[case("ssssssssssssssssssssssssssssssssssssssss")]
     #[tokio::test]
-    async fn direct_setup_keeps_a_sandboxs_setup_roles_out_of_managements_reach() {
+    async fn direct_setup_keeps_a_sandboxs_setup_roles_out_of_managements_reach(
+        #[case] prefix: &str,
+    ) {
         let documents = Arc::new(Mutex::new(Vec::<String>::new()));
         let created_roles = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut iam = MockIamApi::new();
@@ -1367,9 +1372,14 @@ mod tests {
             .resource_lifecycle(ResourceLifecycle::Frozen)
             .controller(AwsRemoteStackManagementController::default())
             .platform(Platform::Aws)
+            .resource_prefix(prefix)
             .service_provider(Arc::new(provider))
             .with_stack_resource(sandbox("agents"), ResourceLifecycle::Live)
             .with_stack_resource(sandbox("frozen-box"), ResourceLifecycle::Frozen)
+            .with_stack_resource(
+                crate::core::controller_test::test_function_1(),
+                ResourceLifecycle::Live,
+            )
             .build()
             .await
             .expect("executor builds");
@@ -1408,6 +1418,9 @@ mod tests {
                     .unwrap_or_default()
             })
             .collect();
+        executor.with_context(|ctx| {
+            super::setup_parity::assert_setup_policy_parity(ctx, installed, &statements);
+        });
         let created_roles = created_roles.lock().unwrap().clone();
         assert_eq!(created_roles.len(), 1, "{created_roles:?}");
         let own_role = serde_json::json!([format!(
@@ -1417,7 +1430,7 @@ mod tests {
         let (own_role_denies, denies): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) =
             statements
                 .iter()
-                .filter(|statement| statement["Effect"] == "Deny")
+                .filter(|statement| super::setup_parity::is_role_guard(statement))
                 .partition(|statement| statement["Resource"] == own_role);
         assert_eq!(
             own_role_denies.len(),
@@ -1445,3 +1458,7 @@ mod tests {
 #[cfg(test)]
 #[path = "aws_boundary_tests.rs"]
 mod boundary_tests;
+
+#[cfg(test)]
+#[path = "aws_setup_parity.rs"]
+mod setup_parity;
