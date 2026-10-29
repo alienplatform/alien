@@ -96,7 +96,9 @@ fn statements(document: &Value) -> Result<Vec<&Value>> {
         for (positive, negative) in [("Action", "NotAction"), ("Resource", "NotResource")] {
             match (statement.get(positive), statement.get(negative)) {
                 (Some(value), None) | (None, Some(value)) => {
-                    strings(value)?;
+                    for selector in strings(value)? {
+                        validate_variables(selector, positive == "Resource")?;
+                    }
                 }
                 _ => {
                     return Err(invalid(
@@ -105,14 +107,87 @@ fn statements(document: &Value) -> Result<Vec<&Value>> {
                 }
             }
         }
-        if statement
-            .get("Condition")
-            .is_some_and(|condition| !condition.is_object())
-        {
-            return Err(invalid("Condition must be an object"));
+        if let Some(condition) = statement.get("Condition") {
+            validate_condition(condition)?;
         }
     }
     Ok(statements)
+}
+
+// Validate the decoded structure before comparing grants. In particular, an unused
+// malformed statement must not be hidden by another Allow that covers every request.
+fn validate_condition(condition: &Value) -> Result<()> {
+    let operators = condition
+        .as_object()
+        .filter(|operators| !operators.is_empty())
+        .ok_or_else(|| invalid("Condition must be a nonempty object"))?;
+    for (operator, entries) in operators {
+        if operator.is_empty() {
+            return Err(invalid("condition operator must not be empty"));
+        }
+        validate_variables(operator, false)?;
+        let entries = entries
+            .as_object()
+            .filter(|entries| !entries.is_empty())
+            .ok_or_else(|| {
+                invalid("condition operator must contain a nonempty key/value object")
+            })?;
+        for (key, value) in entries {
+            if key.is_empty() {
+                return Err(invalid("condition key must not be empty"));
+            }
+            validate_variables(key, false)?;
+            match value {
+                Value::Array(values) if !values.is_empty() => {
+                    for value in values {
+                        validate_condition_value(value)?;
+                    }
+                }
+                value => validate_condition_value(value)?,
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_condition_value(value: &Value) -> Result<()> {
+    match value {
+        Value::String(value) => validate_variables(value, true),
+        Value::Bool(_) | Value::Number(_) => Ok(()),
+        _ => Err(invalid(
+            "condition values must be strings, numbers, booleans, or nonempty arrays of them",
+        )),
+    }
+}
+
+fn validate_variables(mut value: &str, allow_iam_variables: bool) -> Result<()> {
+    while let Some((_, rest)) = value.split_once("${") {
+        let (variable, remaining) = rest
+            .split_once('}')
+            .ok_or_else(|| invalid("policy contains an unterminated variable"))?;
+        // IAM request variables remain symbolic after setup. Template inputs such
+        // as ${local.resource_prefix}, ${BoundaryPolicy}, and ${AWS::AccountId}
+        // must already have been resolved. IAM also supports literal escapes and
+        // defaults, e.g. ${aws:PrincipalTag/team, 'unassigned'}.
+        let key = variable
+            .split_once(',')
+            .map_or(variable, |(key, _)| key)
+            .trim();
+        let iam_key = key.split_once(':').is_some_and(|(namespace, name)| {
+            !namespace.is_empty()
+                && !name.is_empty()
+                && !name.starts_with(':')
+                && namespace
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+                && !name.contains(['$', '{', '}'])
+        });
+        if !allow_iam_variables || !(iam_key || matches!(variable, "*" | "?" | "$")) {
+            return Err(invalid("policy contains an unresolved setup variable"));
+        }
+        value = remaining;
+    }
+    Ok(())
 }
 
 fn strings(value: &Value) -> Result<Vec<&str>> {
@@ -365,14 +440,7 @@ mod tests {
                 aws_permissions_boundary_covers(&installed, &policy(allow(action, "*"))).unwrap()
             );
         }
-        for action in [
-            "iam:GetRole",
-            "IAM:*",
-            "*",
-            "*:GetRole",
-            "i?m:*",
-            "${service}:*",
-        ] {
+        for action in ["iam:GetRole", "IAM:*", "*", "*:GetRole", "i?m:*"] {
             assert!(
                 !aws_permissions_boundary_covers(&installed, &policy(allow(action, "*"))).unwrap()
             );
@@ -416,6 +484,115 @@ mod tests {
         required["Statement"]["NotResource"] = json!(["arn:aws:s3:::one/*"]);
         assert!(!aws_permissions_boundary_covers(&installed, &required).unwrap());
         assert!(aws_permissions_boundary_covers(&policy(allow("s3:*", "*")), &required).unwrap());
+    }
+
+    #[test]
+    fn unresolved_setup_variables_fail_even_when_identical_or_covered_by_a_wildcard() {
+        let broad = policy(allow("*", "*"));
+        for token in [
+            "${stackPrefix}",
+            "${resourceName}",
+            "${awsAccountId}",
+            "${AWS::StackName}",
+            "${AWS::AccountId}",
+            "${BoundaryPolicy}",
+            "${local.resource_prefix}",
+            "${var.region}",
+            "${data.aws_caller_identity.current.account_id}",
+            "${aws_iam_policy.boundary.arn}",
+            "${var.enabled?local.first:local.second}",
+            "${unterminated",
+        ] {
+            let resource = policy(allow("s3:GetObject", &format!("arn:aws:s3:::{token}/*")));
+            let mut condition = policy(allow("s3:GetObject", "*"));
+            condition["Statement"]["Condition"] =
+                json!({"StringEquals": {"aws:RequestedRegion": token}});
+            for unresolved in [resource, condition] {
+                for (installed, required) in [
+                    (&unresolved, &unresolved),
+                    (&broad, &unresolved),
+                    (&unresolved, &broad),
+                ] {
+                    assert_eq!(
+                        aws_permissions_boundary_covers(installed, required)
+                            .unwrap_err()
+                            .code,
+                        "INVALID_PERMISSION_SET",
+                        "{token}"
+                    );
+                }
+            }
+        }
+        let action = policy(allow("${service}:*", "*"));
+        assert!(aws_permissions_boundary_covers(&broad, &action).is_err());
+    }
+
+    #[test]
+    fn iam_request_variables_and_scalar_condition_types_remain_usable() {
+        for token in [
+            "${aws:username}",
+            "${aws:PrincipalTag/team}",
+            "${aws:PrincipalTag/team name}",
+            "${aws:PrincipalTag/team, 'unassigned'}",
+            "${*}",
+            "${?}",
+            "${$}",
+        ] {
+            let variable = policy(allow(
+                "s3:GetObject",
+                &format!("arn:aws:s3:::bucket/{token}/*"),
+            ));
+            assert!(aws_permissions_boundary_covers(&variable, &variable).unwrap());
+            assert!(
+                aws_permissions_boundary_covers(&policy(allow("s3:*", "*")), &variable).unwrap()
+            );
+            let mut conditional = variable.clone();
+            conditional["Statement"]["Condition"] = json!({
+                "StringEquals": {"s3:prefix": [token, "shared/"]},
+                "Bool": {"aws:SecureTransport": true},
+                "NumericLessThanEquals": {"s3:max-keys": 10},
+            });
+            assert!(aws_permissions_boundary_covers(&conditional, &conditional).unwrap());
+            assert!(aws_permissions_boundary_covers(&variable, &conditional).unwrap());
+            assert!(!aws_permissions_boundary_covers(&conditional, &variable).unwrap());
+        }
+    }
+
+    #[test]
+    fn nested_malformed_conditions_cannot_be_hidden_by_other_grants() {
+        let broad = policy(allow("*", "*"));
+        for condition in [
+            json!({}),
+            json!({"": {"aws:SecureTransport": true}}),
+            json!({"Bool": {}}),
+            json!({"Bool": {"": true}}),
+            json!({"Bool": true}),
+            json!({"Bool": {"aws:SecureTransport": null}}),
+            json!({"StringEquals": {"aws:RequestedRegion": []}}),
+            json!({"StringEquals": {"aws:RequestedRegion": [["us-east-1"]]}}),
+            json!({"StringEquals": {"aws:RequestedRegion": ["us-east-1", null]}}),
+            json!({"StringEquals": {"aws:RequestedRegion": {"Ref": "Region"}}}),
+            json!({"StringEquals": {"aws:RequestedRegion": {"Fn::Sub": "${AWS::Region}"}}}),
+            json!({"${operator}": {"aws:RequestedRegion": "us-east-1"}}),
+            json!({"StringEquals": {"${key}": "us-east-1"}}),
+        ] {
+            let mut statement = allow("s3:GetObject", "*");
+            statement["Condition"] = condition;
+            let malformed = policy(json!([allow("*", "*"), statement]));
+            for (installed, required) in [
+                (&malformed, &malformed),
+                (&broad, &malformed),
+                (&malformed, &broad),
+            ] {
+                assert_eq!(
+                    aws_permissions_boundary_covers(installed, required)
+                        .unwrap_err()
+                        .code,
+                    "INVALID_PERMISSION_SET",
+                    "{malformed}"
+                );
+            }
+        }
     }
 
     #[test]

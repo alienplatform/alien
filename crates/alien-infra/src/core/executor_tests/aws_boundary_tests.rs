@@ -213,3 +213,47 @@ async fn wrong_controller_type_cannot_look_like_an_unbounded_setup() {
         .unwrap();
     assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
 }
+
+#[tokio::test]
+async fn unresolved_or_malformed_extra_grants_stop_before_provider_access() {
+    for extra in [
+        json!({"Effect": "Allow", "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::${local.resource_prefix}-*"}),
+        json!({"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*",
+            "Condition": {"StringEquals": {"aws:RequestedRegion": "${AWS::Region}"}}}),
+        json!({"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*",
+            "Condition": {"StringEquals": {"aws:RequestedRegion": {"Ref": "Region"}}}}),
+        json!({"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*",
+            "Condition": {"StringEquals": {"aws:RequestedRegion": null}}}),
+    ] {
+        let (_, mut state, config) = fixture();
+        let stack = Stack::new("boundary".to_string())
+            .add(
+                Storage::new("objects".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        // The valid catalog grants already cover this stack. A malformed extra
+        // statement must still invalidate the recorded document before planning.
+        installed(&mut state)["permissionsBoundaryDocument"]["Statement"]
+            .as_array_mut()
+            .unwrap()
+            .push(extra);
+        let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
+        for refresh in [false, true] {
+            let error = if refresh {
+                executor.refresh(state.clone()).await
+            } else {
+                executor.step(state.clone()).await
+            }
+            .err()
+            .expect("must reject before provider access");
+            assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
+            assert!(!error.retryable);
+        }
+    }
+}
