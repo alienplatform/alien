@@ -526,7 +526,8 @@ fn aws_kv_resource_permissions_attach_to_service_account_role() {
     let stack = Stack::new("kv-permissions".to_string())
         .permission(
             "execution",
-            PermissionProfile::new().resource("store", ["kv/data-read", "kv/data-write"]),
+            PermissionProfile::new()
+                .resource("store", ["kv/data-read", "kv/data-write", "kv/provision"]),
         )
         .add(
             ServiceAccount::new("execution-sa".to_string()).build(),
@@ -554,6 +555,7 @@ fn aws_kv_resource_permissions_attach_to_service_account_role() {
     assert!(actions.contains(&"dynamodb:GetItem"));
     assert!(actions.contains(&"dynamodb:Query"));
     assert!(actions.contains(&"dynamodb:PutItem"));
+    assert!(actions.contains(&"dynamodb:TagResource"));
 
     // Statements must be pinned to the table ARN: the physical table name is
     // CloudFormation-generated, so a name-pattern binding would never match.
