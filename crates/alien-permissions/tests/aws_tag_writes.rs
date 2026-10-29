@@ -164,6 +164,10 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "aoss:tagresource",
                         "aoss:untagresource",
                         "apigateway:tagresource",
+                        "apigateway:post",
+                        "apigateway:put",
+                        "apigateway:patch",
+                        "apigateway:delete",
                         "lambda:tagresource",
                         "lambda:untagresource",
                     ]
@@ -216,6 +220,10 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "aoss:tagresource",
                         "aoss:untagresource",
                         "apigateway:tagresource",
+                        "apigateway:post",
+                        "apigateway:put",
+                        "apigateway:patch",
+                        "apigateway:delete",
                         "lambda:tagresource",
                         "lambda:untagresource",
                     ]
@@ -242,7 +250,38 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     && equals
                         .and_then(|c| c.get("aws:RequestTag/${stackTag}"))
                         .is_some_and(|value| value == "${stackPrefix}");
-                assert!(owned || (creation && !non_ec2) || lambda_prefix || lambda_creation,
+                let gateway_request_owned = equals
+                    .and_then(|c| c.get("aws:RequestTag/${stackTag}"))
+                    .is_some_and(|value| value == "${stackPrefix}");
+                let gateway_creation = gateway_request_owned
+                    && entry.grant.actions.as_ref().is_some_and(|actions| {
+                        !actions.is_empty()
+                            && actions.iter().all(|action| action == "apigateway:POST")
+                    })
+                    && binding.not_resources.is_empty()
+                    && !binding.resources.is_empty()
+                    && binding.resources.iter().all(|arn| {
+                        matches!(
+                            arn.as_str(),
+                            "arn:aws:apigateway:${awsRegion}::/apis"
+                                | "arn:aws:apigateway:${awsRegion}::/restapis"
+                                | "arn:aws:apigateway:${awsRegion}::/domainnames"
+                        )
+                    });
+                // The tag path does not expose ResourceTag. REST tagging also
+                // requires PATCH on the endpoint, checked by this same catalog
+                // walk; the compiled operation test below checks both resources.
+                let gateway_tag_path = gateway_request_owned
+                    && entry.grant.actions.as_ref().is_some_and(|actions| {
+                        !actions.is_empty()
+                            && actions.iter().all(|action| {
+                                matches!(action.as_str(), "apigateway:POST" | "apigateway:PUT")
+                            })
+                    })
+                    && binding.not_resources.is_empty()
+                    && binding.resources == ["arn:aws:apigateway:${awsRegion}::/tags/*"];
+                assert!(owned || (creation && !non_ec2) || lambda_prefix || lambda_creation
+                    || gateway_creation || gateway_tag_path,
                     "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
             }
         }
@@ -524,6 +563,21 @@ fn api_gateway_tagging_requires_an_owned_endpoint() {
                             },
                             "{id} {binding:?} {action} {path} {owner}/{manager}/{resource}"
                         );
+                        if action == "apigateway:PATCH" {
+                            for requested_tags in [own_tags.as_slice(), &[]] {
+                                let tag_request = Request::new("apigateway:PUT", &tag_path)
+                                    .request_tags(requested_tags);
+                                let rest_tag_allowed = evaluate(&policy.statement, &request)
+                                    == Decision::Allowed
+                                    && evaluate(&policy.statement, &tag_request)
+                                        == Decision::Allowed;
+                                assert_eq!(
+                                    rest_tag_allowed,
+                                    allowed && !requested_tags.is_empty(),
+                                    "{id} {binding:?} REST tagging requires both tag-path and endpoint authorization: {path} {owner}/{manager}/{resource}"
+                                );
+                            }
+                        }
                     }
                 }
             }
