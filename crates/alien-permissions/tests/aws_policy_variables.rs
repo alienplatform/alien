@@ -69,6 +69,7 @@ fn resolve(value: &Value) -> Value {
             } else {
                 output.push_str(match variable {
                     "AWS::Partition" => "aws",
+                    "ManagingRoleArn" => "arn:aws:iam::210987654321:role/manager",
                     "AWS::StackName" => "app",
                     "AWS::AccountId" => "123456789012",
                     "AWS::Region" => "us-east-1",
@@ -207,4 +208,87 @@ fn iam_variable_support_does_not_accept_missing_setup_inputs() {
         )
         .unwrap_err();
     assert_eq!(error.code, "INVALID_PERMISSION_SET");
+}
+
+#[test]
+fn compiled_boundary_rendering_matches_runtime_with_custom_request_variables() {
+    let set = permission_set(
+        "arn:aws:s3:::${managingAccountId}-data/${aws:PrincipalTag/team, 'unassigned'}",
+        "${stackPrefix}/${aws:username}",
+    );
+    let stack = Stack::new("sample".to_string())
+        .permission(
+            "reader",
+            PermissionProfile::new().global([PermissionSetReference::Inline(set)]),
+        )
+        .build();
+    let runtime_context = context();
+    let symbolic_context = PermissionContext::new()
+        .with_stack_prefix("${AWS::StackName}")
+        .with_aws_account_id("${AWS::AccountId}")
+        .with_aws_region("${AWS::Region}")
+        .with_managing_account_id("${managingAccountId}");
+    let runtime =
+        aws_stack_permissions_boundary(
+            &stack,
+            &runtime_context,
+            |_, _| Ok(runtime_context.clone()),
+        )
+        .unwrap();
+    let symbolic = aws_stack_permissions_boundary(&stack, &symbolic_context, |_, _| {
+        Ok(symbolic_context.clone())
+    })
+    .unwrap();
+    let rendered = AwsCloudFormationPermissionsGenerator::new()
+        .render_document(&symbolic)
+        .unwrap();
+    assert_eq!(resolve(&rendered), runtime);
+    assert!(rendered["Statement"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|statement| statement["NotAction"] == "iam:*"));
+}
+
+#[test]
+fn compiled_document_rendering_preserves_selectors_and_condition_value_types() {
+    let symbolic = json!({
+        "Version": "2012-10-17",
+        "Statement": [
+            {"Effect": "Allow", "NotAction": "iam:*", "Resource": [
+                "arn:aws:s3:::${AWS::StackName}-*",
+                "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${AWS::StackName}-*"
+            ]},
+            {"Effect": "Deny", "Action": ["s3:GetObject"], "NotResource": [
+                "arn:aws:s3:::${AWS::StackName}-data/${aws:username}"
+            ], "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": "${ManagingRoleArn}"},
+                "StringLike": {"s3:prefix": ["${AWS::StackName}/${aws:username}", "${aws:PrincipalTag/team, 'unassigned'}", "${*}/${?}/${$}"]},
+                "Bool": {"aws:SecureTransport": false},
+                "NumericLessThan": {"s3:TlsVersion": 1.2}
+            }}
+        ]
+    });
+    let rendered = AwsCloudFormationPermissionsGenerator::new()
+        .render_document(&symbolic)
+        .unwrap();
+    let expected = json!({
+        "Version": "2012-10-17",
+        "Statement": [
+            {"Effect": "Allow", "NotAction": "iam:*", "Resource": [
+                "arn:aws:s3:::app-*",
+                "arn:aws:logs:us-east-1:123456789012:log-group:app-*"
+            ]},
+            {"Effect": "Deny", "Action": ["s3:GetObject"], "NotResource": [
+                "arn:aws:s3:::app-data/${aws:username}"
+            ], "Condition": {
+                "ArnEquals": {"aws:PrincipalArn": "arn:aws:iam::210987654321:role/manager"},
+                "StringLike": {"s3:prefix": ["app/${aws:username}", "${aws:PrincipalTag/team, 'unassigned'}", "${*}/${?}/${$}"]},
+                "Bool": {"aws:SecureTransport": false},
+                "NumericLessThan": {"s3:TlsVersion": 1.2}
+            }}
+        ]
+    });
+    assert_eq!(resolve(&rendered), expected);
+    assert!(aws_permissions_boundary_covers(&expected, &expected).unwrap());
 }

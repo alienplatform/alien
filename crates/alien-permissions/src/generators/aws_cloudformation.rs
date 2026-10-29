@@ -143,6 +143,31 @@ impl AwsCloudFormationPermissionsGenerator {
         })
     }
 
+    /// Render a compiled IAM document using CloudFormation substitutions.
+    ///
+    /// This also supports documents containing NotAction, such as permissions
+    /// boundaries. Setup inputs must use CloudFormation pseudo parameters or
+    /// `${managingAccountId}` / `${ManagingRoleArn}`. Request-time IAM variables
+    /// remain literal through template evaluation.
+    pub fn render_document(&self, document: &JsonValue) -> Result<JsonValue> {
+        match document {
+            JsonValue::String(value) => {
+                self.interpolate_cloudformation_string(value, &PermissionContext::new())
+            }
+            JsonValue::Array(values) => values
+                .iter()
+                .map(|value| self.render_document(value))
+                .collect::<Result<Vec<_>>>()
+                .map(JsonValue::Array),
+            JsonValue::Object(values) => values
+                .iter()
+                .map(|(key, value)| Ok((key.clone(), self.render_document(value)?)))
+                .collect::<Result<serde_json::Map<_, _>>>()
+                .map(JsonValue::Object),
+            value => Ok(value.clone()),
+        }
+    }
+
     /// Interpolate CloudFormation resource ARNs with intrinsic functions
     fn interpolate_cloudformation_resources(
         &self,
@@ -177,7 +202,9 @@ impl AwsCloudFormationPermissionsGenerator {
         let template = template.replace("arn:aws:", "arn:${AWS::Partition}:");
 
         // Check if the template contains CloudFormation variables or regular variables
-        let contains_cf_vars = template.contains("${AWS::") || template.contains("${!");
+        let contains_cf_vars = template.contains("${AWS::")
+            || template.contains("${ManagingRoleArn}")
+            || template.contains("${!");
         let contains_regular_vars = [
             "${awsPermissionsBoundaryArn}",
             "${stackPrefix}",
