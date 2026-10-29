@@ -121,7 +121,10 @@ Deployments created before June 2026 should be recreated before rerunning setup.
 Rerunning setup installs the boundary and records it. For a bounded deployment,
 a deployment-time check compares the next release's required ceiling with the
 recorded installed document. An expansion requires setup again before runtime
-changes; management does not rewrite the boundary itself.
+changes. With a recorded boundary, the management guard explicitly denies changes
+to that policy's versions and tags, policy deletion, and removal of boundaries
+from stack roles. Setup installer permissions are separate, so setup can update
+and eventually delete the policy.
 
 IAM's managed-policy limit is 6,144 characters excluding whitespace. Generation
 fails explicitly when the boundary exceeds it. CloudFormation and Terraform

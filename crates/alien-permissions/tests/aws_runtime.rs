@@ -955,7 +955,14 @@ fn the_management_role_guard_covers_every_role_write_that_reaches_the_management
     let management_role = "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management";
     let guard = get_permission_set(alien_permissions::MANAGEMENT_ROLE_GUARD)
         .expect("the guard is registered");
-    let guard_statement = &guard.platforms.aws.as_ref().expect("the guard is AWS")[0];
+    let guard_statement = guard
+        .platforms
+        .aws
+        .as_ref()
+        .expect("the guard is AWS")
+        .iter()
+        .find(|statement| statement.label.as_deref() == Some("deny-management-role-changes"))
+        .expect("management-role deny");
     assert!(!guard_statement.effect.is_allow());
     assert_eq!(
         guard_statement.binding.stack.as_ref().unwrap().resources,

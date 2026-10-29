@@ -48,5 +48,22 @@ expression: "serde_json::to_string_pretty(&guards).expect(\"serializes\")"
         "aws:ResourceTag/resource-type": "sandbox"
       }
     }
+  },
+  {
+    "Sid": "BoundedRoleProtectBoundary",
+    "Effect": "Deny",
+    "Action": [
+      "iam:CreatePolicyVersion",
+      "iam:SetDefaultPolicyVersion",
+      "iam:DeletePolicyVersion",
+      "iam:DeletePolicy",
+      "iam:TagPolicy",
+      "iam:UntagPolicy",
+      "iam:DeleteRolePermissionsBoundary"
+    ],
+    "Resource": [
+      "arn:aws-us-gov:iam::987654321098:policy/acme-parity-permissions-boundary",
+      "arn:aws:iam::987654321098:role/acme-parity-*"
+    ]
   }
 ]

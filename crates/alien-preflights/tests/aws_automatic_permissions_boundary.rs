@@ -3,9 +3,9 @@
 mod iam_policy;
 
 use alien_core::{
-    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Platform, ResourceLifecycle,
-    SetupManagement, Stack, StackSettings, StackState, Storage, Vault, Worker, WorkerCode,
-    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    permissions::ManagementPermissions, DeploymentConfig, EnvironmentVariablesSnapshot,
+    ExternalBindings, Platform, ResourceLifecycle, SetupManagement, Stack, StackSettings,
+    StackState, Storage, Vault, Worker, WorkerCode, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_permissions::{
     generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
@@ -56,7 +56,14 @@ fn compile(stack: &Stack, bounded: bool) -> Vec<AwsIamStatement> {
 }
 
 async fn automatic_stack() -> Stack {
-    let stack = Stack::new("sample".to_string())
+    stack_with_management(SetupManagement::Automatic, ManagementPermissions::Auto).await
+}
+
+async fn stack_with_management(
+    setup_management: SetupManagement,
+    management: ManagementPermissions,
+) -> Stack {
+    let mut stack = Stack::new("sample".to_string())
         .add(
             Storage::new("uploads".to_string()).build(),
             ResourceLifecycle::Live,
@@ -75,8 +82,9 @@ async fn automatic_stack() -> Stack {
             ResourceLifecycle::Live,
         )
         .build();
+    stack.permissions.management = management;
     let settings = StackSettings {
-        setup_management: SetupManagement::Automatic,
+        setup_management,
         ..StackSettings::default()
     };
     let config = DeploymentConfig::builder()
@@ -115,6 +123,38 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
     }
     assert!(!ids.contains("remote-stack-management/provision"));
     let bounded = compile(&stack, true);
+    for action in [
+        "iam:CreatePolicyVersion",
+        "iam:SetDefaultPolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:DeletePolicy",
+        "iam:TagPolicy",
+        "iam:UntagPolicy",
+    ] {
+        assert_eq!(
+            evaluate(&bounded, &Request::new(action, BOUNDARY)),
+            Decision::ExplicitlyDenied,
+            "{action}"
+        );
+        assert_eq!(
+            evaluate(
+                &bounded,
+                &Request::new(
+                    action,
+                    "arn:aws:iam::123456789012:policy/sample-deployment-management-1"
+                )
+            ),
+            Decision::NotAllowed,
+            "management must not rewrite its own policies: {action}"
+        );
+    }
+    assert_eq!(
+        evaluate(
+            &bounded,
+            &Request::new("iam:DeleteRolePermissionsBoundary", ROLE)
+        ),
+        Decision::ExplicitlyDenied
+    );
     let mut observed_writes = BTreeSet::new();
     for statement in bounded
         .iter()
@@ -419,6 +459,44 @@ async fn automatic_profile_cannot_retag_foreign_security_groups() {
                 evaluate(&policy, &request),
                 expected,
                 "bounded={bounded}, creation={creation}, tags={tags:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn boundary_guard_is_installed_in_every_management_mode() {
+    for setup in [SetupManagement::Manual, SetupManagement::Automatic] {
+        for management in [
+            ManagementPermissions::Auto,
+            ManagementPermissions::Extend(Default::default()),
+            ManagementPermissions::Override(Default::default()),
+        ] {
+            if setup == SetupManagement::Automatic
+                && matches!(management, ManagementPermissions::Override(_))
+            {
+                continue; // Automatic setup rejects override profiles.
+            }
+            let stack = stack_with_management(setup, management).await;
+            let context = PermissionContext::new()
+                .with_stack_prefix("sample")
+                .with_aws_account_id("123456789012")
+                .with_aws_permissions_boundary_arn(BOUNDARY);
+            let guard = stack.management().profile().unwrap().0["*"]
+                .iter()
+                .find(|reference| reference.id() == alien_permissions::MANAGEMENT_ROLE_GUARD)
+                .expect("management guard in every mode")
+                .resolve(|name| get_permission_set(name).cloned())
+                .unwrap();
+            let policy = AwsRuntimePermissionsGenerator::new()
+                .generate_policy(&guard, BindingTarget::Stack, &context)
+                .unwrap();
+            assert_eq!(
+                evaluate(
+                    &policy.statement,
+                    &Request::new("iam:CreatePolicyVersion", BOUNDARY)
+                ),
+                Decision::ExplicitlyDenied
             );
         }
     }

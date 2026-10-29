@@ -2,8 +2,10 @@ mod common;
 mod iam_policy;
 
 use alien_permissions::{
-    generators::AwsRuntimePermissionsGenerator, get_permission_set,
-    initial_setup::generate_aws_initial_setup_policy, BindingTarget,
+    generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
+    get_permission_set,
+    initial_setup::generate_aws_initial_setup_policy,
+    BindingTarget,
 };
 use iam_policy::{evaluate, Decision, Request};
 
@@ -139,6 +141,87 @@ fn node_cleanup_only_detaches_the_two_obsolete_policies_within_its_scope() {
                     &Request::new("iam:DetachRolePolicy", &role)
                 ),
                 Decision::NotAllowed
+            );
+        }
+    }
+}
+
+#[test]
+fn management_boundary_deny_overrides_allows_without_affecting_setup_or_siblings() {
+    let broad_allow = AwsIamStatement {
+        sid: "ExplicitManagementExtension".into(),
+        effect: "Allow".into(),
+        action: vec!["iam:*".into()],
+        resource: vec!["*".into()],
+        not_resource: Vec::new(),
+        condition: None,
+    };
+    let generator = AwsRuntimePermissionsGenerator::new();
+    for bounded in [false, true] {
+        let mut context = common::create_test_context();
+        if bounded {
+            context = context.with_aws_permissions_boundary_arn(BOUNDARY);
+        }
+        let mut management = generator
+            .generate_policy(
+                get_permission_set(alien_permissions::MANAGEMENT_ROLE_GUARD).unwrap(),
+                BindingTarget::Stack,
+                &context,
+            )
+            .unwrap()
+            .statement;
+        management.push(broad_allow.clone());
+        for action in [
+            "iam:CreatePolicyVersion",
+            "iam:SetDefaultPolicyVersion",
+            "iam:DeletePolicyVersion",
+            "iam:DeletePolicy",
+            "iam:TagPolicy",
+            "iam:UntagPolicy",
+        ] {
+            for resource in [
+                BOUNDARY,
+                "arn:aws:iam::123456789012:policy/my-stack-deployment-management-1",
+                "arn:aws:iam::123456789012:policy/my-stack-permissions-boundary-copy",
+                "arn:aws:iam::210987654321:policy/my-stack-permissions-boundary",
+            ] {
+                assert_eq!(
+                    evaluate(&management, &Request::new(action, resource)),
+                    if bounded && resource == BOUNDARY {
+                        Decision::ExplicitlyDenied
+                    } else {
+                        Decision::Allowed
+                    },
+                    "bounded={bounded}, {action}, {resource}"
+                );
+            }
+        }
+        for role in [
+            "arn:aws:iam::123456789012:role/my-stack-jobs",
+            "arn:aws:iam::123456789012:role/other-jobs",
+            "arn:aws:iam::210987654321:role/my-stack-jobs",
+        ] {
+            assert_eq!(
+                evaluate(
+                    &management,
+                    &Request::new("iam:DeleteRolePermissionsBoundary", role)
+                ),
+                if bounded && role == "arn:aws:iam::123456789012:role/my-stack-jobs" {
+                    Decision::ExplicitlyDenied
+                } else {
+                    Decision::Allowed
+                }
+            );
+        }
+        let installer = generate_aws_initial_setup_policy(&context).unwrap();
+        for action in [
+            "iam:CreatePolicyVersion",
+            "iam:DeletePolicyVersion",
+            "iam:DeletePolicy",
+        ] {
+            assert_eq!(
+                evaluate(&installer.statement, &Request::new(action, BOUNDARY)),
+                Decision::Allowed
             );
         }
     }
