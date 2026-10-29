@@ -2631,14 +2631,19 @@ async fn download_tools(
         .into_alien_error()
         .context(config_error("encoding the tool list"))?;
     let local_hashes = tool_hashes(folder);
-    let previous: Vec<serde_json::Value> =
-        match std::fs::read(folder.join(TOOLS_DIR).join(TOOLS_SOURCES_FILE)) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .into_alien_error()
-                .context(config_error("decoding carried tool sources"))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(error) => return Err(transfer_file_error(folder, error)),
-        };
+    let previous: Vec<serde_json::Value> = match std::fs::read(
+        folder.join(TOOLS_DIR).join(TOOLS_SOURCES_FILE),
+    ) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            tracing::warn!(%error, "Cannot decode optional tool cache; downloading tools again");
+            Vec::new()
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => {
+            tracing::warn!(%error, "Cannot read optional tool cache; downloading tools again");
+            Vec::new()
+        }
+    };
     let client = http()?;
     let mut builds = Vec::new();
     for download in &downloads {
@@ -6454,6 +6459,49 @@ stringData:
             Tools::AlreadyThere
         );
         binary.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn unusable_tool_sources_trigger_a_fresh_download() {
+        let server = MockServer::start_async().await;
+        let binary = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/tool");
+                then.status(200).body("executable bytes");
+            })
+            .await;
+        let sources = serde_json::json!({ "deployCli": [{
+            "platform": "linux-x86_64",
+            "url": format!("{}/tool", server.base_url()),
+        }] });
+        for unreadable in [false, true] {
+            let bundle = tempfile::tempdir().unwrap();
+            let folder = tempfile::tempdir().unwrap();
+            let tools = folder.path().join(TOOLS_DIR);
+            std::fs::create_dir(&tools).unwrap();
+            let cache = tools.join(TOOLS_SOURCES_FILE);
+            if unreadable {
+                std::fs::create_dir(&cache).unwrap();
+            } else {
+                std::fs::write(&cache, b"invalid JSON").unwrap();
+            }
+            assert_eq!(
+                download_tools(
+                    bundle.path(),
+                    folder.path(),
+                    &sources,
+                    &SiteCapabilities::default()
+                )
+                .await
+                .unwrap(),
+                Tools::Included
+            );
+            assert_eq!(
+                std::fs::read(bundle.path().join("tools/tool-linux-x86_64")).unwrap(),
+                b"executable bytes"
+            );
+        }
+        binary.assert_hits_async(2).await;
     }
 
     #[cfg(target_os = "linux")]
