@@ -457,7 +457,10 @@ fn aws_queue_resource_permissions_attach_to_service_account_role() {
     let stack = Stack::new("queue-permissions".to_string())
         .permission(
             "execution",
-            PermissionProfile::new().resource("jobs", ["queue/data-read", "queue/data-write"]),
+            PermissionProfile::new().resource(
+                "jobs",
+                ["queue/data-read", "queue/data-write", "queue/provision"],
+            ),
         )
         .add(
             ServiceAccount::new("execution-sa".to_string()).build(),
@@ -484,6 +487,7 @@ fn aws_queue_resource_permissions_attach_to_service_account_role() {
     let actions = policy_actions(policy);
     assert!(actions.contains(&"sqs:ReceiveMessage"));
     assert!(actions.contains(&"sqs:DeleteMessage"));
+    assert!(actions.contains(&"sqs:TagQueue"));
 
     // Statements must be pinned to the queue ARN: the physical queue name is
     // CloudFormation-generated, so a name-pattern binding would never match.
