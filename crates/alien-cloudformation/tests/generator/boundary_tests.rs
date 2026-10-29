@@ -26,9 +26,7 @@ fn stack() -> Stack {
     Stack::new("boundary".into())
         .permission(
             "application",
-            PermissionProfile::new()
-                .resource("first", ["key/remote-cryptography"])
-                .resource("second", ["key/remote-cryptography"]),
+            PermissionProfile::new().resource("first", ["key/remote-cryptography"]),
         )
         .management(ManagementPermissions::extend(
             PermissionProfile::new().global([
@@ -42,6 +40,30 @@ fn stack() -> Stack {
         ))
         .add(Key::new("first".into()).build(), ResourceLifecycle::Frozen)
         .add(Key::new("second".into()).build(), ResourceLifecycle::Frozen)
+        .add(
+            alien_core::Container::new("db".into())
+                .cluster("compute".into())
+                .permissions("execution".into())
+                .code(alien_core::ContainerCode::Image {
+                    image: "postgres:17".into(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "1".into(),
+                    desired: "1".into(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "1Gi".into(),
+                    desired: "1Gi".into(),
+                })
+                .persistent_storage(alien_core::PersistentStorage {
+                    size: "10Gi".into(),
+                    mount_path: "/data".into(),
+                    encryption_key: Some(alien_core::ResourceRef::new("key".into(), "second")),
+                    backups: alien_core::VolumeBackups::default(),
+                })
+                .build(),
+            ResourceLifecycle::Live,
+        )
         .add(
             RemoteStackManagement::new("management".into()).build(),
             ResourceLifecycle::Frozen,
@@ -427,7 +449,7 @@ fn size_budget_keeps_distinct_physical_keys_distinct() {
         ResourceLifecycle::Frozen,
     );
     let mut profile = PermissionProfile::new();
-    for index in 0..12 {
+    for index in 0..24 {
         let id = format!("key-{index}");
         profile = profile.resource(&id, ["key/remote-cryptography"]);
         builder = builder.add(Key::new(id).build(), ResourceLifecycle::Frozen);

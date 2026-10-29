@@ -331,7 +331,6 @@ fn wildcard_matching_follows_iam() {
 }
 
 #[test]
-#[ignore = "Native volume-key grants are missing from the boundary; adding them exceeds the policy limit for combined stacks"]
 fn encrypted_volume_backup_grants_are_covered_without_an_application_profile() {
     let key_arn = "arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab";
     let container = alien_core::Container::new("db".to_string())
@@ -412,14 +411,14 @@ fn encrypted_volume_backup_grants_are_covered_without_an_application_profile() {
         let mut grant = original;
         grant.condition = None;
         assert!(
-            !aws_permissions_boundary_covers(
+            aws_permissions_boundary_covers(
                 &boundary,
                 &serde_json::json!({
                     "Version": "2012-10-17", "Statement": [grant],
                 })
             )
             .unwrap(),
-            "EC2-only use and service-created grants must remain conditional"
+            "the exact-key ceiling leaves service restrictions to identity policies"
         );
     }
     assert!(

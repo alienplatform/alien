@@ -59,14 +59,13 @@ The document defines a ceiling for roles management writes:
   alone do not satisfy this ownership check.
 - Runtime grants outside those patterns and ownership checks retain their specific actions,
   resources and conditions, including grants that require `Resource: "*"`.
-- Custom inline AWS permissions in workload profiles and catalog grants that
-  select complete resource ARNs are compiled with their actual resource context.
-  These are setup-approved additions to the ceiling; they are not restricted
-  to name-based resources. Management profiles do not contribute to it.
-
-Native volume-key grants derived from container storage settings are not yet
-included unless they also appear in a workload profile. Encrypted node and
-backup policies therefore need further integration before using this ceiling.
+- Catalog grants selecting complete resource ARNs add those exact resources to
+  the non-IAM ceiling. This includes encryption keys selected by container storage
+  settings, even without a workload permission profile. KMS service and grant
+  conditions remain in identity policies.
+- Custom inline AWS permissions in workload profiles retain their actions,
+  resources and conditions, compiled with their actual resource context.
+  Management profiles do not contribute to the ceiling.
 
 Provision, management, heartbeat, telemetry, observation, remote-management and
 protection permission sets are excluded from the runtime catalog ceiling. A

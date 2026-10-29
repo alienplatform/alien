@@ -370,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn imported_key_boundary_preserves_exact_arn_and_runtime_conditions() {
+    fn imported_key_boundary_uses_exact_arn_ceiling() {
         let key_arn = "arn:aws:kms:us-east-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab";
         for set in [
             "key/availability",
@@ -423,7 +423,7 @@ mod tests {
                     let mut unconditional = statement.clone();
                     unconditional.as_object_mut().unwrap().remove("Condition");
                     assert!(
-                        !aws_permissions_boundary_covers(
+                        aws_permissions_boundary_covers(
                             &boundary,
                             &json!({"Version": "2012-10-17", "Statement": [unconditional]})
                         )
