@@ -119,6 +119,7 @@ fn queue_iam_policies(
     let mut resources = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let context = stack_permission_context(ctx)
+        .with_resource_id(queue.id().to_string())
         .with_resource_name(format!("${{AWS::StackName}}-{}", queue.id()));
 
     let mut owners = resource_permission_owners(ctx, PERMISSION_SET_PREFIX);

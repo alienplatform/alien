@@ -423,6 +423,7 @@ pub fn emit_workload_resource_grants(
 ) -> Result<()> {
     let resource_label = required_label(ctx)?;
     let context = stack_permission_context(ctx)
+        .with_resource_id(ctx.resource_id.to_string())
         .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
     let generator = AwsRuntimePermissionsGenerator::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {

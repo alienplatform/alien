@@ -163,6 +163,8 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
         "iam:untagpolicy",
         "ecr:tagresource",
         "ecr:untagresource",
+        "sqs:tagqueue",
+        "sqs:untagqueue",
         "acm:addtagstocertificate",
         "acm:removetagsfromcertificate",
         "dlm:untagresource",
@@ -253,6 +255,7 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                     && !binding.resources.is_empty()
                     && binding.resources.iter().all(|arn| {
                         [
+                            "arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-",
                             "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-",
                             "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-",
                             "arn:aws:iam::${awsAccountId}:instance-profile/${stackPrefix}-",
