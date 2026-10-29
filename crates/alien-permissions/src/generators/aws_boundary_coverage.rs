@@ -169,20 +169,7 @@ fn validate_variables(mut value: &str, allow_iam_variables: bool) -> Result<()> 
         // as ${local.resource_prefix}, ${BoundaryPolicy}, and ${AWS::AccountId}
         // must already have been resolved. IAM also supports literal escapes and
         // defaults, e.g. ${aws:PrincipalTag/team, 'unassigned'}.
-        let key = variable
-            .split_once(',')
-            .map_or(variable, |(key, _)| key)
-            .trim();
-        let iam_key = key.split_once(':').is_some_and(|(namespace, name)| {
-            !namespace.is_empty()
-                && !name.is_empty()
-                && !name.starts_with(':')
-                && namespace
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
-                && !name.contains(['$', '{', '}'])
-        });
-        if !allow_iam_variables || !(iam_key || matches!(variable, "*" | "?" | "$")) {
+        if !allow_iam_variables || !crate::variables::is_iam_policy_variable(variable) {
             return Err(invalid("policy contains an unresolved setup variable"));
         }
         value = remaining;

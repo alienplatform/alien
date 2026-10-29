@@ -262,7 +262,7 @@ impl AwsCloudFormationPermissionsGenerator {
                 // Use Fn::Sub with variable map to extract account ID from role ARN
                 return Ok(json!({
                     "Fn::Sub": [
-                        result,
+                        escape_iam_variables(&result),
                         {
                             "ManagingAccountId": {
                                 "Fn::Select": [4, {"Fn::Split": [":", {"Ref": "ManagingRoleArn"}]}]
@@ -277,7 +277,7 @@ impl AwsCloudFormationPermissionsGenerator {
             // and other CloudFormation references (${!...})
             if result.contains("${") {
                 Ok(json!({
-                    "Fn::Sub": result
+                    "Fn::Sub": escape_iam_variables(&result)
                 }))
             } else {
                 // Just a plain string after substitution
@@ -286,7 +286,7 @@ impl AwsCloudFormationPermissionsGenerator {
         } else if contains_cf_vars {
             // Template already contains CloudFormation variables, wrap in Fn::Sub
             Ok(json!({
-                "Fn::Sub": template
+                "Fn::Sub": escape_iam_variables(&template)
             }))
         } else {
             // No variables, just return as plain string
@@ -381,4 +381,27 @@ impl Default for AwsCloudFormationPermissionsGenerator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// Fn::Sub must leave request-time IAM variables intact, including defaults and
+// literal escapes. Existing CloudFormation escapes already have their leading !.
+fn escape_iam_variables(template: &str) -> String {
+    let mut result = String::with_capacity(template.len());
+    let mut remaining = template;
+    while let Some((literal, rest)) = remaining.split_once("${") {
+        result.push_str(literal);
+        result.push_str("${");
+        let Some((variable, suffix)) = rest.split_once('}') else {
+            result.push_str(rest);
+            return result;
+        };
+        if crate::variables::is_iam_policy_variable(variable) {
+            result.push('!');
+        }
+        result.push_str(variable);
+        result.push('}');
+        remaining = suffix;
+    }
+    result.push_str(remaining);
+    result
 }

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crate::{
     error::{ErrorData, Result},
     generators::labels::{entry_pascal_label, has_explicit_label},
-    variables::VariableInterpolator,
+    variables::{interpolate_aws_variables, VariableInterpolator},
     BindingTarget, PermissionContext,
 };
 use alien_core::{PermissionGrant, PermissionSet};
@@ -147,12 +147,16 @@ impl AwsRuntimePermissionsGenerator {
             let (binding_spec, actions) =
                 super::aws_boundary::role_write_binding(binding_spec, actions, context);
 
-            let resources =
-                VariableInterpolator::interpolate_string_list(&binding_spec.resources, context)?;
-            let not_resources = VariableInterpolator::interpolate_string_list(
-                &binding_spec.not_resources,
-                context,
-            )?;
+            let resources = binding_spec
+                .resources
+                .iter()
+                .map(|value| interpolate_aws_variables(value, context))
+                .collect::<Result<Vec<_>>>()?;
+            let not_resources = binding_spec
+                .not_resources
+                .iter()
+                .map(|value| interpolate_aws_variables(value, context))
+                .collect::<Result<Vec<_>>>()?;
             let conditions = self.extract_conditions(&binding_spec, context)?;
 
             let statement_id = self.statement_id(
@@ -201,8 +205,7 @@ impl AwsRuntimePermissionsGenerator {
                 for (value_key, value_template) in condition_values {
                     let value_key =
                         VariableInterpolator::interpolate_variables(value_key, context)?;
-                    let interpolated_value =
-                        VariableInterpolator::interpolate_variables(value_template, context)?;
+                    let interpolated_value = interpolate_aws_variables(value_template, context)?;
                     interpolated_values.insert(value_key, interpolated_value);
                 }
 
