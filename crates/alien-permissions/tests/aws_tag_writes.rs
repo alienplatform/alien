@@ -157,6 +157,8 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                         "ec2:createtags",
                         "acm:addtagstocertificate",
                         "dlm:tagresource",
+                        "ses:tagresource",
+                        "ses:untagresource",
                     ]
                     .iter()
                     .any(|tagging| {
@@ -197,11 +199,16 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
                             )
                         });
                 let non_ec2 = entry.grant.actions.iter().flatten().any(|action| {
-                    ["acm:addtagstocertificate", "dlm:tagresource"]
-                        .iter()
-                        .any(|tagging| {
-                            iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
-                        })
+                    [
+                        "acm:addtagstocertificate",
+                        "dlm:tagresource",
+                        "ses:tagresource",
+                        "ses:untagresource",
+                    ]
+                    .iter()
+                    .any(|tagging| {
+                        iam_policy::wildcard_match(&action.to_ascii_lowercase(), tagging)
+                    })
                 });
                 assert!(owned || (creation && !non_ec2), "{id} allows tag writes without creation or existing stack ownership: {binding:?}");
             }
@@ -349,6 +356,58 @@ fn lifecycle_policy_tags_require_existing_stack_ownership() {
                 ),
                 Decision::NotAllowed,
                 "resource binding must preserve resource ownership"
+            );
+        }
+    }
+}
+
+#[test]
+fn email_tag_changes_require_existing_stack_ownership() {
+    let context = PermissionContext::new()
+        .with_stack_prefix("stack-a")
+        .with_resource_name("stack-a-email")
+        .with_resource_id("email")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-west-2");
+    let set = get_permission_set("email/provision").expect("email provision");
+    for binding in [BindingTarget::Stack, BindingTarget::Resource] {
+        let policy = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(set, binding, &context)
+            .expect("email policy");
+        for (resource, create_action) in [
+            ("identity/mail.example.com", "ses:CreateEmailIdentity"),
+            (
+                "configuration-set/stack-a-email",
+                "ses:CreateConfigurationSet",
+            ),
+        ] {
+            let arn = format!("arn:aws:ses:us-west-2:123456789012:{resource}");
+            for action in ["ses:TagResource", "ses:UntagResource"] {
+                for existing_stack in [None, Some("stack-b"), Some("stack-a")] {
+                    let mut request = Request::new(action, &arn)
+                        .request_tags(&[(ALIEN_STACK_TAG_KEY, "stack-a")]);
+                    if let Some(stack) = existing_stack {
+                        request = request.resource_tags(&[(ALIEN_STACK_TAG_KEY, stack)]);
+                    }
+                    assert_eq!(
+                        evaluate(&policy.statement, &request),
+                        if existing_stack == Some("stack-a") {
+                            Decision::Allowed
+                        } else {
+                            Decision::NotAllowed
+                        },
+                        "{binding:?} {action} on {resource}, existing stack {existing_stack:?}"
+                    );
+                }
+            }
+            assert_eq!(
+                evaluate(
+                    &policy.statement,
+                    &Request::new(create_action, &arn)
+                        .request_tags(&[(ALIEN_STACK_TAG_KEY, "stack-a")])
+                ),
+                Decision::Allowed,
+                "tagged {create_action} remains available"
             );
         }
     }
