@@ -1522,7 +1522,9 @@ fn owned_vault_prefixes(state: &serde_json::Value, namespace: &str) -> BTreeSet<
     resources
         .values()
         .filter_map(|resource| {
-            if resource["type"] != "vault" || resource["lifecycle"] == "frozen" {
+            // Signed erase includes setup teardown, so both lifecycle modes apply.
+            // External bindings publish outputs without a controller checkpoint.
+            if resource["type"] != "vault" || resource["_internal"].is_null() {
                 return None;
             }
             let vault = resource["outputs"]["vaultId"].as_str()?;
@@ -5265,13 +5267,24 @@ metadata:
         vault.outputs = Some(alien_core::ResourceOutputs::new(alien_core::VaultOutputs {
             vault_id: format!("kubernetes-secret:{namespace}:app-vault"),
         }));
+        vault.internal_state = Some(serde_json::json!({
+            "type": "KubernetesVaultController", "state": "Ready",
+            "namespace": namespace, "vaultPrefix": "app-vault",
+        }));
         let mut frozen = vault.clone();
         frozen.lifecycle = Some(alien_core::ResourceLifecycle::Frozen);
+        frozen.internal_state.as_mut().unwrap()["vaultPrefix"] = "frozen-vault".into();
         frozen.outputs = Some(alien_core::ResourceOutputs::new(alien_core::VaultOutputs {
+            vault_id: format!("kubernetes-secret:{namespace}:frozen-vault"),
+        }));
+        let mut external = frozen.clone();
+        // External binding adoption publishes outputs without a controller checkpoint.
+        external.internal_state = None;
+        external.outputs = Some(alien_core::ResourceOutputs::new(alien_core::VaultOutputs {
             vault_id: format!("kubernetes-secret:{namespace}:external-vault"),
         }));
         original.state["stackState"] = serde_json::json!({"resources": {
-            "vault": vault, "frozen": frozen,
+            "vault": vault, "frozen": frozen, "external": external,
         }});
         std::fs::write(&snapshot, serde_json::to_vec(&original).unwrap()).unwrap();
         let settings = SiteSide {
@@ -5397,6 +5410,10 @@ stringData:
             ),
             (
                 "frozen-vault-entry",
+                serde_json::json!({"managed-by":"operator", "vault-prefix":"frozen-vault"}),
+            ),
+            (
+                "external-vault-entry",
                 serde_json::json!({"managed-by":"operator", "vault-prefix":"external-vault"}),
             ),
             (
@@ -5707,12 +5724,16 @@ stringData:
             "site-entry",
             "other-vault-entry",
             "frozen-vault-entry",
+            "external-vault-entry",
             "site-labelled-entry",
         ] {
             let exists = remaining.iter().any(|v| v["metadata"]["name"] == name);
             assert_eq!(
                 exists,
-                !matches!(name, "vault-entry" | "late-vault-entry") || policy == "retain",
+                !matches!(
+                    name,
+                    "vault-entry" | "late-vault-entry" | "frozen-vault-entry"
+                ) || policy == "retain",
                 "unexpected retention of {name} under {policy}"
             );
         }
