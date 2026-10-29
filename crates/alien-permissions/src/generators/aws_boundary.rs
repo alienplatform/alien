@@ -320,6 +320,24 @@ fn render_boundary(
     Ok(policy)
 }
 
+/// Backup roles remain setup-owned until setup installs a boundary.
+pub(super) fn include_role_statement(
+    permission_set: &PermissionSet,
+    label: Option<&str>,
+    context: &PermissionContext,
+) -> bool {
+    if permission_set.id != "container/provision" {
+        return true;
+    }
+    match label {
+        Some("deny-volume-backup-role-changes") => context.aws_permissions_boundary_arn.is_none(),
+        Some("bounded-volume-backup-role-writes" | "bounded-volume-backup-role-lifecycle") => {
+            context.aws_permissions_boundary_arn.is_some()
+        }
+        _ => true,
+    }
+}
+
 /// Older setups have no boundary policy or adoption grant. Only omit the catalog's
 /// boundary condition; explicit custom conditions must keep their original meaning.
 pub(super) fn role_write_binding<'a>(

@@ -114,6 +114,13 @@ impl AwsRuntimePermissionsGenerator {
 
         // Process each AWS platform permission in the permission set
         for platform_permission in aws_platform_permissions {
+            if !super::aws_boundary::include_role_statement(
+                permission_set,
+                platform_permission.label.as_deref(),
+                context,
+            ) {
+                continue;
+            }
             let actions = platform_permission.grant.actions.as_ref().ok_or_else(|| {
                 alien_error::AlienError::new(ErrorData::GeneratorError {
                     platform: "aws".to_string(),

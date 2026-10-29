@@ -513,11 +513,8 @@
           }
         }
       },
-      // Every DLM policy runs as the role setup creates for the stack's compute cluster,
-      // `${stackPrefix}-volume-backups-{cluster}`, from `container/volume-backups`: it can only
-      // snapshot this stack's volumes and can't share or copy a snapshot. The management identity
-      // never creates or changes an IAM role here; it may only pass that role to DLM. (IAM
-      // doesn't evaluate a role's tags for PassRole, so the name is the only scope.)
+      // Backup roles are setup-owned without a boundary and runtime-owned with one.
+      // PassRole uses names because IAM does not evaluate role tags for that action.
       {
         "grant": {
           "actions": ["iam:GetRole"]
@@ -551,6 +548,64 @@
                 "iam:PassedToService": "dlm.amazonaws.com"
               }
             }
+          }
+        }
+      },
+      {
+        "label": "bounded-volume-backup-role-writes",
+        "grant": {
+          "actions": [
+            "iam:CreateRole",
+            "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:UpdateAssumeRolePolicy",
+            "iam:PutRolePermissionsBoundary"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "bounded-volume-backup-role-lifecycle",
+        "grant": {
+          "actions": [
+            "iam:GetRolePolicy",
+            "iam:ListRolePolicies",
+            "iam:ListAttachedRolePolicies",
+            "iam:TagRole",
+            "iam:DeleteRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-volume-backups-*"
+            ]
           }
         }
       },
