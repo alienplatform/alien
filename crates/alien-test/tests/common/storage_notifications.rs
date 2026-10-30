@@ -2,6 +2,7 @@
 
 use std::{collections::BTreeSet, time::Duration};
 
+use alien_core::{StackState, StorageOutputs};
 use alien_test::TestDeployment;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -43,6 +44,31 @@ fn matching_objects(phase: &str, prefix: &str) -> Vec<(&'static str, String)> {
 
 async fn check_cohort(deployment: &TestDeployment, phase: &str, prefix: &str) {
     let started = Instant::now();
+    let installed = deployment
+        .manager()
+        .client()
+        .get_deployment()
+        .id(&deployment.id)
+        .send()
+        .await
+        .unwrap();
+    let state: StackState = serde_json::from_value(
+        serde_json::to_value(installed.stack_state.as_ref().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let bucket_name = |id: &str| {
+        state.resources[id]
+            .outputs
+            .as_ref()
+            .unwrap()
+            .downcast_ref::<StorageOutputs>()
+            .unwrap()
+            .bucket_name
+            .as_str()
+    };
+    let expected_first_bucket = bucket_name("objects");
+    let expected_second_bucket = bucket_name("second");
+    assert_ne!(expected_first_bucket, expected_second_bucket);
     let url = super::bindings::deployment_url(deployment).unwrap();
     let client = Client::builder()
         .timeout(Duration::from_secs(60))
@@ -130,6 +156,14 @@ async fn check_cohort(deployment: &TestDeployment, phase: &str, prefix: &str) {
                 chrono::DateTime::parse_from_rfc3339(event["timestamp"].as_str().unwrap()).unwrap();
                 let bucket = event["bucketName"].as_str().unwrap();
                 assert!(!bucket.is_empty());
+                assert_eq!(
+                    bucket,
+                    if key.starts_with("shared/") {
+                        expected_second_bucket
+                    } else {
+                        expected_first_bucket
+                    }
+                );
                 let observed = if key.starts_with("shared/") {
                     &mut second_bucket
                 } else {
