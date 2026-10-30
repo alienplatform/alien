@@ -11,8 +11,8 @@ use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi, IamRoleWr
 use alien_core::{
     standard_resource_tags, ArtifactRegistry, ArtifactRegistryHeartbeatData,
     ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, AwsEcrArtifactRegistryHeartbeatData,
-    AwsEcrRepositoryHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
-    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    AwsEcrRepositoryHeartbeatData, HeartbeatBackend, InitialSetupAuthority, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
 
@@ -396,6 +396,21 @@ impl AwsArtifactRegistryController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         Self::validate_replication(config)?;
+
+        // A template setup created the pull and push roles, and with a permissions boundary
+        // management may not write them. Setup keeps their trust and policies current.
+        if ctx.initial_setup_authority != InitialSetupAuthority::DirectSetup
+            && ctx.aws_permissions_boundary_arn()?.is_some()
+        {
+            info!(
+                registry_id = %config.id,
+                "Leaving the setup-owned registry roles to setup"
+            );
+            return Ok(HandlerAction::Continue {
+                state: UpdatingReplication,
+                suggested_delay: None,
+            });
+        }
 
         info!(
             registry_id = %config.id,
@@ -1731,6 +1746,59 @@ mod tests {
                 .unwrap();
             executor.step().await.expect("adoption precedes the write");
         }
+    }
+
+    /// A template setup's registry roles keep the trust and policies setup gave them: with a
+    /// boundary, an update makes no IAM call. Under a direct setup the controller's own roles
+    /// are still updated.
+    #[tokio::test]
+    async fn bounded_update_leaves_template_setup_roles_to_setup() {
+        let registry = basic_artifact_registry();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(registry.clone())
+            .controller(AwsArtifactRegistryController {
+                state: AwsArtifactRegistryState::Ready,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                bounded_management(),
+            )
+            // No expectations: any IAM call fails the test.
+            .service_provider(setup_mock_service_provider(Arc::new(MockIamApi::new())))
+            .build()
+            .await
+            .unwrap();
+        executor.update(registry.clone()).unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(registry)
+            .controller(AwsArtifactRegistryController {
+                state: AwsArtifactRegistryState::UpdateStart,
+                ..Default::default()
+            })
+            .platform(Platform::Aws)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .with_dependency(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                bounded_management(),
+            )
+            .service_provider(setup_mock_service_provider(Arc::new(MockIamApi::new())))
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.unwrap();
+        assert!(matches!(
+            executor
+                .internal_state::<AwsArtifactRegistryController>()
+                .unwrap()
+                .state,
+            AwsArtifactRegistryState::UpdatingPullRoleTrustPolicy
+        ));
     }
 
     #[tokio::test]
