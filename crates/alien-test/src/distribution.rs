@@ -271,48 +271,12 @@ impl DistributionArtifactCleanup {
                     workdir = %workdir.path().display(),
                     "destroying Terraform setup artifacts"
                 );
-                let detach_script = workdir.path().join("detach-retained-keys.sh");
-                if detach_script.exists() {
-                    let mut detach = Command::new("sh");
-                    detach
-                        .current_dir(workdir.path())
-                        .arg("./detach-retained-keys.sh")
-                        .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes");
-                    apply_env(&mut detach, &env);
-                    run_command(detach, "detach retained Terraform keys").await?;
-                }
-                let erasable = lift_terraform_destroy_guards(workdir.path()).await?;
-                if !erasable.is_empty() {
-                    // `force_destroy` lives in state. Apply only the resources that need it:
-                    // after a failed setup, a full apply would create what setup never did.
-                    let mut list = Command::new("terraform");
-                    list.current_dir(workdir.path()).args(["state", "list"]);
-                    apply_env(&mut list, &env);
-                    let output = list
-                        .output()
-                        .await
-                        .context("Failed to run terraform state list")?;
-                    anyhow::ensure!(
-                        output.status.success(),
-                        "terraform state list failed: {}",
-                        String::from_utf8_lossy(&output.stderr)
+                if let Err(error) = prepare_terraform_erasure(workdir.path(), &env).await {
+                    let workdir = workdir.keep();
+                    anyhow::bail!(
+                        "preparing Terraform setup artifacts for erasure failed: {error:#}. Terraform state retained at {}",
+                        workdir.display()
                     );
-                    let state = String::from_utf8(output.stdout)
-                        .context("terraform state list printed invalid UTF-8")?;
-                    let targets = erasable
-                        .iter()
-                        .filter(|address| state.lines().any(|line| line == address.as_str()))
-                        .map(|address| format!("-target={address}"))
-                        .collect::<Vec<_>>();
-                    if !targets.is_empty() {
-                        let mut apply = Command::new("terraform");
-                        apply
-                            .current_dir(workdir.path())
-                            .args(["apply", "-auto-approve", "-input=false", "-lock-timeout=5m"])
-                            .args(&targets);
-                        apply_env(&mut apply, &env);
-                        run_command(apply, "terraform apply to allow erasing setup data").await?;
-                    }
                 }
                 for attempt in 1..=3 {
                     let mut cmd = Command::new("terraform");
@@ -1971,6 +1935,55 @@ fn stop_before_helm_for_terraform_handoff_debug(
         helm_target.namespace,
         commands.join("\n")
     )
+}
+
+/// Everything before `terraform destroy`: detach retained keys, then let the setup data
+/// be erased. The caller keeps the Terraform state if this fails.
+async fn prepare_terraform_erasure(workdir: &Path, env: &[(String, String)]) -> anyhow::Result<()> {
+    let detach_script = workdir.join("detach-retained-keys.sh");
+    if detach_script.exists() {
+        let mut detach = Command::new("sh");
+        detach
+            .current_dir(workdir)
+            .arg("./detach-retained-keys.sh")
+            .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes");
+        apply_env(&mut detach, env);
+        run_command(detach, "detach retained Terraform keys").await?;
+    }
+    let erasable = lift_terraform_destroy_guards(workdir).await?;
+    if !erasable.is_empty() {
+        // `force_destroy` lives in state. Apply only the resources that need it:
+        // after a failed setup, a full apply would create what setup never did.
+        let mut list = Command::new("terraform");
+        list.current_dir(workdir).args(["state", "list"]);
+        apply_env(&mut list, env);
+        let output = list
+            .output()
+            .await
+            .context("Failed to run terraform state list")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "terraform state list failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let state = String::from_utf8(output.stdout)
+            .context("terraform state list printed invalid UTF-8")?;
+        let targets = erasable
+            .iter()
+            .filter(|address| state.lines().any(|line| line == address.as_str()))
+            .map(|address| format!("-target={address}"))
+            .collect::<Vec<_>>();
+        if !targets.is_empty() {
+            let mut apply = Command::new("terraform");
+            apply
+                .current_dir(workdir)
+                .args(["apply", "-auto-approve", "-input=false", "-lock-timeout=5m"])
+                .args(&targets);
+            apply_env(&mut apply, env);
+            run_command(apply, "terraform apply to allow erasing setup data").await?;
+        }
+    }
+    Ok(())
 }
 
 /// Setup protects the data resources it owns: they carry `prevent_destroy`, and buckets
