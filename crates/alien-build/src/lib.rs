@@ -2010,34 +2010,6 @@ async fn push_resource_images(
             push_resource_started.elapsed().as_secs_f64()
         );
 
-        if *platform == Platform::Aws && resource_type == "sandbox" {
-            // Tags are unique per push, not per image. The bundle's FROM and
-            // content key must use the registry's immutable ARM64 manifest so an
-            // unchanged sandbox does not rebuild on every application release.
-            let reference = Reference::try_from(image_uri.as_str())
-                .into_alien_error()
-                .context(ErrorData::InvalidResourceConfig {
-                    resource_id: resource_name.to_string(),
-                    reason: format!("Invalid image reference '{image_uri}'"),
-                })?;
-            let client = OciClient::new(OciClientConfig {
-                protocol: push_options.protocol.clone(),
-                ..Default::default()
-            });
-            let (_, digest) = client
-                .pull_manifest_raw(
-                    &reference,
-                    &push_options.auth,
-                    &[OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE],
-                )
-                .await
-                .into_alien_error()
-                .context(ErrorData::ImagePushFailed {
-                    image: image_uri.clone(),
-                    reason: "Failed to resolve the pushed ARM64 manifest".to_string(),
-                })?;
-            return Ok(format!("{repository}@{digest}"));
-        }
         return Ok(image_uri);
     }
 
@@ -2122,8 +2094,8 @@ async fn push_resource_images(
     Ok(image_uri)
 }
 
-/// Pushes one target's images and returns the reference its resources run. Azure and GCP
-/// sandboxes run with `agent_image` layered onto the pushed base.
+/// Pushes one target's images and returns the reference its resources run. A sandbox runs with
+/// `agent_image` layered onto the pushed base, on every cloud.
 async fn push_target(
     target: &ResourcePushTarget,
     platform: &Platform,
@@ -2141,23 +2113,95 @@ async fn push_target(
         push_options,
     )
     .await?;
-    if matches!(platform, Platform::Gcp | Platform::Azure) && target.resource_type == "sandbox" {
-        push_sandbox_agent_image(
-            target.resource_name(),
-            &target.local_image_dir,
-            &image_uri,
-            agent_image,
-            push_options,
-            if *platform == Platform::Azure {
-                alien_core::sandbox_image::AZURE_SANDBOX
-            } else {
-                alien_core::sandbox_image::GCP_AGENT_PLATFORM
-            },
+    if target.resource_type != "sandbox" {
+        return Ok(image_uri);
+    }
+    let layered = match platform {
+        Platform::Azure => SandboxAgentLayering::AZURE,
+        Platform::Gcp => SandboxAgentLayering::GCP,
+        Platform::Aws => SandboxAgentLayering::AWS,
+        _ => return Ok(image_uri),
+    };
+    let agent_uri = push_sandbox_agent_image(
+        target.resource_name(),
+        &target.local_image_dir,
+        &image_uri,
+        agent_image,
+        push_options,
+        layered,
+    )
+    .await?;
+    if *platform == Platform::Aws {
+        // Tags are unique per push, not per image. The deployment's bundle names the image in its
+        // `FROM` and its key is the bundle's digest, so an unchanged sandbox must keep one
+        // reference across releases or every release would rebuild it.
+        pin_to_digest(target.resource_name(), &agent_uri, push_options).await
+    } else {
+        Ok(agent_uri)
+    }
+}
+
+/// How the agent is layered onto a sandbox base for one cloud.
+#[derive(Clone, Copy)]
+struct SandboxAgentLayering {
+    target: BinaryTarget,
+    contract: alien_core::sandbox_image::SandboxImage,
+    /// Whether the image itself turns on supervised startup of the base command. On AWS the
+    /// controller turns it on at build time instead, together with the capability grant it needs.
+    image_command_env: bool,
+}
+
+impl SandboxAgentLayering {
+    const AZURE: Self = Self {
+        target: BinaryTarget::LinuxX64,
+        contract: alien_core::sandbox_image::AZURE_SANDBOX,
+        image_command_env: true,
+    };
+    const GCP: Self = Self {
+        target: BinaryTarget::LinuxX64,
+        contract: alien_core::sandbox_image::GCP_AGENT_PLATFORM,
+        image_command_env: true,
+    };
+    const AWS: Self = Self {
+        target: BinaryTarget::LinuxArm64,
+        contract: alien_core::sandbox_image::AWS_MICROVM,
+        image_command_env: false,
+    };
+}
+
+/// `image_uri` as `repository@digest`, resolved from the registry it was pushed to.
+async fn pin_to_digest(
+    resource_name: &str,
+    image_uri: &str,
+    push_options: &dockdash::PushOptions,
+) -> Result<String> {
+    let reference = Reference::try_from(image_uri).into_alien_error().context(
+        ErrorData::InvalidResourceConfig {
+            resource_id: resource_name.to_string(),
+            reason: format!("Invalid image reference '{image_uri}'"),
+        },
+    )?;
+    let client = OciClient::new(OciClientConfig {
+        protocol: push_options.protocol.clone(),
+        ..Default::default()
+    });
+    let (_, digest) = client
+        .pull_manifest_raw(
+            &reference,
+            &push_options.auth,
+            &[OCI_IMAGE_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE],
         )
         .await
-    } else {
-        Ok(image_uri)
-    }
+        .into_alien_error()
+        .context(ErrorData::ImagePushFailed {
+            image: image_uri.to_string(),
+            reason: "Failed to resolve the pushed manifest digest".to_string(),
+        })?;
+    let repository = image_uri
+        .rsplit_once(':')
+        .map(|(repository, _)| repository)
+        .unwrap_or(image_uri);
+    Ok(format!("{repository}@{digest}"))
 }
 
 /// Layers the sandbox agent onto the base just pushed to `base_uri`, pushes the result
@@ -2168,16 +2212,16 @@ async fn push_sandbox_agent_image(
     base_uri: &str,
     agent_image: &str,
     push_options: &dockdash::PushOptions,
-    contract: alien_core::sandbox_image::SandboxImage,
+    layering: SandboxAgentLayering,
 ) -> Result<String> {
-    let tarball = images_dir.join(format!(
-        "{}.oci.tar",
-        BinaryTarget::LinuxX64.runtime_platform_id()
-    ));
+    let tarball = images_dir.join(format!("{}.oci.tar", layering.target.runtime_platform_id()));
     if !tarball.is_file() {
         return Err(AlienError::new(ErrorData::InvalidResourceConfig {
             resource_id: resource_name.to_string(),
-            reason: "Agent-packaged sandboxes require a Linux x64 OCI archive".to_string(),
+            reason: format!(
+                "Agent-packaged sandboxes require a {} OCI archive",
+                layering.target.runtime_platform_id()
+            ),
         }));
     }
     let base = DockDashImage::from_tarball(&tarball).map_dockdash_err()?;
@@ -2203,7 +2247,11 @@ async fn push_sandbox_agent_image(
         push_options.auth.clone(),
         // The default cache, which every other dockdash build here uses by not naming one.
         dockdash::BlobCache::new().map_dockdash_err()?,
-        contract,
+        gcp_sandbox_image::AgentLayering {
+            arch: layering.target.to_dockdash_arch(),
+            contract: layering.contract,
+            image_command_env: layering.image_command_env,
+        },
     )
     .await?
     .image;
@@ -2636,7 +2684,7 @@ fn layered_sandbox_agent(
 /// Cache identity of the layered agent and backend contract. Azure and GCP use the same
 /// binary with different authorization/port settings, so they must never share a pushed artifact.
 fn sandbox_agent_layered_on(platform: Platform) -> Option<String> {
-    matches!(platform, Platform::Gcp | Platform::Azure)
+    matches!(platform, Platform::Gcp | Platform::Azure | Platform::Aws)
         .then(|| format!("{platform}:{}", gcp_sandbox_image::sandbox_agent_image()))
 }
 

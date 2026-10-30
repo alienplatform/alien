@@ -608,6 +608,14 @@ pub struct Sandbox {
     /// which registration reports. Absent means the base image is pulled anonymously.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub private_base_image: Option<String>,
+    /// A prebuilt `s3://` bundle of `code.image`, for an AWS deployment whose setup granted its
+    /// build role a publisher's bundle store instead of a bucket of its own. Such a deployment
+    /// builds from this bundle's key in the store it was granted; every other Live deployment
+    /// renders its own bundle from `code.image`. Set by a publisher, never by authoring.
+    #[builder(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub published_bundle: Option<String>,
     /// Enforced resource ceilings.
     ///
     /// Optional because not every platform can enforce them, and a declaration that names none
@@ -732,7 +740,8 @@ impl Sandbox {
             }
             policy.validate()?;
         }
-        if self.image_user == Some(0) && matches!(platform, Platform::Local | Platform::Kubernetes) {
+        if self.image_user == Some(0) && matches!(platform, Platform::Local | Platform::Kubernetes)
+        {
             return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
                 capability: "root image USER: this backend does not yet separate bounded root boot from non-root exec; use a non-root image USER".into(),
                 platform: platform.to_string(),

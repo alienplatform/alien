@@ -26,7 +26,9 @@ use alien_aws_clients::lambda_microvms::{
     MicrovmLifecycleHooks, UpdateMicrovmImageRequest,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::sandbox_build_role::{sandbox_build_role_arn, sandbox_build_role_name};
+use alien_core::sandbox_build_role::{
+    sandbox_build_role_arn, sandbox_build_role_name, sandbox_bundle_bucket_name,
+};
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     parse_bundle_uri, standard_resource_tags, BundleUri, ResourceOutputs as CoreResourceOutputs,
@@ -126,8 +128,18 @@ pub struct AwsSandboxController {
     pub(crate) bundle_uri: Option<String>,
     /// Bundle setup last granted the build role, for a Frozen sandbox a direct setup registered:
     /// its policy names one bundle object, so a roll waits until setup has granted the new one.
+    /// For a Live sandbox it names the store the build role reads, which is the deployment's own
+    /// bundle bucket when this controller renders the bundle.
     #[serde(default)]
     pub(crate) granted_bundle_uri: Option<String>,
+    /// A `CreateBucket` for the deployment's bundle bucket was sent, so an untagged bucket found
+    /// under its name after a lost response is the one this controller asked for.
+    #[serde(default)]
+    pub(crate) bundle_bucket_requested: bool,
+    /// The rendered bundle last written to the deployment's bucket. Its key is its content's
+    /// digest, so a build whose bundle is already there skips the write.
+    #[serde(default)]
+    pub(crate) written_bundle_uri: Option<String>,
     /// Connectors every session is started with; empty is `allow`, readable only because
     /// `allow_egress` travels with it.
     #[serde(default)]
@@ -197,7 +209,14 @@ impl AwsSandboxController {
             ctx.resource_prefix,
             &config.id,
         );
-        let bundle_uri = self.bundle_to_build(ctx, config, &aws_config.region)?;
+        let bundle = self.bundle_to_build(ctx, config, &aws_config.region)?;
+        let bundle_uri = bundle.uri();
+        if self.needs_bundle_write(&bundle) {
+            return Ok(HandlerAction::Continue {
+                state: WritingBundle,
+                suggested_delay: None,
+            });
+        }
         let client = ctx
             .service_provider
             .get_aws_microvms_client(aws_config)
@@ -354,6 +373,23 @@ impl AwsSandboxController {
         Ok(HandlerAction::Continue {
             state: WaitingForImageActive,
             suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    /// Writes the rendered bundle the create builds from into the deployment's own bucket.
+    #[handler(
+        state = WritingBundle,
+        on_failure = ProvisionFailed,
+        status = ResourceStatus::Provisioning
+    )]
+    async fn writing_bundle(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.write_bundle(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: CreatingImage,
+            suggested_delay: None,
         })
     }
 
@@ -724,7 +760,7 @@ impl AwsSandboxController {
         }
 
         let aws_config = ctx.get_aws_config()?;
-        let desired_bundle = self.bundle_to_build(ctx, config, &aws_config.region)?;
+        let desired_bundle = self.bundle_to_build(ctx, config, &aws_config.region)?.uri();
 
         if self.bundle_uri.as_deref() == Some(desired_bundle.as_str())
             && self.supervisor_environment
@@ -769,7 +805,8 @@ impl AwsSandboxController {
         })?;
 
         let aws_config = ctx.get_aws_config()?;
-        let desired_bundle = self.bundle_to_build(ctx, config, &aws_config.region)?;
+        let bundle = self.bundle_to_build(ctx, config, &aws_config.region)?;
+        let desired_bundle = bundle.uri();
         if resource_lifecycle(ctx, &config.id) == Some(alien_core::ResourceLifecycle::Frozen)
             && self.granted_bundle_uri.as_deref() != Some(desired_bundle.as_str())
         {
@@ -791,6 +828,12 @@ impl AwsSandboxController {
                 resource_id: Some(config.id.clone()),
             })?;
 
+        if self.needs_bundle_write(&bundle) {
+            return Ok(HandlerAction::Continue {
+                state: WritingRolledBundle,
+                suggested_delay: None,
+            });
+        }
         let client = ctx
             .service_provider
             .get_aws_microvms_client(aws_config)
@@ -869,6 +912,23 @@ impl AwsSandboxController {
         Ok(HandlerAction::Continue {
             state: WaitingForRolledImageActive,
             suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    /// The roll's [`Self::writing_bundle`], routed to `UpdateFailed`.
+    #[handler(
+        state = WritingRolledBundle,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating
+    )]
+    async fn writing_rolled_bundle(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.write_bundle(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: UpdatingImage,
+            suggested_delay: None,
         })
     }
 
@@ -987,6 +1047,39 @@ impl AwsSandboxController {
         self.active_version = None;
         info!(sandbox_id = %config.id, "AWS sandbox image deleted; sessions expire on their own");
 
+        Ok(HandlerAction::Continue {
+            state: DeletingBundleBucket,
+            suggested_delay: None,
+        })
+    }
+
+    /// The bundle bucket goes after the image, the last thing that could read it.
+    #[handler(
+        state = DeletingBundleBucket,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting
+    )]
+    async fn deleting_bundle_bucket(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        let bucket = sandbox_bundle_bucket_name(ctx.resource_prefix, &config.id);
+        if self.granted_bucket() == Some(bucket.as_str()) || self.bundle_bucket_requested {
+            let client = ctx
+                .service_provider
+                .get_aws_s3_client(ctx.get_aws_config()?)
+                .await?;
+            super::aws_bundle::delete(
+                client.as_ref(),
+                &bucket,
+                &standard_resource_tags(ctx.resource_prefix, &config.id),
+                &config.id,
+                self.bundle_bucket_requested,
+            )
+            .await?;
+            self.bundle_bucket_requested = false;
+        }
         Ok(HandlerAction::Continue {
             state: DeletingEgressSecrets,
             suggested_delay: None,
@@ -1334,32 +1427,67 @@ fn image_build_inputs(
 }
 
 impl AwsSandboxController {
-    /// The bundle this sandbox builds from: the release's bundle, read from the store its setup
-    /// granted.
+    /// The bundle this sandbox builds from.
     ///
-    /// A Live build role grants one store's stable prefix, and every bundle is published to each
-    /// store under the same key. A release naming another store (stores moved after this setup ran)
-    /// is therefore read from the granted one, which this role can read and which still holds the
-    /// key. A Frozen role grants one exact object, so its bundle is taken as declared.
+    /// A Live sandbox whose release names a container image renders its bundle into the
+    /// deployment's own bucket, when its setup granted that bucket. A setup that granted a
+    /// publisher's store instead builds from the release's published bundle, read from that store.
+    ///
+    /// A Live build role grants one store's stable prefix, and every published bundle is written to
+    /// each store under the same key. A release naming another store (stores moved after this setup
+    /// ran) is therefore read from the granted one, which this role can read and which still holds
+    /// the key. A Frozen role grants one exact object, so its bundle is taken as declared.
     fn bundle_to_build(
         &self,
         ctx: &ResourceControllerContext<'_>,
         config: &Sandbox,
         region: &str,
-    ) -> Result<String> {
-        let desired = desired_bundle_uri(config, region)?;
-        if resource_lifecycle(ctx, &config.id) == Some(alien_core::ResourceLifecycle::Frozen) {
-            return Ok(desired);
-        }
-        let split = |uri: &str| {
-            uri.strip_prefix("s3://")
-                .and_then(|path| path.split_once('/'))
-                .map(|(bucket, key)| (bucket.to_string(), key.to_string()))
+    ) -> Result<BundleToBuild> {
+        let SandboxCode::Image { image } = &config.code else {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "an AWS sandbox is built from a released image, not from source"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            }));
         };
-        Ok(
+        if resource_lifecycle(ctx, &config.id) == Some(alien_core::ResourceLifecycle::Frozen) {
+            return Ok(BundleToBuild::Published(regional_bundle_uri(
+                image, region, &config.id,
+            )?));
+        }
+        let published = if image.starts_with("s3://") {
+            image.as_str()
+        } else {
+            let own = sandbox_bundle_bucket_name(ctx.resource_prefix, &config.id);
+            if self.granted_bucket() == Some(own.as_str()) {
+                // The release stores the manager's proxy reference; the build pulls from the
+                // registry behind it.
+                let image = match ctx.deployment_config.native_image_host.as_deref() {
+                    Some(host) => alien_core::image_rewrite::resolve_native_image_uri(image, host)
+                        .unwrap_or_else(|| image.clone()),
+                    None => image.clone(),
+                };
+                return Ok(BundleToBuild::Rendered(super::aws_bundle::render(
+                    &own, &image, &config.id,
+                )?));
+            }
+            config.published_bundle.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "this sandbox's setup granted the bundle store '{}' rather than a bucket \
+                         of the deployment's own, and the release has no bundle published there; \
+                         run setup again to grant the deployment's bucket",
+                        self.granted_bucket().unwrap_or("none")
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })
+            })?
+        };
+        let desired = regional_bundle_uri(published, region, &config.id)?;
+        Ok(BundleToBuild::Published(
             match (
-                self.granted_bundle_uri.as_deref().and_then(split),
-                split(&desired),
+                self.granted_bundle_uri.as_deref().and_then(split_s3_uri),
+                split_s3_uri(&desired),
             ) {
                 (Some((granted_bucket, _)), Some((desired_bucket, key)))
                     if granted_bucket != desired_bucket =>
@@ -1368,8 +1496,69 @@ impl AwsSandboxController {
                 }
                 _ => desired,
             },
-        )
+        ))
     }
+
+    /// The bucket the setup granted this sandbox's build role.
+    fn granted_bucket(&self) -> Option<&str> {
+        self.granted_bundle_uri
+            .as_deref()
+            .and_then(split_s3_uri)
+            .map(|(bucket, _)| bucket)
+    }
+
+    /// Whether the build needs a rendered bundle written first. A published bundle is already in
+    /// its store.
+    fn needs_bundle_write(&self, bundle: &BundleToBuild) -> bool {
+        matches!(bundle, BundleToBuild::Rendered(rendered)
+            if self.written_bundle_uri.as_deref() != Some(rendered.uri().as_str()))
+    }
+
+    /// Writes the desired bundle into the deployment's own bucket, creating the bucket first if
+    /// this sandbox has none yet.
+    async fn write_bundle(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        let aws_config = ctx.get_aws_config()?;
+        let BundleToBuild::Rendered(rendered) =
+            self.bundle_to_build(ctx, config, &aws_config.region)?
+        else {
+            return Ok(());
+        };
+        let client = ctx.service_provider.get_aws_s3_client(aws_config).await?;
+        super::aws_bundle::write(
+            client.as_ref(),
+            &rendered,
+            &standard_resource_tags(ctx.resource_prefix, &config.id),
+            &config.id,
+            &mut self.bundle_bucket_requested,
+        )
+        .await?;
+        self.written_bundle_uri = Some(rendered.uri());
+        Ok(())
+    }
+}
+
+/// What a build reads its bundle from.
+enum BundleToBuild {
+    /// A bundle already in a store the build role can read.
+    Published(String),
+    /// A bundle this controller renders into the deployment's own bucket before the build.
+    Rendered(super::aws_bundle::RenderedBundle),
+}
+
+impl BundleToBuild {
+    fn uri(&self) -> String {
+        match self {
+            BundleToBuild::Published(uri) => uri.clone(),
+            BundleToBuild::Rendered(bundle) => bundle.uri(),
+        }
+    }
+}
+
+/// `s3://bucket/key` as `(bucket, key)`.
+fn split_s3_uri(uri: &str) -> Option<(&str, &str)> {
+    uri.strip_prefix("s3://")
+        .and_then(|path| path.split_once('/'))
 }
 
 /// The MicroVM image's name, unique in the account because it carries the deployment's
@@ -1378,23 +1567,15 @@ fn sandbox_image_name(resource_prefix: &str, resource_id: &str) -> String {
     format!("{resource_prefix}-{resource_id}")
 }
 
-/// The bundle the declaration asks for, with the region token resolved.
+/// A published bundle URI, with the region token resolved.
 ///
 /// AWS builds a MicroVM image only from a bucket in the image's own region, so a vendor's one
 /// stored URI resolves per region here exactly as the emitters resolve it.
-fn desired_bundle_uri(config: &Sandbox, region: &str) -> Result<String> {
-    let SandboxCode::Image { image } = &config.code else {
-        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-            message: "an AWS sandbox is built from a prebuilt s3:// bundle, not from source"
-                .to_string(),
-            resource_id: Some(config.id.clone()),
-        }));
-    };
-
-    match parse_bundle_uri(image).map_err(|reason| {
+fn regional_bundle_uri(uri: &str, region: &str, resource_id: &str) -> Result<String> {
+    match parse_bundle_uri(uri).map_err(|reason| {
         AlienError::new(ErrorData::ResourceConfigInvalid {
             message: reason,
-            resource_id: Some(config.id.clone()),
+            resource_id: Some(resource_id.to_string()),
         })
     })? {
         BundleUri::Literal(uri) => Ok(uri.to_string()),
@@ -1718,7 +1899,11 @@ mod tests {
         subject: Sandbox,
         lifecycle: alien_core::ResourceLifecycle,
         controller: AwsSandboxController,
-        other: (Sandbox, alien_core::ResourceLifecycle, Option<AwsSandboxController>),
+        other: (
+            Sandbox,
+            alien_core::ResourceLifecycle,
+            Option<AwsSandboxController>,
+        ),
         directory: &std::path::Path,
     ) -> Result<AwsSandboxController> {
         use crate::{LocalVaultController, LocalVaultState};
@@ -1795,7 +1980,10 @@ mod tests {
         .await
         .expect("the owner writes the key");
         assert_eq!(owner.state, AwsSandboxState::PublishingEgressConfig);
-        let key = owner.egress_public_key.clone().expect("public key recorded");
+        let key = owner
+            .egress_public_key
+            .clone()
+            .expect("public key recorded");
         let stored = vault
             .get_secret(super::super::egress::SIGNING_KEY)
             .await
@@ -1995,7 +2183,11 @@ mod tests {
         assert_eq!(controller.state, AwsSandboxState::PublishingEgressConfig);
         let key = controller.egress_public_key.as_ref().expect("public key");
         assert!(!key.kid.is_empty());
-        assert_eq!(read.hits_async().await, 0, "the private key must not be read");
+        assert_eq!(
+            read.hits_async().await,
+            0,
+            "the private key must not be read"
+        );
         assert_eq!(write.hits_async().await, 1);
     }
 
@@ -2243,6 +2435,248 @@ mod tests {
             state: Some("CREATING".to_string()),
             image_version: Some("1.0".to_string()),
         }
+    }
+
+    /// The release's image, already carrying the agent, in another account's registry.
+    const RELEASED_IMAGE: &str = "210987654321.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:\
+                                  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn released_sandbox(published_bundle: Option<&str>) -> Sandbox {
+        let mut sandbox = sandbox_with_bundle(RELEASED_IMAGE);
+        sandbox.published_bundle = published_bundle.map(str::to_string);
+        sandbox
+    }
+
+    /// Setup registered the deployment's own bucket, `<prefix>-<id>-sbx`, for this sandbox.
+    fn own_bucket_controller() -> AwsSandboxController {
+        AwsSandboxController {
+            state: AwsSandboxState::CreatingImage,
+            granted_bundle_uri: Some("s3://test-agents-sbx/sandbox-bundle/".to_string()),
+            bundle_uri: Some("s3://test-agents-sbx/sandbox-bundle/".to_string()),
+            ..runtime_seeded_controller()
+        }
+    }
+
+    fn dockerfile_in(zip: &[u8]) -> String {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).expect("a zip");
+        let mut dockerfile = String::new();
+        std::io::Read::read_to_string(
+            &mut archive
+                .by_name("Dockerfile")
+                .expect("Dockerfile at the root"),
+            &mut dockerfile,
+        )
+        .expect("reads");
+        dockerfile
+    }
+
+    /// The whole own-bucket life: the first build creates and tags the bucket, writes a bundle
+    /// naming the release's image, and builds from it; deletion removes the image, then empties
+    /// and deletes the bucket.
+    #[tokio::test]
+    async fn a_sandbox_with_its_own_bucket_renders_its_bundle_there_and_removes_it_on_delete() {
+        use alien_aws_clients::s3::{MockS3Api, PutObjectOutput};
+
+        let ours: std::collections::HashMap<String, String> =
+            standard_resource_tags("test", "agents")
+                .into_iter()
+                .collect();
+        let created = Arc::new(Mutex::new(false));
+        let written = Arc::new(Mutex::new(None::<(String, String, Vec<u8>)>));
+        let mut s3 = MockS3Api::new();
+        {
+            let created = created.clone();
+            let ours = ours.clone();
+            s3.expect_get_bucket_tagging()
+                .withf(|bucket| bucket == "test-agents-sbx")
+                .returning(move |_| {
+                    if *created.lock().unwrap() {
+                        Ok(ours.clone())
+                    } else {
+                        Err(not_found())
+                    }
+                });
+        }
+        {
+            let created = created.clone();
+            s3.expect_create_bucket()
+                .withf(|bucket| bucket == "test-agents-sbx")
+                .times(1)
+                .returning(move |_| {
+                    *created.lock().unwrap() = true;
+                    Ok(())
+                });
+        }
+        {
+            let ours = ours.clone();
+            s3.expect_put_bucket_abac_tags()
+                .withf(move |bucket, tags| bucket == "test-agents-sbx" && *tags == ours)
+                .times(1)
+                .returning(|_, _| Ok(()));
+        }
+        {
+            let written = written.clone();
+            s3.expect_put_object().times(1).returning(move |request| {
+                *written.lock().unwrap() = Some((
+                    request.bucket.clone(),
+                    request.key.clone(),
+                    request.body.clone(),
+                ));
+                Ok(PutObjectOutput {
+                    e_tag: None,
+                    version_id: None,
+                    server_side_encryption: None,
+                })
+            });
+        }
+        s3.expect_empty_bucket()
+            .withf(|bucket| bucket == "test-agents-sbx")
+            .times(1)
+            .returning(|_| Ok(()));
+        s3.expect_delete_bucket()
+            .withf(|bucket| bucket == "test-agents-sbx")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let built_from = Arc::new(Mutex::new(None::<String>));
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .returning(|_| Err(not_found()));
+        {
+            let built_from = built_from.clone();
+            client
+                .expect_create_microvm_image()
+                .times(1)
+                .returning(move |request| {
+                    *built_from.lock().unwrap() = Some(request.code_artifact.uri.clone());
+                    Ok(created_response())
+                });
+        }
+        client
+            .expect_get_microvm_image_version()
+            .returning(|_, _| Ok(active_version()));
+        client
+            .expect_delete_microvm_image()
+            .times(1)
+            .returning(|_| Ok(()));
+        client
+            .expect_list_microvm_image_versions()
+            .returning(|_| Ok(vec![]));
+
+        let s3 = Arc::new(s3);
+        let client = Arc::new(client);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_microvms_client()
+            .returning(move |_| Ok(client.clone()));
+        provider
+            .expect_get_aws_s3_client()
+            .returning(move |_| Ok(s3.clone()));
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(released_sandbox(None))
+            .controller(own_bucket_controller())
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor should build");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("create flow should succeed");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let (bucket, key, zip) = written.lock().unwrap().clone().expect("a bundle written");
+        assert_eq!(bucket, "test-agents-sbx");
+        assert_eq!(dockerfile_in(&zip), format!("FROM {RELEASED_IMAGE}\n"));
+        assert_eq!(
+            built_from.lock().unwrap().as_deref(),
+            Some(format!("s3://test-agents-sbx/{key}").as_str()),
+            "the image is built from the bundle just written"
+        );
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert_eq!(
+            controller.bundle_uri.as_deref(),
+            Some(format!("s3://test-agents-sbx/{key}").as_str())
+        );
+
+        executor.delete().expect("transition to delete");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete flow should succeed");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// A setup that granted a publisher's store keeps building after the release moves to a
+    /// container image: it reads the published bundle's key from the store it was granted, and
+    /// never touches S3 itself (the provider here has no S3 client to give).
+    #[tokio::test]
+    async fn a_setup_granted_a_publishers_store_builds_from_the_published_bundle() {
+        const GRANTED: &str = "s3://publisher-us-east-1/sandbox-bundle/v1/bundle.zip";
+        let built_from = Arc::new(Mutex::new(None::<String>));
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .returning(|_| Err(not_found()));
+        {
+            let built_from = built_from.clone();
+            client
+                .expect_create_microvm_image()
+                .times(1)
+                .returning(move |request| {
+                    *built_from.lock().unwrap() = Some(request.code_artifact.uri.clone());
+                    Ok(created_response())
+                });
+        }
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(released_sandbox(Some(
+                "s3://publisher-renamed-{region}/sandbox-bundle/v2/bundle.zip",
+            )))
+            .controller(AwsSandboxController {
+                state: AwsSandboxState::CreatingImage,
+                granted_bundle_uri: Some(GRANTED.to_string()),
+                bundle_uri: Some(GRANTED.to_string()),
+                ..runtime_seeded_controller()
+            })
+            .platform(Platform::Aws)
+            .service_provider(provider(client))
+            .build()
+            .await
+            .expect("executor should build");
+        executor.step().await.expect("the build starts");
+        assert_eq!(
+            built_from.lock().unwrap().as_deref(),
+            Some("s3://publisher-us-east-1/sandbox-bundle/v2/bundle.zip"),
+            "the published key, read from the store this setup granted"
+        );
+    }
+
+    /// With neither its own bucket granted nor a published bundle, there is nothing the build role
+    /// could read; the sandbox says to run setup instead of starting a build that cannot succeed.
+    #[tokio::test]
+    async fn a_release_with_no_bundle_for_a_publishers_store_asks_for_setup() {
+        const GRANTED: &str = "s3://publisher-us-east-1/sandbox-bundle/v1/bundle.zip";
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(released_sandbox(None))
+            .controller(AwsSandboxController {
+                state: AwsSandboxState::CreatingImage,
+                granted_bundle_uri: Some(GRANTED.to_string()),
+                bundle_uri: Some(GRANTED.to_string()),
+                ..runtime_seeded_controller()
+            })
+            .platform(Platform::Aws)
+            .service_provider(provider(MockLambdaMicrovmsApi::new()))
+            .build()
+            .await
+            .expect("executor should build");
+        let error = executor.step().await.expect_err("no bundle to build from");
+        assert!(
+            error.to_string().contains("run setup again"),
+            "unexpected error: {error}"
+        );
     }
 
     fn not_found() -> alien_error::AlienError<CloudClientErrorData> {
@@ -4579,8 +5013,9 @@ mod tests {
                 .expect_get_aws_ec2_client()
                 .returning(move |_| Ok(ec2.clone()));
             if let Some(secrets_manager) = gateway.secrets_manager {
-                let secrets_manager: Arc<dyn alien_aws_clients::secrets_manager::SecretsManagerApi> =
-                    Arc::new(secrets_manager);
+                let secrets_manager: Arc<
+                    dyn alien_aws_clients::secrets_manager::SecretsManagerApi,
+                > = Arc::new(secrets_manager);
                 provider
                     .expect_get_aws_secrets_manager_client()
                     .returning(move |_| Ok(secrets_manager.clone()));
@@ -4601,8 +5036,10 @@ mod tests {
                 });
             }
             for other in others {
-                builder = builder
-                    .with_stack_resource(internet_sandbox(other), alien_core::ResourceLifecycle::Live);
+                builder = builder.with_stack_resource(
+                    internet_sandbox(other),
+                    alien_core::ResourceLifecycle::Live,
+                );
             }
             let mut executor = builder
                 .with_dependency(sandbox_network(), sandbox_network_controller())
@@ -4672,29 +5109,35 @@ mod tests {
             secrets_manager
         }
 
-        fn secret_exists() -> alien_client_core::Result<
-            alien_aws_clients::secrets_manager::DescribeSecretResponse,
-        > {
-            Ok(serde_json::from_value(serde_json::json!({"Name": "test-sandbox-egress-replica-secret"}))
-                .unwrap())
+        fn secret_exists(
+        ) -> alien_client_core::Result<alien_aws_clients::secrets_manager::DescribeSecretResponse>
+        {
+            Ok(serde_json::from_value(
+                serde_json::json!({"Name": "test-sandbox-egress-replica-secret"}),
+            )
+            .unwrap())
         }
 
-        fn secret_absent() -> alien_client_core::Result<
-            alien_aws_clients::secrets_manager::DescribeSecretResponse,
-        > {
-            Err(AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
-                resource_type: "secret".into(),
-                resource_name: "test-sandbox-egress-replica-secret".into(),
-            }))
+        fn secret_absent(
+        ) -> alien_client_core::Result<alien_aws_clients::secrets_manager::DescribeSecretResponse>
+        {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "secret".into(),
+                    resource_name: "test-sandbox-egress-replica-secret".into(),
+                },
+            ))
         }
 
-        fn existence_denied() -> alien_client_core::Result<
-            alien_aws_clients::secrets_manager::DescribeSecretResponse,
-        > {
-            Err(AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
-                resource_type: "secret".into(),
-                resource_name: "test-sandbox-egress-replica-secret".into(),
-            }))
+        fn existence_denied(
+        ) -> alien_client_core::Result<alien_aws_clients::secrets_manager::DescribeSecretResponse>
+        {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "secret".into(),
+                    resource_name: "test-sandbox-egress-replica-secret".into(),
+                },
+            ))
         }
 
         /// Once every gateway replica reads its replica secret from Secrets Manager and setup
@@ -4703,8 +5146,13 @@ mod tests {
         #[tokio::test]
         async fn a_gateway_that_reads_the_source_gets_a_configuration_without_the_secret() {
             let directory = tempfile::tempdir().unwrap();
-            let embedded =
-                refresh_pass("agents", &[], running_internet_controller(IMAGE_ARN), directory.path()).await;
+            let embedded = refresh_pass(
+                "agents",
+                &[],
+                running_internet_controller(IMAGE_ARN),
+                directory.path(),
+            )
+            .await;
             assert!(stored_gateway_config(directory.path()).await["replicaSecret"].is_string());
 
             let moved = refresh_with(
@@ -4791,7 +5239,10 @@ mod tests {
                 .expect_create_secret()
                 .withf(|request| {
                     request.name == "test-sandbox-egress-replica-secret"
-                        && request.secret_string.as_ref().is_some_and(|value| value.len() >= 32)
+                        && request
+                            .secret_string
+                            .as_ref()
+                            .is_some_and(|value| value.len() >= 32)
                 })
                 .times(1)
                 .returning(|_| {
@@ -4815,7 +5266,10 @@ mod tests {
             )
             .await;
             assert!(controller.egress_replica_secret_ready);
-            assert!(stored_gateway_config(directory.path()).await.get("replicaSecret").is_none());
+            assert!(stored_gateway_config(directory.path())
+                .await
+                .get("replicaSecret")
+                .is_none());
         }
 
         /// A fresh install: the gateway is not created yet, so no replica holds an embedded
@@ -4868,12 +5322,24 @@ mod tests {
                     .unwrap()
                     .iter()
                     .map(|audience| {
-                        audience.as_str().unwrap().rsplit('/').next().unwrap().to_string()
+                        audience
+                            .as_str()
+                            .unwrap()
+                            .rsplit('/')
+                            .next()
+                            .unwrap()
+                            .to_string()
                     })
                     .collect::<Vec<_>>()
             };
 
-            let owner = refresh_pass("b", &["c"], running_internet_controller(IMAGE_ARN), directory.path()).await;
+            let owner = refresh_pass(
+                "b",
+                &["c"],
+                running_internet_controller(IMAGE_ARN),
+                directory.path(),
+            )
+            .await;
             assert!(owner.egress_config_digest.is_some());
             assert_eq!(stored_audiences().await, ["b", "c"]);
 
@@ -4889,7 +5355,10 @@ mod tests {
             .unwrap();
             taken_over["audiences"] = serde_json::json!(["test/a", "test/b"]);
             vault
-                .set_secret(crate::sandbox::egress::GATEWAY_CONFIG, &taken_over.to_string())
+                .set_secret(
+                    crate::sandbox::egress::GATEWAY_CONFIG,
+                    &taken_over.to_string(),
+                )
                 .await
                 .unwrap();
 
@@ -5163,9 +5632,7 @@ mod tests {
 
             /// Management may write the vault but not read it, as setup now grants. Returns the
             /// read and write mocks.
-            async fn denied_reads(
-                server: &MockServer,
-            ) -> (httpmock::Mock<'_>, httpmock::Mock<'_>) {
+            async fn denied_reads(server: &MockServer) -> (httpmock::Mock<'_>, httpmock::Mock<'_>) {
                 let read = server
                     .mock_async(|when, then| {
                         when.method(POST).header("x-amz-target", "AmazonSSM.GetParameter");
@@ -5205,8 +5672,9 @@ mod tests {
                     .returning(|_| Ok(vec![]));
                 let microvms = Arc::new(microvms);
                 let ec2 = Arc::new(valid_sandbox_network_ec2());
-                let secrets_manager: Arc<dyn alien_aws_clients::secrets_manager::SecretsManagerApi> =
-                    Arc::new(secrets_manager);
+                let secrets_manager: Arc<
+                    dyn alien_aws_clients::secrets_manager::SecretsManagerApi,
+                > = Arc::new(secrets_manager);
                 let mut provider = MockPlatformServiceProvider::new();
                 provider
                     .expect_get_aws_microvms_client()
@@ -5233,10 +5701,7 @@ mod tests {
                             session_token: None,
                         },
                         service_overrides: Some(AwsServiceOverrides {
-                            endpoints: HashMap::from([(
-                                "ssm".to_string(),
-                                ssm.base_url(),
-                            )]),
+                            endpoints: HashMap::from([("ssm".to_string(), ssm.base_url())]),
                         }),
                     })))
                     .service_provider(Arc::new(provider))
@@ -5265,7 +5730,10 @@ mod tests {
                 run_gateway_on(&mut executor, gateway_image);
                 executor.step().await.expect("the refresh pass never fails");
                 (
-                    executor.internal_state::<AwsSandboxController>().unwrap().clone(),
+                    executor
+                        .internal_state::<AwsSandboxController>()
+                        .unwrap()
+                        .clone(),
                     executor.status(),
                 )
             }
@@ -5311,7 +5779,11 @@ mod tests {
                     );
                     owner = after;
                 }
-                assert_eq!(write.hits_async().await, 0, "nothing is written while deferred");
+                assert_eq!(
+                    write.hits_async().await,
+                    0,
+                    "nothing is written while deferred"
+                );
 
                 // The gateway rolled to an image that reads its replica secret from its source.
                 let reads = read.hits_async().await;
@@ -5325,7 +5797,11 @@ mod tests {
                 .await;
                 assert_eq!(status, ResourceStatus::Running);
                 assert!(after.egress_replica_secret_ready);
-                assert_eq!(read.hits_async().await, reads, "the source-only publish reads nothing");
+                assert_eq!(
+                    read.hits_async().await,
+                    reads,
+                    "the source-only publish reads nothing"
+                );
                 assert_eq!(write.hits_async().await, 1);
                 assert_ne!(
                     after.egress_config_digest.as_deref(),
@@ -5454,5 +5930,4 @@ mod tests {
             }
         }
     }
-
 }

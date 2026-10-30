@@ -22,7 +22,7 @@ use alien_error::{Context, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 
-fn is_bucket_already_owned(error: &AlienError<CloudClientErrorData>) -> bool {
+pub(crate) fn is_bucket_already_owned(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         &error.error,
         Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
@@ -33,7 +33,7 @@ fn is_bucket_already_owned(error: &AlienError<CloudClientErrorData>) -> bool {
     )
 }
 
-fn is_bucket_missing(error: &AlienError<CloudClientErrorData>) -> bool {
+pub(crate) fn is_bucket_missing(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         &error.error,
         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
@@ -41,7 +41,7 @@ fn is_bucket_missing(error: &AlienError<CloudClientErrorData>) -> bool {
 }
 
 /// What already holds a bucket name, as far as this deployment is concerned.
-enum ExistingBucket {
+pub(crate) enum ExistingBucket {
     Missing,
     /// Carries this deployment's tags for the resource.
     Ours,
@@ -51,7 +51,7 @@ enum ExistingBucket {
     Foreign,
 }
 
-async fn inspect_bucket(
+pub(crate) async fn inspect_bucket(
     client: &dyn S3Api,
     bucket_name: &str,
     our_tags: &HashMap<String, String>,
@@ -76,7 +76,7 @@ async fn inspect_bucket(
     }
 }
 
-fn bucket_not_owned(resource_id: &str, bucket_name: &str) -> AlienError<ErrorData> {
+pub(crate) fn bucket_not_owned(resource_id: &str, bucket_name: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
         resource_id: resource_id.to_string(),
         object: format!("S3 bucket '{}'", bucket_name),
@@ -105,7 +105,7 @@ fn is_access_denied(error: &AlienError<CloudClientErrorData>) -> bool {
     )
 }
 
-fn is_accepted_without_body(error: &AlienError<CloudClientErrorData>) -> bool {
+pub(crate) fn is_accepted_without_body(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         &error.error,
         Some(CloudClientErrorData::HttpResponseBodyReadFailed { .. })
@@ -113,7 +113,7 @@ fn is_accepted_without_body(error: &AlienError<CloudClientErrorData>) -> bool {
 }
 
 /// Whether a failed request may still have been applied: no answer from S3 arrived.
-fn is_outcome_unknown(error: &AlienError<CloudClientErrorData>) -> bool {
+pub(crate) fn is_outcome_unknown(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         &error.error,
         Some(
