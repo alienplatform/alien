@@ -40,9 +40,18 @@ quoted Unicode/percent/star keys, filter exclusions, and at least one actual
 multi-message batch. They continue observing after delivery to catch delayed
 excluded messages. Provider duplicates are permitted and remain in the records.
 The existing E2E context runs deployment cleanup even if an assertion fails.
+It first observes the cloud resources with target-account credentials, then checks
+their absence after teardown. AWS checks each rule, bucket configuration and
+queue; GCP checks buckets, the topic and all prefixed subscriptions across every
+list page; Azure checks that the owning resource group is gone. Failed reads or
+permission denials cannot pass as successful deletion. Successful cohorts log
+their duration and every observed batch size.
 
 Cloud execution needs the standard E2E credentials and build prerequisites.
+The callback tunnel must connect successfully before setup starts. Environments
+with a custom certificate trust store may set `NGROK_ROOT_CAS=host` or provide a
+PEM file path; TLS certificate verification remains enabled.
 These entry points do not yet assert rule-update setup rejection/re-import,
-independent cloud-resource absence, or multipart upload; retain separate cloud
+or multipart upload; retain separate cloud
 qualification for those behaviors. A cloud test being compiled is not evidence
 that its deployment or cleanup passed.

@@ -6,6 +6,7 @@ use alien_test::TestDeployment;
 use reqwest::Client;
 use serde_json::{json, Value};
 use tokio::time::{sleep, Instant};
+use tracing::info;
 
 async fn read_batches(client: &Client, url: &str) -> Vec<Value> {
     let response = client.get(format!("{url}/batches")).send().await.unwrap();
@@ -22,6 +23,7 @@ async fn read_batches(client: &Client, url: &str) -> Vec<Value> {
 /// a key-indexed projection. Cloud delivery is at least once: duplicates remain visible in
 /// the records and are permitted, but unexpected keys and missing keys always fail.
 pub async fn check_delivery(deployment: &TestDeployment) {
+    let started = Instant::now();
     let url = super::bindings::deployment_url(deployment).unwrap();
     let client = Client::builder()
         .timeout(Duration::from_secs(60))
@@ -107,6 +109,16 @@ pub async fn check_delivery(deployment: &TestDeployment) {
             // Keep observing after success so delayed excluded messages still fail.
             let completed = *complete_at.get_or_insert_with(Instant::now);
             if completed.elapsed() >= Duration::from_secs(30) {
+                let batch_sizes: Vec<_> = batches
+                    .iter()
+                    .map(|batch| batch["events"].as_array().unwrap().len())
+                    .collect();
+                info!(
+                    elapsed_seconds = started.elapsed().as_secs_f64(),
+                    unique_events = seen.len(),
+                    ?batch_sizes,
+                    "Deployed Worker notification cohort passed"
+                );
                 break;
             }
         }
