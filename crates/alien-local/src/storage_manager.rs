@@ -1,12 +1,21 @@
-use crate::error::{ErrorData, Result};
-use alien_error::{Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
-use std::path::PathBuf;
+use crate::{
+    error::{ErrorData, Result},
+    storage_notifications::NotificationServices,
+    LocalQueueManager,
+};
+use alien_core::{
+    bindings::{BindingValue, StorageBinding},
+    Storage,
+};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
+use std::{path::PathBuf, sync::Arc};
+use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 /// Manager for local storage resources.
 ///
 /// Creates and manages filesystem directories for storage resources.
-/// The storage manager is stateless - directories persist on disk.
+/// Directories and notification cursors persist on disk; tasks belong to this manager.
 ///
 /// # State Scoping
 /// All storage directories are created under `{state_dir}/storage/{resource_id}/`.
@@ -15,6 +24,7 @@ use tracing::{debug, info};
 #[derive(Debug, Clone)]
 pub struct LocalStorageManager {
     state_dir: PathBuf,
+    notifications: Arc<Mutex<NotificationServices>>,
 }
 
 impl LocalStorageManager {
@@ -23,7 +33,42 @@ impl LocalStorageManager {
     /// # Arguments
     /// * `state_dir` - Base directory for all local platform state
     pub fn new(state_dir: PathBuf) -> Self {
-        Self { state_dir }
+        Self {
+            state_dir,
+            notifications: Arc::new(Mutex::new(NotificationServices::default())),
+        }
+    }
+
+    /// Restore or update Storage-owned queue delivery, including after manager restart.
+    pub async fn ensure_notifications(
+        &self,
+        storage: &Storage,
+        queues: &LocalQueueManager,
+    ) -> Result<()> {
+        let root = self.get_storage_path(&storage.id)?;
+        self.notifications
+            .lock()
+            .await
+            .ensure(
+                storage,
+                &root,
+                &self
+                    .state_dir
+                    .join("storage-notifications")
+                    .join(&storage.id),
+                queues,
+            )
+            .await
+    }
+
+    /// Stop delivery before deleting or retaining the bucket. Cursors remain for recovery.
+    pub async fn stop_notifications(&self, id: &str) -> Result<()> {
+        self.notifications.lock().await.stop(id).await
+    }
+
+    /// Drain delivery tasks before closing queue owners during manager shutdown.
+    pub async fn shutdown_notifications(&self) -> Result<()> {
+        self.notifications.lock().await.close().await
     }
 
     /// Creates a storage directory for a resource.
@@ -62,8 +107,6 @@ impl LocalStorageManager {
     ///
     /// Returns an error if the storage doesn't exist.
     pub fn get_storage_path(&self, id: &str) -> Result<PathBuf> {
-        use alien_error::AlienError;
-
         let storage_path = self.state_dir.join("storage").join(id);
 
         if !storage_path.exists() {
@@ -84,6 +127,21 @@ impl LocalStorageManager {
     /// # Note
     /// This is idempotent - succeeds even if the storage doesn't exist.
     pub async fn delete_storage(&self, id: &str) -> Result<()> {
+        self.stop_notifications(id).await?;
+        let cursor_dir = self.state_dir.join("storage-notifications").join(id);
+        match tokio::fs::remove_dir_all(&cursor_dir).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::LocalDirectoryError {
+                        path: cursor_dir.display().to_string(),
+                        operation: "delete".into(),
+                        reason: "Remove storage notification cursors".into(),
+                    })
+            }
+        }
         let storage_dir = self.state_dir.join("storage").join(id);
 
         if storage_dir.exists() {
@@ -128,8 +186,6 @@ impl LocalStorageManager {
     /// # Returns
     /// Ok(()) if storage exists and is healthy, error otherwise
     pub async fn check_health(&self, id: &str) -> Result<()> {
-        use alien_error::AlienError;
-
         let storage_path = self.state_dir.join("storage").join(id);
 
         let metadata = tokio::fs::metadata(&storage_path).await.map_err(|error| {
@@ -178,8 +234,6 @@ impl LocalStorageManager {
     /// # Returns
     /// StorageBinding configured for this storage directory, or error if storage doesn't exist
     pub fn get_binding(&self, id: &str) -> Result<alien_core::bindings::StorageBinding> {
-        use alien_core::bindings::{BindingValue, StorageBinding};
-
         let storage_path = self.get_storage_path(id)?;
 
         // Use file:// URL for consistency and to support object_store's parse_url
