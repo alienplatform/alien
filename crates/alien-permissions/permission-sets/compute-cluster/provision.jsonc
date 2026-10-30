@@ -379,8 +379,9 @@
           }
         }
       },
-      // ASG creation is name-scoped and must include Alien boundary tags.
+      // Numeric versions keep role passing checked when an ASG changes templates.
       {
+        "label": "legacy-role-asg-create",
         "grant": {
           "actions": ["autoscaling:CreateAutoScalingGroup"]
         },
@@ -409,14 +410,129 @@
           }
         }
       },
-      // Existing ASGs can be changed only when they carry Alien boundary tags.
       {
+        "label": "bounded-role-asg-create",
+        "grant": {
+          "actions": ["autoscaling:CreateAutoScalingGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "Bool": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "Bool": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "legacy-role-asg-management",
         "grant": {
           "actions": [
             "autoscaling:DeleteAutoScalingGroup",
             "autoscaling:UpdateAutoScalingGroup",
             "autoscaling:SetDesiredCapacity"
           ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Capacity-only updates omit the version key; template changes supply it.
+      {
+        "label": "bounded-role-asg-update",
+        "grant": {
+          "actions": ["autoscaling:UpdateAutoScalingGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "BoolIfExists": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "BoolIfExists": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "bounded-role-asg-management",
+        "grant": {
+          "actions": ["autoscaling:DeleteAutoScalingGroup", "autoscaling:SetDesiredCapacity"]
         },
         "binding": {
           "stack": {

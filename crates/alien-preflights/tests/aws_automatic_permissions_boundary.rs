@@ -553,3 +553,35 @@ async fn automatic_profile_passes_roles_only_to_their_intended_services() {
         assert_eq!(evaluate(&policy, &request), expected, "{role} to {service}");
     }
 }
+
+#[tokio::test]
+async fn automatic_profile_cannot_select_floating_asg_templates() {
+    let stack = automatic_stack().await;
+    let tags = [
+        (ALIEN_STACK_TAG_KEY, "sample"),
+        (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+    ];
+    let arn = "arn:aws:autoscaling:us-east-1:123456789012:autoScalingGroup:example:autoScalingGroupName/sample-compute";
+    for bounded in [false, true] {
+        let policy = compile(&stack, bounded);
+        for action in [
+            "autoscaling:CreateAutoScalingGroup",
+            "autoscaling:UpdateAutoScalingGroup",
+        ] {
+            for numeric in ["true", "false"] {
+                let request = Request::new(action, arn)
+                    .request_tags(&tags)
+                    .resource_tags(&tags)
+                    .with("autoscaling:LaunchTemplateVersionSpecified", numeric);
+                assert_eq!(
+                    evaluate(&policy, &request) == Decision::Allowed,
+                    !bounded || numeric == "true"
+                );
+            }
+        }
+        let capacity = Request::new("autoscaling:UpdateAutoScalingGroup", arn).resource_tags(&tags);
+        assert_eq!(evaluate(&policy, &capacity), Decision::Allowed);
+        let refresh = Request::new("autoscaling:StartInstanceRefresh", arn).resource_tags(&tags);
+        assert_eq!(evaluate(&policy, &refresh) == Decision::Allowed, !bounded);
+    }
+}

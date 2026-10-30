@@ -108,6 +108,10 @@ fn condition_holds(
     expected: &AwsConditionValue,
     actual: Option<&AwsConditionValue>,
 ) -> bool {
+    // BoolIfExists permits absent request keys, but still checks supplied values.
+    if operator == "BoolIfExists" {
+        return actual.is_none() || condition_holds("Bool", expected, actual);
+    }
     let expected = values(expected);
     assert!(
         !expected.is_empty(),

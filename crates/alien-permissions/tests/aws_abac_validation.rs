@@ -714,7 +714,11 @@ fn tag_absent_grants_are_reads_of_gone_objects() {
                 let uses_null = binding
                     .condition
                     .as_ref()
-                    .is_some_and(|conditions| conditions.contains_key("Null"));
+                    .and_then(|conditions| conditions.get("Null"))
+                    .is_some_and(|keys| {
+                        keys.keys()
+                            .any(|key| key != "autoscaling:LaunchConfigurationName")
+                    });
                 if !uses_null {
                     continue;
                 }
