@@ -553,6 +553,7 @@
       // CloudFormation role names are based on logical IDs and generated
       // suffixes, so they do not reliably end in a fixed role suffix.
       {
+        "label": "bounded-role-pass",
         "grant": {
           "actions": ["iam:PassRole"]
         },
@@ -569,6 +570,15 @@
               "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
             }
           }
+        }
+      },
+      // Setups without a boundary retain their existing role-passing grants.
+      {
+        "label": "legacy-role-pass",
+        "grant": { "actions": ["iam:PassRole"] },
+        "binding": {
+          "stack": { "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"] },
+          "resource": { "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"] }
         }
       }
     ],

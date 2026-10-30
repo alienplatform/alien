@@ -648,7 +648,9 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
                 .generate_policy(
                     get_permission_set(id).expect("permission set exists"),
                     target,
-                    &create_test_context(),
+                    &create_test_context().with_aws_permissions_boundary_arn(
+                        "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary",
+                    ),
                 )
                 .expect("compute permissions should render");
             let serialized = serde_json::to_string(&generated).unwrap();

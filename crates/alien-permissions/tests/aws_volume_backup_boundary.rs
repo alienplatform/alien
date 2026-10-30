@@ -162,66 +162,98 @@ fn legacy_context() -> PermissionContext {
 
 #[test]
 fn management_passes_dlm_only_the_setup_role() {
-    let management = management();
-    // IAM doesn't evaluate a role's tags for PassRole, so the request carries none: a grant
-    // that relied on them would deny here as it does in AWS.
-    let pass = |role: &str, service: &str| {
-        evaluate(
-            &management,
-            &Request::new("iam:PassRole", role_arn(role)).with("iam:PassedToService", service),
-        )
-    };
+    for bounded in [false, true] {
+        let mut permission_context = context();
+        if bounded {
+            permission_context = permission_context.with_aws_permissions_boundary_arn(
+                "arn:aws:iam::123456789012:policy/app-deployment-management-boundary",
+            );
+        }
+        let management: Vec<_> = [
+            "container/provision",
+            "compute-cluster/provision",
+            "compute-cluster/management",
+        ]
+        .into_iter()
+        .flat_map(|id| {
+            AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    get_permission_set(id).unwrap(),
+                    BindingTarget::Stack,
+                    &permission_context,
+                )
+                .unwrap()
+                .statement
+        })
+        .collect();
+        // IAM doesn't evaluate a role's tags for PassRole, so the request carries none: a grant
+        // that relied on them would deny here as it does in AWS.
+        let pass = |role: &str, service: &str| {
+            evaluate(
+                &management,
+                &Request::new("iam:PassRole", role_arn(role)).with("iam:PassedToService", service),
+            )
+        };
 
-    // Whatever the cluster is called, its setup role stays clear of the legacy-role Deny,
-    // `app-dlm-*`, and of the legacy cleanup grants on the same names.
-    for cluster in ["compute", "dlm", "dlm-a", "volume-backups"] {
-        let setup_role = format!("app-volume-backups-{cluster}");
-        assert_eq!(
-            pass(&setup_role, "dlm.amazonaws.com"),
-            Decision::Allowed,
-            "{setup_role}"
-        );
-        for service in ["lambda.amazonaws.com", "codebuild.amazonaws.com"] {
+        // Whatever the cluster is called, its setup role stays clear of the legacy-role Deny,
+        // `app-dlm-*`, and of the legacy cleanup grants on the same names.
+        for cluster in ["compute", "dlm", "dlm-a", "volume-backups"] {
+            let setup_role = format!("app-volume-backups-{cluster}");
             assert_eq!(
-                pass(&setup_role, service),
-                Decision::NotAllowed,
-                "{setup_role} must not be passed to {service} through compute grants"
+                pass(&setup_role, "dlm.amazonaws.com"),
+                Decision::Allowed,
+                "{setup_role}"
+            );
+            for service in ["lambda.amazonaws.com", "codebuild.amazonaws.com"] {
+                assert_eq!(
+                    pass(&setup_role, service),
+                    if bounded {
+                        Decision::NotAllowed
+                    } else {
+                        Decision::Allowed
+                    },
+                    "bounded={bounded}: {setup_role} to {service}"
+                );
+            }
+            assert_eq!(
+                evaluate(
+                    &management,
+                    &Request::new("iam:DeleteRole", role_arn(&setup_role))
+                ),
+                if bounded {
+                    Decision::NotAllowed
+                } else {
+                    Decision::ExplicitlyDenied
+                },
+                "{setup_role}"
             );
         }
         assert_eq!(
-            evaluate(
-                &management,
-                &Request::new("iam:DeleteRole", role_arn(&setup_role))
-            ),
-            Decision::ExplicitlyDenied,
-            "{setup_role}"
+            pass("app-compute-node", "ec2.amazonaws.com"),
+            Decision::Allowed
         );
-    }
-    assert_eq!(
-        pass("app-compute-node", "ec2.amazonaws.com"),
-        Decision::Allowed
-    );
-    // A role earlier releases made at runtime still carries the AWS managed DLM policy, which
-    // may share or copy any snapshot. The compute cluster's prefix-wide PassRole names it too.
-    assert_eq!(
-        pass("app-dlm-0123456789abcdef", "dlm.amazonaws.com"),
-        Decision::ExplicitlyDenied
-    );
-    for statement in &management {
-        let passes_role = statement
-            .action
-            .iter()
-            .any(|action| wildcard_match(&action.to_lowercase(), "iam:passrole"));
-        let uses_role_tags = statement.condition.iter().flatten().any(|(_, entries)| {
-            entries.keys().any(|key| {
-                key.starts_with("aws:ResourceTag/") || key.starts_with("iam:ResourceTag/")
-            })
-        });
-        assert!(
-            !(passes_role && uses_role_tags),
-            "{}: IAM doesn't evaluate role tags for PassRole",
-            statement.sid
+        // A role earlier releases made at runtime still carries the AWS managed DLM policy, which
+        // may share or copy any snapshot. The compute cluster's prefix-wide PassRole names it too.
+        assert_eq!(
+            pass("app-dlm-0123456789abcdef", "dlm.amazonaws.com"),
+            Decision::ExplicitlyDenied
         );
+        for statement in &management {
+            let passes_role = statement
+                .action
+                .iter()
+                .any(|action| wildcard_match(&action.to_lowercase(), "iam:passrole"));
+            let uses_role_tags = statement.condition.iter().flatten().any(|(_, entries)| {
+                entries.keys().any(|key| {
+                    key.starts_with("aws:ResourceTag/") || key.starts_with("iam:ResourceTag/")
+                })
+            });
+            assert!(
+                !(passes_role && uses_role_tags),
+                "{}: IAM doesn't evaluate role tags for PassRole",
+                statement.sid
+            );
+        }
     }
 }
 

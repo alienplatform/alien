@@ -501,3 +501,55 @@ async fn boundary_guard_is_installed_in_every_management_mode() {
         }
     }
 }
+
+#[tokio::test]
+async fn automatic_profile_passes_roles_only_to_their_intended_services() {
+    let stack = automatic_stack().await;
+    let policy = compile(&stack, true);
+    // Evaluate every automatic grant together: a compute grant must not bypass backup scope.
+    for (role, service, expected) in [
+        (
+            "sample-volume-backups-compute",
+            "dlm.amazonaws.com",
+            Decision::Allowed,
+        ),
+        (
+            "sample-compute-node",
+            "ec2.amazonaws.com",
+            Decision::Allowed,
+        ),
+        (
+            "sample-execution-sa",
+            "lambda.amazonaws.com",
+            Decision::Allowed,
+        ),
+        (
+            "sample-volume-backups-compute",
+            "lambda.amazonaws.com",
+            Decision::NotAllowed,
+        ),
+        (
+            "sample-volume-backups-compute",
+            "codebuild.amazonaws.com",
+            Decision::NotAllowed,
+        ),
+        (
+            "foreign-volume-backups-compute",
+            "dlm.amazonaws.com",
+            Decision::NotAllowed,
+        ),
+        (
+            "foreign-compute-node",
+            "ec2.amazonaws.com",
+            Decision::NotAllowed,
+        ),
+    ] {
+        // PassRole does not expose the role's resource tags to IAM conditions.
+        let request = Request::new(
+            "iam:PassRole",
+            format!("arn:aws:iam::123456789012:role/{role}"),
+        )
+        .with("iam:PassedToService", service);
+        assert_eq!(evaluate(&policy, &request), expected, "{role} to {service}");
+    }
+}
