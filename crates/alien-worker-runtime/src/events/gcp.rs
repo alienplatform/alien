@@ -1,5 +1,6 @@
 use crate::error::{Error, ErrorData};
-use alien_core::{MessagePayload, QueueMessage, StorageEvent, StorageEventType, StorageEvents};
+use alien_bindings::providers::queue::storage_notifications::gcp_queue_payload;
+use alien_core::{QueueMessage, StorageEvent, StorageEventType, StorageEvents};
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose, Engine};
 use chrono::{DateTime, Utc};
@@ -367,17 +368,13 @@ pub(crate) fn pubsub_cloudevent_to_queue_messages_with_source(
             reason: "Failed to decode base64 message data".to_string(),
         })?;
 
-    let message_text = String::from_utf8(message_bytes)
-        .into_alien_error()
+    let Some(payload) = gcp_queue_payload(&message_bytes, &pubsub_data.message.attributes)
         .context(ErrorData::EventProcessingFailed {
             event_type: event_type_str.to_string(),
-            reason: "Message data is not valid UTF-8".to_string(),
-        })?;
-
-    // Try to parse as JSON, fall back to Text
-    let payload = match serde_json::from_str::<serde_json::Value>(&message_text) {
-        Ok(json_value) => MessagePayload::Json(json_value),
-        Err(_) => MessagePayload::Text(message_text),
+            reason: "Failed to normalize Pub/Sub queue payload".to_string(),
+        })?
+    else {
+        return Ok(Vec::new());
     };
 
     // Extract source queue name from subscription or CloudEvent source
@@ -458,6 +455,7 @@ pub fn storage_cloudevent_to_storage_events(event: Event) -> Result<StorageEvent
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::MessagePayload;
     use base64::{engine::general_purpose, Engine};
     use cloudevents::{EventBuilder as _, EventBuilderV10};
     use serde_json::json;

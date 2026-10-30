@@ -1,4 +1,4 @@
-use super::encode_batch;
+use super::{encode_batch, storage_notifications::azure_queue_payload};
 use crate::error::{ErrorData, Result};
 use crate::traits::QueueSendResult;
 use crate::traits::{
@@ -175,8 +175,13 @@ impl Queue for AzureServiceBusQueue {
                 Ok(Some(received_msg)) => {
                     let body = received_msg.body.clone();
                     let payload = match serde_json::from_str::<serde_json::Value>(&body) {
-                        Ok(json_value) => MessagePayload::Json(json_value),
-                        Err(_) => MessagePayload::Text(body),
+                        Ok(json_value) => alien_core::MessagePayload::Json(json_value),
+                        Err(_) => alien_core::MessagePayload::Text(body),
+                    };
+
+                    let payload = match azure_queue_payload(payload)? {
+                        alien_core::MessagePayload::Json(value) => MessagePayload::Json(value),
+                        alien_core::MessagePayload::Text(text) => MessagePayload::Text(text),
                     };
 
                     // Encode both message_id and lock_token in receipt_handle for ack()
