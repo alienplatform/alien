@@ -304,6 +304,7 @@ fn aws_service_account_round_trip() {
         "arn:aws:iam::123456789012:role/alien-stack-execution"
     );
     assert_eq!(internal["stackPermissionsApplied"], true);
+    assert_eq!(internal["runtimeCreated"], false);
 }
 
 /// A fully wired email resource (seed domain + inbound) imports as Running

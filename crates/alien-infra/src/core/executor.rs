@@ -717,6 +717,7 @@ impl StackExecutor {
 
         Self::builder(&empty_stack, client_config)
             .deployment_config(deployment_config)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
             .step_out_of_scope_resources(false)
             .maybe_lifecycle_filter(lifecycle_filter)
             .build()
@@ -735,6 +736,7 @@ impl StackExecutor {
 
         Self::builder(&empty_stack, client_config)
             .deployment_config(deployment_config)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
             .service_provider(service_provider)
             .step_out_of_scope_resources(false)
             .maybe_lifecycle_filter(lifecycle_filter)
@@ -865,10 +867,19 @@ impl StackExecutor {
         dependency_id: &str,
         state: &StackState,
     ) -> bool {
-        self.preserved_resources.contains(resource_id)
-            && state.resources.get(resource_id).is_some_and(|resource| {
-                Self::permission_only_dependency(resource, dependency_id, state)
-            })
+        state.resources.get(resource_id).is_some_and(|resource| {
+            // Automatic setup leaves its vault to package teardown, but that
+            // vault must not hold runtime-created grantees after workloads stop.
+            let kept_for_package_teardown = self.runtime_cleanup_filter
+                && self.deployment_config.stack_settings.setup_management
+                    == alien_core::SetupManagement::Automatic
+                && alien_core::is_automatic_setup_package_resource_type(
+                    resource.config.resource_type().as_ref(),
+                    self.client_config.platform(),
+                );
+            (self.preserved_resources.contains(resource_id) || kept_for_package_teardown)
+                && Self::permission_only_dependency(resource, dependency_id, state)
+        })
     }
 
     /// Whether a recorded resource is protected by this deletion scope.

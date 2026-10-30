@@ -6,17 +6,21 @@ use super::helpers::*;
 use crate::{
     error::Result,
     remote_bindings::{AwsRemoteBindingsController, AwsRemoteBindingsState},
+    service_account::AwsServiceAccountController,
     state_utils::{StackResourceStateExt, StackStateExt},
     storage::{test_storage_deletes_issued, SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN},
+    worker::{AwsWorkerController, AwsWorkerState},
     MockPlatformServiceProvider, StackExecutor,
 };
+use alien_aws_clients::cloudwatch_logs::MockCloudWatchLogsApi;
 use alien_aws_clients::iam::{
-    ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames,
+    ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, ListRolePoliciesResponse,
+    ListRolePoliciesResult, MockIamApi, PolicyNames,
 };
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
 use alien_core::{
     ClientConfig, RemoteBindings, RemoteStackManagement, Resource, ResourceLifecycle, ResourceRef,
-    ResourceStatus, ServiceAccount, Stack, Storage,
+    ResourceStatus, ServiceAccount, SetupManagement, Stack, Storage, Vault,
 };
 
 /// Tests basic deletion of a single resource.
@@ -1049,6 +1053,228 @@ async fn retained_data_releases_published_access_only_during_setup_and_retries_d
             assert_deleted(&state, &["access"]);
             assert!(setup.is_synced(&state));
             assert_eq!(*calls.lock().unwrap(), ["policy", "policy", "role"]);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn automatic_cleanup_deletes_identity_after_workload_but_preserves_setup_vault() -> Result<()>
+{
+    for (management, runtime_created, missing, setup_teardown) in [
+        (SetupManagement::Manual, false, false, false),
+        (SetupManagement::Automatic, false, false, false),
+        (SetupManagement::Automatic, true, false, false),
+        (SetupManagement::Automatic, true, true, false),
+        (SetupManagement::Automatic, false, false, true),
+    ] {
+        let stack = Stack::new("automatic-cleanup".to_string())
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_with_dependencies(
+                test_storage("secrets"),
+                ResourceLifecycle::Frozen,
+                vec![ResourceRef::new(
+                    ServiceAccount::RESOURCE_TYPE,
+                    "execution-sa",
+                )],
+            )
+            .add_with_dependencies(
+                test_function("consumer"),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(
+                    ServiceAccount::RESOURCE_TYPE,
+                    "execution-sa",
+                )],
+            )
+            .build();
+        let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+        // The IAM role and final worker delete use real controllers; the vault is outside
+        // runtime cleanup and must keep its exact checkpoint without any call.
+        let vault = state.resources.get_mut("secrets").unwrap();
+        vault.config = Resource::new(Vault::new("secrets".to_string()).build());
+        vault.resource_type = Vault::RESOURCE_TYPE.to_string();
+        let vault_before = serde_json::to_value(&*vault).unwrap();
+        let account = state.resources.get_mut("execution-sa").unwrap();
+        account.controller_platform = Some(alien_core::Platform::Aws);
+        let controller: AwsServiceAccountController = serde_json::from_value(serde_json::json!({
+            "state": "ready",
+            "roleName": "owned-execution-sa",
+            "stackPermissionsApplied": true,
+            "runtimeCreated": runtime_created,
+            "roleArn": "arn:aws:iam::123456789012:role/owned-execution-sa"
+        }))
+        .unwrap();
+        account.set_internal_controller(Some(Box::new(controller)))?;
+        let identity_before = serde_json::to_value(&*account).unwrap();
+        if management == SetupManagement::Automatic {
+            let mut controller = account.get_internal_controller()?.unwrap();
+            controller.transition_to_delete_start()?;
+            account.status = controller.get_status();
+            account.set_internal_controller(Some(controller))?;
+        }
+        let worker = state.resources.get_mut("consumer").unwrap();
+        worker.controller_platform = Some(alien_core::Platform::Aws);
+        worker.status = ResourceStatus::Deleting;
+        worker.set_internal_controller(Some(Box::new(AwsWorkerController {
+            state: AwsWorkerState::DeletingLogGroup,
+            ..Default::default()
+        })))?;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        let mut logs = MockCloudWatchLogsApi::new();
+        logs.expect_delete_log_group().times(1).returning(move |_| {
+            seen.lock().unwrap().push("workload");
+            Ok(())
+        });
+        let logs = Arc::new(logs);
+        let expected = usize::from(
+            management == SetupManagement::Automatic && (runtime_created || setup_teardown),
+        );
+        let mut iam = MockIamApi::new();
+        iam.expect_list_attached_role_policies()
+            .withf(|role| role == "owned-execution-sa")
+            .times(expected)
+            .returning(move |_| {
+                if missing {
+                    return Err(alien_error::AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceNotFound {
+                            resource_type: "IAM role".to_string(),
+                            resource_name: "owned-execution-sa".to_string(),
+                        },
+                    ));
+                }
+                Ok(ListAttachedRolePoliciesResponse {
+                    list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                        attached_policies: None,
+                        is_truncated: Some(false),
+                        marker: None,
+                    },
+                })
+            });
+        iam.expect_list_role_policies()
+            .withf(|role| role == "owned-execution-sa")
+            .times(expected)
+            .returning(move |_| {
+                if missing {
+                    return Err(alien_error::AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceNotFound {
+                            resource_type: "IAM role".to_string(),
+                            resource_name: "owned-execution-sa".to_string(),
+                        },
+                    ));
+                }
+                Ok(ListRolePoliciesResponse {
+                    list_role_policies_result: ListRolePoliciesResult {
+                        policy_names: Some(PolicyNames {
+                            member: vec!["execution".to_string()],
+                        }),
+                        is_truncated: Some(false),
+                        marker: None,
+                    },
+                })
+            });
+        let seen = calls.clone();
+        iam.expect_delete_role_policy()
+            .withf(|role, policy| role == "owned-execution-sa" && policy == "execution")
+            .times(if missing { 0 } else { expected })
+            .returning(move |_, _| {
+                seen.lock().unwrap().push("policy");
+                Ok(())
+            });
+        let seen = calls.clone();
+        iam.expect_delete_role()
+            .withf(|role| role == "owned-execution-sa")
+            .times(expected)
+            .returning(move |_| {
+                seen.lock().unwrap().push("role");
+                if missing {
+                    return Err(alien_error::AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceNotFound {
+                            resource_type: "IAM role".to_string(),
+                            resource_name: "owned-execution-sa".to_string(),
+                        },
+                    ));
+                }
+                Ok(())
+            });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(logs.clone()));
+        let provider = Arc::new(provider);
+        let mut config = default_deployment_config();
+        config.stack_settings.setup_management = management;
+        for _ in 0..20 {
+            state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+            let executor = if setup_teardown {
+                StackExecutor::for_deletion_with_service_provider(
+                    client,
+                    &config,
+                    provider.clone(),
+                    None,
+                )?
+                .preserving_resources(&state, ["secrets".to_string()])?
+            } else {
+                StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
+                    client,
+                    &config,
+                    provider.clone(),
+                )?
+            };
+            executor.prepare_for_deletion(&mut state)?;
+            let step = executor.step(state).await?;
+            state = step.next_state;
+            if get_status(&state, "consumer") != Some(ResourceStatus::Deleted) {
+                assert!(
+                    calls.lock().unwrap().is_empty(),
+                    "workload still needs its identity"
+                );
+            }
+            assert_eq!(
+                serde_json::to_value(&state.resources["secrets"]).unwrap(),
+                vault_before
+            );
+            if executor.is_synced(&state) {
+                break;
+            }
+        }
+        assert_deleted(&state, &["consumer"]);
+        if management == SetupManagement::Automatic && !runtime_created && !setup_teardown {
+            assert_eq!(
+                get_status(&state, "execution-sa"),
+                Some(ResourceStatus::DeleteFailed)
+            );
+            assert!(state.resources["execution-sa"]
+                .error
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("Runtime creation"));
+            assert_eq!(*calls.lock().unwrap(), ["workload"]);
+        } else if management == SetupManagement::Automatic {
+            assert_deleted(&state, &["execution-sa"]);
+            assert_eq!(
+                *calls.lock().unwrap(),
+                if missing {
+                    vec!["workload", "role"]
+                } else {
+                    vec!["workload", "policy", "role"]
+                }
+            );
+        } else {
+            assert_eq!(
+                serde_json::to_value(&state.resources["execution-sa"]).unwrap(),
+                identity_before
+            );
+            assert_eq!(*calls.lock().unwrap(), ["workload"]);
         }
     }
     Ok(())

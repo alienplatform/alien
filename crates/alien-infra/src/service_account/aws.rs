@@ -40,6 +40,9 @@ pub struct AwsServiceAccountController {
     pub role_arn: Option<String>,
     /// The name of the created IAM role.
     pub(crate) role_name: Option<String>,
+    /// Set only after this controller creates a role during automatic setup.
+    #[serde(default)]
+    pub(crate) runtime_created: bool,
     /// Whether stack-level permissions have been applied
     pub(crate) stack_permissions_applied: bool,
     /// Last trust policy installed by privileged setup; absent in older checkpoints.
@@ -116,6 +119,8 @@ impl AwsServiceAccountController {
             "IAM role created successfully"
         );
 
+        self.runtime_created = ctx.deployment_config.stack_settings.setup_management
+            == alien_core::SetupManagement::Automatic;
         self.assume_role_policy = Some(assume_role_policy);
         self.role_name = Some(role_name);
         self.role_arn = Some(role_arn);
@@ -337,6 +342,8 @@ impl AwsServiceAccountController {
             }
         };
 
+        self.validate_delete_authority(ctx)?;
+
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
@@ -509,6 +516,7 @@ impl AwsServiceAccountController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.validate_delete_authority(ctx)?;
         let role_name = self.role_name.as_ref().unwrap();
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
@@ -611,6 +619,21 @@ impl AwsServiceAccountController {
 
 // Separate impl block for helper methods
 impl AwsServiceAccountController {
+    fn validate_delete_authority(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        if ctx.deployment_config.stack_settings.setup_management
+            == alien_core::SetupManagement::Automatic
+            && ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+            && !self.runtime_created
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Runtime creation of this IAM role is not recorded; use privileged setup teardown to remove it".to_string(),
+                resource_id: Some(ctx.desired_resource_config::<ServiceAccount>()?.id.clone()),
+            }));
+        }
+
+        Ok(())
+    }
+
     /// Write the stack-level inline policy, or remove it when an update leaves
     /// no stack permissions. Requires privileged setup.
     async fn apply_stack_permissions(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
@@ -1141,6 +1164,7 @@ impl AwsServiceAccountController {
             role_name: Some(role_name.to_string()),
             stack_permissions_applied: true,
             assume_role_policy: None,
+            runtime_created: false,
             _internal_stay_count: None,
         }
     }
@@ -1275,9 +1299,61 @@ mod tests {
     use crate::core::{
         controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
     };
-    use alien_core::permissions::PermissionProfile;
     use alien_aws_clients::iam::{ListRolePoliciesResponse, ListRolePoliciesResult, PolicyNames};
+    use alien_core::permissions::PermissionProfile;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn records_runtime_ownership_only_after_automatic_role_creation() {
+        for management in [
+            alien_core::SetupManagement::Manual,
+            alien_core::SetupManagement::Automatic,
+        ] {
+            let mut iam = alien_aws_clients::iam::MockIamApi::new();
+            iam.expect_create_role().times(1).returning(|request| {
+                Ok(serde_json::from_value(serde_json::json!({"CreateRoleResult": {"Role": {
+                    "Path": "/", "RoleName": request.role_name, "RoleId": "created-role",
+                    "Arn": "arn:aws:iam::123456789012:role/created-role", "CreateDate": "2026-10-30T00:00:00Z"
+                }}})).unwrap())
+            });
+            let iam = Arc::new(iam);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_iam_client()
+                .returning(move |_| Ok(iam.clone()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(ServiceAccount::new("execution-sa".to_string()).build())
+                .controller(AwsServiceAccountController::default())
+                .platform(Platform::Aws)
+                .stack_settings(alien_core::StackSettings {
+                    setup_management: management,
+                    ..Default::default()
+                })
+                .service_provider(Arc::new(provider))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            assert!(
+                !executor
+                    .internal_state::<AwsServiceAccountController>()
+                    .unwrap()
+                    .runtime_created
+            );
+            executor.step().await.unwrap();
+            let checkpoint = executor
+                .internal_state::<AwsServiceAccountController>()
+                .unwrap()
+                .to_json_value()
+                .unwrap();
+            let restored: AwsServiceAccountController = serde_json::from_value(checkpoint).unwrap();
+            assert_eq!(
+                restored.runtime_created,
+                management == alien_core::SetupManagement::Automatic
+            );
+            assert!(restored.role_arn.is_some());
+        }
+    }
 
     fn policy_account(count: usize) -> ServiceAccount {
         let resources: Vec<_> = (0..count)
