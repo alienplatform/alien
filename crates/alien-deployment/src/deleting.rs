@@ -1335,13 +1335,14 @@ mod tests {
 
     #[tokio::test]
     async fn automatic_cleanup_waits_for_role_deletion_before_setup_handoff() {
-        for (fail_delete, managed_pages, inline_pages) in [
-            (false, false, false),
-            (true, false, false),
-            (false, true, false),
-            (false, false, true),
-            (false, true, true),
-            (true, true, true),
+        for (fail_delete, managed_pages, inline_pages, fail_cleanup) in [
+            (false, false, false, false),
+            (true, false, false, false),
+            (false, true, false, false),
+            (false, false, true, false),
+            (false, true, true, false),
+            (true, true, true, false),
+            (false, false, false, true),
         ] {
             let mut stack = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
             let mut vault = resource_state(
@@ -1373,6 +1374,50 @@ mod tests {
             .unwrap();
             stack.resources.insert("execution-sa".to_string(), role);
             let mut iam = MockIamApi::new();
+            if fail_cleanup {
+                // Managed policy removal succeeds before inline cleanup is denied.
+                iam.expect_list_attached_role_policies()
+                    .withf(|role| role == "test-execution-sa")
+                    .times(1)
+                    .return_once(|_| Ok(serde_json::from_value(serde_json::json!({
+                        "ListAttachedRolePoliciesResult": {
+                            "IsTruncated": false,
+                            "AttachedPolicies": {"member": [{
+                                "PolicyName": "removed-before-failure",
+                                "PolicyArn": "arn:aws:iam::123456789012:policy/removed-before-failure"
+                            }]}
+                        }
+                    })).unwrap()));
+                iam.expect_detach_role_policy()
+                    .withf(|role, policy| {
+                        role == "test-execution-sa"
+                            && policy == "arn:aws:iam::123456789012:policy/removed-before-failure"
+                    })
+                    .times(1)
+                    .return_once(|_, _| Ok(()));
+                iam.expect_list_role_policies()
+                    .withf(|role| role == "test-execution-sa")
+                    .times(1)
+                    .return_once(|_| {
+                        Ok(serde_json::from_value(serde_json::json!({
+                            "ListRolePoliciesResult": {
+                                "IsTruncated": false, "PolicyNames": {"member": ["last-inline"]}
+                            }
+                        }))
+                        .unwrap())
+                    });
+                iam.expect_delete_role_policy()
+                    .withf(|role, policy| role == "test-execution-sa" && policy == "last-inline")
+                    .times(1)
+                    .return_once(|_, _| {
+                        Err(alien_error::AlienError::new(
+                            alien_client_core::ErrorData::RemoteAccessDenied {
+                                resource_type: "IAM role policy".to_string(),
+                                resource_name: "last-inline".to_string(),
+                            },
+                        ))
+                    });
+            }
             let paginated = managed_pages || inline_pages;
             if paginated {
                 iam.expect_list_attached_role_policies()
@@ -1433,7 +1478,7 @@ mod tests {
             iam.expect_list_role_policies()
                 .times(1)
                 .return_once(move |_| {
-                    let policies = if inline_pages {
+                    let policies = if inline_pages || fail_cleanup {
                         vec!["last-inline"]
                     } else {
                         vec![]
@@ -1454,7 +1499,7 @@ mod tests {
                 .returning(|_, _| Ok(()));
             iam.expect_delete_role_policy()
                 .withf(|role, policy| role == "test-execution-sa" && policy == "last-inline")
-                .times(usize::from(inline_pages))
+                .times(usize::from(inline_pages || fail_cleanup))
                 .returning(|_, _| Ok(()));
             iam.expect_delete_role()
                 .withf(|name| name == "test-execution-sa")
@@ -1500,7 +1545,7 @@ mod tests {
                 .allow_frozen_changes(false)
                 .build();
             let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
-            let current = DeploymentState {
+            let mut current = DeploymentState {
                 status: DeploymentStatus::Deleting,
                 platform: Platform::Aws,
                 current_release: None,
@@ -1516,6 +1561,48 @@ mod tests {
                 retry_requested: false,
                 protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
             };
+            if fail_cleanup {
+                current
+                    .stack_state
+                    .as_mut()
+                    .unwrap()
+                    .resources
+                    .get_mut("execution-sa")
+                    .unwrap()
+                    .retry_attempt = 9;
+                let failed =
+                    handle_deleting(current, config.clone(), client.clone(), provider.clone())
+                        .await
+                        .expect("record partial policy cleanup failure")
+                        .state;
+                assert_eq!(failed.status, DeploymentStatus::DeleteFailed);
+                let stack = failed.stack_state.as_ref().unwrap();
+                let role = &stack.resources["execution-sa"];
+                assert_eq!(role.status, ResourceStatus::DeleteFailed);
+                assert!(role.error.is_some());
+                assert_eq!(
+                    role.last_failed_state.as_ref().unwrap()["state"],
+                    "deleteStart"
+                );
+                assert_eq!(
+                    role.internal_state.as_ref().unwrap()["roleName"],
+                    "test-execution-sa"
+                );
+                assert_eq!(
+                    serde_json::to_value(&stack.resources["secrets"]).unwrap(),
+                    vault_before
+                );
+                current = serde_json::from_value(serde_json::to_value(failed).unwrap()).unwrap();
+                current.retry_requested = true;
+                current =
+                    handle_delete_failed(current, config.clone(), client.clone(), provider.clone())
+                        .await
+                        .expect("retry checkpointed policy cleanup")
+                        .state;
+                assert_eq!(current.status, DeploymentStatus::Deleting);
+                assert!(!current.retry_requested);
+                current = serde_json::from_value(serde_json::to_value(current).unwrap()).unwrap();
+            }
             let mut pending =
                 handle_deleting(current, config.clone(), client.clone(), provider.clone())
                     .await
