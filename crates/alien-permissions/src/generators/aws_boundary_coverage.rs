@@ -3,20 +3,27 @@
 use alien_error::AlienError;
 use serde_json::Value;
 
+use super::aws_boundary::action_pattern_matches;
 use crate::{ErrorData, Result};
 
 /// Whether the installed boundary permits everything the required boundary permits.
 ///
 /// This compares generated identity policies, not arbitrary IAM policy equivalence. Conditions
-/// on the installed grant must also occur in the required grant. Installed Denies must also
-/// occur in the required document. Unsupported comparisons return false, requiring setup again;
+/// on the installed grant must also occur in the required grant. Each installed Deny must
+/// occur in the required document or provably match none of its Allows. Unsupported
+/// comparisons return false, requiring setup again;
 /// malformed documents return an error. Neither case may be treated as permission to proceed.
 /// Documents must be decoded JSON with template parameters already resolved.
 pub fn aws_permissions_boundary_covers(installed: &Value, required: &Value) -> Result<bool> {
     let installed = statements(installed)?;
     let required = statements(required)?;
+    let required_allows: Vec<_> = required.iter().filter(|s| s["Effect"] == "Allow").collect();
     for deny in installed.iter().filter(|s| s["Effect"] == "Deny") {
-        if !required.iter().any(|s| same_statement(deny, s)) {
+        if !required.iter().any(|s| same_statement(deny, s))
+            && required_allows
+                .iter()
+                .any(|allow| deny_may_match(deny, allow))
+        {
             return Ok(false);
         }
     }
@@ -207,6 +214,57 @@ fn strings(value: &Value) -> Result<Vec<&str>> {
         return Err(invalid("selector must not be empty"));
     }
     Ok(values)
+}
+
+/// Conservative: true unless the Deny's actions or condition provably exclude every
+/// request the Allow grants. Only an all-resource Deny with an `Action` list, optionally
+/// limited by `BoolIfExists {key: "false"}`, can be shown not to match.
+fn deny_may_match(deny: &Value, allow: &Value) -> bool {
+    let (Ok(denied), true) = (
+        strings(&deny["Action"]),
+        deny.get("Resource") == Some(&Value::from("*")),
+    ) else {
+        return true;
+    };
+    if let Some(condition) = deny.get("Condition") {
+        let excluded = condition.as_object().is_some_and(|operators| {
+            operators.len() == 1
+                && operators
+                    .get("BoolIfExists")
+                    .and_then(Value::as_object)
+                    .is_some_and(|keys| {
+                        keys.len() == 1
+                            && keys.iter().all(|(key, value)| {
+                                value == "false" && allow["Condition"]["Bool"][key] == "true"
+                            })
+                    })
+        });
+        if excluded {
+            return false;
+        }
+        if !condition
+            .as_object()
+            .is_some_and(|operators| operators.keys().all(|op| op == "BoolIfExists"))
+        {
+            return true;
+        }
+    }
+    denied.into_iter().any(|action| {
+        if let Some(allowed) = allow.get("Action") {
+            strings(allowed).map_or(true, |patterns| {
+                patterns.iter().any(|pattern| {
+                    action_pattern_matches(pattern, action)
+                        || action_pattern_matches(action, pattern)
+                })
+            })
+        } else {
+            strings(&allow["NotAction"]).map_or(true, |excluded| {
+                !excluded
+                    .iter()
+                    .any(|pattern| action_pattern_matches(pattern, action))
+            })
+        }
+    })
 }
 
 fn same_statement(left: &Value, right: &Value) -> bool {

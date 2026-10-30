@@ -385,12 +385,16 @@ mod tests {
                 if statement.get("Condition").is_some() {
                     let mut unconditional = statement.clone();
                     unconditional.as_object_mut().unwrap().remove("Condition");
-                    assert!(
+                    // Key grants stay limited to AWS resources without their conditions.
+                    let creates_grants =
+                        statement["Action"].to_string().contains("kms:CreateGrant");
+                    assert_eq!(
                         aws_permissions_boundary_covers(
                             &boundary,
                             &json!({"Version": "2012-10-17", "Statement": [unconditional]})
                         )
                         .unwrap(),
+                        !creates_grants,
                         "{set}"
                     );
                 }

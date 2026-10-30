@@ -208,11 +208,23 @@ fn catalog_management_role_writes_require_boundary_and_ownership() {
                         continue;
                     }
                     let conditions = &statement.condition.as_ref().unwrap()["StringEquals"];
-                    assert_eq!(
-                        conditions["iam:PermissionsBoundary"].as_string(),
-                        Some(BOUNDARY),
-                        "{id}: {action}"
-                    );
+                    // Detaching one named AWS managed policy only removes permissions, so it
+                    // may precede the boundary. Ownership tags are still checked below.
+                    let detaches_aws_managed_policy = statement.action.len() == 1
+                        && action == "iam:DetachRolePolicy"
+                        && conditions
+                            .get("iam:PolicyARN")
+                            .and_then(|arn| arn.as_string())
+                            .is_some_and(|arn| {
+                                arn.starts_with("arn:aws:iam::aws:policy/") && !arn.contains('*')
+                            });
+                    if !detaches_aws_managed_policy {
+                        assert_eq!(
+                            conditions["iam:PermissionsBoundary"].as_string(),
+                            Some(BOUNDARY),
+                            "{id}: {action}"
+                        );
+                    }
                     let tag_source = if action == "iam:CreateRole" {
                         "aws:RequestTag"
                     } else {
@@ -307,6 +319,91 @@ fn explicit_custom_boundary_conditions_are_not_removed_for_legacy_setups() {
                 .with("iam:PermissionsBoundary", BOUNDARY)
                 .resource_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
                 .request_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
+        ),
+        Decision::Allowed
+    );
+}
+
+#[test]
+fn bounded_setups_detach_obsolete_aws_managed_policies_from_unbounded_roles() {
+    let context = common::create_test_context().with_aws_permissions_boundary_arn(BOUNDARY);
+    let policies: Vec<_> = ["compute-cluster/provision", "container/provision"]
+        .iter()
+        .flat_map(|id| {
+            AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    get_permission_set(id).unwrap(),
+                    BindingTarget::Stack,
+                    &context,
+                )
+                .unwrap()
+                .statement
+        })
+        .collect();
+    let node_role = "arn:aws:iam::123456789012:role/my-stack-workers-role";
+    let backup_role = "arn:aws:iam::123456789012:role/my-stack-dlm-0123abcd";
+    let own = [("managed-by", "runtime"), ("deployment", "my-stack")];
+    // The roles carry no boundary, so the request has no iam:PermissionsBoundary value.
+    for (role, policy, allowed) in [
+        (
+            node_role,
+            "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+            true,
+        ),
+        (
+            node_role,
+            "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+            true,
+        ),
+        (
+            backup_role,
+            "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole",
+            true,
+        ),
+        (
+            node_role,
+            "arn:aws:iam::aws:policy/AdministratorAccess",
+            false,
+        ),
+        (
+            node_role,
+            "arn:aws:iam::123456789012:policy/my-stack-extra",
+            false,
+        ),
+        (
+            backup_role,
+            "arn:aws:iam::123456789012:policy/my-stack-extra",
+            false,
+        ),
+    ] {
+        for (tags, owned) in [
+            (&own[..], true),
+            (
+                &[("managed-by", "runtime"), ("deployment", "other-stack")][..],
+                false,
+            ),
+            (
+                &[("managed-by", "setup"), ("deployment", "my-stack")][..],
+                false,
+            ),
+            (&[][..], false),
+        ] {
+            assert_eq!(
+                evaluate(
+                    &policies,
+                    &Request::new("iam:DetachRolePolicy", role)
+                        .with("iam:PolicyARN", policy)
+                        .resource_tags(tags)
+                ) == Decision::Allowed,
+                allowed && owned,
+                "{role} {policy} {tags:?}"
+            );
+        }
+    }
+    assert_eq!(
+        evaluate(
+            &policies,
+            &Request::new("iam:DeleteRole", backup_role).resource_tags(&own)
         ),
         Decision::Allowed
     );

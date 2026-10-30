@@ -138,7 +138,7 @@ impl AwsRemoteBindingsController {
                 client.as_ref(),
                 ctx.aws_permissions_boundary_arn()?.as_deref(),
             )
-            .prepare_existing(role_name, ctx.resource_prefix, &resource_id)
+            .prepare_for_removal(role_name, ctx.resource_prefix, &resource_id)
             .await
             {
                 Ok(()) => {}
@@ -334,6 +334,28 @@ mod tests {
             .unwrap()
     }
 
+    /// Removal adopts the role without auditing its attached policies.
+    fn expect_removal_adoption(iam: &mut MockIamApi, sequence: &mut mockall::Sequence) {
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|name| {
+                assert_eq!(name, "test-access");
+                Ok(
+                    serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": role()}}))
+                        .unwrap(),
+                )
+            });
+        iam.expect_put_role_permissions_boundary()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|name, boundary| {
+                assert_eq!(name, "test-access");
+                assert_eq!(boundary, BOUNDARY);
+                Ok(())
+            });
+    }
+
     fn expect_adoption(iam: &mut MockIamApi, sequence: &mut mockall::Sequence) {
         iam.expect_get_role()
             .times(1)
@@ -440,7 +462,7 @@ mod tests {
     async fn delete_adopts_before_removing_policies_and_role() {
         let mut iam = MockIamApi::new();
         let mut sequence = mockall::Sequence::new();
-        expect_adoption(&mut iam, &mut sequence);
+        expect_removal_adoption(&mut iam, &mut sequence);
         iam.expect_list_role_policies()
             .times(1)
             .in_sequence(&mut sequence)
@@ -505,6 +527,11 @@ mod tests {
             AwsRemoteBindingsState::DeleteStart,
         ] {
             for unsafe_policy in [false, true] {
+                // AWS managed policies keep a role from being adopted to keep running, not
+                // from being deleted.
+                if unsafe_policy && state == AwsRemoteBindingsState::DeleteStart {
+                    continue;
+                }
                 let mut iam = MockIamApi::new();
                 iam.expect_get_role().times(1).returning(move |_| {
                     let mut role = role();

@@ -582,7 +582,9 @@
       // at runtime, once their policy runs as the setup role. Only removal: the managed DLM
       // policy is detached and the role deleted, never created, attached or passed. Scoped by
       // name, not tags: IAM answers a tag-conditioned call on a missing role with AccessDenied,
-      // and cleanup must see NoSuchEntity to treat it as already gone.
+      // and cleanup must see NoSuchEntity to treat it as already gone. These roles predate the
+      // permissions boundary, and detaching only removes permissions, so the bounded detach
+      // needs ownership tags but not the boundary.
       //
       // Those roles still carry the AWS managed DLM policy, which may share and copy any
       // snapshot. The compute cluster's `${stackPrefix}-*` PassRole grant names them too, so
@@ -690,7 +692,6 @@
             "condition": {
               "StringEquals": {
                 "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole",
-                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
                 "aws:ResourceTag/${managedByTag}": "runtime",
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               }
@@ -701,7 +702,6 @@
             "condition": {
               "StringEquals": {
                 "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole",
-                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
                 "aws:ResourceTag/${managedByTag}": "runtime",
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               }

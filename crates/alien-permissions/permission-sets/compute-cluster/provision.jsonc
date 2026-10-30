@@ -3,7 +3,8 @@
   "description": "Allows creating and managing ComputeCluster compute infrastructure. Derived from AwsComputeClusterController, GcpComputeClusterController, AzureComputeClusterController API calls.",
   "platforms": {
     "aws": [
-      // Remove obsolete node agents before adopting the permissions boundary.
+      // Remove obsolete node agents' AWS managed policies. Detaching only removes
+      // permissions, so the role need not carry the boundary yet; ownership tags still apply.
       // No attachment or other policy removal is authorized by these grants.
       {
         "grant": {
@@ -42,7 +43,6 @@
             "condition": {
               "StringEquals": {
                 "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
                 "aws:ResourceTag/${managedByTag}": "runtime",
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               }
@@ -56,7 +56,6 @@
             "condition": {
               "StringEquals": {
                 "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
                 "aws:ResourceTag/${managedByTag}": "runtime",
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               }
@@ -102,7 +101,6 @@
             "condition": {
               "StringEquals": {
                 "iam:PolicyARN": "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
-                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
                 "aws:ResourceTag/${managedByTag}": "runtime",
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               }
@@ -116,7 +114,6 @@
             "condition": {
               "StringEquals": {
                 "iam:PolicyARN": "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
-                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
                 "aws:ResourceTag/${managedByTag}": "runtime",
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}"
               }

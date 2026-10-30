@@ -37,6 +37,30 @@ impl<'a> IamRoleWriter<'a> {
         deployment_prefix: &str,
         resource_id: &str,
     ) -> Result<()> {
+        self.prepare(role_name, deployment_prefix, resource_id, true)
+            .await
+    }
+
+    /// Like [`Self::prepare_existing`], before removing the role's policies and the role.
+    /// The boundary is attached so the bounded cleanup grants apply, but AWS-managed
+    /// policies are not refused: the role is being deleted, not kept running under it.
+    pub async fn prepare_for_removal(
+        &self,
+        role_name: &str,
+        deployment_prefix: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        self.prepare(role_name, deployment_prefix, resource_id, false)
+            .await
+    }
+
+    async fn prepare(
+        &self,
+        role_name: &str,
+        deployment_prefix: &str,
+        resource_id: &str,
+        audit_attached_policies: bool,
+    ) -> Result<()> {
         let Some(boundary) = self.permissions_boundary else {
             return Ok(());
         };
@@ -65,7 +89,9 @@ impl<'a> IamRoleWriter<'a> {
             }));
         }
 
-        self.audit_attached_policies(role_name).await?;
+        if audit_attached_policies {
+            self.audit_attached_policies(role_name).await?;
+        }
         self.iam
             .put_role_permissions_boundary(role_name, boundary)
             .await

@@ -132,27 +132,60 @@ async fn roles_without_current_runtime_ownership_are_never_written_or_adopted() 
                 {"Key": "resource", "Value": "worker"}
             ]}),
         ] {
-            let mut iam = MockIamApi::new();
-            iam.expect_get_role().once().return_once(move |_| {
-                Ok(serde_json::from_value(json!({"GetRoleResult": {"Role": {
-                    "Path": "/", "RoleName": "test-role", "RoleId": "id",
-                    "Arn": "arn:aws:iam::123456789012:role/test-role",
-                    "CreateDate": "2026-01-01", "Tags": tags,
-                    "PermissionsBoundary": boundary.map(|arn| json!({"PermissionsBoundaryArn": arn}))
-                }}})).unwrap())
-            });
             // No policy audit, adoption, or write may follow a failed ownership check.
-            let error = IamRoleWriter::new(&iam, Some(BOUNDARY))
-                .prepare_existing("test-role", "test", "worker")
-                .await
+            for removal in [false, true] {
+                let mut iam = MockIamApi::new();
+                let tags = tags.clone();
+                iam.expect_get_role().once().return_once(move |_| {
+                    Ok(serde_json::from_value(json!({"GetRoleResult": {"Role": {
+                        "Path": "/", "RoleName": "test-role", "RoleId": "id",
+                        "Arn": "arn:aws:iam::123456789012:role/test-role",
+                        "CreateDate": "2026-01-01", "Tags": tags,
+                        "PermissionsBoundary": boundary.map(|arn| json!({"PermissionsBoundaryArn": arn}))
+                    }}})).unwrap())
+                });
+                let writer = IamRoleWriter::new(&iam, Some(BOUNDARY));
+                let error = if removal {
+                    writer
+                        .prepare_for_removal("test-role", "test", "worker")
+                        .await
+                } else {
+                    writer.prepare_existing("test-role", "test", "worker").await
+                }
                 .unwrap_err();
-            assert!(matches!(
-                error.error,
-                Some(ErrorData::ExistingCloudResourceNotOwned { .. })
-            ));
-            assert!(!error.retryable);
+                assert!(matches!(
+                    error.error,
+                    Some(ErrorData::ExistingCloudResourceNotOwned { .. })
+                ));
+                assert!(!error.retryable);
+            }
         }
     }
+}
+
+#[tokio::test]
+async fn removal_adopts_roles_that_carry_aws_managed_policies() {
+    // Removal attaches the boundary so the bounded cleanup grants apply, without the
+    // attached-policy audit that keeps AWS managed policies off running roles.
+    let mut iam = MockIamApi::new();
+    expect_role(&mut iam, None);
+    iam.expect_list_attached_role_policies().never();
+    iam.expect_put_role_permissions_boundary()
+        .with(eq("test-role"), eq(BOUNDARY))
+        .once()
+        .returning(|_, _| Ok(()));
+    IamRoleWriter::new(&iam, Some(BOUNDARY))
+        .prepare_for_removal("test-role", "test", "worker")
+        .await
+        .unwrap();
+
+    let mut iam = MockIamApi::new();
+    expect_role(&mut iam, Some("arn:aws:iam::123456789012:policy/other"));
+    let error = IamRoleWriter::new(&iam, Some(BOUNDARY))
+        .prepare_for_removal("test-role", "test", "worker")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("different permissions boundary"));
 }
 
 #[tokio::test]

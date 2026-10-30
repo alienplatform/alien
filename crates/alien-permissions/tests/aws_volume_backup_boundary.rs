@@ -497,7 +497,12 @@ fn encrypted_volume_backup_grants_are_covered_without_an_application_profile() {
         );
         let mut grant = original;
         grant.condition = None;
-        assert!(
+        // Other service restrictions stay in identity policies; key grants must be for AWS resources.
+        let creates_grants = grant
+            .action
+            .iter()
+            .any(|action| action == "kms:CreateGrant");
+        assert_eq!(
             aws_permissions_boundary_covers(
                 &boundary,
                 &serde_json::json!({
@@ -505,6 +510,7 @@ fn encrypted_volume_backup_grants_are_covered_without_an_application_profile() {
                 })
             )
             .unwrap(),
+            !creates_grants,
             "the exact-key ceiling leaves service restrictions to identity policies"
         );
     }

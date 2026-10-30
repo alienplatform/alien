@@ -1118,7 +1118,7 @@ impl AwsArtifactRegistryController {
         resource_id: &str,
     ) -> Result<()> {
         match IamRoleWriter::new(iam_client, ctx.aws_permissions_boundary_arn()?.as_deref())
-            .prepare_existing(role_name, ctx.resource_prefix, resource_id)
+            .prepare_for_removal(role_name, ctx.resource_prefix, resource_id)
             .await
         {
             Ok(()) => {}
@@ -1763,10 +1763,8 @@ mod tests {
                         }
                     });
                 if !missing {
-                    iam.expect_list_attached_role_policies()
-                        .times(1)
-                        .in_sequence(&mut sequence)
-                        .returning(|_| Ok(empty_attached_role_policies_response()));
+                    // Removal adopts without the attached-policy audit, so an AWS managed
+                    // policy on the role does not block cleanup.
                     iam.expect_put_role_permissions_boundary()
                         .times(1)
                         .in_sequence(&mut sequence)
@@ -1777,7 +1775,21 @@ mod tests {
                     iam.expect_list_attached_role_policies()
                         .times(1)
                         .in_sequence(&mut sequence)
-                        .returning(|_| Ok(empty_attached_role_policies_response()));
+                        .returning(|_| {
+                            Ok(serde_json::from_value(serde_json::json!({"ListAttachedRolePoliciesResult": {
+                                "AttachedPolicies": {"member": [{"PolicyName": "AmazonEC2ContainerRegistryReadOnly", "PolicyArn": "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"}]}, "IsTruncated": false
+                            }})).unwrap())
+                        });
+                    iam.expect_detach_role_policy()
+                        .times(1)
+                        .in_sequence(&mut sequence)
+                        .returning(|_, arn| {
+                            assert_eq!(
+                                arn,
+                                "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+                            );
+                            Ok(())
+                        });
                     iam.expect_list_role_policies()
                         .times(1)
                         .in_sequence(&mut sequence)

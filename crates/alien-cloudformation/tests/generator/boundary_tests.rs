@@ -272,13 +272,25 @@ fn check_boundary(enabled: Option<bool>) {
                             && statement["Condition"]["StringEquals"]["iam:PermissionsBoundary"]
                                 .is_null()
                         {
-                            // The approved removal-only migration for obsolete DLM roles.
-                            assert_eq!(
-                                statement["Condition"],
-                                json!({"StringEquals": {
-                                    "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
-                                }})
+                            // Removal-only detaches of one obsolete AWS managed policy, from
+                            // this stack's roles and, once bounded, only runtime-owned ones.
+                            let conditions =
+                                statement["Condition"]["StringEquals"].as_object().unwrap();
+                            assert!(
+                                conditions["iam:PolicyARN"]
+                                    .as_str()
+                                    .unwrap()
+                                    .starts_with("arn:aws:iam::aws:policy/"),
+                                "{statement}"
                             );
+                            if conditions.len() > 1 {
+                                assert_eq!(conditions.len(), 3, "{statement}");
+                                assert_eq!(
+                                    conditions["aws:ResourceTag/deployment"],
+                                    prefix.as_str()
+                                );
+                                assert_eq!(conditions["aws:ResourceTag/managed-by"], "runtime");
+                            }
                             assert_eq!(
                                 statement["Resource"],
                                 json!([format!("arn:aws:iam::{account}:role/{prefix}-dlm-*")])

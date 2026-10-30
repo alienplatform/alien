@@ -18,6 +18,57 @@ use super::{AwsIamStatement, AwsRuntimePermissionsGenerator};
 
 const MANAGED_POLICY_LIMIT: usize = 6_144;
 
+/// Resource-policy and sharing writes that could expose stack resources outside the
+/// account or to the public. Runtime catalog grants never need them; a stack's own
+/// explicit application grants keep any of these they name.
+const SHARING_ACTIONS: &[&str] = &[
+    "aoss:CreateAccessPolicy",
+    "aoss:CreateSecurityPolicy",
+    "aoss:UpdateAccessPolicy",
+    "aoss:UpdateSecurityPolicy",
+    "backup:PutBackupVaultAccessPolicy",
+    "codebuild:PutResourcePolicy",
+    "dlm:CreateLifecyclePolicy",
+    "dlm:UpdateLifecyclePolicy",
+    "dynamodb:PutResourcePolicy",
+    "ec2:CopySnapshot",
+    "ec2:ModifyImageAttribute",
+    "ec2:ModifySnapshotAttribute",
+    "ecr:PutRegistryPolicy",
+    "ecr:PutReplicationConfiguration",
+    "ecr:SetRepositoryPolicy",
+    "elasticfilesystem:PutFileSystemPolicy",
+    "events:PutPermission",
+    "glue:PutResourcePolicy",
+    "kms:PutKeyPolicy",
+    "lambda:AddLayerVersionPermission",
+    "lambda:AddPermission",
+    "lambda:CreateFunctionUrlConfig",
+    "lambda:UpdateFunctionUrlConfig",
+    "logs:PutDestinationPolicy",
+    "logs:PutResourcePolicy",
+    "logs:PutSubscriptionFilter",
+    "ram:AssociateResourceShare",
+    "ram:CreateResourceShare",
+    "rds:ModifyDBClusterSnapshotAttribute",
+    "rds:ModifyDBSnapshotAttribute",
+    "s3:DeleteBucketPolicy",
+    "s3:PutAccessPointPolicy",
+    "s3:PutAccountPublicAccessBlock",
+    "s3:PutBucketAcl",
+    "s3:PutBucketOwnershipControls",
+    "s3:PutBucketPolicy",
+    "s3:PutBucketPublicAccessBlock",
+    "s3:PutReplicationConfiguration",
+    "secretsmanager:PutResourcePolicy",
+    "ses:CreateEmailIdentityPolicy",
+    "ses:UpdateEmailIdentityPolicy",
+    "sns:AddPermission",
+    "sns:SetTopicAttributes",
+    "sqs:AddPermission",
+    "sqs:SetQueueAttributes",
+];
+
 /// Render the boundary including inline and ARN-selected application grants.
 ///
 /// The resolver receives the profile name and scope (`"*"` or a resource id). It must
@@ -38,6 +89,24 @@ pub fn aws_stack_permissions_boundary(
     let generator = AwsRuntimePermissionsGenerator::new();
     let mut statements = Vec::new();
     let mut exact_resources = BTreeSet::new();
+    let mut granted = BTreeSet::new();
+    for (_, profile) in stack.permission_profiles() {
+        for reference in profile.0.values().flatten() {
+            let set = match reference {
+                PermissionSetReference::Inline(set) => Some(set),
+                // Runtime catalog sets never need these; the catalog test checks that.
+                PermissionSetReference::Name(id) if !is_runtime_set(id) => get_permission_set(id),
+                PermissionSetReference::Name(_) => None,
+            };
+            granted.extend(
+                set.and_then(|set| set.platforms.aws.as_ref())
+                    .into_iter()
+                    .flatten()
+                    .filter(|entry| entry.effect.is_allow())
+                    .flat_map(|entry| entry.grant.actions.iter().flatten().cloned()),
+            );
+        }
+    }
     for (profile_name, profile) in stack.permission_profiles() {
         for (scope, references) in &profile.0 {
             if !references
@@ -138,7 +207,7 @@ pub fn aws_stack_permissions_boundary(
             );
         }
     }
-    render_boundary(context, &statements, exact_resources)
+    render_boundary(context, &statements, exact_resources, &granted)
 }
 
 fn collect_resolved_grants(
@@ -188,13 +257,19 @@ pub fn aws_permissions_boundary(
     context: &PermissionContext,
     custom_statements: &[AwsIamStatement],
 ) -> Result<Value> {
-    render_boundary(context, custom_statements, BTreeSet::new())
+    let granted = custom_statements
+        .iter()
+        .filter(|statement| statement.effect == "Allow")
+        .flat_map(|statement| statement.action.iter().cloned())
+        .collect();
+    render_boundary(context, custom_statements, BTreeSet::new(), &granted)
 }
 
 fn render_boundary(
     context: &PermissionContext,
     custom_statements: &[AwsIamStatement],
     mut scoped_resources: BTreeSet<String>,
+    granted_actions: &BTreeSet<String>,
 ) -> Result<Value> {
     let prefix = context.stack_prefix.as_deref().ok_or_else(|| {
         AlienError::new(ErrorData::VariableNotFound {
@@ -305,6 +380,25 @@ fn render_boundary(
         }),
     ];
     rendered.extend(statements.iter().map(render_statement));
+    let granted = |action: &str| {
+        granted_actions
+            .iter()
+            .any(|pattern| action_pattern_matches(pattern, action))
+    };
+    let denied: Vec<_> = SHARING_ACTIONS
+        .iter()
+        .filter(|action| !granted(action))
+        .collect();
+    if !denied.is_empty() {
+        rendered.push(json!({"Effect": "Deny", "Action": denied, "Resource": "*"}));
+    }
+    // EC2 creates grants on stack keys to attach encrypted volumes.
+    if !granted("kms:CreateGrant") {
+        rendered.push(json!({
+            "Effect": "Deny", "Action": ["kms:CreateGrant"], "Resource": "*",
+            "Condition": {"BoolIfExists": {"kms:GrantIsForAWSResource": "false"}},
+        }));
+    }
     let policy = json!({"Version": "2012-10-17", "Statement": rendered});
     let size = policy
         .to_string()
@@ -439,6 +533,25 @@ fn merge_statement(statements: &mut Vec<AwsIamStatement>, mut statement: AwsIamS
     }
 }
 
+/// Case-insensitive IAM action match where `pattern` may use `*` and `?`.
+pub(super) fn action_pattern_matches(pattern: &str, action: &str) -> bool {
+    fn matches(pattern: &[u8], action: &[u8]) -> bool {
+        match (pattern.first(), action.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => {
+                matches(&pattern[1..], action)
+                    || (!action.is_empty() && matches(pattern, &action[1..]))
+            }
+            (Some(b'?'), Some(_)) => matches(&pattern[1..], &action[1..]),
+            (Some(left), Some(right)) => {
+                left.eq_ignore_ascii_case(right) && matches(&pattern[1..], &action[1..])
+            }
+            _ => false,
+        }
+    }
+    matches(pattern.as_bytes(), action.as_bytes())
+}
+
 fn render_statement(statement: &AwsIamStatement) -> Value {
     let mut value = json!({"Effect": statement.effect, "Action": statement.action});
     if !statement.resource.is_empty() {
@@ -468,6 +581,133 @@ mod tests {
             .with_aws_region("ap-southeast-7")
             .with_aws_account_id("123456789012")
             .with_managing_account_id("210987654321")
+    }
+
+    fn denied_actions(boundary: &Value) -> Vec<String> {
+        boundary["Statement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["Effect"] == "Deny" && s.get("Condition").is_none())
+            .flat_map(|s| match &s["Action"] {
+                Value::Array(actions) => actions.clone(),
+                action => vec![action.clone()],
+            })
+            .map(|action| action.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn runtime_catalog_never_needs_sharing_actions() {
+        for id in list_permission_set_ids()
+            .into_iter()
+            .filter(|id| is_runtime_set(id))
+        {
+            for entry in get_permission_set(id)
+                .unwrap()
+                .platforms
+                .aws
+                .iter()
+                .flatten()
+            {
+                if !entry.effect.is_allow() {
+                    continue;
+                }
+                for action in entry.grant.actions.iter().flatten() {
+                    for denied in SHARING_ACTIONS {
+                        assert!(
+                            !action_pattern_matches(action, denied),
+                            "{id} grants {action}, which the boundary denies"
+                        );
+                    }
+                    if action_pattern_matches(action, "kms:CreateGrant") {
+                        for binding in [&entry.binding.stack, &entry.binding.resource]
+                            .into_iter()
+                            .flatten()
+                        {
+                            let condition = binding.condition.as_ref().unwrap();
+                            assert_eq!(
+                                condition["Bool"]["kms:GrantIsForAWSResource"].as_string(),
+                                Some("true"),
+                                "{id} creates key grants outside AWS resources"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn boundary_denies_sharing_unless_the_stack_grants_it() {
+        let boundary = aws_permissions_boundary(&context(), &[]).unwrap();
+        let mut denied = denied_actions(&boundary);
+        denied.sort();
+        let mut expected: Vec<_> = SHARING_ACTIONS.iter().map(|a| a.to_string()).collect();
+        expected.sort();
+        assert_eq!(denied, expected);
+        let grant_deny = boundary["Statement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["Action"] == json!(["kms:CreateGrant"]))
+            .unwrap();
+        assert_eq!(grant_deny["Effect"], "Deny");
+        assert_eq!(
+            grant_deny["Condition"],
+            json!({"BoolIfExists": {"kms:GrantIsForAWSResource": "false"}})
+        );
+
+        let mut inline = get_permission_set("queue/data-write").unwrap().clone();
+        inline.id = "custom/queue-policy".to_string();
+        let entry = inline.platforms.aws.as_mut().unwrap().first_mut().unwrap();
+        entry.grant.actions = Some(vec!["sqs:SetQueueAttributes".to_string()]);
+        let stack = Stack::new("test".to_string())
+            .permission(
+                "application",
+                alien_core::PermissionProfile(indexmap::indexmap! {
+                    "*".to_string() => vec![
+                        PermissionSetReference::Inline(inline),
+                        PermissionSetReference::from_name("storage/provision"),
+                    ]
+                }),
+            )
+            .build();
+        let boundary =
+            aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context())).unwrap();
+        let denied = denied_actions(&boundary);
+        for kept in [
+            "sqs:SetQueueAttributes",
+            "s3:PutBucketPolicy",
+            "s3:PutBucketAcl",
+        ] {
+            assert!(!denied.iter().any(|a| a == kept), "{kept}");
+        }
+        for still_denied in [
+            "ec2:ModifySnapshotAttribute",
+            "sqs:AddPermission",
+            "lambda:AddPermission",
+        ] {
+            assert!(denied.iter().any(|a| a == still_denied), "{still_denied}");
+        }
+    }
+
+    #[test]
+    fn action_patterns_match_case_insensitively() {
+        assert!(action_pattern_matches("s3:*", "s3:PutBucketPolicy"));
+        assert!(action_pattern_matches(
+            "S3:putbucket*",
+            "s3:PutBucketPolicy"
+        ));
+        assert!(action_pattern_matches(
+            "sqs:?etQueueAttributes",
+            "sqs:SetQueueAttributes"
+        ));
+        assert!(!action_pattern_matches("s3:Get*", "s3:PutBucketPolicy"));
+        assert!(!action_pattern_matches(
+            "s3:PutBucket",
+            "s3:PutBucketPolicy"
+        ));
     }
 
     #[test]
@@ -636,11 +876,14 @@ mod tests {
                     for statement in unconditional["Statement"].as_array_mut().unwrap() {
                         statement.as_object_mut().unwrap().remove("Condition");
                     }
-                    assert!(super::super::aws_permissions_boundary_covers(
-                        &boundary,
-                        &unconditional
-                    )
-                    .unwrap());
+                    // Only grants for AWS resources may use a stack key outside its conditions.
+                    let grants = unconditional.to_string().contains("kms:CreateGrant");
+                    assert_eq!(
+                        super::super::aws_permissions_boundary_covers(&boundary, &unconditional)
+                            .unwrap(),
+                        !grants,
+                        "{id}"
+                    );
                 }
                 assert_eq!(
                     aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context()))
@@ -782,7 +1025,9 @@ mod tests {
             let error = result.unwrap_err();
             assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
             assert!(!error.retryable);
-            assert!(error.to_string().contains("Reduce custom runtime permissions"));
+            assert!(error
+                .to_string()
+                .contains("Reduce custom runtime permissions"));
         }
     }
 

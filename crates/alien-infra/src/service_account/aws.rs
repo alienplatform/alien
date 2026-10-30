@@ -369,7 +369,7 @@ impl AwsServiceAccountController {
             client.as_ref(),
             ctx.aws_permissions_boundary_arn()?.as_deref(),
         )
-        .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+        .prepare_for_removal(role_name, ctx.resource_prefix, &config.id)
         .await
         {
             Ok(()) => {}
@@ -1534,6 +1534,28 @@ mod tests {
             .unwrap()
     }
 
+    /// Removal adopts the role without auditing its attached policies.
+    fn expect_removal_adoption(iam: &mut MockIamApi, sequence: &mut mockall::Sequence) {
+        iam.expect_get_role()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|name| {
+                assert_eq!(name, "test-execution-sa");
+                Ok(
+                    serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": role()}}))
+                        .unwrap(),
+                )
+            });
+        iam.expect_put_role_permissions_boundary()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|name, boundary| {
+                assert_eq!(name, "test-execution-sa");
+                assert_eq!(boundary, BOUNDARY);
+                Ok(())
+            });
+    }
+
     fn expect_adoption(iam: &mut MockIamApi, sequence: &mut mockall::Sequence) {
         iam.expect_get_role()
             .times(1)
@@ -1850,13 +1872,13 @@ mod tests {
     async fn delete_adopts_before_removing_policies_and_role() {
         let mut iam = MockIamApi::new();
         let mut sequence = mockall::Sequence::new();
-        expect_adoption(&mut iam, &mut sequence);
+        expect_removal_adoption(&mut iam, &mut sequence);
         iam.expect_list_attached_role_policies()
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| {
                 Ok(serde_json::from_value(
-                    serde_json::json!({"ListAttachedRolePoliciesResult": {"AttachedPolicies": {"member": [{"PolicyName": "custom", "PolicyArn": "arn:aws:iam::123456789012:policy/custom"}]}, "IsTruncated": false}}),
+                    serde_json::json!({"ListAttachedRolePoliciesResult": {"AttachedPolicies": {"member": [{"PolicyName": "AdministratorAccess", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}]}, "IsTruncated": false}}),
                 )
                 .unwrap())
             });
@@ -1868,7 +1890,7 @@ mod tests {
                     (name, policy),
                     (
                         "test-execution-sa",
-                        "arn:aws:iam::123456789012:policy/custom"
+                        "arn:aws:iam::aws:policy/AdministratorAccess"
                     )
                 );
                 Ok(())
@@ -1947,6 +1969,11 @@ mod tests {
             AwsServiceAccountState::DeleteStart,
         ] {
             for unsafe_policy in [false, true] {
+                // AWS managed policies keep a role from being adopted to keep running, not
+                // from being deleted.
+                if unsafe_policy && state == AwsServiceAccountState::DeleteStart {
+                    continue;
+                }
                 let mut iam = MockIamApi::new();
                 iam.expect_get_role().times(1).returning(move |_| {
                     let mut role = role();

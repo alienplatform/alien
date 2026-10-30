@@ -85,7 +85,9 @@ fn aws_remote_stack_management_skips_live_provision_sets() {
     }
 
     assert!(rendered.contains("lambda:InvokeFunction"));
-    assert!(!rendered.contains("lambda:CreateFunction"));
+    assert!(!rendered
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == ':'))
+        .any(|word| word == "lambda:CreateFunction"));
     assert_terraform_valid(
         &module,
         "aws_remote_stack_management_skips_live_provision_sets",
@@ -925,7 +927,9 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
             hcl::parse(contents).unwrap_or_else(|error| panic!("{file} parses: {error}"));
         for kind in ["aws_iam_policy", "aws_iam_role_policy"] {
             for block in resource_blocks(&body, kind) {
-                if block.labels()[1].as_str().starts_with("management") {
+                // The boundary caps the roles management writes; it is not attached to management.
+                let label = block.labels()[1].as_str();
+                if label.starts_with("management") && label != "management_permissions_boundary" {
                     collect_denies(jsonencoded(block_attribute(block, "policy")), &mut denies);
                 }
             }

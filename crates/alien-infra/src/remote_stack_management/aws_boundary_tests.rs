@@ -218,6 +218,32 @@ async fn existing_policy_prunes_nondefault_version_before_installing_and_records
 }
 
 #[tokio::test]
+async fn setup_never_replaces_a_same_named_policy_it_did_not_record() {
+    let mut iam = MockIamApi::new();
+    iam.expect_create_policy().times(1).returning(|_, _, _| {
+        Err(AlienError::new(ClientError::RemoteResourceConflict {
+            resource_type: "policy".to_string(),
+            resource_name: ARN.to_string(),
+            message: "exists".to_string(),
+        }))
+    });
+    iam.expect_list_policy_versions().never();
+    iam.expect_create_policy_version().never();
+    let executor = executor(iam).await;
+    let mut controller = AwsRemoteStackManagementController::default();
+    let error = executor
+        .with_context(|ctx| block_on(controller.install_permissions_boundary(ctx)))
+        .unwrap_err();
+    assert!(matches!(
+        error.error,
+        Some(ErrorData::ExistingCloudResourceNotOwned { .. })
+    ));
+    // Deletion removes only a recorded boundary, so the existing policy is not adopted.
+    assert_eq!(controller.permissions_boundary_arn, None);
+    assert_eq!(controller.permissions_boundary_document, None);
+}
+
+#[tokio::test]
 async fn setup_refreshes_legacy_and_stale_boundaries_but_runtime_never_does() {
     let executor = executor(MockIamApi::new()).await;
     let mut controller = AwsRemoteStackManagementController::mock_ready("test-prefix");

@@ -236,6 +236,61 @@ Resources:
           Effect: Allow
           Resource:
             Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:*
+        - Action:
+          - aoss:CreateAccessPolicy
+          - aoss:CreateSecurityPolicy
+          - aoss:UpdateAccessPolicy
+          - aoss:UpdateSecurityPolicy
+          - backup:PutBackupVaultAccessPolicy
+          - codebuild:PutResourcePolicy
+          - dlm:CreateLifecyclePolicy
+          - dlm:UpdateLifecyclePolicy
+          - dynamodb:PutResourcePolicy
+          - ec2:CopySnapshot
+          - ec2:ModifyImageAttribute
+          - ec2:ModifySnapshotAttribute
+          - ecr:PutRegistryPolicy
+          - ecr:PutReplicationConfiguration
+          - ecr:SetRepositoryPolicy
+          - elasticfilesystem:PutFileSystemPolicy
+          - events:PutPermission
+          - glue:PutResourcePolicy
+          - kms:PutKeyPolicy
+          - lambda:AddLayerVersionPermission
+          - lambda:AddPermission
+          - lambda:CreateFunctionUrlConfig
+          - lambda:UpdateFunctionUrlConfig
+          - logs:PutDestinationPolicy
+          - logs:PutResourcePolicy
+          - logs:PutSubscriptionFilter
+          - ram:AssociateResourceShare
+          - ram:CreateResourceShare
+          - rds:ModifyDBClusterSnapshotAttribute
+          - rds:ModifyDBSnapshotAttribute
+          - s3:DeleteBucketPolicy
+          - s3:PutAccessPointPolicy
+          - s3:PutAccountPublicAccessBlock
+          - s3:PutBucketAcl
+          - s3:PutBucketOwnershipControls
+          - s3:PutBucketPolicy
+          - s3:PutBucketPublicAccessBlock
+          - s3:PutReplicationConfiguration
+          - secretsmanager:PutResourcePolicy
+          - ses:CreateEmailIdentityPolicy
+          - ses:UpdateEmailIdentityPolicy
+          - sns:AddPermission
+          - sns:SetTopicAttributes
+          - sqs:AddPermission
+          - sqs:SetQueueAttributes
+          Effect: Deny
+          Resource: '*'
+        - Action:
+          - kms:CreateGrant
+          Condition:
+            BoolIfExists:
+              kms:GrantIsForAWSResource: 'false'
+          Effect: Deny
+          Resource: '*'
         Version: 2012-10-17
   ManagementRoleManagementPolicy1:
     Type: AWS::IAM::ManagedPolicy
@@ -722,7 +777,7 @@ Outputs:
         - Fn::Sub: arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
         - '"},{"Action":"lambda:PassNetworkConnector","Effect":"Allow","Resource":"'
         - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:*
-        - '"}],"Version":"2012-10-17"}}}]'
+        - '"},{"Action":["aoss:CreateAccessPolicy","aoss:CreateSecurityPolicy","aoss:UpdateAccessPolicy","aoss:UpdateSecurityPolicy","backup:PutBackupVaultAccessPolicy","codebuild:PutResourcePolicy","dlm:CreateLifecyclePolicy","dlm:UpdateLifecyclePolicy","dynamodb:PutResourcePolicy","ec2:CopySnapshot","ec2:ModifyImageAttribute","ec2:ModifySnapshotAttribute","ecr:PutRegistryPolicy","ecr:PutReplicationConfiguration","ecr:SetRepositoryPolicy","elasticfilesystem:PutFileSystemPolicy","events:PutPermission","glue:PutResourcePolicy","kms:PutKeyPolicy","lambda:AddLayerVersionPermission","lambda:AddPermission","lambda:CreateFunctionUrlConfig","lambda:UpdateFunctionUrlConfig","logs:PutDestinationPolicy","logs:PutResourcePolicy","logs:PutSubscriptionFilter","ram:AssociateResourceShare","ram:CreateResourceShare","rds:ModifyDBClusterSnapshotAttribute","rds:ModifyDBSnapshotAttribute","s3:DeleteBucketPolicy","s3:PutAccessPointPolicy","s3:PutAccountPublicAccessBlock","s3:PutBucketAcl","s3:PutBucketOwnershipControls","s3:PutBucketPolicy","s3:PutBucketPublicAccessBlock","s3:PutReplicationConfiguration","secretsmanager:PutResourcePolicy","ses:CreateEmailIdentityPolicy","ses:UpdateEmailIdentityPolicy","sns:AddPermission","sns:SetTopicAttributes","sqs:AddPermission","sqs:SetQueueAttributes"],"Effect":"Deny","Resource":"*"},{"Action":["kms:CreateGrant"],"Condition":{"BoolIfExists":{"kms:GrantIsForAWSResource":"false"}},"Effect":"Deny","Resource":"*"}],"Version":"2012-10-17"}}}]'
     Description: Deployment registration resources JSON chunk. Reassemble chunks in numeric suffix order.
   DeploymentResources1:
     Value:

@@ -687,26 +687,50 @@ impl AwsRemoteStackManagementController {
                 resource_id: Some(ctx.desired_config.id().to_string()),
             })?;
         let client = ctx.service_provider.get_aws_iam_client(aws).await?;
-        // Keep the cleanup target even if AWS accepts the request but its response is lost.
-        self.permissions_boundary_arn = Some(arn.clone());
-        match client.create_policy(&name, &serialized, None).await {
-            Ok(_) => {}
-            Err(error) if is_remote_conflict(&error) => {
-                self.create_default_policy_version(client.as_ref(), &arn, &serialized)
-                    .await?;
-            }
-            Err(error) => {
-                return Err(error
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to install permissions boundary '{arn}'"),
-                        resource_id: Some(ctx.desired_config.id().to_string()),
-                    })
-                    .into())
-            }
-        }
+        self.write_permissions_boundary(
+            client.as_ref(),
+            &name,
+            &arn,
+            &serialized,
+            ctx.desired_config.id(),
+        )
+        .await?;
         // Record the accepted document before any management-policy write can fail.
         self.permissions_boundary_document = Some(document);
         Ok(())
+    }
+
+    async fn write_permissions_boundary(
+        &mut self,
+        client: &dyn IamApi,
+        name: &str,
+        arn: &str,
+        document: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        // Keep the cleanup target even if AWS accepts the request but its response is lost.
+        let recorded = self.permissions_boundary_arn.replace(arn.to_string());
+        match client.create_policy(name, document, None).await {
+            Ok(_) => Ok(()),
+            // Only a policy this deployment recorded is replaced, never one it did not create.
+            Err(error) if is_remote_conflict(&error) && recorded.as_deref() == Some(arn) => {
+                self.create_default_policy_version(client, arn, document)
+                    .await
+            }
+            Err(error) if is_remote_conflict(&error) => {
+                self.permissions_boundary_arn = recorded;
+                Err(AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
+                    resource_id: resource_id.to_string(),
+                    object: format!("IAM policy '{arn}'"),
+                }))
+            }
+            Err(error) => Err(error
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to install permissions boundary '{arn}'"),
+                    resource_id: Some(resource_id.to_string()),
+                })
+                .into()),
+        }
     }
 
     /// Generate managed IAM policy documents for management permissions from the stack's management profile.
