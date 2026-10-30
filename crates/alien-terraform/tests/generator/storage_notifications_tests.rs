@@ -2,7 +2,8 @@
 
 use super::helpers::{assert_terraform_valid, render};
 use alien_core::{
-    Queue, ResourceLifecycle, ResourceRef, Stack, StackSettings, Storage, StorageNotification,
+    AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Queue, ResourceLifecycle,
+    ResourceRef, Stack, StackSettings, Storage, StorageNotification,
 };
 use alien_terraform::TerraformTarget;
 
@@ -39,5 +40,51 @@ fn gcp_storage_notifications_with_a_shared_queue_are_provider_valid() {
     assert_terraform_valid(
         &module,
         "GCS notifications sharing one queue-owned publisher grant",
+    );
+}
+
+#[test]
+fn azure_storage_notifications_share_account_and_queue() {
+    let notification = |prefix: &str, suffix: &str| {
+        StorageNotification::builder()
+            .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs"))
+            .prefix(prefix.to_string())
+            .suffix(suffix.to_string())
+            .build()
+    };
+    let stack = Stack::new("notification-validation".into())
+        .add(
+            AzureResourceGroup::new("default-resource-group".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            AzureStorageAccount::new("default-storage-account".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            AzureServiceBusNamespace::new("default-service-bus-namespace".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Storage::new("first".into())
+                .notifications(vec![
+                    notification("in/", ".json"),
+                    notification("other/", ".data"),
+                ])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("second".into())
+                .notifications(vec![notification("literal/${x}%{x}/", ".json")])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    assert_terraform_valid(
+        &module,
+        "Azure account-scoped subscriptions sharing a queue",
     );
 }
