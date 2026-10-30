@@ -14,11 +14,11 @@ use crate::{
     expr,
 };
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
-use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
 use alien_core::{
-    import::EmitContext, LifecycleRule, PermissionProfile, PermissionSetReference,
+    import::EmitContext, ErrorData, LifecycleRule, PermissionProfile, PermissionSetReference,
     RemoteStackManagement, Result, ServiceAccount, Storage,
 };
+use alien_error::AlienError;
 use alien_permissions::BindingTarget;
 use hcl::{
     expr::Expression,
@@ -138,16 +138,19 @@ fn emit_storage_key_iam(
 }
 
 fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> Block {
+    // Sandbox bundles are build inputs the controller renders again and deletes with each sandbox,
+    // so their bucket goes with the deployment instead of outliving it.
+    let bundles = storage.id() == SANDBOX_BUNDLE_STORAGE_ID;
     resource_block(
         "aws_s3_bucket",
         label,
         [
             attr("bucket", resource_prefix_template(storage.id())),
-            attr("force_destroy", Expression::Bool(false)),
+            attr("force_destroy", Expression::Bool(bundles)),
             attr("tags", tags(ctx, "storage")),
             nested(block(
                 "lifecycle",
-                [attr("prevent_destroy", Expression::Bool(true))],
+                [attr("prevent_destroy", Expression::Bool(!bundles))],
             )),
         ],
     )
@@ -385,6 +388,38 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
     Ok(())
 }
 
+/// `storage/data-read` on the deployment's sandbox bundle Storage, for the build role labelled
+/// `role_label` of a sandbox that renders its bundle there. The sandbox emits it, because it owns
+/// the role and depends on the Storage; emitted with the Storage it would close a dependency
+/// cycle.
+pub(crate) fn emit_sandbox_bundle_read(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    role_label: &str,
+) -> Result<()> {
+    let storage_label = ctx.name_for(SANDBOX_BUNDLE_STORAGE_ID).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!("missing Terraform label for resource '{SANDBOX_BUNDLE_STORAGE_ID}'"),
+        })
+    })?;
+    let read = alien_permissions::get_permission_set("storage/data-read").ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: "permission set 'storage/data-read' is not defined".to_string(),
+        })
+    })?;
+    let context = aws_terraform_permission_context()
+        .with_resource_name(format!("${{{}}}", bucket_path(storage_label, "bucket")));
+    emit_iam_role_policy_for_target_with_label(
+        fragment,
+        role_label,
+        read,
+        &format!("{role_label}_sandbox_bundle_read"),
+        "sandbox-bundle-read",
+        &context,
+        BindingTarget::Resource,
+    )
+}
+
 fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
@@ -414,22 +449,6 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
                 label.to_string(),
                 vec![PermissionSetReference::from_name(definition.permission_set)],
             ));
-        }
-    }
-
-    // The image builds of the sandboxes that render their bundles here. The sandbox emitter labels
-    // each build role with its sandbox's label.
-    if ctx.resource_id == SANDBOX_BUNDLE_STORAGE_ID {
-        for (id, _) in ctx.stack.resources() {
-            if let Some(label) = ctx
-                .name_for(id)
-                .filter(|_| aws_sandbox_renders_bundle(ctx.stack, id))
-            {
-                owners.push((
-                    label.to_string(),
-                    vec![PermissionSetReference::from_name("storage/data-read")],
-                ));
-            }
         }
     }
 
