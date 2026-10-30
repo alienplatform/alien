@@ -904,25 +904,29 @@ impl AwsServiceAccountController {
                 resource_id: Some(config.id.clone()),
             }));
         }
-        let dropped = held
+        let mut dropped = held
             .policy_names
             .map(|names| names.member)
             .unwrap_or_default()
             .into_iter()
             .filter(|name| {
                 !kept.contains(name) && names_aws_resource_grant(name, set_ids.iter().copied())
-            });
+            })
+            .peekable();
+        if dropped.peek().is_none() {
+            return Ok(());
+        }
+        IamRoleWriter::new(
+            client.as_ref(),
+            ctx.aws_permissions_boundary_arn()?.as_deref(),
+        )
+        .prepare_existing(role_name, ctx.resource_prefix, &config.id)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to prepare service account IAM role '{role_name}'"),
+            resource_id: Some(config.id.clone()),
+        })?;
         for policy_name in dropped {
-            IamRoleWriter::new(
-                client.as_ref(),
-                ctx.aws_permissions_boundary_arn()?.as_deref(),
-            )
-            .prepare_existing(role_name, ctx.resource_prefix, &config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to prepare service account IAM role '{role_name}'"),
-                resource_id: Some(config.id.clone()),
-            })?;
             match client.delete_role_policy(role_name, &policy_name).await {
                 Ok(()) => info!(
                     role_name = %role_name,
@@ -2034,34 +2038,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_stack_policy_and_dropped_resource_grant_adopt_before_removal() {
-        for resource_grant in [false, true] {
+    async fn empty_stack_policy_and_dropped_resource_grants_adopt_once_before_removal() {
+        for (resource_grant, count) in [(false, 1), (true, 0), (true, 1), (true, 2)] {
             let mut iam = MockIamApi::new();
             let mut sequence = mockall::Sequence::new();
+            let policies: Vec<String> = if resource_grant {
+                (0..count)
+                    .map(|index| format!("deployment-old{index}-storage-data-read"))
+                    .collect()
+            } else {
+                vec![MANAGED_POLICY_NAME.to_string()]
+            };
             if resource_grant {
-                iam.expect_list_role_policies().times(1).in_sequence(&mut sequence).returning(|name| {
-                    assert_eq!(name, "test-execution-sa");
-                    Ok(serde_json::from_value(serde_json::json!({"ListRolePoliciesResult": {
-                        "PolicyNames": {"member": ["deployment-old-storage-data-read", "unrelated"]}, "IsTruncated": false
-                    }})).unwrap())
-                });
+                let mut held = policies.clone();
+                held.push("unrelated".to_string());
+                iam.expect_list_role_policies()
+                    .times(1)
+                    .in_sequence(&mut sequence)
+                    .returning(move |name| {
+                        assert_eq!(name, "test-execution-sa");
+                        Ok(
+                            serde_json::from_value(serde_json::json!({"ListRolePoliciesResult": {
+                                "PolicyNames": {"member": held}, "IsTruncated": false
+                            }}))
+                            .unwrap(),
+                        )
+                    });
             }
-            expect_adoption(&mut iam, &mut sequence);
-            iam.expect_delete_role_policy()
-                .times(1)
-                .in_sequence(&mut sequence)
-                .returning(move |name, policy| {
-                    assert_eq!(name, "test-execution-sa");
-                    assert_eq!(
-                        policy,
-                        if resource_grant {
-                            "deployment-old-storage-data-read"
-                        } else {
-                            MANAGED_POLICY_NAME
-                        }
-                    );
-                    Ok(())
-                });
+            if !policies.is_empty() {
+                expect_adoption(&mut iam, &mut sequence);
+            }
+            for expected in policies {
+                iam.expect_delete_role_policy()
+                    .times(1)
+                    .in_sequence(&mut sequence)
+                    .returning(move |name, policy| {
+                        assert_eq!(name, "test-execution-sa");
+                        assert_eq!(policy, expected);
+                        Ok(())
+                    });
+            }
             let state = if resource_grant {
                 AwsServiceAccountState::UpdatingResourcePermissions
             } else {
