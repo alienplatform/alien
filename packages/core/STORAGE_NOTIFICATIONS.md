@@ -113,6 +113,20 @@ It returns the portable `alien_sdk::StorageEvent`, including its timestamp and
 optional metadata. Direct binding applications can use it without the `worker`
 feature. Existing direct storage-handler event types remain compatible.
 
+Python accepts `QueueMessage` from bindings and `QueueEvent` from single or batched
+Worker handlers:
+
+```python
+from alienplatform import storage_event_from_message
+
+event = storage_event_from_message(message)
+print(event.bucket_name, event.object_key, event.timestamp)
+```
+
+Python returns a typed `StorageEvent` with a timezone-aware UTC timestamp. Both
+SDK helpers reject invalid event fields with `INVALID_STORAGE_EVENT_MESSAGE` and
+leave acknowledgment to the caller or Worker runtime.
+
 Delivery is at least once and unordered. Overwrites produce another event, and
 redelivery or overlapping rules can produce duplicates. The object is the record;
 the notification is a hint to read it. Make processing idempotent, for example by

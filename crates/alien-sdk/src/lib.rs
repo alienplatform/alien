@@ -67,7 +67,9 @@ pub use alien_bindings::{
 
 pub mod error;
 pub mod storage_events;
-pub use storage_events::{storage_event_from_message, StorageEvent, StorageEventMessage, StorageEventType};
+pub use storage_events::{
+    storage_event_from_message, StorageEvent, StorageEventMessage, StorageEventType,
+};
 
 /// Serializable requests returned by storage presigning operations.
 pub mod presigned {
