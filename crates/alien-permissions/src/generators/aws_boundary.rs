@@ -407,7 +407,9 @@ fn resolved_boundary_set(reference: &PermissionSetReference) -> Option<&Permissi
 }
 
 fn is_runtime_set(id: &str) -> bool {
-    let (category, operation) = id.split_once('/').unwrap_or((id, ""));
+    // Nested IDs such as `experimental/aws-opensearch/provision` end in the operation.
+    let category = id.split('/').next().unwrap_or(id);
+    let operation = id.rsplit_once('/').map_or("", |(_, operation)| operation);
     !matches!(category, "guard" | "remote-stack-management" | "observe")
         && !operation.starts_with("protect-")
         && !matches!(
@@ -1102,6 +1104,7 @@ mod tests {
             "sandbox/protect-setup-roles",
             "remote-stack-management/execute",
             "observe/logs",
+            "experimental/aws-opensearch/provision",
         ] {
             assert!(!is_runtime_set(id), "{id}");
         }
@@ -1109,6 +1112,7 @@ mod tests {
             "worker/execute",
             "storage/data-read",
             "sandbox/remote-execute",
+            "experimental/aws-opensearch/data-access",
         ] {
             assert!(is_runtime_set(id), "{id}");
         }
