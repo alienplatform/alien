@@ -19,7 +19,7 @@ app.post("/run", async c => {
   let stderr = ""
   let exitCode: number | null = null
   try {
-    for await (const frame of agents.runCommand(session.id, "/bin/sh", {
+    for await (const frame of agents.runCommand(session.sandboxId, "/bin/sh", {
       timeoutMs: 60_000,
       args: ["-c", command],
     })) {
@@ -28,9 +28,9 @@ app.post("/run", async c => {
       else stderr += frame.data.toString()
     }
   } finally {
-    await agents.terminate(session.id)
+    await agents.terminate(session.sandboxId)
   }
-  return c.json({ sandboxId: session.id, exitCode, stdout, stderr })
+  return c.json({ sandboxId: session.sandboxId, exitCode, stdout, stderr })
 })
 
 export default app
