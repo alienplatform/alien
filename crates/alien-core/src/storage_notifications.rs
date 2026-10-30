@@ -49,6 +49,12 @@ pub fn aws_notification_rule_name(prefix: &str, storage_id: &str, index: usize) 
     format!("{prefix}-sn-{}-{index}", &hash[..16])
 }
 
+/// Matches every rule name [`aws_notification_rule_name`] produces for `prefix`. Queue
+/// policies and management grants scope EventBridge access with it.
+pub fn aws_notification_rule_name_pattern(prefix: &str) -> String {
+    format!("{prefix}-sn-*")
+}
+
 /// JSON paths shared by all AWS setup and controller target writers.
 pub fn aws_notification_input_paths() -> BTreeMap<String, String> {
     [
@@ -157,12 +163,22 @@ mod tests {
         let mut names = HashSet::new();
         for length in 3..=40 {
             let prefix = "p".repeat(length);
-            for storage_id in ["source", "second", "long-resource-identity".repeat(10).as_str()] {
+            for storage_id in [
+                "source",
+                "second",
+                "long-resource-identity".repeat(10).as_str(),
+            ] {
                 for index in 0..10 {
                     let name = aws_notification_rule_name(&prefix, storage_id, index);
                     assert!(name.len() <= 64, "EventBridge rejects {name}");
-                    assert!(name.starts_with(&format!("{prefix}-sn-")), "IAM scope must stay intact");
-                    assert!(names.insert(name), "storage/rule identities must be distinct");
+                    assert!(
+                        name.starts_with(&format!("{prefix}-sn-")),
+                        "IAM scope must stay intact"
+                    );
+                    assert!(
+                        names.insert(name),
+                        "storage/rule identities must be distinct"
+                    );
                 }
             }
         }

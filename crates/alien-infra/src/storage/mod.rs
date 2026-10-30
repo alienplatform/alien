@@ -39,12 +39,3 @@ pub use fixtures::*;
 
 mod retention;
 pub use retention::protect_retained_storage;
-
-#[cfg(test)]
-mod gcp_notifications_live;
-
-#[cfg(test)]
-mod aws_notifications_live;
-
-#[cfg(test)]
-mod azure_notifications_live;

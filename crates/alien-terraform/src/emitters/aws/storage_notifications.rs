@@ -10,7 +10,7 @@ use alien_core::{
     import::EmitContext,
     storage_notifications::{
         AWS_NOTIFICATION_INPUT_TEMPLATE, aws_eventbridge_pattern, aws_notification_input_paths,
-        aws_notification_rule_name,
+        aws_notification_rule_name, aws_notification_rule_name_pattern,
     },
 };
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -182,9 +182,12 @@ pub(super) fn queue_policy(label: &str) -> Block {
                                         "ArnLike",
                                         expr::object([(
                                             "aws:SourceArn",
-                                            expr::template(
-                                                "arn:aws:events:${var.aws_region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-sn-*",
-                                            ),
+                                            expr::template(format!(
+                                                "arn:aws:events:${{var.aws_region}}:${{data.aws_caller_identity.current.account_id}}:rule/{}",
+                                                aws_notification_rule_name_pattern(
+                                                    "${local.resource_prefix}"
+                                                )
+                                            )),
                                         )]),
                                     ),
                                 ]),
