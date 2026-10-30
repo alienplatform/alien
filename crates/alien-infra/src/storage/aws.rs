@@ -131,6 +131,15 @@ fn is_missing_optional_bucket_metadata(error: &AlienError<CloudClientErrorData>)
     )
 }
 
+fn may_manage_notifications(ctx: &ResourceControllerContext<'_>, id: &str) -> bool {
+    ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        || !ctx
+            .desired_stack
+            .resources
+            .get(id)
+            .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Frozen)
+}
+
 #[controller]
 pub struct AwsStorageController {
     /// The actual bucket name (includes stack name prefix).
@@ -151,6 +160,9 @@ pub struct AwsStorageController {
     /// do not prove that an unchanged declaration was applied.
     #[serde(default)]
     pub(crate) read_cors_applied: bool,
+    /// Records notification ownership across rule removal and interrupted updates.
+    #[serde(default)]
+    pub(crate) notifications_managed: bool,
 }
 
 #[controller]
@@ -516,8 +528,9 @@ impl AwsStorageController {
 
         info!(bucket=%config.id, "Successfully applied resource-scoped permissions");
 
+        self.notifications_managed |= !config.notifications.is_empty();
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: CreatingNotifications,
             suggested_delay: None,
         })
     }
@@ -659,6 +672,9 @@ impl AwsStorageController {
                 suggested_delay: None,
             });
         }
+
+        self.notifications_managed |=
+            !config.notifications.is_empty() || !prev_config.notifications.is_empty();
 
         if config.cors_allowed_origins != prev_config.cors_allowed_origins {
             self.require_cors_authority(ctx)?;
@@ -991,13 +1007,60 @@ impl AwsStorageController {
         }
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: UpdatingNotifications,
             suggested_delay: None,
         })
     }
 
-    // ─────────────── DELETE FLOW ──────────────────────────────
+    #[handler(state = CreatingNotifications, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn creating_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let done = self.reconcile_queue_notifications(ctx, false).await?;
+        Ok(HandlerAction::Continue {
+            state: if done { Ready } else { CreatingNotifications },
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = UpdatingNotifications, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let done = self.reconcile_queue_notifications(ctx, false).await?;
+        Ok(HandlerAction::Continue {
+            state: if done { Ready } else { UpdatingNotifications },
+            suggested_delay: None,
+        })
+    }
+
     #[flow_entry(Delete)]
+    #[handler(state = DeletingNotifications, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
+    async fn deleting_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let done = self.reconcile_queue_notifications(ctx, true).await?;
+        Ok(HandlerAction::Continue {
+            state: if done {
+                DeleteStart
+            } else {
+                DeletingNotifications
+            },
+            suggested_delay: None,
+        })
+    }
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        Ok(may_manage_notifications(ctx, &config.id)
+            && !self.notifications_managed
+            && !config.notifications.is_empty())
+    }
+
+    // ─────────────── DELETE FLOW ──────────────────────────────
     #[handler(
         state = DeleteStart,
         on_failure = DeleteFailed,
@@ -1344,6 +1407,41 @@ impl AwsStorageController {
 }
 
 impl AwsStorageController {
+    async fn reconcile_queue_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        deleting: bool,
+    ) -> Result<bool> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        if !may_manage_notifications(ctx, &config.id) {
+            return Ok(true);
+        }
+        let previously_notifying = ctx
+            .state
+            .resources
+            .get(&config.id)
+            .and_then(|resource| resource.previous_config.as_ref())
+            .and_then(|resource| resource.downcast_ref::<Storage>())
+            .is_some_and(|storage| !storage.notifications.is_empty());
+        if !self.notifications_managed && config.notifications.is_empty() && !previously_notifying {
+            return Ok(true);
+        }
+        let Some(bucket) = self.bucket_name.as_deref() else {
+            if deleting {
+                return Ok(true);
+            }
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "Bucket identity missing during notification reconciliation".into(),
+            }));
+        };
+        let done = super::aws_notifications::reconcile(ctx, bucket, &config, deleting).await?;
+        if done {
+            self.notifications_managed = !deleting && !config.notifications.is_empty();
+        }
+        Ok(done)
+    }
+
     fn require_cors_authority(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let config = ctx.desired_resource_config::<Storage>()?;
         if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
@@ -1388,6 +1486,7 @@ impl AwsStorageController {
             requested_bucket_name: None,
             ownership_verified: true,
             read_cors_applied: false,
+            notifications_managed: false,
             _internal_stay_count: None,
         }
     }
@@ -2009,6 +2108,7 @@ mod tests {
             requested_bucket_name: None,
             ownership_verified: false,
             read_cors_applied: false,
+            notifications_managed: false,
             _internal_stay_count: None,
         }
     }
@@ -3028,6 +3128,7 @@ mod tests {
             requested_bucket_name: None,
             ownership_verified: false,
             read_cors_applied: false,
+            notifications_managed: false,
             _internal_stay_count: None,
         };
 
@@ -3108,6 +3209,7 @@ mod tests {
                 requested_bucket_name: None,
                 ownership_verified: true,
                 read_cors_applied: false,
+                notifications_managed: false,
                 _internal_stay_count: None,
             })
             .platform(Platform::Aws)

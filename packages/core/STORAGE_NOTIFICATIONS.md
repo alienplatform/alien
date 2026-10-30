@@ -1,8 +1,9 @@
 # Storage notifications into queues
 
 Storage notification declarations, validation, GCP/Azure Terraform setup and
-controllers, local delivery, and GCP/Azure queue payload normalization are available
-in this branch. AWS notification-to-queue provisioning is still under development.
+controllers, AWS notification controllers, local delivery, and GCP/Azure queue payload
+normalization are available in this branch. AWS CloudFormation and Terraform
+notification provisioning is still under development.
 
 Declare a queue destination on a Storage resource:
 
@@ -74,6 +75,20 @@ so adding notifications does not update the Queue's IAM. Live Storage adds the
 existing `storage/trigger-management` permission set to management permissions;
 Frozen rules keep those writes in setup. Retained-storage cleanup waits until
 Azure confirms its subscriptions are gone and preserves the shared topic.
+
+AWS controllers enable EventBridge through a read/modify/write of the complete
+bucket notification document, preserving independent Lambda, SQS and SNS entries.
+Each Storage owns its EventBridge rules and queue targets. The Queue owns one
+`StorageNotificationIngress` policy statement, scoped to this account and stack's
+rules; unrelated statements are preserved. Unchanged queues do not read or rewrite
+the policy. Live notifying Storage adds `storage/queue-notifications` management
+permissions; ordinary Storage does not receive these EventBridge grants.
+
+Rule removal and retained-storage cleanup delete owned targets and rules but leave
+the bucket's shared EventBridge switch enabled, because independent rules may use
+it. EventBridge charges can therefore continue on a retained bucket. Disable the
+switch separately only after confirming no other rules need those events. Erasing
+the bucket removes the switch along with the bucket.
 
 AWS EventBridge introduces event-delivery charges beyond SQS; enabling it on a
 bucket sends supported S3 events to EventBridge even when rules filter them out.
