@@ -7,6 +7,7 @@ use bon::Builder;
 use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -15,6 +16,8 @@ use mockall::automock;
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait EventBridgeApi: Send + Sync + std::fmt::Debug {
+    async fn describe_rule(&self, name: &str) -> Result<EventBridgeRule>;
+    async fn list_targets_by_rule(&self, name: &str) -> Result<Vec<EventBridgeTarget>>;
     async fn put_rule(&self, request: PutRuleRequest) -> Result<PutRuleResponse>;
     async fn put_targets(&self, request: PutTargetsRequest) -> Result<()>;
     async fn remove_targets(&self, rule_name: &str, target_ids: Vec<String>) -> Result<()>;
@@ -235,6 +238,48 @@ impl EventBridgeClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl EventBridgeApi for EventBridgeClient {
+    async fn describe_rule(&self, name: &str) -> Result<EventBridgeRule> {
+        self.send_json(
+            "AWSEvents.DescribeRule",
+            serde_json::json!({"Name": name}).to_string(),
+            "DescribeRule",
+            name,
+        )
+        .await
+    }
+
+    async fn list_targets_by_rule(&self, name: &str) -> Result<Vec<EventBridgeTarget>> {
+        let mut targets = Vec::new();
+        let mut next_token: Option<String> = None;
+        loop {
+            let mut request = serde_json::json!({"Rule": name});
+            if let Some(token) = &next_token {
+                request["NextToken"] = token.clone().into();
+            }
+            let page: ListTargetsResponse = self
+                .send_json(
+                    "AWSEvents.ListTargetsByRule",
+                    request.to_string(),
+                    "ListTargetsByRule",
+                    name,
+                )
+                .await?;
+            targets.extend(page.targets);
+            match page.next_token {
+                Some(token) if next_token.as_ref() == Some(&token) => {
+                    return Err(AlienError::new(ErrorData::InvalidInput {
+                        message: format!(
+                            "EventBridge repeated a target pagination token for rule '{name}'"
+                        ),
+                        field_name: None,
+                    }))
+                }
+                Some(token) => next_token = Some(token),
+                None => return Ok(targets),
+            }
+        }
+    }
+
     async fn put_rule(&self, request: PutRuleRequest) -> Result<PutRuleResponse> {
         let body = serde_json::to_string(&request).into_alien_error().context(
             ErrorData::InvalidInput {
@@ -301,7 +346,10 @@ impl EventBridgeApi for EventBridgeClient {
 #[serde(rename_all = "PascalCase")]
 pub struct PutRuleRequest {
     pub name: String,
-    pub schedule_expression: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_expression: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_pattern: Option<String>,
     pub state: Option<String>,
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -321,11 +369,41 @@ pub struct PutTargetsRequest {
     pub targets: Vec<EventBridgeTarget>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct EventBridgeTarget {
     pub id: String,
     pub arn: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_transformer: Option<InputTransformer>,
+}
+
+/// Provider wire format for an EventBridge input transformation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct InputTransformer {
+    pub input_paths_map: BTreeMap<String, String>,
+    pub input_template: String,
+}
+
+/// Rule metadata needed to reconcile an event pattern without repeated writes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct EventBridgeRule {
+    pub name: String,
+    pub arn: Option<String>,
+    pub description: Option<String>,
+    pub state: Option<String>,
+    pub event_pattern: Option<String>,
+    pub schedule_expression: Option<String>,
+    pub managed_by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ListTargetsResponse {
+    targets: Vec<EventBridgeTarget>,
+    next_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -368,7 +446,9 @@ impl TargetsResponse {
         let Some(entry) = self.failed_entries.into_iter().next() else {
             return Ok(());
         };
-        let code = entry.error_code.unwrap_or_else(|| "UnknownErrorCode".into());
+        let code = entry
+            .error_code
+            .unwrap_or_else(|| "UnknownErrorCode".into());
         let message = format!(
             "{operation} failed for target '{}' of rule '{rule_name}': {}",
             entry.target_id.as_deref().unwrap_or("unknown"),
@@ -472,7 +552,11 @@ mod tests {
         assert_eq!(error.code, "REMOTE_RESOURCE_CONFLICT");
         assert!(error.retryable);
         assert!(error.message.contains("target '1'"), "{}", error.message);
-        assert!(error.message.contains("Too many requests"), "{}", error.message);
+        assert!(
+            error.message.contains("Too many requests"),
+            "{}",
+            error.message
+        );
     }
 
     #[tokio::test]
@@ -524,6 +608,7 @@ mod tests {
             .put_targets(PutTargetsRequest {
                 rule: "app-worker-cron-0".into(),
                 targets: vec![EventBridgeTarget {
+                    input_transformer: None,
                     id: "1".into(),
                     arn: "arn:aws:lambda:us-east-1:123456789012:function:app-worker".into(),
                 }],
@@ -533,5 +618,108 @@ mod tests {
 
         assert_eq!(error.code, "REMOTE_SERVICE_UNAVAILABLE");
         assert!(error.retryable);
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+    use alien_core::{
+        storage_notifications::{aws_notification_input_paths, AWS_NOTIFICATION_INPUT_TEMPLATE},
+        AwsClientConfig, AwsCredentials, AwsServiceOverrides,
+    };
+    use httpmock::{Method::POST, MockServer};
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn event_pattern_and_transformer_round_trip_through_provider_api() {
+        let server = MockServer::start_async().await;
+        let pattern = serde_json::json!({"source":["aws.s3"]}).to_string();
+        let put = server.mock_async(|when, then| {
+            when.method(POST).header("X-Amz-Target", "AWSEvents.PutRule")
+                .json_body(serde_json::json!({"Name":"test-sn-0", "EventPattern":pattern,
+                    "State":"ENABLED", "Description":"notification"}));
+            then.status(200).json_body(serde_json::json!({"RuleArn":"arn:aws:events:us-east-1:123456789012:rule/test-sn-0"}));
+        }).await;
+        let transformer = InputTransformer {
+            input_paths_map: aws_notification_input_paths(),
+            input_template: AWS_NOTIFICATION_INPUT_TEMPLATE.into(),
+        };
+        let target = EventBridgeTarget {
+            id: "queue".into(),
+            arn: "arn:aws:sqs:us-east-1:123456789012:test-work".into(),
+            input_transformer: Some(transformer),
+        };
+        let targets = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("X-Amz-Target", "AWSEvents.PutTargets")
+                    .json_body(serde_json::json!({"Rule":"test-sn-0", "Targets":[target]}));
+                then.status(200)
+                    .json_body(serde_json::json!({"FailedEntryCount":0,"FailedEntries":[]}));
+            })
+            .await;
+        let describe = server.mock_async(|when, then| {
+            when.method(POST).header("X-Amz-Target", "AWSEvents.DescribeRule")
+                .json_body(serde_json::json!({"Name":"test-sn-0"}));
+            then.status(200).json_body(serde_json::json!({"Name":"test-sn-0", "EventPattern":pattern,"State":"ENABLED","Description":"notification"}));
+        }).await;
+        let first = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("X-Amz-Target", "AWSEvents.ListTargetsByRule")
+                    .json_body(serde_json::json!({"Rule":"test-sn-0"}));
+                then.status(200)
+                    .json_body(serde_json::json!({"Targets":[target],"NextToken":"next"}));
+            })
+            .await;
+        let second = server.mock_async(|when, then| {
+            when.method(POST).header("X-Amz-Target", "AWSEvents.ListTargetsByRule")
+                .json_body(serde_json::json!({"Rule":"test-sn-0","NextToken":"next"}));
+            then.status(200).json_body(serde_json::json!({"Targets":[{"Id":"foreign","Arn":"other","Input":"untouched"}]}));
+        }).await;
+        let client = EventBridgeClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "123456789012".into(),
+                region: "us-east-1".into(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test".into(),
+                    secret_access_key: "test".into(),
+                    session_token: None,
+                },
+                service_overrides: Some(AwsServiceOverrides {
+                    endpoints: HashMap::from([("events".into(), server.base_url())]),
+                }),
+            }),
+        );
+        client
+            .put_rule(
+                PutRuleRequest::builder()
+                    .name("test-sn-0".into())
+                    .event_pattern(pattern.clone())
+                    .state("ENABLED".into())
+                    .description("notification".into())
+                    .build(),
+            )
+            .await
+            .unwrap();
+        client
+            .put_targets(PutTargetsRequest {
+                rule: "test-sn-0".into(),
+                targets: vec![target.clone()],
+            })
+            .await
+            .unwrap();
+        let observed = client.describe_rule("test-sn-0").await.unwrap();
+        assert_eq!(observed.event_pattern, Some(pattern));
+        assert!(observed.schedule_expression.is_none());
+        let observed_targets = client.list_targets_by_rule("test-sn-0").await.unwrap();
+        assert_eq!(observed_targets.len(), 2);
+        assert_eq!(observed_targets[0], target);
+        assert_eq!(observed_targets[1].id, "foreign");
+        for mock in [put, targets, describe, first, second] {
+            mock.assert_hits_async(1).await;
+        }
     }
 }

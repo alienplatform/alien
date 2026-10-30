@@ -2,6 +2,8 @@
 
 use crate::{Queue, Stack, Storage, StorageNotification};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 /// Custom GCS notification attribute carrying the literal consumer-side suffix.
 pub const GCS_SUFFIX_ATTRIBUTE: &str = "storageEventSuffix";
@@ -38,6 +40,30 @@ pub fn aws_eventbridge_pattern(notification: &StorageNotification, bucket_name: 
         }
     })
 }
+
+/// A bounded, deterministic rule identity, including the complete bucket identity in
+/// the hash. Keep the stack prefix intact for the queue policy and management grants.
+pub fn aws_notification_rule_name(prefix: &str, bucket: &str, index: usize) -> String {
+    let hash = format!("{:x}", Sha256::digest(bucket.as_bytes()));
+    format!("{prefix}-sn-{}-{index}", &hash[..24])
+}
+
+/// JSON paths shared by all AWS setup and controller target writers.
+pub fn aws_notification_input_paths() -> BTreeMap<String, String> {
+    [
+        ("bucket", "$.detail.bucket.name"),
+        ("key", "$.detail.object.key"),
+        ("timestamp", "$.time"),
+        ("size", "$.detail.object.size"),
+        ("etag", "$.detail.object.etag"),
+    ]
+    .into_iter()
+    .map(|(key, path)| (key.into(), path.into()))
+    .collect()
+}
+
+/// EventBridge substitutes JSON values, preserving literal quotes and Unicode keys.
+pub const AWS_NOTIFICATION_INPUT_TEMPLATE: &str = r#"{"eventType":"created","bucketName":<bucket>,"objectKey":<key>,"timestamp":<timestamp>,"size":<size>,"etag":<etag>}"#;
 
 /// EventBridge ORs the entries in a field's matcher list. A wildcard covers keys
 /// whose prefix and suffix do not overlap; exact alternatives cover shorter keys.
