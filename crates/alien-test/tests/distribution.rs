@@ -88,6 +88,14 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 .expect("frozen notification change must require and recover through setup");
             common::storage_notifications::check_updated_delivery(&ctx.deployment).await;
         }
+        TestApp::SandboxSession => {
+            common::sandbox::check_session_runs_a_command(ctx)
+                .await
+                .expect("a sandbox session runs a command");
+            common::sandbox::check_bundle_in_deployment_bucket(ctx)
+                .await
+                .expect("the bundle lives in the deployment's own bucket");
+        }
         TestApp::AutomaticSetup => {
             let installed = ctx
                 .manager
@@ -917,6 +925,33 @@ distribution_test_context!(
 #[test_context(CloudFormationAwsPushRust)]
 #[tokio::test]
 async fn cloudformation_aws_push_comprehensive_rust(ctx: &mut CloudFormationAwsPushRust) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    CloudFormationAwsPushSandboxSession,
+    DistributionFlow::CloudFormationAwsPush,
+    TestApp::SandboxSession
+);
+
+/// A source-built Live sandbox installed by CloudFormation: a session runs a command, and the
+/// image-build bundle lives in the deployment's own bucket.
+#[test_context(CloudFormationAwsPushSandboxSession)]
+#[tokio::test]
+async fn cloudformation_aws_push_sandbox_session(ctx: &mut CloudFormationAwsPushSandboxSession) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAwsPushSandboxSession,
+    DistributionFlow::TerraformAwsPush,
+    TestApp::SandboxSession
+);
+
+/// The same as `cloudformation_aws_push_sandbox_session`, installed by Terraform.
+#[test_context(TerraformAwsPushSandboxSession)]
+#[tokio::test]
+async fn terraform_aws_push_sandbox_session(ctx: &mut TerraformAwsPushSandboxSession) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 
