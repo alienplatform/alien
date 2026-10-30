@@ -170,33 +170,34 @@ fn rerunning_setup_replaces_the_installed_boundary_document() {
             &ctx,
         ).unwrap()
     };
-    let existing = import(&original);
-    assert!(
-        !alien_permissions::generators::aws_permissions_boundary_covers(
-            &internal_state(&existing)["permissionsBoundaryDocument"],
-            &expanded
-        )
-        .unwrap()
-    );
-    let updated = registry
-        .merge_reimport(
-            &RemoteStackManagement::RESOURCE_TYPE,
-            Platform::Aws,
-            existing,
-            import(&expanded),
-            &ctx,
-        )
-        .unwrap();
-    let restored = alien_infra::deserialize_controller(internal_state(&updated).clone()).unwrap();
-    let restored_state = alien_infra::serialize_controller(restored.as_ref()).unwrap();
-    assert_eq!(restored_state["permissionsBoundaryDocument"], expanded);
-    assert!(
-        alien_permissions::generators::aws_permissions_boundary_covers(
-            &restored_state["permissionsBoundaryDocument"],
-            &expanded
-        )
-        .unwrap()
-    );
+    for (case, before, after) in [
+        ("expanded", &original, &expanded),
+        ("contracted", &expanded, &original),
+        ("unchanged", &original, &original),
+    ] {
+        let updated = registry
+            .merge_reimport(
+                &RemoteStackManagement::RESOURCE_TYPE,
+                Platform::Aws,
+                import(before),
+                import(after),
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(updated.status, ResourceStatus::Running, "{case}");
+        let restored =
+            alien_infra::deserialize_controller(internal_state(&updated).clone()).unwrap();
+        let restored_state = alien_infra::serialize_controller(restored.as_ref()).unwrap();
+        assert_eq!(
+            restored_state["permissionsBoundaryDocument"], *after,
+            "{case}"
+        );
+        assert_eq!(
+            restored_state["permissionsBoundaryArn"],
+            "arn:aws:iam::123456789012:policy/test-deployment-management-boundary",
+            "{case}"
+        );
+    }
 }
 
 #[test]
