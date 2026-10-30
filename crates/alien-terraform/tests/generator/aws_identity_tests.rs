@@ -855,10 +855,7 @@ const PARITY_REGION: &str = "us-gov-east-1";
 /// Every combination the build role's grant branches on: lifecycle, whether the bundle URI
 /// carries the region token, and whether a private base image is declared and where its region
 /// comes from.
-/// A released container image, which a Live sandbox's controller renders its own bundle from.
-const RELEASED_IMAGE: &str = "210987654321.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:f00d";
-
-const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 7] = [
+const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
     (
         ResourceLifecycle::Frozen,
         "s3://acme-artifacts/agents/bundle.zip",
@@ -889,7 +886,6 @@ const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 7] = [
         "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
         Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base@sha256:f00d"),
     ),
-    (ResourceLifecycle::Live, RELEASED_IMAGE, None),
 ];
 
 /// Other sets grant role writes on `role/<prefix>-*`. One guard refuses them on the management role
@@ -1179,10 +1175,6 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             .find(|block| block.labels()[1].as_str() == role_label)
             .unwrap_or_else(|| panic!("{case}: the build role {role_label} renders"));
 
-        let deployment_bucket =
-            (lifecycle == ResourceLifecycle::Live && !bundle_uri.starts_with("s3://")).then(|| {
-                alien_core::sandbox_build_role::sandbox_bundle_bucket_name(PARITY_PREFIX, "agents")
-            });
         let expected = SandboxBuildRole::builder()
             .sandbox_id("agents")
             .partition(PARITY_PARTITION)
@@ -1191,7 +1183,6 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             .bundle_uri(bundle_uri)
             .runtime_built(lifecycle == ResourceLifecycle::Live)
             .maybe_private_base_image(private_base_image)
-            .maybe_deployment_bucket(deployment_bucket.as_deref())
             .build();
 
         assert_eq!(
@@ -1344,7 +1335,6 @@ fn the_emitted_registration_matches_the_direct_seed() {
             SandboxEgress::None,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
-        (SandboxEgress::Allow, RELEASED_IMAGE),
     ] {
         let (mut stack, settings) = live_sandbox_stack("acme-sandbox-parity", egress.clone());
         let sandbox = Sandbox {
@@ -1400,7 +1390,6 @@ fn the_emitted_registration_matches_the_direct_seed() {
                 PARITY_PREFIX,
                 "agents",
             ),
-            PARITY_PREFIX,
             PARITY_REGION,
             Some(PARITY_CONNECTOR_ARN),
         )
