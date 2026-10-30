@@ -181,6 +181,13 @@ fn management_passes_dlm_only_the_setup_role() {
             Decision::Allowed,
             "{setup_role}"
         );
+        for service in ["lambda.amazonaws.com", "codebuild.amazonaws.com"] {
+            assert_eq!(
+                pass(&setup_role, service),
+                Decision::NotAllowed,
+                "{setup_role} must not be passed to {service} through compute grants"
+            );
+        }
         assert_eq!(
             evaluate(
                 &management,
@@ -190,6 +197,10 @@ fn management_passes_dlm_only_the_setup_role() {
             "{setup_role}"
         );
     }
+    assert_eq!(
+        pass("app-compute-node", "ec2.amazonaws.com"),
+        Decision::Allowed
+    );
     // A role earlier releases made at runtime still carries the AWS managed DLM policy, which
     // may share or copy any snapshot. The compute cluster's prefix-wide PassRole names it too.
     assert_eq!(

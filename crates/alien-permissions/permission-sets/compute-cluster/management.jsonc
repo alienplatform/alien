@@ -467,19 +467,25 @@
           }
         }
       },
-      // iam:PassRole remains stack-prefix scoped. CloudFormation role names are
-      // based on logical IDs and generated suffixes, so they do not reliably end
-      // in a fixed role suffix.
+      // Only EC2 can receive these stack-prefixed instance roles. CloudFormation
+      // names use logical IDs and generated suffixes, so they do not reliably
+      // end in a fixed role suffix.
       {
         "grant": {
           "actions": ["iam:PassRole"]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+            }
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+            }
           }
         }
       },

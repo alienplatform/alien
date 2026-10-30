@@ -675,7 +675,17 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
                 assert_eq!(grant.action, [action]);
                 assert_eq!(grant.resource, [resource]);
                 assert!(grant.not_resource.is_empty());
-                assert!(grant.condition.is_none());
+                if action == "iam:PassRole" {
+                    assert_eq!(
+                        serde_json::to_value(&grant.condition).unwrap(),
+                        serde_json::json!({
+                            "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+                        }),
+                        "{id} / {target}: instance roles must only be passed to EC2"
+                    );
+                } else {
+                    assert!(grant.condition.is_none());
+                }
             }
             // Manual management still cannot write profiles. Provision additionally
             // owns runtime compute profiles and removal of obsolete node policies.

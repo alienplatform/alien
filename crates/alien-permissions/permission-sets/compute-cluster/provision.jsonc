@@ -549,7 +549,7 @@
           }
         }
       },
-      // iam:PassRole — scoped to stack-prefixed IAM roles created by setup.
+      // Only EC2 can receive these stack-prefixed instance roles.
       // CloudFormation role names are based on logical IDs and generated
       // suffixes, so they do not reliably end in a fixed role suffix.
       {
@@ -558,10 +558,16 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+            }
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+            }
           }
         }
       }
