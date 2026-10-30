@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use alien_core::{SetupConfigurationProfile, Stack, Storage};
+use alien_manager::auth::Subject;
 use anyhow::{ensure, Context};
 use serde_json::Value;
 use tokio::{
@@ -18,7 +19,7 @@ use super::{
     render_distribution_management_config, rewrite_push_distribution_images, run_command,
     run_terraform_cmd, stack_settings_for_terraform, terraform_import_request_from_outputs,
     terraform_output_json, wait_and_finalize, DistributionArtifactCleanup, DistributionFlow,
-    TestApp, TestContext,
+    TerraformReservation, TestApp, TestContext,
 };
 
 fn change_rule(stack: &mut Stack) -> anyhow::Result<()> {
@@ -233,10 +234,32 @@ pub async fn verify_rule_update(ctx: &mut TestContext) -> anyhow::Result<()> {
             )
             .await?;
             let outputs = terraform_output_json(workdir.path(), env).await?;
+            // A deployment reserved before its first setup keeps the reserved lane.
+            let record = prepared
+                .manager
+                .deployment_store()
+                .get_deployment(&Subject::system(), &ctx.deployment.id)
+                .await
+                .map_err(|error| anyhow::anyhow!("Failed to read deployment: {error}"))?
+                .context("Deployment missing before setup rerun")?;
+            let reservation = match (record.setup_target, record.setup_fingerprint_version) {
+                (Some(setup_target), Some(setup_fingerprint_version))
+                    if !setup_target.is_empty() =>
+                {
+                    Some(TerraformReservation {
+                        deployment_id: ctx.deployment.id.clone(),
+                        deployment_name: ctx.deployment.name.clone(),
+                        setup_target,
+                        setup_fingerprint_version,
+                    })
+                }
+                _ => None,
+            };
             terraform_import_request_from_outputs(
                 &outputs,
                 &prepared.dg_token,
                 &ctx.deployment.name,
+                reservation.as_ref(),
             )?
         }
         _ => anyhow::bail!("Exactly one cloud setup artifact is required"),
@@ -248,7 +271,7 @@ pub async fn verify_rule_update(ctx: &mut TestContext) -> anyhow::Result<()> {
     {
         *retained_resources = request.resources.clone();
     }
-    let imported = import_stack(&prepared, request).await?;
+    let imported = import_stack(&prepared, request, None).await?;
     ensure!(
         imported.deployment.id == ctx.deployment.id,
         "Setup rerun must preserve deployment identity"
