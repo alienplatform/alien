@@ -6,7 +6,7 @@
 //! controller-readable subscription.
 
 use crate::{
-    block::{attr, block, nested, resource_block},
+    block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
         binding_label_for_role, downcast, emit_custom_roles_for_bindings, labels,
@@ -15,7 +15,10 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, Queue, Result, Worker, WorkerTrigger};
+use alien_core::{
+    import::EmitContext, storage_notifications::queue_receives_storage_notifications, ErrorData,
+    Queue, Result, Worker, WorkerTrigger,
+};
 use alien_error::AlienError;
 use alien_permissions::{
     generators::{GcpBindingResourceKind, GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
@@ -76,6 +79,9 @@ impl TfEmitter for GcpQueueEmitter {
         fragment.resource_blocks.push(topic);
         fragment.resource_blocks.push(subscription);
         emit_queue_iam(ctx, &mut fragment, label)?;
+        if queue_receives_storage_notifications(ctx.stack, queue.id()) {
+            emit_storage_publisher(&mut fragment, label);
+        }
         Ok(fragment)
     }
 
@@ -116,6 +122,24 @@ impl TfEmitter for GcpQueueEmitter {
             ),
         ])))
     }
+}
+
+fn emit_storage_publisher(fragment: &mut TfFragment, label: &str) {
+    let agent_label = format!("{label}_storage_service_agent");
+    fragment.data_blocks.push(data_block(
+        "google_storage_project_service_account",
+        &agent_label,
+        [attr("project", expr::raw("var.gcp_project"))],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "google_pubsub_topic_iam_member", &format!("{label}_storage_publisher"),
+        [
+            attr("project", expr::raw("var.gcp_project")),
+            attr("topic", expr::traversal(["google_pubsub_topic", label, "id"])),
+            attr("role", Expression::String("roles/pubsub.publisher".to_string())),
+            attr("member", expr::template(format!("serviceAccount:${{data.google_storage_project_service_account.{agent_label}.email_address}}"))),
+        ],
+    ));
 }
 
 fn emit_queue_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {

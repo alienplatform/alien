@@ -1,7 +1,25 @@
 //! Shared notification translation for setup generators and live controllers.
 
-use crate::StorageNotification;
+use crate::{Queue, Stack, Storage, StorageNotification};
 use serde_json::{json, Value};
+
+/// Custom GCS notification attribute carrying the literal consumer-side suffix.
+pub const GCS_SUFFIX_ATTRIBUTE: &str = "storageEventSuffix";
+
+/// Whether this queue owns an ingress grant for storage notifications in its stack.
+pub fn queue_receives_storage_notifications(stack: &Stack, queue_id: &str) -> bool {
+    stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Storage>()
+            .is_some_and(|storage| {
+                storage.notifications.iter().any(|notification| {
+                    notification.queue.resource_type == Queue::RESOURCE_TYPE
+                        && notification.queue.id == queue_id
+                })
+            })
+    })
+}
 
 /// Maximum serialized event-pattern length accepted by EventBridge.
 pub const AWS_EVENTBRIDGE_MAX_PATTERN_CHARACTERS: usize = 4096;

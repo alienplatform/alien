@@ -16,10 +16,11 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, LifecycleRule, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, Result, ServiceAccount, Storage,
+    import::EmitContext, storage_notifications::GCS_SUFFIX_ATTRIBUTE, LifecycleRule,
+    PermissionProfile, PermissionSetReference, RemoteStackManagement, Result, ServiceAccount,
+    Storage,
 };
-use alien_error::Context;
+use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     BindingTarget,
@@ -50,6 +51,7 @@ impl TfEmitter for GcpStorageEmitter {
         }
 
         emit_storage_iam(ctx, &mut fragment, label)?;
+        emit_notifications(ctx, &mut fragment, label, storage)?;
 
         // This grant lets the storage service decrypt retained objects. Application
         // and public IAM members remain managed for revocation.
@@ -90,6 +92,65 @@ impl TfEmitter for GcpStorageEmitter {
             ),
         ])))
     }
+}
+
+fn emit_notifications(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    label: &str,
+    storage: &Storage,
+) -> Result<()> {
+    for (index, notification) in storage.notifications.iter().enumerate() {
+        let queue_label = ctx.name_for(&notification.queue.id).ok_or_else(|| {
+            AlienError::new(alien_core::ErrorData::GenericError {
+                message: format!(
+                    "Storage '{}' notification {index} queue '{}' has no Terraform resource",
+                    storage.id(),
+                    notification.queue.id
+                ),
+            })
+        })?;
+        let mut body = vec![
+            attr("bucket", bucket_name(label)),
+            attr(
+                "topic",
+                expr::traversal(["google_pubsub_topic", queue_label, "id"]),
+            ),
+            attr(
+                "payload_format",
+                Expression::String("JSON_API_V1".to_string()),
+            ),
+            attr(
+                "event_types",
+                Expression::Array(vec![Expression::String("OBJECT_FINALIZE".to_string())]),
+            ),
+            attr(
+                "depends_on",
+                Expression::Array(vec![expr::traversal([
+                    "google_pubsub_topic_iam_member",
+                    &format!("{queue_label}_storage_publisher"),
+                ])]),
+            ),
+        ];
+        if let Some(prefix) = &notification.prefix {
+            body.push(attr(
+                "object_name_prefix",
+                Expression::String(prefix.clone()),
+            ));
+        }
+        if let Some(suffix) = &notification.suffix {
+            body.push(attr(
+                "custom_attributes",
+                expr::object([(GCS_SUFFIX_ATTRIBUTE, Expression::String(suffix.clone()))]),
+            ));
+        }
+        fragment.resource_blocks.push(resource_block(
+            "google_storage_notification",
+            &format!("{label}_notification_{index}"),
+            body,
+        ));
+    }
+    Ok(())
 }
 
 fn emit_storage_key_access(fragment: &mut TfFragment, label: &str, key_label: &str) {
