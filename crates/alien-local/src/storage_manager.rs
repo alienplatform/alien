@@ -66,6 +66,28 @@ impl LocalStorageManager {
         self.notifications.lock().await.stop(id).await
     }
 
+    /// Stop delivery for a Storage that no longer declares notifications and forget its
+    /// cursors, so a rule added later starts from the objects that exist then.
+    pub async fn remove_notifications(&self, id: &str) -> Result<()> {
+        self.stop_notifications(id).await?;
+        self.remove_notification_cursors(id).await
+    }
+
+    async fn remove_notification_cursors(&self, id: &str) -> Result<()> {
+        let cursor_dir = self.state_dir.join("storage-notifications").join(id);
+        match tokio::fs::remove_dir_all(&cursor_dir).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error)
+                .into_alien_error()
+                .context(ErrorData::LocalDirectoryError {
+                    path: cursor_dir.display().to_string(),
+                    operation: "delete".into(),
+                    reason: "Failed to remove storage notification cursors".into(),
+                }),
+        }
+    }
+
     /// Drain delivery tasks before closing queue owners during manager shutdown.
     pub async fn shutdown_notifications(&self) -> Result<()> {
         self.notifications.lock().await.close().await
@@ -127,21 +149,7 @@ impl LocalStorageManager {
     /// # Note
     /// This is idempotent - succeeds even if the storage doesn't exist.
     pub async fn delete_storage(&self, id: &str) -> Result<()> {
-        self.stop_notifications(id).await?;
-        let cursor_dir = self.state_dir.join("storage-notifications").join(id);
-        match tokio::fs::remove_dir_all(&cursor_dir).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error)
-                    .into_alien_error()
-                    .context(ErrorData::LocalDirectoryError {
-                        path: cursor_dir.display().to_string(),
-                        operation: "delete".into(),
-                        reason: "Remove storage notification cursors".into(),
-                    })
-            }
-        }
+        self.remove_notifications(id).await?;
         let storage_dir = self.state_dir.join("storage").join(id);
 
         if storage_dir.exists() {

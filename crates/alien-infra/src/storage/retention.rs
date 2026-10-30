@@ -25,6 +25,8 @@ use crate::{
 /// and the setup authority passes both when it finishes retention, because Frozen storage is
 /// setup-owned. This operation does not certify removal of workload or management access.
 /// Every retry re-reads provider state; saved resource identities and recovery data stay intact.
+/// Returns false while a provider is still removing owned notifications; the caller waits and
+/// calls again, as it does for retained KV.
 pub async fn protect_retained_storage(
     state: &StackState,
     retained_ids: &[String],
@@ -32,7 +34,8 @@ pub async fn protect_retained_storage(
     provider: &dyn PlatformServiceProvider,
     external_bindings: &ExternalBindings,
     lifecycles: &[ResourceLifecycle],
-) -> Result<()> {
+) -> Result<bool> {
+    let mut complete = true;
     for id in retained_ids {
         let resource = state
             .resources
@@ -140,18 +143,14 @@ pub async fn protect_retained_storage(
                         .is_some_and(|previous| !previous.notifications.is_empty())
                 {
                     let events = provider.get_aws_eventbridge_client(config).await?;
-                    if !super::aws_notifications::remove_owned_step(
+                    // One mutation per call; the remaining steps below are independent.
+                    complete &= super::aws_notifications::remove_owned_step(
                         events.as_ref(),
                         &state.resource_prefix,
                         name,
                         id,
                     )
-                    .await?
-                    {
-                        return Err(AlienError::new(ErrorData::StorageNotificationCleanupPending {
-                            resource_id:id.clone(), message:"EventBridge rule removal is still in progress; retry retained storage protection".into(),
-                        }));
-                    }
+                    .await?;
                 }
                 // Rules outlive a bucket deleted out of band. Clean them before
                 // treating that missing bucket as successful retention cleanup.
@@ -248,7 +247,7 @@ pub async fn protect_retained_storage(
                         &group,
                         account,
                     );
-                    super::azure_notifications::remove_owned(
+                    complete &= super::azure_notifications::remove_owned(
                         notifications.as_ref(),
                         &source,
                         name,
@@ -324,7 +323,7 @@ pub async fn protect_retained_storage(
             }
         }
     }
-    Ok(())
+    Ok(complete)
 }
 
 /// Require applicable Azure lifecycle deletion rules to be disabled before handoff.
@@ -646,7 +645,8 @@ mod tests {
             }),
         );
         let config = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
-        let error = protect_retained_storage(
+        // Pending provider work is progress for the deletion loop to wait on, not a failure.
+        assert!(!protect_retained_storage(
             &state,
             &["data".into()],
             &config,
@@ -655,10 +655,9 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap_err();
-        assert_eq!(error.code, "STORAGE_NOTIFICATION_CLEANUP_PENDING");
+        .expect("a pending rule removal is not an error"));
         assert!(!*remaining.lock().unwrap());
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &["data".into()],
             &config,
@@ -667,7 +666,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
     }
 
     fn transient() -> AlienError<ClientError> {
@@ -738,7 +737,7 @@ mod tests {
         .is_err());
         for _ in 0..2 {
             let reloaded = serde_json::from_value(original.clone()).unwrap();
-            protect_retained_storage(
+            assert!(protect_retained_storage(
                 &reloaded,
                 &["data".into()],
                 &client,
@@ -747,7 +746,7 @@ mod tests {
                 &[ResourceLifecycle::Live],
             )
             .await
-            .unwrap();
+            .unwrap());
             assert_eq!(serde_json::to_value(reloaded).unwrap(), original);
         }
         // A failed replacement can leave the old storage controller behind a
@@ -755,7 +754,7 @@ mod tests {
         let entry = state.resources.get_mut("data").unwrap();
         entry.config = Resource::new(alien_core::Vault::new("data".into()).build());
         let old_identity = entry.internal_state.clone();
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &["data".into()],
             &client,
@@ -764,7 +763,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         assert_eq!(state.resources["data"].internal_state, old_identity);
         assert_eq!(
             policy.lock().unwrap()["Statement"],
@@ -1099,7 +1098,7 @@ mod tests {
         .is_err());
         for _ in 0..2 {
             let reloaded = serde_json::from_value(original.clone()).unwrap();
-            protect_retained_storage(
+            assert!(protect_retained_storage(
                 &reloaded,
                 &["data".into()],
                 &client,
@@ -1108,7 +1107,7 @@ mod tests {
                 &[ResourceLifecycle::Live],
             )
             .await
-            .unwrap();
+            .unwrap());
             assert_eq!(serde_json::to_value(reloaded).unwrap(), original);
         }
         let actual = serde_json::to_value(policy.lock().unwrap().clone()).unwrap();
@@ -1306,7 +1305,7 @@ mod tests {
         let original = serde_json::to_value(&state).unwrap();
         for _ in 0..2 {
             let reloaded = serde_json::from_value(original.clone()).unwrap();
-            protect_retained_storage(
+            assert!(protect_retained_storage(
                 &reloaded,
                 &["data".into()],
                 &client,
@@ -1315,7 +1314,7 @@ mod tests {
                 &[ResourceLifecycle::Live],
             )
             .await
-            .unwrap();
+            .unwrap());
             assert_eq!(serde_json::to_value(reloaded).unwrap(), original);
         }
         assert!(*private.lock().unwrap());
@@ -1332,7 +1331,7 @@ mod tests {
         )]));
         let provider = MockPlatformServiceProvider::new();
         let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &["data".into()],
             &client,
@@ -1341,7 +1340,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         state.resources.get_mut("data").unwrap().internal_state = original_controller;
         assert!(protect_retained_storage(
             &state,
@@ -1366,7 +1365,7 @@ mod tests {
         );
         state.resources.get_mut("data").unwrap().lifecycle = Some(ResourceLifecycle::Frozen);
         let original = serde_json::to_value(&state).unwrap();
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &["data".into()],
             &ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
@@ -1375,7 +1374,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         assert_eq!(serde_json::to_value(state).unwrap(), original);
     }
 
@@ -1385,7 +1384,7 @@ mod tests {
         state.resources.get_mut("data").unwrap().lifecycle = Some(ResourceLifecycle::Frozen);
         let provider = MockPlatformServiceProvider::new();
         let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &["data".into()],
             &client,
@@ -1394,9 +1393,9 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         state.resources.get_mut("data").unwrap().lifecycle = Some(ResourceLifecycle::Live);
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &[],
             &client,
@@ -1405,7 +1404,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         state.resources.get_mut("data").unwrap().lifecycle = None;
         assert!(protect_retained_storage(
             &state,

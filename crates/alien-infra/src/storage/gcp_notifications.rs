@@ -296,6 +296,7 @@ mod tests {
             topic_name: Some("test-work".into()),
             subscription_name: Some("test-work-sub".into()),
             storage_publisher_member: Some("serviceAccount:storage".into()),
+            storage_publisher_pending: None,
             _internal_stay_count: None,
         };
         let checkpoint = GcpStorageController {
