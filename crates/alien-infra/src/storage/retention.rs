@@ -143,6 +143,16 @@ pub async fn protect_retained_storage(
                     Err(error) if missing(&error) => continue,
                     Err(error) => return Err(error.context(cloud_error(id))),
                 };
+                if controller.notifications_managed
+                    || !storage.notifications.is_empty()
+                    || resource
+                        .previous_config
+                        .as_ref()
+                        .and_then(|previous| previous.downcast_ref::<Storage>())
+                        .is_some_and(|previous| !previous.notifications.is_empty())
+                {
+                    super::gcp_notifications::remove_owned(client.as_ref(), name, id).await?;
+                }
                 if !was_public {
                     stop_gcs_lifecycle(client.as_ref(), name, id, &observed).await?;
                     continue;

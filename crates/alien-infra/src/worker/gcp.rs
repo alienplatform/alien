@@ -8049,6 +8049,7 @@ mod tests {
                             state: GcpQueueState::Ready,
                             topic_name: Some("test-test-queue".into()),
                             subscription_name: Some("test-test-queue-sub".into()),
+                            storage_publisher_member: None,
                             _internal_stay_count: None,
                         },
                     )
@@ -8103,6 +8104,7 @@ mod tests {
             state: GcpQueueState::Ready,
             topic_name: Some("test-test-queue".to_string()),
             subscription_name: Some("test-test-queue-sub".to_string()),
+            storage_publisher_member: None,
             _internal_stay_count: None,
         };
 
@@ -8174,6 +8176,7 @@ mod tests {
             state: GcpQueueState::Ready,
             topic_name: Some("test-test-queue".to_string()),
             subscription_name: Some("test-test-queue-sub".to_string()),
+            storage_publisher_member: None,
             _internal_stay_count: None,
         };
 

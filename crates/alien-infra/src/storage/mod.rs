@@ -5,6 +5,7 @@ mod aws_import;
 pub use aws_import::AwsStorageImporter;
 
 mod gcp;
+mod gcp_notifications;
 pub use gcp::*;
 
 mod gcp_import;
@@ -36,3 +37,6 @@ pub use fixtures::*;
 
 mod retention;
 pub use retention::protect_retained_storage;
+
+#[cfg(test)]
+mod gcp_notifications_live;

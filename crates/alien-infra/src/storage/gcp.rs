@@ -62,6 +62,10 @@ pub struct GcpStorageController {
     /// This is a capability receipt, not a copy of desired configuration.
     #[serde(default)]
     pub(crate) read_cors_applied: bool,
+
+    /// This controller has managed queue notification rules on the bucket.
+    #[serde(default)]
+    pub(crate) notifications_managed: bool,
 }
 
 #[controller]
@@ -139,6 +143,7 @@ impl GcpStorageController {
             == read_cors(&config.cors_allowed_origins);
         let lifecycle_confirmed =
             gcs_lifecycle_matches(created_bucket.lifecycle.as_ref(), &lifecycle);
+        self.notifications_managed = !config.notifications.is_empty();
         self.bucket_name = Some(created_bucket.name.unwrap_or_else(|| bucket_name.clone()));
         if lifecycle_confirmed {
             self.lifecycle_revision = Some(lifecycle_revision);
@@ -252,7 +257,7 @@ impl GcpStorageController {
         }
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: CreatingNotifications,
             suggested_delay: None,
         })
     }
@@ -307,6 +312,8 @@ impl GcpStorageController {
             })
         })?;
 
+        self.notifications_managed |=
+            !config.notifications.is_empty() || !prev_config.notifications.is_empty();
         info!(bucket = %bucket_name, "Starting bucket configuration update");
 
         let gcp_config = ctx.get_gcp_config()?;
@@ -536,13 +543,53 @@ impl GcpStorageController {
             .await?;
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: UpdatingNotifications,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = CreatingNotifications, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn creating_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let done = self.reconcile_queue_notifications(ctx, false).await?;
+        Ok(HandlerAction::Continue {
+            state: if done { Ready } else { CreatingNotifications },
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = UpdatingNotifications, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let done = self.reconcile_queue_notifications(ctx, false).await?;
+        Ok(HandlerAction::Continue {
+            state: if done { Ready } else { UpdatingNotifications },
             suggested_delay: None,
         })
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
     #[flow_entry(Delete)]
+    #[handler(state = DeletingNotifications, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
+    async fn deleting_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let done = self.reconcile_queue_notifications(ctx, true).await?;
+        Ok(HandlerAction::Continue {
+            state: if done {
+                DeleteStart
+            } else {
+                DeletingNotifications
+            },
+            suggested_delay: None,
+        })
+    }
+
     #[handler(
         state = DeleteStart,
         on_failure = DeleteFailed,
@@ -677,7 +724,8 @@ impl GcpStorageController {
         let lifecycle = gcs_lifecycle(&config.id, &config.lifecycle_rules)?;
         let desired = gcs_lifecycle_revision(&config.id, &lifecycle)?;
         Ok(self.lifecycle_revision.as_deref() != Some(desired.as_str())
-            || (!self.read_cors_applied && !config.cors_allowed_origins.is_empty()))
+            || (!self.read_cors_applied && !config.cors_allowed_origins.is_empty())
+            || (!self.notifications_managed && !config.notifications.is_empty()))
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -1045,6 +1093,7 @@ impl GcpStorageController {
             bucket_name: Some(get_gcp_bucket_name("test-stack", storage_name)),
             lifecycle_revision: None,
             read_cors_applied: false,
+            notifications_managed: false,
             _internal_stay_count: None,
         }
     }
@@ -1852,6 +1901,7 @@ mod lifecycle_prefix_tests {
             bucket_name: Some(BUCKET.to_string()),
             lifecycle_revision: Some("unused".to_string()),
             read_cors_applied: false,
+            notifications_managed: false,
             _internal_stay_count: None,
         })
         .unwrap();
@@ -2391,6 +2441,7 @@ mod public_access_tests {
             bucket_name: Some("test-storage".into()),
             lifecycle_revision: None,
             read_cors_applied: false,
+            notifications_managed: false,
             _internal_stay_count: None,
         })
         .unwrap();
@@ -2459,6 +2510,7 @@ mod public_access_tests {
             bucket_name: Some("test-storage".into()),
             lifecycle_revision: None,
             read_cors_applied: false,
+            notifications_managed: false,
             _internal_stay_count: None,
         };
         let mut executor = SingleControllerExecutor::builder()
@@ -2475,5 +2527,34 @@ mod public_access_tests {
             .unwrap();
         let err = executor.step().await.unwrap_err();
         assert!(format!("{err:?}").contains("must be changed through setup"));
+    }
+}
+
+impl GcpStorageController {
+    async fn reconcile_queue_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        deleting: bool,
+    ) -> Result<bool> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        if !may_repair_lifecycle(ctx, &config.id)
+            || (!self.notifications_managed && config.notifications.is_empty())
+        {
+            return Ok(true);
+        }
+        let Some(bucket) = &self.bucket_name else {
+            if deleting {
+                return Ok(true);
+            }
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "Bucket name missing during notification reconciliation".into(),
+            }));
+        };
+        let done = super::gcp_notifications::reconcile(ctx, bucket, &config, deleting).await?;
+        if done {
+            self.notifications_managed = !deleting && !config.notifications.is_empty();
+        }
+        Ok(done)
     }
 }

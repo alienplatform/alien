@@ -16,9 +16,10 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, storage_notifications::GCS_SUFFIX_ATTRIBUTE, LifecycleRule,
-    PermissionProfile, PermissionSetReference, RemoteStackManagement, Result, ServiceAccount,
-    Storage,
+    import::EmitContext,
+    storage_notifications::{GCS_RULE_ATTRIBUTE, GCS_SUFFIX_ATTRIBUTE},
+    LifecycleRule, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
+    ServiceAccount, Storage,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
@@ -138,12 +139,16 @@ fn emit_notifications(
                 Expression::String(prefix.clone()),
             ));
         }
+        let mut attributes = vec![(
+            GCS_RULE_ATTRIBUTE,
+            expr::raw(format!(
+                "format(\"%s/{index}\", google_storage_bucket.{label}.name)"
+            )),
+        )];
         if let Some(suffix) = &notification.suffix {
-            body.push(attr(
-                "custom_attributes",
-                expr::object([(GCS_SUFFIX_ATTRIBUTE, Expression::String(suffix.clone()))]),
-            ));
+            attributes.push((GCS_SUFFIX_ATTRIBUTE, Expression::String(suffix.clone())));
         }
+        body.push(attr("custom_attributes", expr::object(attributes)));
         fragment.resource_blocks.push(resource_block(
             "google_storage_notification",
             &format!("{label}_notification_{index}"),
