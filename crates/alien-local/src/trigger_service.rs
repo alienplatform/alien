@@ -996,6 +996,156 @@ mod tests {
             .is_empty());
     }
 
+    #[tokio::test]
+    async fn storage_notifications_reach_batched_queue_tasks_and_settle() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage_manager = crate::LocalStorageManager::new(directory.path().to_owned());
+        let queues = crate::LocalQueueManager::new(directory.path().to_owned());
+        queues.create_queue("jobs").await.unwrap();
+        let root = storage_manager.create_storage("objects").await.unwrap();
+        let config = alien_core::Storage::new("objects".into())
+            .notifications(vec![
+                alien_core::StorageNotification::builder()
+                    .queue(alien_core::ResourceRef::new(
+                        alien_core::Queue::RESOURCE_TYPE,
+                        "jobs",
+                    ))
+                    .prefix("in/".into())
+                    .suffix(".json".into())
+                    .build(),
+                alien_core::StorageNotification::builder()
+                    .queue(alien_core::ResourceRef::new(
+                        alien_core::Queue::RESOURCE_TYPE,
+                        "jobs",
+                    ))
+                    .prefix("other/".into())
+                    .suffix(".data".into())
+                    .build(),
+            ])
+            .build();
+        storage_manager
+            .ensure_notifications(&config, &queues)
+            .await
+            .unwrap();
+        for key in [
+            "in/a.json",
+            "in/b.json",
+            "other/c.data",
+            "other/d.data",
+            "in/excluded.txt",
+        ] {
+            let path = root.join(key);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"payload").unwrap();
+        }
+        let queue = queues.load_queue("jobs").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while queue.stats().await.unwrap().visible < 4 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        storage_manager.stop_notifications("objects").await.unwrap();
+        assert_eq!(queue.stats().await.unwrap().total, 4);
+        let control = Arc::new(ControlGrpcServer::new());
+        let mut stream = control
+            .wait_for_tasks(Request::new(WaitForTasksRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        let collectors = QueueCollectors::new(
+            HashMap::from([(
+                "jobs".into(),
+                alien_core::QueueBatchConfig {
+                    max_messages: 2,
+                    max_window_seconds: 1,
+                },
+            )]),
+            control.clone(),
+        );
+        let collector = collectors.clients["jobs"].clone();
+        let (shutdown, mut receiver) = broadcast::channel(1);
+        let poll_control = control.clone();
+        let poll_queue = queue.clone();
+        let poller = tokio::spawn(async move {
+            poll_batch_queue(
+                "jobs",
+                poll_queue,
+                &poll_control,
+                &mut receiver,
+                collector,
+                Duration::from_secs(30),
+            )
+            .await
+        });
+        let mut keys = HashSet::new();
+        for _ in 0..2 {
+            let task = tokio::time::timeout(Duration::from_secs(5), stream.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let Some(control::task::Payload::QueueBatch(batch)) = task.payload else {
+                panic!("queue batch required");
+            };
+            assert_eq!(batch.source, "jobs");
+            assert_eq!(batch.deliveries.len(), 2);
+            for delivery in &batch.deliveries {
+                let message = delivery.message.as_ref().unwrap();
+                let event: alien_core::StorageEvent =
+                    serde_json::from_slice(&message.payload).unwrap();
+                assert_eq!(message.source, "jobs");
+                assert_eq!(event.bucket_name, "objects");
+                assert_eq!(event.event_type, alien_core::StorageEventType::Created);
+                assert_eq!(event.size, Some(7));
+                assert!(keys.insert(event.object_key));
+            }
+            control
+                .send_task_result(Request::new(SendTaskResultRequest {
+                    task_id: task.task_id,
+                    result: Some(send_task_result_request::Result::QueueBatch(
+                        control::QueueBatchResult {
+                            outcomes:
+                                batch
+                                    .deliveries
+                                    .iter()
+                                    .map(|delivery| control::QueueDeliveryOutcome {
+                                        delivery_id: delivery.delivery_id.clone(),
+                                        disposition:
+                                            control::queue_delivery_outcome::Disposition::Success
+                                                as i32,
+                                    })
+                                    .collect(),
+                        },
+                    )),
+                }))
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            keys,
+            HashSet::from([
+                "in/a.json".into(),
+                "in/b.json".into(),
+                "other/c.data".into(),
+                "other/d.data".into()
+            ])
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while queue.stats().await.unwrap().total != 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("every successful delivery is acknowledged");
+        shutdown.send(()).unwrap();
+        poller.await.unwrap().unwrap();
+        collectors.join().await.unwrap();
+        storage_manager.delete_storage("objects").await.unwrap();
+        queues.delete_queue("jobs").await.unwrap();
+    }
+
     async fn acknowledge(server: &ControlGrpcServer, task: &Task) {
         server
             .send_task_result(Request::new(SendTaskResultRequest {

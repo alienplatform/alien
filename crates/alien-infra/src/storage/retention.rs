@@ -76,7 +76,16 @@ pub async fn protect_retained_storage(
                 .and_then(|previous| previous.downcast_ref::<Storage>())
                 .is_some_and(|previous| previous.public_read);
         let platform = resource.controller_platform.unwrap_or(state.platform);
-        if (!was_public && !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure))
+        let has_local_notifications = platform == Platform::Local
+            && (!storage.notifications.is_empty()
+                || resource
+                    .previous_config
+                    .as_ref()
+                    .and_then(|previous| previous.downcast_ref::<Storage>())
+                    .is_some_and(|previous| !previous.notifications.is_empty()));
+        if (!was_public
+            && !has_local_notifications
+            && !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure))
             || resource.status == ResourceStatus::Deleted
         {
             continue;
@@ -264,7 +273,20 @@ pub async fn protect_retained_storage(
                     .await
                     .context(cloud_error(id))?;
             }
-            Platform::Local | Platform::Test => {}
+            Platform::Local =>
+            {
+                #[cfg(feature = "local")]
+                if has_local_notifications {
+                    let manager = provider
+                        .get_local_storage_manager()
+                        .ok_or_else(|| invalid(id, "Local storage manager is unavailable"))?;
+                    manager
+                        .stop_notifications(id)
+                        .await
+                        .context(cloud_error(id))?;
+                }
+            }
+            Platform::Test => {}
             _ => {
                 return Err(invalid(
                     id,

@@ -1,8 +1,8 @@
 # Storage notifications into queues
 
 Storage notification declarations, validation, GCP/Azure Terraform setup and
-controllers, and GCP/Azure queue payload normalization are available in this
-branch. AWS provisioning and local delivery are still under development.
+controllers, local delivery, and GCP/Azure queue payload normalization are available
+in this branch. AWS notification-to-queue provisioning is still under development.
 
 Declare a queue destination on a Storage resource:
 
@@ -77,6 +77,27 @@ Azure confirms its subscriptions are gone and preserves the shared topic.
 
 AWS EventBridge introduces event-delivery charges beyond SQS; enabling it on a
 bucket sends supported S3 events to EventBridge even when rules filter them out.
+
+## Local development
+
+`alien dev` runs notification delivery in the storage manager, independently of
+Workers. Each matching rule puts a canonical event into the local queue. Stopping
+a Worker does not stop queue intake. Rule changes stop the old watcher before
+starting the new one, and removing or retaining Storage stops its delivery tasks.
+
+Each rule and each direct Worker storage trigger keeps an acknowledged cursor
+under the deployment's data directory. Restarting the manager or Worker does not
+replay unchanged acknowledged objects. New or overwritten objects retained on disk
+while it was stopped are delivered after restart. Keep the data directory to keep
+these cursors. Delivery and checkpoint writes are separate: a crash between them
+can produce a duplicate, so consumers must remain idempotent.
+
+Filesystem notifications wake reconciliation; a 30-second safety scan covers
+missed hints. Reconciliation compares modification time and size and observes the
+latest committed state, so it cannot reconstruct intermediate overwrites or
+objects created and deleted entirely between scans. Staged multipart files do not
+emit events until committed. Cursors retain pending failed deliveries; corrupted
+cursors fail explicitly instead of silently replaying the bucket.
 
 ## Reading notifications
 

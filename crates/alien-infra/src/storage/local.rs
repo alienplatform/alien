@@ -56,6 +56,7 @@ impl LocalStorageController {
         );
 
         self.storage_path = Some(storage_path.display().to_string());
+        ensure_notifications(ctx, &config).await?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -90,6 +91,8 @@ impl LocalStorageController {
                 resource_id: Some(config.id.clone()),
             })?;
 
+        ensure_notifications(ctx, &config).await?;
+
         if let Some(storage_path) = &self.storage_path {
             emit_local_storage_heartbeat(ctx, &config.id, storage_path);
         }
@@ -112,10 +115,8 @@ impl LocalStorageController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Storage>()?;
 
-        info!(storage_id=%config.id, "Updating local storage (no-op)");
-
-        // For local storage, updates are typically no-op since the directory path doesn't change
-        // The directory persists with its contents unchanged
+        info!(storage_id=%config.id, "Updating local storage notifications");
+        ensure_notifications(ctx, &config).await?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -212,6 +213,43 @@ impl LocalStorageController {
     }
 }
 
+async fn ensure_notifications(
+    ctx: &ResourceControllerContext<'_>,
+    storage: &Storage,
+) -> Result<()> {
+    let manager = ctx
+        .service_provider
+        .get_local_storage_manager()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::LocalServicesNotAvailable {
+                service_name: "storage_manager".into(),
+            })
+        })?;
+    if storage.notifications.is_empty() {
+        return manager.stop_notifications(&storage.id).await.context(
+            ErrorData::CloudPlatformError {
+                message: "Stop local storage notifications".into(),
+                resource_id: Some(storage.id.clone()),
+            },
+        );
+    }
+    let queues = ctx
+        .service_provider
+        .get_local_queue_manager()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::LocalServicesNotAvailable {
+                service_name: "queue_manager".into(),
+            })
+        })?;
+    manager
+        .ensure_notifications(storage, &queues)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: "Reconcile local storage notifications".into(),
+            resource_id: Some(storage.id.clone()),
+        })
+}
+
 fn emit_local_storage_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
@@ -281,5 +319,119 @@ impl LocalStorageController {
             storage_path: Some(storage_path.to_string()),
             _internal_stay_count: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use alien_bindings::traits::Queue as QueueBinding;
+    use alien_core::{
+        ClientConfig, ExternalBindings, Queue, ResourceLifecycle, StorageNotification,
+    };
+    use alien_local::{LocalQueueManager, LocalStorageManager};
+
+    use super::*;
+    use crate::controller_test::SingleControllerExecutor;
+    use crate::queue::local::{LocalQueueController, LocalQueueState};
+    use crate::storage::retention::protect_retained_storage;
+    use crate::MockPlatformServiceProvider;
+
+    #[tokio::test]
+    async fn controller_restores_delivery_and_retention_stops_it_without_erasing_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = Arc::new(LocalStorageManager::new(directory.path().to_owned()));
+        let queues = Arc::new(LocalQueueManager::new(directory.path().to_owned()));
+        queues.set_endpoint("http://127.0.0.1/queues".into());
+        let path = queues.create_queue("jobs").await.unwrap();
+        let queue = Queue::new("jobs".into()).build();
+        let storage = Storage::new("objects".into())
+            .notifications(vec![StorageNotification::builder()
+                .queue((&queue).into())
+                .suffix(".json".into())
+                .build()])
+            .build();
+        let mut provider = MockPlatformServiceProvider::new();
+        let storage_handle = manager.clone();
+        provider
+            .expect_get_local_storage_manager()
+            .returning(move || Some(storage_handle.clone()));
+        let queue_handle = queues.clone();
+        provider
+            .expect_get_local_queue_manager()
+            .returning(move || Some(queue_handle.clone()));
+        let provider = Arc::new(provider);
+        let mut run = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .controller(LocalStorageController::default())
+            .platform(Platform::Local)
+            .service_provider(provider.clone())
+            .with_dependency(
+                queue,
+                LocalQueueController {
+                    state: LocalQueueState::Ready,
+                    queue_path: Some(path.display().to_string()),
+                    binding: Some(queues.get_binding("jobs").unwrap()),
+                    _internal_stay_count: None,
+                },
+            )
+            .build()
+            .await
+            .unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        let root = manager.get_storage_path("objects").unwrap();
+        std::fs::write(root.join("first.json"), b"first").unwrap();
+        let binding = queues.load_queue("jobs").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while binding.stats().await.unwrap().total != 1 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let messages = binding.receive("jobs", 10).await.unwrap();
+        assert_eq!(messages.len(), 1);
+        binding
+            .ack("jobs", &messages[0].receipt_handle)
+            .await
+            .unwrap();
+
+        // A Ready controller must reattach tasks on its health reconciliation.
+        manager.stop_notifications("objects").await.unwrap();
+        std::fs::write(root.join("offline.json"), b"offline").unwrap();
+        run.step().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while binding.stats().await.unwrap().total != 1 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        protect_retained_storage(
+            run.stack_state(),
+            &["objects".into()],
+            &ClientConfig::Local {
+                state_directory: directory.path().display().to_string(),
+            },
+            provider.as_ref(),
+            &ExternalBindings::default(),
+            &[ResourceLifecycle::Live],
+        )
+        .await
+        .unwrap();
+        std::fs::write(root.join("retained.json"), b"retained").unwrap();
+        assert_eq!(binding.stats().await.unwrap().total, 1);
+        assert!(root.join("first.json").exists());
+        run.delete().unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Deleted);
+        assert!(!root.exists());
+        assert!(!directory
+            .path()
+            .join("storage-notifications/objects")
+            .exists());
+        queues.delete_queue("jobs").await.unwrap();
     }
 }
