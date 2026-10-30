@@ -13,7 +13,10 @@ use alien_core::{
     ALIEN_STACK_TAG_KEY,
 };
 use alien_permissions::{
-    generators::{aws_permissions_boundary_covers, aws_stack_permissions_boundary, AwsIamPolicy},
+    generators::{
+        aws_permissions_boundary_covers, aws_stack_permissions_boundary, AwsIamPolicy,
+        AwsIamStatement,
+    },
     PermissionContext,
 };
 use alien_preflights::{mutations::ManagementPermissionProfileMutation, StackMutation};
@@ -576,105 +579,111 @@ fn registration_depends_on_the_boundary_for_teardown_ordering() {
     ));
 }
 
+async fn rendered_management_statements(automatic: bool, grants: &[&str]) -> Vec<AwsIamStatement> {
+    let stack = Stack::new("management-boundary".into())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global(grants.iter().copied()),
+        ))
+        .add(
+            RemoteStackManagement::new("management".into()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let settings = StackSettings {
+        setup_management: if automatic {
+            SetupManagement::Automatic
+        } else {
+            SetupManagement::Manual
+        },
+        ..Default::default()
+    };
+    let config = DeploymentConfig::builder()
+        .stack_settings(settings.clone())
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: String::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+        })
+        .allow_frozen_changes(false)
+        .external_bindings(ExternalBindings::default())
+        .build();
+    let stack = ManagementPermissionProfileMutation
+        .mutate(stack, &StackState::new(Platform::Aws), &config)
+        .await
+        .unwrap();
+    let module = render(&stack, TerraformTarget::Aws, settings);
+    assert_terraform_valid(&module, "management authorization");
+    let mut context = Context::new();
+    for (name, value) in [
+        ("local", json!({"resource_prefix": "stack-a"})),
+        (
+            "var",
+            json!({"managing_account_id": "210987654321", "managing_role_arn": "arn:aws:iam::210987654321:role/manager"}),
+        ),
+        (
+            "data",
+            json!({
+                "aws_partition": {"current": {"partition": "aws"}},
+                "aws_region": {"current": {"region": "us-west-2"}},
+                "aws_caller_identity": {"current": {"account_id": "123456789012"}}
+            }),
+        ),
+        (
+            "aws_iam_policy",
+            json!({"management_permissions_boundary": {
+                "arn": "arn:aws:iam::123456789012:policy/stack-a-deployment-management-boundary"
+            }}),
+        ),
+        (
+            "aws_iam_role",
+            json!({"management": {
+                "arn": "arn:aws:iam::123456789012:role/stack-a-management"
+            }}),
+        ),
+    ] {
+        context.declare_var(name, hcl::to_value(value).unwrap());
+    }
+    let mut statements = Vec::new();
+    for (file, contents) in module.iter().filter(|(file, _)| file.ends_with(".tf")) {
+        let body: hcl::Body = hcl::parse(contents).unwrap();
+        for block in body.blocks() {
+            let labels = block.labels();
+            if block.identifier() != "resource" || labels.len() != 2 {
+                continue;
+            }
+            let kind = labels[0].as_str();
+            let name = labels[1].as_str();
+            if (kind == "aws_iam_policy" && name.starts_with("management_managed_policy"))
+                || (kind == "aws_iam_role_policy" && name.starts_with("management_"))
+            {
+                let mut policy = document(attribute(block, "policy"), &context);
+                // IAM accepts a scalar for a single action or resource;
+                // the evaluator's statement type stores both as lists.
+                for statement in policy["Statement"].as_array_mut().unwrap() {
+                    for key in ["Action", "Resource"] {
+                        if statement[key].is_string() {
+                            statement[key] = json!([statement[key].take()]);
+                        }
+                    }
+                }
+                let policy: AwsIamPolicy = serde_json::from_value(policy)
+                    .unwrap_or_else(|error| panic!("{file}/{name}: {error}"));
+                statements.extend(policy.statement);
+            }
+        }
+    }
+    assert!(!statements.is_empty());
+    statements
+}
+
 #[tokio::test]
 async fn terraform_management_policies_require_numeric_asg_versions() {
     // Automatic setup includes every provision set, even for absent resource
     // types. Evaluate the complete emitted policy so no broader Allow bypasses
     // the numeric-version conditions.
     for automatic in [false, true] {
-        let stack = Stack::new("asg-boundary".into())
-            .management(ManagementPermissions::extend(
-                PermissionProfile::new().global(["compute-cluster/management"]),
-            ))
-            .add(
-                RemoteStackManagement::new("management".into()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-        let settings = StackSettings {
-            setup_management: if automatic {
-                SetupManagement::Automatic
-            } else {
-                SetupManagement::Manual
-            },
-            ..Default::default()
-        };
-        let config = DeploymentConfig::builder()
-            .stack_settings(settings.clone())
-            .environment_variables(EnvironmentVariablesSnapshot {
-                variables: Vec::new(),
-                hash: String::new(),
-                created_at: "2026-01-01T00:00:00Z".into(),
-            })
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
-        let stack = ManagementPermissionProfileMutation
-            .mutate(stack, &StackState::new(Platform::Aws), &config)
-            .await
-            .unwrap();
-        let module = render(&stack, TerraformTarget::Aws, settings);
-        assert_terraform_valid(&module, "numeric ASG management permissions");
-        let mut context = Context::new();
-        for (name, value) in [
-            ("local", json!({"resource_prefix": "stack-a"})),
-            (
-                "var",
-                json!({"managing_account_id": "210987654321", "managing_role_arn": "arn:aws:iam::210987654321:role/manager"}),
-            ),
-            (
-                "data",
-                json!({
-                    "aws_partition": {"current": {"partition": "aws"}},
-                    "aws_region": {"current": {"region": "us-west-2"}},
-                    "aws_caller_identity": {"current": {"account_id": "123456789012"}}
-                }),
-            ),
-            (
-                "aws_iam_policy",
-                json!({"management_permissions_boundary": {
-                    "arn": "arn:aws:iam::123456789012:policy/stack-a-deployment-management-boundary"
-                }}),
-            ),
-            (
-                "aws_iam_role",
-                json!({"management": {
-                    "arn": "arn:aws:iam::123456789012:role/stack-a-management"
-                }}),
-            ),
-        ] {
-            context.declare_var(name, hcl::to_value(value).unwrap());
-        }
-        let mut statements = Vec::new();
-        for (file, contents) in module.iter().filter(|(file, _)| file.ends_with(".tf")) {
-            let body: hcl::Body = hcl::parse(contents).unwrap();
-            for block in body.blocks() {
-                let labels = block.labels();
-                if block.identifier() != "resource" || labels.len() != 2 {
-                    continue;
-                }
-                let kind = labels[0].as_str();
-                let name = labels[1].as_str();
-                if (kind == "aws_iam_policy" && name.starts_with("management_managed_policy"))
-                    || (kind == "aws_iam_role_policy" && name.starts_with("management_"))
-                {
-                    let mut policy = document(attribute(block, "policy"), &context);
-                    // IAM accepts a scalar for a single action or resource;
-                    // the evaluator's statement type stores both as lists.
-                    for statement in policy["Statement"].as_array_mut().unwrap() {
-                        for key in ["Action", "Resource"] {
-                            if statement[key].is_string() {
-                                statement[key] = json!([statement[key].take()]);
-                            }
-                        }
-                    }
-                    let policy: AwsIamPolicy = serde_json::from_value(policy)
-                        .unwrap_or_else(|error| panic!("{file}/{name}: {error}"));
-                    statements.extend(policy.statement);
-                }
-            }
-        }
-        assert!(!statements.is_empty());
+        let statements =
+            rendered_management_statements(automatic, &["compute-cluster/management"]).await;
         let arn = "arn:aws:autoscaling:us-west-2:123456789012:autoScalingGroup:example:autoScalingGroupName/stack-a-compute";
         let tags = [
             (ALIEN_STACK_TAG_KEY, "stack-a"),
@@ -745,6 +754,71 @@ async fn terraform_management_policies_require_numeric_asg_versions() {
                     evaluate(&statements, &request),
                     Decision::NotAllowed,
                     "automatic={automatic}/{action}/{tags:?}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn terraform_management_passes_roles_only_to_their_intended_services() {
+    for automatic in [false, true] {
+        let statements = rendered_management_statements(
+            automatic,
+            &[
+                "compute-cluster/management",
+                "container/provision",
+                "worker/provision",
+                "build/provision",
+            ],
+        )
+        .await;
+        for (role, intended_service) in [
+            ("stack-a-volume-backups-compute", "dlm.amazonaws.com"),
+            ("stack-a-compute-node", "ec2.amazonaws.com"),
+            ("stack-a-execution-sa", "lambda.amazonaws.com"),
+            ("stack-a-build-sa", "codebuild.amazonaws.com"),
+        ] {
+            for prefix in ["stack-a", "stack-b"] {
+                let role = role.replacen("stack-a", prefix, 1);
+                for service in [
+                    Some(intended_service),
+                    Some("unrelated.amazonaws.com"),
+                    None,
+                ] {
+                    // PassRole does not supply resource tags to IAM conditions.
+                    let mut request = Request::new(
+                        "iam:PassRole",
+                        format!("arn:aws:iam::123456789012:role/{role}"),
+                    );
+                    if let Some(service) = service {
+                        request = request.with("iam:PassedToService", service);
+                    }
+                    assert_eq!(
+                        evaluate(&statements, &request) == Decision::Allowed,
+                        prefix == "stack-a" && service == Some(intended_service),
+                        "automatic={automatic}/{role}/{service:?}"
+                    );
+                }
+            }
+        }
+        // Other provision grants must not let Lambda or CodeBuild use the
+        // setup-owned backup role, or revive a legacy backup role.
+        for role in ["stack-a-volume-backups-compute", "stack-a-dlm-compute"] {
+            for service in ["lambda.amazonaws.com", "codebuild.amazonaws.com"] {
+                let request = Request::new(
+                    "iam:PassRole",
+                    format!("arn:aws:iam::123456789012:role/{role}"),
+                )
+                .with("iam:PassedToService", service);
+                assert_eq!(
+                    evaluate(&statements, &request),
+                    if role == "stack-a-dlm-compute" {
+                        Decision::ExplicitlyDenied
+                    } else {
+                        Decision::NotAllowed
+                    },
+                    "automatic={automatic}/{role}/{service}"
                 );
             }
         }
