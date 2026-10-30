@@ -1352,3 +1352,203 @@ async fn automatic_cleanup_deletes_identity_after_workload_but_preserves_setup_v
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn automatic_identity_cleanup_rechecks_ownership_after_partial_failure() -> Result<()> {
+    for retry_owner in ["runtime", "setup"] {
+        let stack = Stack::new("cleanup-retry".to_string())
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+        let account = state.resources.get_mut("execution-sa").unwrap();
+        account.controller_platform = Some(alien_core::Platform::Aws);
+        // An older checkpoint has only live tags as ownership proof.
+        let controller: AwsServiceAccountController = serde_json::from_value(serde_json::json!({
+            "state": "deleteStart", "roleName": "owned-execution-sa",
+            "roleArn": "arn:aws:iam::123456789012:role/owned-execution-sa",
+            "stackPermissionsApplied": true
+        }))
+        .unwrap();
+        account.set_internal_controller(Some(Box::new(controller)))?;
+        account.status = ResourceStatus::Deleting;
+        account.retry_attempt = 9;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut iam = MockIamApi::new();
+        let prefix = state.resource_prefix.clone();
+        let seen = calls.clone();
+        iam.expect_get_role()
+            .withf(|role| role == "owned-execution-sa")
+            .times(if retry_owner == "runtime" { 3 } else { 2 })
+            .returning(move |_| {
+                let mut calls = seen.lock().unwrap();
+                let owner = if calls.is_empty() {
+                    "runtime"
+                } else {
+                    retry_owner
+                };
+                calls.push("ownership");
+                Ok(
+                    serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": {
+                        "Path": "/", "RoleName": "owned-execution-sa", "RoleId": "existing-role",
+                        "Arn": "arn:aws:iam::123456789012:role/owned-execution-sa",
+                        "CreateDate": "2026-10-30T00:00:00Z", "Tags": {"member": [
+                            {"Key": "managed-by", "Value": owner},
+                            {"Key": "deployment", "Value": prefix},
+                            {"Key": "resource", "Value": "execution-sa"}
+                        ]}
+                    }}}))
+                    .unwrap(),
+                )
+            });
+        let seen = calls.clone();
+        let attempts = if retry_owner == "runtime" { 2 } else { 1 };
+        iam.expect_list_attached_role_policies()
+            .withf(|role| role == "owned-execution-sa")
+            .times(attempts)
+            .returning(move |_| {
+                let detached = seen.lock().unwrap().contains(&"detach");
+                Ok(ListAttachedRolePoliciesResponse {
+                    list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                        attached_policies: if detached {
+                            None
+                        } else {
+                            Some(
+                                serde_json::from_value(serde_json::json!({"member": [{
+                                    "PolicyName": "execution",
+                                    "PolicyArn": "arn:aws:iam::123456789012:policy/execution"
+                                }]}))
+                                .unwrap(),
+                            )
+                        },
+                        is_truncated: Some(false),
+                        marker: None,
+                    },
+                })
+            });
+        let seen = calls.clone();
+        iam.expect_detach_role_policy()
+            .withf(|role, policy| {
+                role == "owned-execution-sa"
+                    && policy == "arn:aws:iam::123456789012:policy/execution"
+            })
+            .times(1)
+            .returning(move |_, _| {
+                seen.lock().unwrap().push("detach");
+                Ok(())
+            });
+        iam.expect_list_role_policies()
+            .withf(|role| role == "owned-execution-sa")
+            .times(attempts)
+            .returning(|_| {
+                Ok(ListRolePoliciesResponse {
+                    list_role_policies_result: ListRolePoliciesResult {
+                        policy_names: Some(PolicyNames {
+                            member: vec!["execution".to_string()],
+                        }),
+                        is_truncated: Some(false),
+                        marker: None,
+                    },
+                })
+            });
+        let seen = calls.clone();
+        iam.expect_delete_role_policy()
+            .withf(|role, policy| role == "owned-execution-sa" && policy == "execution")
+            .times(attempts)
+            .returning(move |_, policy| {
+                let mut calls = seen.lock().unwrap();
+                let first = !calls.contains(&"policy");
+                calls.push("policy");
+                if first {
+                    return Err(alien_error::AlienError::new(
+                        alien_client_core::ErrorData::RemoteAccessDenied {
+                            resource_type: "role policy".to_string(),
+                            resource_name: policy.to_string(),
+                        },
+                    ));
+                }
+                Ok(())
+            });
+        let seen = calls.clone();
+        iam.expect_delete_role()
+            .withf(|role| role == "owned-execution-sa")
+            .times(usize::from(retry_owner == "runtime"))
+            .returning(move |_| {
+                seen.lock().unwrap().push("role");
+                Ok(())
+            });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let provider = Arc::new(provider);
+        let mut config = default_deployment_config();
+        config.stack_settings.setup_management = SetupManagement::Automatic;
+        for attempt in 0..2 {
+            state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            if attempt == 1 {
+                assert!(state
+                    .resources
+                    .get_mut("execution-sa")
+                    .unwrap()
+                    .retry_failed()?);
+            }
+            let executor = StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
+                ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+                &config,
+                provider.clone(),
+            )?;
+            for _ in 0..10 {
+                state = executor.step(state).await?.next_state;
+                state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+                if matches!(
+                    get_status(&state, "execution-sa"),
+                    Some(ResourceStatus::Deleted | ResourceStatus::DeleteFailed)
+                ) {
+                    break;
+                }
+            }
+            let account = &state.resources["execution-sa"];
+            let controller =
+                account.get_internal_controller_typed::<AwsServiceAccountController>()?;
+            if attempt == 0 {
+                assert_eq!(account.status, ResourceStatus::DeleteFailed);
+                assert!(account
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .to_string()
+                    .contains("execution"));
+                assert!(account.last_failed_state.is_some());
+                assert_eq!(controller.role_name.as_deref(), Some("owned-execution-sa"));
+                assert!(controller.role_arn.is_some());
+                assert_eq!(*calls.lock().unwrap(), ["ownership", "detach", "policy"]);
+            } else {
+                assert_eq!(account.status, ResourceStatus::Deleted);
+                assert!(account.error.is_none());
+                assert_eq!(controller.role_name.is_some(), retry_owner == "setup");
+                assert_eq!(controller.role_arn.is_some(), retry_owner == "setup");
+                assert_eq!(
+                    *calls.lock().unwrap(),
+                    if retry_owner == "runtime" {
+                        vec![
+                            "ownership",
+                            "detach",
+                            "policy",
+                            "ownership",
+                            "policy",
+                            "ownership",
+                            "role",
+                        ]
+                    } else {
+                        vec!["ownership", "detach", "policy", "ownership"]
+                    }
+                );
+            }
+        }
+    }
+    Ok(())
+}
