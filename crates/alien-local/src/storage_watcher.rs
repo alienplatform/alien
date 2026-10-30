@@ -46,6 +46,10 @@ struct Cursor {
 
 /// A cursor belongs to one destination. Successful delivery to another destination
 /// must never acknowledge this one's pending objects.
+///
+/// A destination without a cursor starts from the objects that exist when it opens, as
+/// a new cloud notification or trigger only sees later writes. From then on the cursor
+/// is durable, so a restart delivers what changed while stopped and replays nothing.
 pub(crate) struct StorageWatcher {
     root: PathBuf,
     state_path: PathBuf,
@@ -64,7 +68,22 @@ impl StorageWatcher {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .into_alien_error()
                 .context(storage_error(state_path, "Read storage cursor"))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Cursor::default(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let snapshot_root = root.clone();
+                let existing =
+                    tokio::task::spawn_blocking(move || storage_snapshot(&snapshot_root))
+                        .await
+                        .into_alien_error()
+                        .context(storage_error(&root, "Join storage scan"))??;
+                let cursor = Cursor {
+                    objects: existing
+                        .into_iter()
+                        .map(|(key, version)| (key, Some(version)))
+                        .collect(),
+                };
+                save_cursor(&cursor, state_path).await?;
+                cursor
+            }
             Err(error) => {
                 return Err(error)
                     .into_alien_error()
@@ -147,7 +166,7 @@ impl StorageWatcher {
             }
             // Preserve pending creation across restart, including a later deletion.
             if observed {
-                self.save().await?;
+                save_cursor(&self.cursor, &self.state_path).await?;
             }
             let changes: Vec<_> = self
                 .cursor
@@ -161,6 +180,10 @@ impl StorageWatcher {
                     }),
                 })
                 .collect();
+            // The cursor advances only after the destination acknowledged, and is
+            // checkpointed once per pass rather than once per object. A crash before the
+            // checkpoint redelivers this pass (at-least-once); it can never lose an event.
+            let mut acknowledged = false;
             for change in changes {
                 let key = change.key.clone();
                 let version = change.version;
@@ -168,7 +191,7 @@ impl StorageWatcher {
                     // If completion and shutdown coincide, persist the completion first.
                     biased;
                     result = deliver(change) => result?,
-                    _ = stop.cancelled() => return Ok(()),
+                    _ = stop.cancelled() => break,
                 };
                 if !success {
                     scan.reset_after(Duration::from_secs(2));
@@ -182,49 +205,53 @@ impl StorageWatcher {
                         self.cursor.objects.remove(&key);
                     }
                 }
-                // A crash between delivery and this commit may duplicate; it cannot lose
-                // an event. Never advance the durable cursor before the destination acks.
-                self.save().await?;
+                acknowledged = true;
+            }
+            if acknowledged {
+                save_cursor(&self.cursor, &self.state_path).await?;
+            }
+            if stop.is_cancelled() {
+                return Ok(());
             }
         }
     }
+}
 
-    async fn save(&self) -> Result<()> {
-        let bytes = serde_json::to_vec(&self.cursor)
-            .into_alien_error()
-            .context(storage_error(&self.state_path, "Serialize storage cursor"))?;
-        let path = self.state_path.clone();
-        tokio::task::spawn_blocking(move || {
-            let parent = path.parent().ok_or_else(|| {
-                AlienError::new(storage_error(&path, "Cursor has no parent directory"))
-            })?;
-            std::fs::create_dir_all(parent)
-                .into_alien_error()
-                .context(storage_error(&path, "Create cursor directory"))?;
-            let mut file = tempfile::NamedTempFile::new_in(parent)
-                .into_alien_error()
-                .context(storage_error(&path, "Create cursor checkpoint"))?;
-            std::io::Write::write_all(&mut file, &bytes)
-                .into_alien_error()
-                .context(storage_error(&path, "Write cursor checkpoint"))?;
-            file.as_file()
-                .sync_all()
-                .into_alien_error()
-                .context(storage_error(&path, "Sync cursor checkpoint"))?;
-            file.persist(&path)
-                .into_alien_error()
-                .context(storage_error(&path, "Publish cursor checkpoint"))?;
-            #[cfg(unix)]
-            std::fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .into_alien_error()
-                .context(storage_error(&path, "Sync cursor directory"))?;
-            Ok(())
-        })
-        .await
+async fn save_cursor(cursor: &Cursor, state_path: &Path) -> Result<()> {
+    let bytes = serde_json::to_vec(cursor)
         .into_alien_error()
-        .context(storage_error(&self.state_path, "Join cursor checkpoint"))?
-    }
+        .context(storage_error(state_path, "Serialize storage cursor"))?;
+    let path = state_path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let parent = path.parent().ok_or_else(|| {
+            AlienError::new(storage_error(&path, "Cursor has no parent directory"))
+        })?;
+        std::fs::create_dir_all(parent)
+            .into_alien_error()
+            .context(storage_error(&path, "Create cursor directory"))?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)
+            .into_alien_error()
+            .context(storage_error(&path, "Create cursor checkpoint"))?;
+        std::io::Write::write_all(&mut file, &bytes)
+            .into_alien_error()
+            .context(storage_error(&path, "Write cursor checkpoint"))?;
+        file.as_file()
+            .sync_all()
+            .into_alien_error()
+            .context(storage_error(&path, "Sync cursor checkpoint"))?;
+        file.persist(&path)
+            .into_alien_error()
+            .context(storage_error(&path, "Publish cursor checkpoint"))?;
+        #[cfg(unix)]
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .into_alien_error()
+            .context(storage_error(&path, "Sync cursor directory"))?;
+        Ok(())
+    })
+    .await
+    .into_alien_error()
+    .context(storage_error(state_path, "Join cursor checkpoint"))?
 }
 
 fn storage_error(path: &Path, reason: &str) -> ErrorData {
@@ -321,13 +348,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn pending_creation_survives_restart_and_still_delivers_deletion() {
+    async fn new_cursor_skips_existing_objects_and_pending_creation_survives_restart() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("objects");
         let state = directory.path().join("cursor.json");
         std::fs::create_dir(&root).unwrap();
-        std::fs::write(root.join("pending"), b"payload").unwrap();
+        std::fs::write(root.join("existing"), b"before").unwrap();
         let watcher = StorageWatcher::open(&root, &state).await.unwrap();
+        std::fs::write(root.join("pending"), b"payload").unwrap();
         let stop = CancellationToken::new();
         let task_stop = stop.clone();
         let (sender, mut receiver) = mpsc::channel(1);
@@ -376,9 +404,10 @@ mod tests {
         stop.cancel();
         task.await.unwrap().unwrap();
         let recovered = StorageWatcher::open(&root, &state).await.unwrap();
-        assert!(
-            recovered.cursor.objects.is_empty(),
-            "completed deletion is durable"
+        assert_eq!(
+            recovered.cursor.objects.keys().collect::<Vec<_>>(),
+            vec!["existing"],
+            "completed deletion is durable and the baseline object was never pending"
         );
     }
 

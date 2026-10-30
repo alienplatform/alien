@@ -475,13 +475,7 @@ async fn handle_raw_dapr_message(
         None => original_source.to_owned(),
     };
 
-    let payload = match azure_queue_payload(alien_core::MessagePayload::Json(json_value)) {
-        Ok(payload) => payload,
-        Err(error) => {
-            error!(%error, "Failed to normalize Service Bus queue payload");
-            return (StatusCode::BAD_REQUEST, "Invalid queue payload").into_response();
-        }
-    };
+    let payload = azure_queue_payload(alien_core::MessagePayload::Json(json_value));
 
     let qm = alien_core::QueueMessage {
         id: message_id,

@@ -183,10 +183,7 @@ pub fn dapr_cloudevent_to_queue_messages(event: Event) -> Result<Vec<QueueMessag
         }
     };
 
-    let payload = azure_queue_payload(payload).context(ErrorData::EventProcessingFailed {
-        event_type: event_type_str.to_string(),
-        reason: "Failed to normalize Service Bus queue payload".to_string(),
-    })?;
+    let payload = azure_queue_payload(payload);
 
     // Use Azure Service Bus MessageId if available, otherwise fall back to CloudEvent ID
     let message_id =

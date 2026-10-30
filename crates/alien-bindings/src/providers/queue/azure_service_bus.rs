@@ -179,7 +179,7 @@ impl Queue for AzureServiceBusQueue {
                         Err(_) => alien_core::MessagePayload::Text(body),
                     };
 
-                    let payload = match azure_queue_payload(payload)? {
+                    let payload = match azure_queue_payload(payload) {
                         alien_core::MessagePayload::Json(value) => MessagePayload::Json(value),
                         alien_core::MessagePayload::Text(text) => MessagePayload::Text(text),
                     };

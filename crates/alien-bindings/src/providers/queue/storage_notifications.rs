@@ -2,12 +2,14 @@
 
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    storage_notifications::GCS_SUFFIX_ATTRIBUTE, MessagePayload, StorageEvent, StorageEventType,
+    storage_notifications::{GCS_RULE_ATTRIBUTE, GCS_SUFFIX_ATTRIBUTE},
+    MessagePayload, StorageEvent, StorageEventType,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
+use tracing::warn;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,24 +31,45 @@ fn invalid(reason: impl Into<String>) -> ErrorData {
     }
 }
 
-/// Normalize GCS notifications while preserving ordinary queue bodies.
-/// `None` means a valid notification failed its suffix filter and must be acknowledged.
-/// Malformed notifications return an error and must remain available for redelivery.
-pub fn gcp_queue_payload(
+/// How a consumer handles one Pub/Sub message read from a Queue.
+#[derive(Debug, PartialEq)]
+pub enum GcpQueueDelivery {
+    /// Hand this payload to the consumer.
+    Deliver(MessagePayload),
+    /// A storage notification whose key misses its rule's suffix: acknowledge it unseen.
+    Filtered,
+}
+
+/// Normalize GCS notifications created for a Storage's rules; every other message keeps
+/// its body. Each message is decided on its own, so one bad message never fails a batch:
+/// a notification that doesn't parse is delivered unchanged, where the consumer's
+/// `StorageEvent` parsing reports it, instead of being dropped or redelivered forever.
+pub fn gcp_queue_payload(data: &[u8], attributes: &HashMap<String, String>) -> GcpQueueDelivery {
+    if !attributes.contains_key(GCS_RULE_ATTRIBUTE) {
+        return GcpQueueDelivery::Deliver(ordinary_payload(data));
+    }
+    match gcs_storage_event(data, attributes) {
+        Ok(Some(event)) => GcpQueueDelivery::Deliver(MessagePayload::Json(event)),
+        Ok(None) => GcpQueueDelivery::Filtered,
+        Err(error) => {
+            warn!(%error, "Delivering an unparseable storage notification unchanged");
+            GcpQueueDelivery::Deliver(ordinary_payload(data))
+        }
+    }
+}
+
+fn ordinary_payload(data: &[u8]) -> MessagePayload {
+    let text = String::from_utf8_lossy(data);
+    serde_json::from_str(&text)
+        .map(MessagePayload::Json)
+        .unwrap_or_else(|_| MessagePayload::Text(text.into_owned()))
+}
+
+/// `None` means the notification failed its rule's suffix filter.
+fn gcs_storage_event(
     data: &[u8],
     attributes: &HashMap<String, String>,
-) -> Result<Option<MessagePayload>> {
-    if !attributes.contains_key("notificationConfig") {
-        let payload = match serde_json::from_slice(data) {
-            Ok(value) => MessagePayload::Json(value),
-            Err(_) => MessagePayload::Text(
-                String::from_utf8(data.to_vec())
-                    .into_alien_error()
-                    .context(invalid("Pub/Sub message body is not UTF-8"))?,
-            ),
-        };
-        return Ok(Some(payload));
-    }
+) -> Result<Option<serde_json::Value>> {
     for (name, expected) in [
         ("eventType", "OBJECT_FINALIZE"),
         ("payloadFormat", "JSON_API_V1"),
@@ -100,7 +123,7 @@ pub fn gcp_queue_payload(
         region: None,
     };
     serde_json::to_value(event)
-        .map(|value| Some(MessagePayload::Json(value)))
+        .map(Some)
         .into_alien_error()
         .context(ErrorData::SerializationFailed {
             message: "Storage notification queue payload".to_string(),
@@ -124,17 +147,28 @@ struct BlobCreatedData {
     content_type: Option<String>,
 }
 
-/// Normalize the singleton CloudEvent delivered by Event Grid to Service Bus.
-/// Ordinary queue messages retain their original payload and settlement behavior.
-pub fn azure_queue_payload(payload: MessagePayload) -> Result<MessagePayload> {
+/// Normalize the singleton CloudEvent Event Grid delivers to Service Bus for a blob
+/// creation; every other message keeps its body. As on GCP, an event that doesn't
+/// parse is delivered unchanged rather than failing the batch it arrived in.
+pub fn azure_queue_payload(payload: MessagePayload) -> MessagePayload {
     let MessagePayload::Json(value) = &payload else {
-        return Ok(payload);
+        return payload;
     };
     if value.get("type").and_then(serde_json::Value::as_str)
         != Some("Microsoft.Storage.BlobCreated")
     {
-        return Ok(payload);
+        return payload;
     }
+    match blob_created_storage_event(value) {
+        Ok(event) => MessagePayload::Json(event),
+        Err(error) => {
+            warn!(%error, "Delivering an unparseable storage notification unchanged");
+            payload
+        }
+    }
+}
+
+fn blob_created_storage_event(value: &serde_json::Value) -> Result<serde_json::Value> {
     let event: BlobCreatedEvent = serde_json::from_value(value.clone())
         .into_alien_error()
         .context(invalid("Azure BlobCreated CloudEvent is invalid"))?;
@@ -169,7 +203,6 @@ pub fn azure_queue_payload(payload: MessagePayload) -> Result<MessagePayload> {
         region: None,
     };
     serde_json::to_value(storage_event)
-        .map(MessagePayload::Json)
         .into_alien_error()
         .context(ErrorData::SerializationFailed {
             message: "Storage notification queue payload".to_string(),
@@ -190,6 +223,7 @@ mod tests {
             ("eventType", "OBJECT_FINALIZE"),
             ("payloadFormat", "JSON_API_V1"),
             ("eventTime", "2026-10-30T08:00:00.123Z"),
+            (GCS_RULE_ATTRIBUTE, "source/0"),
             (GCS_SUFFIX_ATTRIBUTE, ".json"),
         ]
         .into_iter()
@@ -200,10 +234,8 @@ mod tests {
     #[test]
     fn gcs_notification_preserves_metadata_and_literal_keys() {
         let body = json!({"bucket":"source", "name":"in/quote\"é*.json", "size":"7", "etag":"etag", "generation":"123", "contentType":"application/json", "storageClass":"STANDARD", "metadata":{"label":"value"}});
-        let result = gcp_queue_payload(&serde_json::to_vec(&body).unwrap(), &attributes())
-            .unwrap()
-            .unwrap();
-        let MessagePayload::Json(value) = result else {
+        let result = gcp_queue_payload(&serde_json::to_vec(&body).unwrap(), &attributes());
+        let GcpQueueDelivery::Deliver(MessagePayload::Json(value)) = result else {
             panic!("expected JSON")
         };
         let event: StorageEvent = serde_json::from_value(value).unwrap();
@@ -238,51 +270,77 @@ mod tests {
             ("in/a*.JSON", false),
         ] {
             let body = serde_json::to_vec(&json!({"bucket":"source", "name":key})).unwrap();
-            assert_eq!(gcp_queue_payload(&body, &attrs).unwrap().is_some(), matches);
+            assert_eq!(
+                gcp_queue_payload(&body, &attrs) != GcpQueueDelivery::Filtered,
+                matches,
+                "{key}"
+            );
         }
         attrs.remove(GCS_SUFFIX_ATTRIBUTE);
-        assert!(
-            gcp_queue_payload(br#"{"bucket":"source","name":"any"}"#, &attrs)
-                .unwrap()
-                .is_some()
-        );
+        assert!(matches!(
+            gcp_queue_payload(br#"{"bucket":"source","name":"any"}"#, &attrs),
+            GcpQueueDelivery::Deliver(MessagePayload::Json(_))
+        ));
     }
 
     #[test]
-    fn malformed_notifications_fail_instead_of_being_filtered_or_passed_through() {
+    fn malformed_notifications_are_delivered_unchanged_instead_of_failing_the_batch() {
         let attrs = attributes();
-        for body in [
-            b"not json".as_slice(),
-            br#"{"bucket":"source"}"#,
-            br#"{"bucket":"source","name":"excluded.txt","size":"bad"}"#,
+        for (body, expected) in [
+            (
+                b"not json".as_slice(),
+                MessagePayload::Text("not json".into()),
+            ),
+            (
+                br#"{"bucket":"source"}"#.as_slice(),
+                MessagePayload::Json(json!({"bucket":"source"})),
+            ),
+            (
+                br#"{"bucket":"source","name":"excluded.txt","size":"bad"}"#.as_slice(),
+                MessagePayload::Json(json!({"bucket":"source","name":"excluded.txt","size":"bad"})),
+            ),
         ] {
             assert_eq!(
-                gcp_queue_payload(body, &attrs).unwrap_err().code,
-                "QUEUE_PROVIDER_RESPONSE_INVALID"
+                gcp_queue_payload(body, &attrs),
+                GcpQueueDelivery::Deliver(expected)
             );
         }
+        let body = br#"{"bucket":"source","name":"file.txt"}"#;
         for field in ["eventType", "payloadFormat", "eventTime"] {
             let mut broken = attrs.clone();
             broken.remove(field);
-            assert!(
-                gcp_queue_payload(br#"{"bucket":"source","name":"file.json"}"#, &broken).is_err()
+            assert_eq!(
+                gcp_queue_payload(body, &broken),
+                GcpQueueDelivery::Deliver(MessagePayload::Json(
+                    json!({"bucket":"source","name":"file.txt"})
+                )),
+                "a notification missing {field} must not be suffix-filtered or converted"
             );
         }
     }
 
     #[test]
-    fn ordinary_queue_messages_keep_their_payload() {
-        let attrs = HashMap::new();
-        assert_eq!(
-            gcp_queue_payload(b"text", &attrs).unwrap(),
-            Some(MessagePayload::Text("text".into()))
-        );
-        assert_eq!(
-            gcp_queue_payload(br#"{"name":"regular"}"#, &attrs).unwrap(),
-            Some(MessagePayload::Json(json!({"name":"regular"})))
-        );
-        assert!(gcp_queue_payload(&[0xff], &attrs).is_err());
+    fn messages_without_a_rule_attribute_keep_their_payload() {
+        let mut foreign = attributes();
+        foreign.remove(GCS_RULE_ATTRIBUTE);
+        for attrs in [HashMap::new(), foreign] {
+            assert_eq!(
+                gcp_queue_payload(b"text", &attrs),
+                GcpQueueDelivery::Deliver(MessagePayload::Text("text".into()))
+            );
+            assert_eq!(
+                gcp_queue_payload(br#"{"bucket":"source","name":"regular.txt"}"#, &attrs),
+                GcpQueueDelivery::Deliver(MessagePayload::Json(
+                    json!({"bucket":"source","name":"regular.txt"})
+                ))
+            );
+            assert_eq!(
+                gcp_queue_payload(&[b'a', 0xff], &attrs),
+                GcpQueueDelivery::Deliver(MessagePayload::Text("a\u{fffd}".into()))
+            );
+        }
     }
+
     #[test]
     fn azure_notification_preserves_literal_subject_and_metadata() {
         let payload = json!({
@@ -291,8 +349,7 @@ mod tests {
             "time":"2026-10-30T08:00:00.1234567Z",
             "data":{"contentLength":7,"eTag":"etag","contentType":"application/json"}
         });
-        let MessagePayload::Json(result) =
-            azure_queue_payload(MessagePayload::Json(payload)).unwrap()
+        let MessagePayload::Json(result) = azure_queue_payload(MessagePayload::Json(payload))
         else {
             panic!("expected JSON")
         };
@@ -315,23 +372,21 @@ mod tests {
     }
 
     #[test]
-    fn azure_ordinary_messages_pass_through_but_malformed_notifications_fail() {
-        for payload in [
+    fn azure_ordinary_and_malformed_messages_pass_through_unchanged() {
+        let mut payloads = vec![
             MessagePayload::Text("ordinary".into()),
             MessagePayload::Json(json!({"data":"ordinary"})),
-        ] {
-            assert_eq!(azure_queue_payload(payload.clone()).unwrap(), payload);
-        }
-        assert!(azure_queue_payload(MessagePayload::Json(
-            json!({"type":"Microsoft.Storage.BlobCreated"})
-        ))
-        .is_err());
+            MessagePayload::Json(json!({"type":"Microsoft.Storage.BlobCreated"})),
+        ];
         for subject in [
             "",
             "/blobServices/default/containers/source/blobs/",
             "/blobServices/default/containers//blobs/key",
         ] {
-            assert!(azure_queue_payload(MessagePayload::Json(json!({"type":"Microsoft.Storage.BlobCreated", "specversion":"1.0", "time":"2026-10-30T08:00:00Z", "subject":subject, "data":{}}))).is_err());
+            payloads.push(MessagePayload::Json(json!({"type":"Microsoft.Storage.BlobCreated", "specversion":"1.0", "time":"2026-10-30T08:00:00Z", "subject":subject, "data":{}})));
+        }
+        for payload in payloads {
+            assert_eq!(azure_queue_payload(payload.clone()), payload);
         }
     }
 }

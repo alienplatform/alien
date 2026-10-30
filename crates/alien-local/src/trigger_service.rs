@@ -1185,6 +1185,7 @@ mod tests {
                 .call()
                 .await
         });
+        wait_for_cursor(&root).await;
         std::fs::write(root.join("first"), b"first").unwrap();
         let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await
@@ -1308,6 +1309,19 @@ mod tests {
         watcher.await.unwrap().unwrap();
     }
 
+    /// A new watcher starts from the objects present when it opens; it has opened once
+    /// its cursor exists, so only writes after this point are new.
+    async fn wait_for_cursor(root: &std::path::Path) {
+        let cursor = root.parent().unwrap().join("cursor.json");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !cursor.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("storage watcher opened its cursor");
+    }
+
     async fn next_storage_event(
         stream: &mut (impl futures_util::Stream<Item = std::result::Result<Task, tonic::Status>>
                   + Unpin),
@@ -1364,7 +1378,7 @@ mod tests {
                 .call()
                 .await
         });
-
+        wait_for_cursor(&root).await;
         std::fs::write(root.join("doomed"), b"doomed").unwrap();
         let (created, event) = next_storage_event(&mut stream).await;
         assert_eq!(
@@ -1411,6 +1425,7 @@ mod tests {
                 .call()
                 .await
         });
+        wait_for_cursor(&root).await;
         std::fs::write(root.join("before"), b"before").unwrap();
         let (task, event) = next_storage_event(&mut stream).await;
         assert_eq!(event.key, "before");
