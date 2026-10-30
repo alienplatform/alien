@@ -66,11 +66,15 @@ def main():
         boundary = json.loads(Path(output, "boundary.json").read_text())
         management = json.loads(Path(output, "management.json").read_text())
         tags = json.loads(Path(output, "tags.json").read_text())
+        role_tags = [{"Key": key, "Value": value} for key, value in tags.items()]
     # Sids are optional labels; duplicate catalog labels cannot share a document.
     for statement in management["Statement"]:
         statement.pop("Sid", None)
+    # Automatic profiles can repeat identical grants across permission sets.
+    statements = {json.dumps(statement, sort_keys=True): statement
+                  for statement in management["Statement"]}.values()
     chunks = [[]]
-    for statement in management["Statement"]:
+    for statement in statements:
         if len(encode(document(chunks[-1] + [statement]))) > 6000:
             chunks.append([])
         chunks[-1].append(statement)
@@ -116,13 +120,19 @@ def main():
         print(f"PASS CloudFormation validate-template; boundary {len(encode(boundary))} characters", flush=True)
         policies.append(iam.create_policy(PolicyName=prefix + "-deployment-management-boundary",
                                          PolicyDocument=encode(boundary))["Policy"]["Arn"])
+        spare_version = iam.create_policy_version(
+            PolicyArn=boundary_arn, PolicyDocument=encode(boundary), SetAsDefault=False)["PolicyVersion"]["VersionId"]
+        permissive_boundary = iam.create_policy(
+            PolicyName=prefix + "-permissive-boundary", PolicyDocument=admin_policy)["Policy"]["Arn"]
+        policies.append(permissive_boundary)
         create_role(iam, prefix + "-management", AssumeRolePolicyDocument=trust({"AWS": f"arn:aws:iam::{account}:root"}))
         for index, chunk in enumerate(chunks):
             arn = iam.create_policy(PolicyName=f"{prefix}-management-{index}", PolicyDocument=encode(document(chunk)))["Policy"]["Arn"]
             policies.append(arn)
             iam.attach_role_policy(RoleName=prefix + "-management", PolicyArn=arn)
-        for name in [prefix + "-legacy", sibling + "-admin"]:
-            create_role(iam, name, AssumeRolePolicyDocument=trust({"AWS": f"arn:aws:iam::{account}:root"}))
+        for name in [prefix + "-legacy", prefix + "-setup", sibling + "-admin"]:
+            create_role(iam, name, AssumeRolePolicyDocument=trust({"AWS": f"arn:aws:iam::{account}:root"}),
+                        Tags=role_tags if name == prefix + "-legacy" else [])
             iam.put_role_policy(RoleName=name, PolicyName="admin", PolicyDocument=admin_policy)
         for name in [prefix, sibling]:
             bucket = f"{name}-data-{account}"
@@ -137,19 +147,40 @@ def main():
         bounded = prefix + "-workload"
         # Establish positive permission propagation before interpreting denials.
         eventually(lambda: create_role(miam, bounded, AssumeRolePolicyDocument=lambda_trust,
-                                       PermissionsBoundary=boundary_arn), {"AccessDenied"})
+                                       PermissionsBoundary=boundary_arn, Tags=role_tags), {"AccessDenied"})
         print("PASS management creates bounded role", flush=True)
-        check("create unbounded role", False, lambda: create_role(miam, prefix + "-unbounded", AssumeRolePolicyDocument=lambda_trust))
+        check("create unbounded role", False, lambda: create_role(miam, prefix + "-unbounded", AssumeRolePolicyDocument=lambda_trust, Tags=role_tags))
         check("write bounded role", True, lambda: miam.put_role_policy(RoleName=bounded, PolicyName="admin", PolicyDocument=admin_policy))
         check("attach managed administrator policy", False, lambda: miam.attach_role_policy(RoleName=bounded, PolicyArn="arn:aws:iam::aws:policy/AdministratorAccess"))
         check("write unbounded role", False, lambda: miam.put_role_policy(RoleName=prefix + "-legacy", PolicyName="extra", PolicyDocument=admin_policy))
-        check("tag unbounded role", True, lambda: miam.tag_role(RoleName=prefix + "-legacy", Tags=[{"Key": "probe", "Value": "boundary"}]))
+        check("tag unbounded runtime role", True, lambda: miam.tag_role(
+            RoleName=prefix + "-legacy", Tags=role_tags + [{"Key": "Name", "Value": "boundary test"}]))
+        check("tag setup role as runtime", False, lambda: miam.tag_role(RoleName=prefix + "-setup", Tags=role_tags))
+        check("adopt setup role", False, lambda: miam.put_role_permissions_boundary(
+            RoleName=prefix + "-setup", PermissionsBoundary=boundary_arn))
+        check("write setup role", False, lambda: miam.put_role_policy(
+            RoleName=prefix + "-setup", PolicyName="extra", PolicyDocument=admin_policy))
         check("delete unbounded inline policy", False, lambda: miam.delete_role_policy(RoleName=prefix + "-legacy", PolicyName="admin"))
         check("change unbounded trust", False, lambda: miam.update_assume_role_policy(RoleName=prefix + "-legacy", PolicyDocument=lambda_trust))
         check("remove boundary", False, lambda: miam.delete_role_permissions_boundary(RoleName=bounded))
-        check("swap boundary", False, lambda: miam.put_role_permissions_boundary(RoleName=bounded, PermissionsBoundary="arn:aws:iam::aws:policy/AdministratorAccess"))
+        for label, alternate in [("AWS administrator", "arn:aws:iam::aws:policy/AdministratorAccess"),
+                                 ("customer administrator", permissive_boundary)]:
+            check(f"swap boundary to {label}", False, lambda: miam.put_role_permissions_boundary(
+                RoleName=bounded, PermissionsBoundary=alternate))
+            check(f"create role with {label} boundary", False, lambda: create_role(
+                miam, prefix + "-alternate-" + label.split()[0].lower(),
+                AssumeRolePolicyDocument=lambda_trust, PermissionsBoundary=alternate, Tags=role_tags))
         check("rewrite boundary", False, lambda: miam.create_policy_version(PolicyArn=boundary_arn, PolicyDocument=admin_policy, SetAsDefault=True))
-        check("create sibling role", False, lambda: create_role(miam, sibling + "-other", AssumeRolePolicyDocument=lambda_trust, PermissionsBoundary=boundary_arn))
+        check("change default boundary version", False, lambda: miam.set_default_policy_version(
+            PolicyArn=boundary_arn, VersionId=spare_version))
+        check("delete boundary version", False, lambda: miam.delete_policy_version(
+            PolicyArn=boundary_arn, VersionId=spare_version))
+        check("delete boundary policy", False, lambda: miam.delete_policy(PolicyArn=boundary_arn))
+        check("tag boundary policy", False, lambda: miam.tag_policy(
+            PolicyArn=boundary_arn, Tags=[{"Key": "probe", "Value": "boundary"}]))
+        check("untag boundary policy", False, lambda: miam.untag_policy(
+            PolicyArn=boundary_arn, TagKeys=["probe"]))
+        check("create sibling role", False, lambda: create_role(miam, sibling + "-other", AssumeRolePolicyDocument=lambda_trust, PermissionsBoundary=boundary_arn, Tags=role_tags))
         check("read sibling bucket", False, lambda: manager.client("s3").get_object(Bucket=buckets[1], Key="marker"))
         check("adopt legacy role", True, lambda: miam.put_role_permissions_boundary(RoleName=prefix + "-legacy", PermissionsBoundary=boundary_arn))
         check("write adopted role", True, lambda: miam.put_role_policy(RoleName=prefix + "-legacy", PolicyName="extra", PolicyDocument=admin_policy))
