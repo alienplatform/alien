@@ -1019,10 +1019,13 @@ Resources:
           Sid: InspectVpcForLambdaNetworking
         - Action:
           - iam:PassRole
+          Condition:
+            StringEquals:
+              iam:PassedToService: lambda.amazonaws.com
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
-          Sid: PassLambdaExecutionRoles
+          Sid: BoundedRolePass
         - Action:
           - iam:PutRolePermissionsBoundary
           - iam:PutRolePolicy
@@ -1082,6 +1085,17 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
           Sid: ImportTlsCertificates
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
+  ManagementRoleManagementPolicy2:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Application management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
         - Action:
           - acm:AddTagsToCertificate
           - acm:DeleteCertificate
@@ -1097,17 +1111,6 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
           Sid: ManageTlsCertificates
-      Roles:
-      - Ref: ManagementRole
-    DependsOn:
-    - ManagementRole
-  ManagementRoleManagementPolicy2:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      Description: Application management permissions
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
         - Action:
           - acm:DescribeCertificate
           Condition:
@@ -1249,6 +1252,17 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
           Sid: CheckSqsQueueHealth
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
+  ManagementRoleManagementPolicy3:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Application management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
         - Action:
           - dynamodb:DescribeContinuousBackups
           - dynamodb:DescribeTable
@@ -1266,17 +1280,6 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
           Sid: WriteSsmParameters
-      Roles:
-      - Ref: ManagementRole
-    DependsOn:
-    - ManagementRole
-  ManagementRoleManagementPolicy3:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      Description: Application management permissions
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
         - Sid: ReadOwnManagementRole
           Effect: Allow
           Action: iam:GetRole
