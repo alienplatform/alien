@@ -88,3 +88,47 @@ fn azure_storage_notifications_share_account_and_queue() {
         "Azure account-scoped subscriptions sharing a queue",
     );
 }
+
+#[test]
+fn aws_storage_notifications_with_shared_queue_are_provider_valid() {
+    let notification = |prefix: &str, suffix: &str| {
+        StorageNotification::builder()
+            .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs"))
+            .prefix(prefix.to_string())
+            .suffix(suffix.to_string())
+            .build()
+    };
+    let stack = Stack::new("storage-delivery".into())
+        .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Storage::new("first".into())
+                .notifications(vec![
+                    notification("in/", ".json"),
+                    notification("same", "same"),
+                ])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("second".into())
+                .notifications(vec![notification("literal/${x}%{x}*\\é/", ".data")])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    assert_terraform_valid(&module, "AWS notification rules and shared queue ingress");
+}
+
+#[test]
+fn aws_storage_notifications_follow_deployer_enablement() {
+    let storage = Storage::new("files".into()).notifications(vec![
+        StorageNotification::builder().queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs")).build(),
+    ]).build();
+    let stack = Stack::new("gated-notifications".into())
+        .inputs(vec![super::helpers::gate_input("deliveryEnabled", "Enable delivery", "Create the bucket and queue")])
+        .add_enabled_when(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen, "deliveryEnabled")
+        .add_enabled_when(storage, ResourceLifecycle::Frozen, "deliveryEnabled")
+        .build();
+    assert_terraform_valid(&render(&stack, TerraformTarget::Aws, StackSettings::default()), "Gated storage notifications");
+}

@@ -54,6 +54,12 @@ impl CfEmitter for AwsQueueEmitter {
 
         let mut resources = vec![queue_resource];
         resources.extend(queue_iam_policies(ctx, queue, queue_id)?);
+        if alien_core::storage_notifications::queue_receives_storage_notifications(
+            ctx.stack,
+            ctx.resource_id,
+        ) {
+            resources.push(super::storage_notifications::queue_policy(queue_id));
+        }
         Ok(resources)
     }
 

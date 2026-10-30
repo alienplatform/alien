@@ -589,7 +589,7 @@ mod tests {
     #[tokio::test]
     async fn s3_retention_removes_rules_even_when_bucket_is_already_gone() {
         let rule_name =
-            alien_core::storage_notifications::aws_notification_rule_name("owned", "owned-data", 0);
+            alien_core::storage_notifications::aws_notification_rule_name("owned", "data", 0);
         let remaining = Arc::new(Mutex::new(true));
         let mut events = MockEventBridgeApi::new();
         let read = remaining.clone();

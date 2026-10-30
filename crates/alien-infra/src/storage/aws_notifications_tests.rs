@@ -234,7 +234,7 @@ async fn lost_rule_response_recovers_updates_and_selectively_cleans_up() {
         .await
         .unwrap();
     run.run_until_terminal().await.unwrap();
-    let name = aws_notification_rule_name("test", "test-uploads", 0);
+    let name = aws_notification_rule_name("test", "uploads", 0);
     let actual: serde_json::Value = serde_json::from_str(
         remote.lock().unwrap().rules[&name]
             .event_pattern
@@ -307,7 +307,7 @@ async fn frozen_handoff_never_writes_notifications_even_from_saved_mutation_stat
 
 #[tokio::test]
 async fn cleanup_refuses_foreign_rule_and_foreign_targets() {
-    let name = aws_notification_rule_name("test", "test-uploads", 0);
+    let name = aws_notification_rule_name("test", "uploads", 0);
     let mut events = MockEventBridgeApi::new();
     events.expect_describe_rule().times(1).returning(|name| {
         Ok(EventBridgeRule {

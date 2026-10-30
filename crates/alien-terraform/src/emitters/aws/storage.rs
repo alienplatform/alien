@@ -61,6 +61,7 @@ impl TfEmitter for AwsStorageEmitter {
         }
         emit_storage_iam(ctx, &mut fragment, label)?;
         emit_storage_key_iam(ctx, &mut fragment, storage, label)?;
+        super::storage_notifications::emit(ctx, &mut fragment, label, storage)?;
 
         Ok(fragment)
     }
