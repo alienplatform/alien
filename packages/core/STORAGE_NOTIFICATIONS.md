@@ -1,178 +1,202 @@
 # Storage notifications into queues
 
-Storage notifications support AWS CloudFormation and Terraform setup, GCP/Azure
-Terraform setup, Live controllers, and local delivery. GCP/Azure queue consumers
-normalize provider messages into the same event payload.
-
-Declare a queue destination on a Storage resource:
+A Storage can put an event into a Queue every time an object is created or
+overwritten. Workers consume those events with an ordinary queue trigger,
+optionally batched, or a direct `queue.receive()` loop.
 
 ```ts
-import { Queue, Stack, Storage } from "@alienplatform/core"
+import * as alien from "@alienplatform/core"
 
-const work = new Queue("work").build()
-const objects = new Storage("objects")
+const work = new alien.Queue("work").build()
+const objects = new alien.Storage("objects")
   .notify(work, { prefix: "uploads/", suffix: ".json" })
   .notify(work, { prefix: "uploads/", suffix: ".csv" })
   .build()
 
-export default new Stack("ingest")
+const ingest = new alien.Worker("ingest")
+  .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
+  .permissions("execution")
+  .link(objects)
+  .link(work)
+  .trigger({ type: "queue", queue: work.ref(), batch: { maxMessages: 10, maxWindowSeconds: 5 } })
+  .build()
+
+export default new alien.Stack("ingest")
   .add(work, "frozen")
   .add(objects, "frozen")
+  .add(ingest, "live")
+  .permissions({
+    profiles: {
+      execution: {
+        objects: ["storage/data-read"],
+        work: ["queue/data-read"],
+      },
+    },
+  })
   .build()
 ```
-
-Each rule defaults to `events: ["created"]`, the only supported event selection.
-Prefix and suffix matching is literal and case sensitive: `*` and backslashes
-have no special meaning. A key must start with the prefix and end with the
-suffix. The two filters may overlap within the key, and multiple matching rules
-each produce a delivery.
-
-## Limits and ownership
-
-- At most 10 rules per Storage resource.
-- A supplied prefix must contain 1–512 UTF-8 bytes; a supplied suffix must contain
-  1–128 UTF-8 bytes. Omit a filter to match every prefix or suffix.
-- Filters cannot contain control characters U+0000–U+001F or U+007F. These
-  declarations fail at compile time on every platform.
-- The target must be a Queue in the same stack. Storage depends on its queues.
-- Storage and Queue must have the same lifecycle: both Frozen or both Live.
-- A Storage with notifications cannot also be a Worker's direct storage-trigger
-  source. Use a queue trigger, optionally with batching, to consume its events.
-- Kubernetes and machines do not support these declarations and reject them
-  before deployment.
-
-Frozen rules are setup-owned. Adding, editing or removing a rule requires rerunning
-setup; an ordinary deployment update returns `DEPLOYMENT_SETUP_REQUIRED`. Live
-rules are owned by the Storage controller. Consumers need their existing queue
-read permissions; they do not manage notification rules.
-
-AWS rules use EventBridge. The complete event pattern must fit within 4,096
-characters. Compile-time validation reserves space for a full 63-character S3
-bucket name. Ordinary nonoverlapping filters fit even when JSON escaping expands
-them. Highly repetitive overlapping filters can produce many exact alternatives
-and exceed the limit; shorten the filters or reduce their overlap. AWS rejects
-these declarations at compile time with the Storage ID and rule index.
-EventBridge also applies its own wildcard-complexity checks; unusually repetitive
-suffixes can be rejected by AWS even when the pattern fits the size limit.
-S3 EventBridge activation and rule changes propagate asynchronously. A successful
-setup or update does not mean the new filter is already effective: events can
-still match the old rule or miss the new rule during propagation. Allow the
-provider changes to settle before relying on a new filter; reconcile objects
-from Storage when uploads cannot be paused during a rule change. See the
-[AWS rule update semantics](https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_PutRule.html).
-
-The delivery paths are S3 → EventBridge → SQS, Cloud Storage → Pub/Sub,
-and Blob Storage → Event Grid → Service Bus. GCP suffix filtering happens in the
-consumer: nonmatching messages are acknowledged without invoking the handler.
-GCP setup and Live controllers create independent notification configurations and
-a single publisher grant per destination queue for the project's Cloud Storage
-service agent. The queue updates its grant when the first rule starts targeting it
-or the last rule stops; unchanged deployments do not rewrite the policy. Rule
-updates and teardown leave independently managed notification configurations
-alone. The bucket follows the existing setup data-retention policy; removing
-notifications does not delete stored objects. Existing out-of-band configurations
-also count toward provider notification quotas.
-Azure setup and controllers create account-scoped Event Grid subscriptions,
-reusing the storage account's shared system topic. Azure creates that topic
-automatically if it is absent; the controller does not need a system-topic write
-grant and does not own or delete the shared topic. Each Storage owns only its
-subscriptions; updates and deletion preserve subscriptions managed elsewhere.
-Default Event Grid destination authentication requires no extra queue-side grant
-or delivery identity. Existing queue provisioning grants suffice for destination
-validation, so adding notifications does not update the Queue's IAM. Live Storage adds the
-existing `storage/trigger-management` permission set to management permissions;
-Frozen rules keep those writes in setup. Retained-storage cleanup waits until
-Azure confirms its subscriptions are gone and leaves unrelated subscriptions
-and their shared topic in place. Azure can remove an automatically created topic
-after its last subscription is deleted.
-
-Once a Storage declares notifications, setup owns its S3 notification
-configuration. Add more notifications as rules, not out of band. CloudFormation
-uses the bucket's native EventBridge property; Terraform uses
-`aws_s3_bucket_notification`. Setup may replace independently authored Lambda,
-SQS or SNS entries on that bucket. The compile-time check forbids mixing these
-notifications with a Worker storage trigger on the same source.
-
-Live controllers instead enable EventBridge through a read/modify/write of the
-complete bucket notification document, preserving independent entries and filters.
-Setup owns the destination queue policy document; preserve extra statements in
-that setup definition. Live controllers merge only their owned statement.
-
-Each Storage owns its EventBridge rules and queue targets. The Queue owns one
-`StorageNotificationIngress` policy statement, scoped to this account and stack's
-rules. Live reconciliation preserves unrelated statements, and unchanged queues
-do not read or rewrite the policy. Live notifying Storage adds `storage/queue-notifications` management
-permissions; ordinary Storage does not receive these EventBridge grants.
-
-Live rule removal and retained-storage cleanup delete owned targets and rules but
-leave the shared EventBridge switch enabled, because independent rules may use it.
-A bucket retained by CloudFormation also keeps its EventBridge setting. Charges
-can therefore continue on these retained buckets; disable the switch separately
-only after confirming no other rules need those events. Terraform removes its
-owned notification configuration during teardown. Erasing a bucket removes its
-configuration along with the data.
-
-AWS EventBridge introduces event-delivery charges beyond SQS; enabling it on a
-bucket sends supported S3 events to EventBridge even when rules filter them out.
-
-## Local development
-
-`alien dev` runs notification delivery in the storage manager, independently of
-Workers. Each matching rule puts a canonical event into the local queue. Stopping
-a Worker does not stop queue intake. Rule changes stop the old watcher before
-starting the new one, and removing or retaining Storage stops its delivery tasks.
-
-Each rule and each direct Worker storage trigger keeps an acknowledged cursor
-under the deployment's data directory. Restarting the manager or Worker does not
-replay unchanged acknowledged objects. New or overwritten objects retained on disk
-while it was stopped are delivered after restart. Keep the data directory to keep
-these cursors. Delivery and checkpoint writes are separate: a crash between them
-can produce a duplicate, so consumers must remain idempotent.
-
-Filesystem notifications wake reconciliation; a 30-second safety scan covers
-missed hints. Reconciliation compares modification time and size and observes the
-latest committed state, so it cannot reconstruct intermediate overwrites or
-objects created and deleted entirely between scans. Staged multipart files do not
-emit events until committed. Cursors retain pending failed deliveries; corrupted
-cursors fail explicitly instead of silently replaying the bucket.
-
-## Reading notifications
-
-Queue payloads use the portable `StorageEvent` shape: `eventType`, `bucketName`,
-`objectKey`, `timestamp`, and optional `size` and `etag`. For TypeScript Worker
-handlers or messages returned by `queue.receive()`, validate the payload with:
 
 ```ts
 import { onQueueMessage, storageEventFromMessage } from "@alienplatform/sdk"
 
 onQueueMessage("work", async message => {
   const event = await storageEventFromMessage(message)
+  // The object is the record: read it, then process idempotently.
   console.log(event.bucketName, event.objectKey, event.etag)
 })
 ```
 
-The helper accepts parsed Worker payloads and JSON strings from queue bindings.
-It throws a structured `INVALID_STORAGE_EVENT_MESSAGE` error for invalid payloads
-and does not acknowledge messages. When using a queue binding, acknowledge only
-after processing succeeds.
+## Delivery guarantees
 
-Rust exposes the same parser for binding messages, Worker single messages, and
-messages inside Worker batches:
+- **At least once.** Redelivery, provider retries and overlapping rules can deliver
+  the same object more than once. Make processing idempotent, for example by
+  recording `(objectKey, etag)` when an ETag is available.
+- **Unordered.** Events for different objects, and for successive overwrites of
+  one object, can arrive in any order.
+- **The object is the record.** An event is a hint to read the object. Read the
+  current object rather than trusting event metadata to describe it.
+- **Only new writes.** A rule sees objects created after it takes effect. Objects
+  that already exist are not replayed, in the cloud or under `alien dev`.
+- **Rule changes are not instant.** Providers apply rule changes asynchronously.
+  For a short time after setup or an update, events can still match the old
+  filter or miss the new one. If uploads can't pause during a rule change,
+  reconcile by listing the Storage afterwards.
+
+## Rules
+
+Each `.notify(queue, { prefix?, suffix?, events? })` adds a rule:
+
+- `events` defaults to `["created"]`, the only supported event type. Overwrites
+  count as creations.
+- Matching is literal and case sensitive: the key must start with `prefix` and end
+  with `suffix`. `*` and `\` have no special meaning. Prefix and suffix may overlap
+  inside a short key (`prefix: "a/b"`, `suffix: "b.json"` matches `a/b.json`).
+- Omit a filter to match everything on that side. Each matching rule delivers its
+  own event, so two rules that match one key produce two events.
+
+Compile-time checks, on every platform:
+
+| Check | Limit |
+|---|---|
+| Rules per Storage | at most 10 |
+| `prefix` | 1–512 UTF-8 bytes when given |
+| `suffix` | 1–128 UTF-8 bytes when given |
+| Characters | no control characters (U+0000–U+001F, U+007F) |
+| Target | a Queue in the same stack; the Storage depends on it |
+| Lifecycle | Storage and Queue both Frozen or both Live |
+| Worker storage triggers | a Storage with notifications can't also be a direct storage-trigger source; consume its queue instead |
+| Platforms | AWS, GCP, Azure and local. Kubernetes and machine deployments reject notifications at compile time |
+
+On AWS the generated EventBridge pattern must also fit in 4,096 characters. Ordinary
+filters always fit within the 512/128-byte limits. Only prefixes and suffixes that
+overlap in many ways (for example long runs of one repeated character) can exceed
+it, and the compiler names the Storage and rule index. Shorten the filters or
+reduce their overlap.
+
+## Frozen and Live rules
+
+**Frozen** (setup-owned) rules are created by the setup package (CloudFormation or
+Terraform). Adding, changing or removing a rule changes setup: a normal deployment
+update fails with `DEPLOYMENT_SETUP_REQUIRED` until setup is rerun with the new
+package. Deleting the deployment removes the rules. Retained buckets keep their
+data.
+
+**Live** rules are reconciled by the Storage controller on every deployment, using
+management permissions the stack adds automatically: `storage/queue-notifications`
+on AWS, `storage/trigger-management` on Azure, and `queue/storage-notifications` on
+GCP (for the topic's publisher grant). Removing a rule or the Storage deletes exactly the rules,
+targets and subscriptions it created.
+
+Workers that only consume the queue need no extra permissions.
+
+### AWS: setup owns the bucket's notification configuration
+
+Once a Storage declares notifications, **setup owns its S3 notification
+configuration.** CloudFormation sets the bucket's native
+`EventBridgeConfiguration`, and Terraform manages `aws_s3_bucket_notification`.
+Both write the whole document, so Lambda, SQS or SNS notifications added to that
+bucket outside Alien are removed the next time setup runs. Add more notifications
+as rules instead.
+
+Live controllers instead read, modify and write the bucket's notification
+document, and preserve entries they don't own.
+
+## How each provider delivers
+
+| | AWS | GCP | Azure | Local (`alien dev`) |
+|---|---|---|---|---|
+| Path | S3 → EventBridge → SQS | Cloud Storage → Pub/Sub | Blob Storage → Event Grid → Service Bus | file watcher → local queue |
+| One rule is | an EventBridge rule (`<prefix>-sn-…`) with an SQS target | a bucket notification config | an Event Grid subscription on the storage account's system topic | a watcher with its own cursor |
+| Prefix filter | at the provider | at the provider | at the provider | in the watcher |
+| Suffix filter | at the provider | **in the consumer** (see below) | at the provider | in the watcher |
+| Queue grant | one `StorageNotificationIngress` statement on the queue policy, scoped to the account and the stack's rules | Cloud Storage service agent as publisher on the topic, once per queue | none needed | none |
+| `timestamp` | S3 event time | GCS event time | Event Grid event time | object modification time |
+
+Provider details that matter in production:
+
+- **AWS cost.** Enabling EventBridge on a bucket sends every S3 event for that
+  bucket to EventBridge, including events no rule matches. EventBridge bills per
+  event published, in addition to SQS. When notifications are removed, the
+  bucket's EventBridge switch stays on, because rules outside Alien may use it.
+  Turn it off yourself once nothing else needs it.
+- **AWS names.** Rule names are `<prefix>-sn-<hash>-<n>` and must fit EventBridge's
+  64-character limit, so the stack's resource prefix (the CloudFormation stack
+  name) can be at most 42 characters.
+- **GCP suffix filtering happens in the consumer.** Cloud Storage filters only by
+  prefix. The suffix travels as a message attribute, and the Worker runtime or
+  `queue.receive()` acknowledges non-matching messages without handing them to
+  your code. Every object under the prefix still costs one Pub/Sub message, and
+  with push delivery one Worker request. On a pull binding those messages also
+  use up slots in `receive(max)`, so a call can return fewer messages than
+  available, or none. Pick prefixes that are selective on their own.
+- **GCP quota.** Cloud Storage allows 10 notification configs per bucket per event
+  type, and that includes configs created outside Alien.
+- **Azure.** All subscriptions share the storage account's one system topic, which
+  Azure creates when the first subscription is added. Alien never deletes the
+  topic, and subscriptions created elsewhere are left alone.
+- **Messages that are not notifications** in the same queue are delivered
+  unchanged on every provider. A notification that can't be parsed is also
+  delivered unchanged, rather than failing the batch it arrived in, and the SDK
+  helpers below report it.
+
+## The event payload
+
+Every provider delivers the same JSON shape (`StorageEvent`):
+
+| Field | Present | Notes |
+|---|---|---|
+| `eventType` | always | `"created"` |
+| `bucketName` | always | the physical bucket or container name |
+| `objectKey` | always | the literal key, never URL-decoded |
+| `timestamp` | always | RFC 3339, UTC |
+| `size` | AWS, GCP, Azure, local | bytes |
+| `etag` | AWS, GCP, Azure | the provider's own format (S3 MD5 hex, GCS base64, Azure `0x…`). Compare ETags only within one provider |
+| `contentType` | GCP, Azure | |
+| `versionId`, `currentTier`, `metadata` | GCP | generation, storage class, custom metadata |
+
+Code that must run everywhere should rely only on the fields marked "always" and
+treat the rest as optional.
+
+## Reading events in code
+
+TypeScript, for Worker handlers and messages from `queue.receive()`:
+
+```ts
+import { storageEventFromMessage } from "@alienplatform/sdk"
+
+const event = await storageEventFromMessage(message)
+```
+
+Rust (binding messages, single Worker messages and messages inside batches):
 
 ```rust
 use alien_sdk::storage_event_from_message;
 
-// `message` is from queue.receive(), a single handler, or a batch delivery.
 let event = storage_event_from_message(&message)?;
 println!("{} {}", event.bucket_name, event.object_key);
 ```
 
-It returns the portable `alien_sdk::StorageEvent`, including its timestamp and
-optional metadata. Direct binding applications can use it without the `worker`
-feature. Existing direct storage-handler event types remain compatible.
-
-Python accepts `QueueMessage` from bindings and `QueueEvent` from single or batched
-Worker handlers:
+Python (`QueueMessage` from bindings, `QueueEvent` from Worker handlers):
 
 ```python
 from alienplatform import storage_event_from_message
@@ -181,11 +205,24 @@ event = storage_event_from_message(message)
 print(event.bucket_name, event.object_key, event.timestamp)
 ```
 
-Python returns a typed `StorageEvent` with a timezone-aware UTC timestamp. Both
-SDK helpers reject invalid event fields with `INVALID_STORAGE_EVENT_MESSAGE` and
-leave acknowledgment to the caller or Worker runtime.
+Each helper validates the payload and fails with `INVALID_STORAGE_EVENT_MESSAGE`
+if it isn't a storage event. None of them acknowledges the message: with a queue
+binding, acknowledge only after processing succeeds. With a Worker trigger, the
+runtime acknowledges when the handler returns.
 
-Delivery is at least once and unordered. Overwrites produce another event, and
-redelivery or overlapping rules can produce duplicates. The object is the record;
-the notification is a hint to read it. Make processing idempotent, for example by
-tracking `(objectKey, etag)` when an ETag is available.
+## Local development
+
+`alien dev` delivers notifications from the storage manager, independently of
+Workers: stopping a Worker doesn't stop events from reaching the queue.
+
+- Each rule keeps an acknowledged cursor under the deployment's data directory.
+  A new rule starts from the objects that exist when it starts.
+- Restarting `alien dev` replays nothing that was already delivered. Objects
+  written or overwritten while it was stopped are delivered once it is back.
+  Keep the data directory to keep this state.
+- Filesystem events trigger delivery, and a scan every 30 seconds catches anything
+  they missed. The watcher compares modification time and size, so it sees the
+  latest committed state of each object. An object created and deleted between
+  two scans, or overwritten twice, produces at most one event.
+- A crash between delivering and recording an event redelivers it, so local
+  delivery is also at least once.
