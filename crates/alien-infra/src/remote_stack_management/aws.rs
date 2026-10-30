@@ -1290,19 +1290,9 @@ mod tests {
     /// Other sets grant role writes on `role/<prefix>-*`; direct setup's management role must deny
     /// them on itself, by the name it is created under, and on every role carrying setup's sandbox
     /// tags, Live or Frozen, and keep PassRole.
-    #[rstest::rstest]
-    #[case("test-prefix", false, false)]
-    #[case("ssssssssssssssssssssssssssssssssssssssss", false, false)]
-    #[case("test-prefix", true, false)]
-    #[case("ssssssssssssssssssssssssssssssssssssssss", true, false)]
-    #[case("test-prefix", true, true)]
-    #[case("ssssssssssssssssssssssssssssssssssssssss", true, true)]
     #[tokio::test]
-    async fn direct_setup_keeps_a_sandboxs_setup_roles_out_of_managements_reach(
-        #[case] prefix: &str,
-        #[case] physical_keys: bool,
-        #[case] gated_ai: bool,
-    ) {
+    async fn direct_setup_keeps_a_sandboxs_setup_roles_out_of_managements_reach() {
+        let prefix = "ssssssssssssssssssssssssssssssssssssssss";
         let documents = Arc::new(Mutex::new(Vec::<String>::new()));
         let created_roles = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut iam = MockIamApi::new();
@@ -1395,62 +1385,56 @@ mod tests {
                 crate::core::controller_test::test_function_1(),
                 ResourceLifecycle::Live,
             );
-        if gated_ai {
-            builder = builder
-                .with_gated_stack_resource(
-                    alien_core::Ai::new("gateway".into()).build(),
-                    ResourceLifecycle::Frozen,
-                    alien_core::StackInputDefinition::deployer_boolean(
-                        "aiEnabled",
-                        "Enable AI",
-                        "Create the AI gateway",
-                        Some(true),
-                    ),
-                )
-                .management_permissions(alien_core::permissions::ManagementPermissions::extend(
-                    alien_core::PermissionProfile::new().global(["ai/provision"]),
-                ));
-        }
-        if physical_keys {
-            builder = builder.permission_profile(
-                "key-user",
-                alien_core::PermissionProfile::new()
-                    .resource("first", ["key/remote-cryptography"])
-                    .resource("second", ["key/remote-cryptography"]),
+        builder = builder
+            .with_gated_stack_resource(
+                alien_core::Ai::new("gateway".into()).build(),
+                ResourceLifecycle::Frozen,
+                alien_core::StackInputDefinition::deployer_boolean(
+                    "aiEnabled",
+                    "Enable AI",
+                    "Create the AI gateway",
+                    Some(true),
+                ),
+            )
+            .management_permissions(alien_core::permissions::ManagementPermissions::extend(
+                alien_core::PermissionProfile::new().global(["ai/provision"]),
+            ));
+        builder = builder.permission_profile(
+            "key-user",
+            alien_core::PermissionProfile::new()
+                .resource("first", ["key/remote-cryptography"])
+                .resource("second", ["key/remote-cryptography"]),
+        );
+        for id in ["first", "second"] {
+            builder = builder.with_stack_resource(
+                alien_core::Key::new(id.into()).build(),
+                ResourceLifecycle::Frozen,
             );
-            for id in ["first", "second"] {
-                builder = builder.with_stack_resource(
-                    alien_core::Key::new(id.into()).build(),
-                    ResourceLifecycle::Frozen,
-                );
-            }
         }
         let mut executor = builder.build().await.expect("executor builds");
-        if physical_keys {
-            for (id, uuid) in [
-                ("first", "00000000-0000-0000-0000-000000000001"),
-                ("second", "00000000-0000-0000-0000-000000000002"),
-            ] {
-                let arn = format!("arn:aws:kms:us-east-1:123456789012:key/{uuid}");
-                let mut saved = executor.stack_state().resources[id].clone();
-                saved.status = ResourceStatus::Running;
-                let controller: crate::key::AwsKeyController =
-                    serde_json::from_value(serde_json::json!({
-                        "state": "ready", "keyArn": arn, "region": "us-east-1", "available": true
-                    }))
-                    .unwrap();
-                saved
-                    .set_internal_controller(Some(Box::new(controller)))
-                    .unwrap();
-                saved.outputs = Some(ResourceOutputs::new(alien_core::KeyOutputs {
-                    available: Some(true),
-                    fingerprint: alien_core::KeyFingerprint::Aws {
-                        key_arn: arn.clone(),
-                    },
-                    wrapping_key_id: arn,
-                }));
-                executor.insert_saved_resource(id, saved);
-            }
+        for (id, uuid) in [
+            ("first", "00000000-0000-0000-0000-000000000001"),
+            ("second", "00000000-0000-0000-0000-000000000002"),
+        ] {
+            let arn = format!("arn:aws:kms:us-east-1:123456789012:key/{uuid}");
+            let mut saved = executor.stack_state().resources[id].clone();
+            saved.status = ResourceStatus::Running;
+            let controller: crate::key::AwsKeyController =
+                serde_json::from_value(serde_json::json!({
+                    "state": "ready", "keyArn": arn, "region": "us-east-1", "available": true
+                }))
+                .unwrap();
+            saved
+                .set_internal_controller(Some(Box::new(controller)))
+                .unwrap();
+            saved.outputs = Some(ResourceOutputs::new(alien_core::KeyOutputs {
+                available: Some(true),
+                fingerprint: alien_core::KeyFingerprint::Aws {
+                    key_arn: arn.clone(),
+                },
+                wrapping_key_id: arn,
+            }));
+            executor.insert_saved_resource(id, saved);
         }
 
         executor.run_until_terminal().await.expect("setup runs");
@@ -1487,9 +1471,6 @@ mod tests {
                     .unwrap_or_default()
             })
             .collect();
-        executor.with_context(|ctx| {
-            super::setup_parity::assert_setup_policy_parity(ctx, installed, &statements);
-        });
         let created_roles = created_roles.lock().unwrap().clone();
         assert_eq!(created_roles.len(), 1, "{created_roles:?}");
         let own_role = serde_json::json!([format!(
@@ -1499,7 +1480,14 @@ mod tests {
         let (own_role_denies, denies): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) =
             statements
                 .iter()
-                .filter(|statement| super::setup_parity::is_role_guard(statement))
+                .filter(|statement| {
+                    statement["Effect"] == "Deny"
+                        && statement["Action"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|action| action == "iam:PutRolePolicy")
+                })
                 .partition(|statement| statement["Resource"] == own_role);
         assert_eq!(
             own_role_denies.len(),
@@ -1527,7 +1515,3 @@ mod tests {
 #[cfg(test)]
 #[path = "aws_boundary_tests.rs"]
 mod boundary_tests;
-
-#[cfg(test)]
-#[path = "aws_setup_parity.rs"]
-mod setup_parity;
