@@ -83,8 +83,12 @@ impl EventBridgeClient {
             .content_sha256(&body)
             .body(body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+        let result = crate::aws::aws_request_utils::sign_send_json_retrying_when(
+            builder,
+            &self.sign_config(),
+            crate::aws::aws_request_utils::is_transient_json_error,
+        )
+        .await;
 
         Self::map_result(result, operation, resource, Some(&body))
     }
@@ -112,9 +116,12 @@ impl EventBridgeClient {
             .content_sha256(&body)
             .body(body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
+        let result = crate::aws::aws_request_utils::sign_send_no_response_retrying_when(
+            builder,
+            &self.sign_config(),
+            crate::aws::aws_request_utils::is_transient_json_error,
+        )
+        .await;
 
         Self::map_result(result, operation, resource, Some(&body))
     }
@@ -195,11 +202,13 @@ impl EventBridgeClient {
                 resource_name: resource.into(),
             },
             // Resource already exists
-            "ResourceAlreadyExistsException" => ErrorData::RemoteResourceConflict {
-                message,
-                resource_type: "Rule".into(),
-                resource_name: resource.into(),
-            },
+            "ResourceAlreadyExistsException" | "ConcurrentModificationException" => {
+                ErrorData::RemoteResourceConflict {
+                    message,
+                    resource_type: "Rule".into(),
+                    resource_name: resource.into(),
+                }
+            }
             // Invalid input
             "ValidationException" | "InvalidEventPatternException" => ErrorData::InvalidInput {
                 message,
@@ -618,6 +627,20 @@ mod tests {
 
         assert_eq!(error.code, "REMOTE_SERVICE_UNAVAILABLE");
         assert!(error.retryable);
+    }
+    #[tokio::test]
+    async fn rule_discovery_does_not_retry_provider_not_found() {
+        let server = MockServer::start_async().await;
+        let missing = server.mock_async(|when, then| {
+            when.method(POST).header("X-Amz-Target", "AWSEvents.DescribeRule");
+            then.status(400).json_body(serde_json::json!({"__type":"ResourceNotFoundException", "message":"Rule does not exist"}));
+        }).await;
+        let error = client(&server)
+            .describe_rule("test-absent")
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "REMOTE_RESOURCE_NOT_FOUND");
+        missing.assert_hits_async(1).await;
     }
 }
 
