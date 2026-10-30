@@ -5784,10 +5784,17 @@ mod tests {
             sandbox_image_hash(tarballs(), Platform::Gcp),
             artifact_hash(tarballs(), agent.as_deref())
         );
-        assert_eq!(sandbox_image_hash(tarballs(), Platform::Aws), tarballs());
-        assert_ne!(sandbox_image_hash(tarballs(), Platform::Azure), tarballs());
+        // AWS layers the agent at release too, so a new agent renames its artifact as well, and
+        // no two clouds share one: each layers its own contract onto the base.
+        for platform in [Platform::Aws, Platform::Azure, Platform::Gcp] {
+            assert_ne!(sandbox_image_hash(tarballs(), platform), tarballs());
+        }
         assert_ne!(
             sandbox_image_hash(tarballs(), Platform::Azure),
+            sandbox_image_hash(tarballs(), Platform::Gcp)
+        );
+        assert_ne!(
+            sandbox_image_hash(tarballs(), Platform::Aws),
             sandbox_image_hash(tarballs(), Platform::Gcp)
         );
     }
