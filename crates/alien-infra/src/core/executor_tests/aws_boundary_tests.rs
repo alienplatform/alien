@@ -87,40 +87,104 @@ fn installed(state: &mut StackState) -> &mut Value {
         .unwrap()
 }
 
+async fn assert_setup_required(executor: &StackExecutor, state: &StackState, scenario: &str) {
+    for refresh in [false, true] {
+        let result = if refresh {
+            executor.refresh(state.clone()).await
+        } else {
+            executor.step(state.clone()).await
+        };
+        let error = result.err().unwrap_or_else(|| {
+            panic!("{scenario}: must reject before provider access (refresh={refresh})")
+        });
+        assert_eq!(
+            error.code, "SETUP_RERUN_REQUIRED",
+            "{scenario}, refresh={refresh}"
+        );
+        assert!(!error.retryable);
+        assert!(error.to_string().contains("rerun setup"));
+    }
+}
+
 #[tokio::test]
-async fn missing_malformed_and_insufficient_documents_stop_step_and_refresh() {
-    for document in [
-        None,
-        Some(json!({"Statement": "invalid"})),
-        Some(json!({
-            "Version": "2012-10-17", "Statement": []
-        })),
+async fn invalid_installed_boundaries_stop_step_and_refresh() {
+    let (_, state, config) = fixture();
+    let valid = state.resources["management"]
+        .internal_state
+        .clone()
+        .unwrap();
+    let mut wrong_controller = state.resources["management"].clone();
+    wrong_controller
+        .set_internal_controller(Some(Box::new(
+            crate::storage::AwsStorageController::default(),
+        )))
+        .unwrap();
+    let mut cases = vec![
+        ("missing controller", None),
+        ("wrong controller type", wrong_controller.internal_state),
+    ];
+    for (name, document) in [
+        ("missing document", Value::Null),
+        ("malformed document", json!({"Statement": "invalid"})),
+        (
+            "insufficient document",
+            json!({"Version": "2012-10-17", "Statement": []}),
+        ),
     ] {
-        let (_, mut state, config) = fixture();
-        // This would create a bucket if the check happened after stepping controllers.
-        let stack = Stack::new("boundary".to_string())
-            .add(
-                Storage::new("objects".to_string()).build(),
-                ResourceLifecycle::Live,
-            )
-            .add(
-                RemoteStackManagement::new("management".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-        installed(&mut state)["permissionsBoundaryDocument"] = document.unwrap_or(Value::Null);
-        let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
-        for refresh in [false, true] {
-            let result = if refresh {
-                executor.refresh(state.clone()).await
-            } else {
-                executor.step(state.clone()).await
-            };
-            let error = result.err().expect("must reject before provider access");
-            assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
-            assert!(!error.retryable);
-            assert!(error.to_string().contains("rerun setup"));
-        }
+        let mut controller = valid.clone();
+        controller["permissionsBoundaryDocument"] = document;
+        cases.push((name, Some(controller)));
+    }
+    // Even an otherwise sufficient document must reject unresolved extra grants.
+    for (name, extra) in [
+        (
+            "unresolved resource",
+            json!({"Effect": "Allow", "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::${local.resource_prefix}-*"}),
+        ),
+        (
+            "unresolved condition",
+            json!({"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*",
+            "Condition": {"StringEquals": {"aws:RequestedRegion": "${AWS::Region}"}}}),
+        ),
+        (
+            "object condition",
+            json!({"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*",
+            "Condition": {"StringEquals": {"aws:RequestedRegion": {"Ref": "Region"}}}}),
+        ),
+        (
+            "null condition",
+            json!({"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*",
+            "Condition": {"StringEquals": {"aws:RequestedRegion": null}}}),
+        ),
+    ] {
+        let mut controller = valid.clone();
+        controller["permissionsBoundaryDocument"]["Statement"]
+            .as_array_mut()
+            .unwrap()
+            .push(extra);
+        cases.push((name, Some(controller)));
+    }
+    // This bucket would call the provider if validation happened after planning.
+    let stack = Stack::new("boundary".to_string())
+        .add(
+            Storage::new("objects".to_string()).build(),
+            ResourceLifecycle::Live,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
+    for (name, controller) in cases {
+        let mut state = state.clone();
+        state
+            .resources
+            .get_mut("management")
+            .unwrap()
+            .internal_state = controller;
+        assert_setup_required(&executor, &state, name).await;
     }
 }
 
@@ -303,85 +367,6 @@ async fn setup_repair_and_full_teardown_do_not_require_new_runtime_permissions()
 }
 
 #[tokio::test]
-async fn missing_controller_state_cannot_disable_the_check() {
-    let (stack, mut state, config) = fixture();
-    state
-        .resources
-        .get_mut("management")
-        .unwrap()
-        .internal_state = None;
-    let error = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff)
-        .step(state)
-        .await
-        .err()
-        .unwrap();
-    assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
-}
-
-#[tokio::test]
-async fn wrong_controller_type_cannot_look_like_an_unbounded_setup() {
-    let (stack, mut state, config) = fixture();
-    state
-        .resources
-        .get_mut("management")
-        .unwrap()
-        .set_internal_controller(Some(Box::new(
-            crate::storage::AwsStorageController::default(),
-        )))
-        .unwrap();
-    let error = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff)
-        .step(state)
-        .await
-        .err()
-        .unwrap();
-    assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
-}
-
-#[tokio::test]
-async fn unresolved_or_malformed_extra_grants_stop_before_provider_access() {
-    for extra in [
-        json!({"Effect": "Allow", "Action": "s3:GetObject",
-            "Resource": "arn:aws:s3:::${local.resource_prefix}-*"}),
-        json!({"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*",
-            "Condition": {"StringEquals": {"aws:RequestedRegion": "${AWS::Region}"}}}),
-        json!({"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*",
-            "Condition": {"StringEquals": {"aws:RequestedRegion": {"Ref": "Region"}}}}),
-        json!({"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*",
-            "Condition": {"StringEquals": {"aws:RequestedRegion": null}}}),
-    ] {
-        let (_, mut state, config) = fixture();
-        let stack = Stack::new("boundary".to_string())
-            .add(
-                Storage::new("objects".to_string()).build(),
-                ResourceLifecycle::Live,
-            )
-            .add(
-                RemoteStackManagement::new("management".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-        // The valid catalog grants already cover this stack. A malformed extra
-        // statement must still invalidate the recorded document before planning.
-        installed(&mut state)["permissionsBoundaryDocument"]["Statement"]
-            .as_array_mut()
-            .unwrap()
-            .push(extra);
-        let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
-        for refresh in [false, true] {
-            let error = if refresh {
-                executor.refresh(state.clone()).await
-            } else {
-                executor.step(state.clone()).await
-            }
-            .err()
-            .expect("must reject before provider access");
-            assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
-            assert!(!error.retryable);
-        }
-    }
-}
-
-#[tokio::test]
 async fn key_grants_require_the_installed_boundary_to_cover_the_imported_arn() {
     let (_, mut state, config) = fixture();
     let key_arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555";
@@ -432,18 +417,7 @@ async fn key_grants_require_the_installed_boundary_to_cover_the_imported_arn() {
                 .unwrap()
                 .push(grant);
         }
-        for refresh in [false, true] {
-            let result = if refresh {
-                executor.refresh(state.clone()).await
-            } else {
-                executor.step(state.clone()).await
-            };
-            let error = result
-                .err()
-                .expect("setup must approve the exact key ceiling");
-            assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
-            assert!(!error.retryable);
-        }
+        assert_setup_required(&executor, &state, "exact key ceiling").await;
     }
 
     let approved = aws_permissions_boundary_for_stack(
@@ -466,16 +440,5 @@ async fn key_grants_require_the_installed_boundary_to_cover_the_imported_arn() {
             ..Default::default()
         })))
         .unwrap();
-    for refresh in [false, true] {
-        let result = if refresh {
-            executor.refresh(state.clone()).await
-        } else {
-            executor.step(state.clone()).await
-        };
-        let error = result
-            .err()
-            .expect("replacement key requires setup approval");
-        assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
-        assert!(!error.retryable);
-    }
+    assert_setup_required(&executor, &state, "replacement key").await;
 }
