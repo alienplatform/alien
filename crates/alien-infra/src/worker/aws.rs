@@ -288,7 +288,10 @@ impl AwsWorkerController {
         let worker = ctx.desired_resource_config::<Worker>()?;
         // A create that failed before assigning a function name cannot have installed
         // an S3 notification. No dependency or cloud lookup is needed to delete it.
-        if self.worker_name.is_none() && self.arn.is_none() && self.s3_permission_statement_ids.is_empty() {
+        if self.worker_name.is_none()
+            && self.arn.is_none()
+            && self.s3_permission_statement_ids.is_empty()
+        {
             return Ok(());
         }
         let worker_name = self.worker_name.as_deref().ok_or_else(|| {
@@ -4172,7 +4175,8 @@ impl AwsWorkerController {
                         message: format!("Failed to delete old EventBridge rule '{rule_name}'"),
                         resource_id: Some(current_config.id.clone()),
                     })?;
-                    self.eventbridge_rule_names.retain(|name| name != &rule_name);
+                    self.eventbridge_rule_names
+                        .retain(|name| name != &rule_name);
                 }
                 self.eventbridge_permission_statement_ids.clear();
             }
@@ -4299,7 +4303,7 @@ impl AwsWorkerController {
                         .put_rule(PutRuleRequest {
                             name: rule_name.clone(),
                             schedule_expression: Some(schedule_expression),
-                        event_pattern: None,
+                            event_pattern: None,
                             state: Some("ENABLED".to_string()),
                             description: Some(format!(
                                 "Schedule trigger for worker '{}'",
@@ -4704,7 +4708,8 @@ impl AwsWorkerController {
                         message: format!("Failed to delete EventBridge rule '{rule_name}'"),
                         resource_id: Some(worker_config.id.clone()),
                     })?;
-                self.eventbridge_rule_names.retain(|name| name != &rule_name);
+                self.eventbridge_rule_names
+                    .retain(|name| name != &rule_name);
             }
         }
 
@@ -7247,11 +7252,13 @@ mod tests {
             .expect_remove_targets()
             .withf(|rule, ids| rule == "test-basic-func-cron-0" && *ids == ["1"])
             .returning(|rule, _| {
-                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
-                    message: "RemoveTargets failed for target '1'".to_string(),
-                    resource_type: "Rule".to_string(),
-                    resource_name: rule.to_string(),
-                }))
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        message: "RemoveTargets failed for target '1'".to_string(),
+                        resource_type: "Rule".to_string(),
+                        resource_name: rule.to_string(),
+                    },
+                ))
             });
         eventbridge.expect_delete_rule().times(0);
 
@@ -7278,7 +7285,10 @@ mod tests {
             .expect_remove_targets()
             .times(1)
             .returning(move |rule, _| {
-                recorded.lock().unwrap().push(format!("RemoveTargets {rule}"));
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push(format!("RemoveTargets {rule}"));
                 Ok(())
             });
         let recorded = calls.clone();
@@ -11128,7 +11138,9 @@ mod tests {
     mod linked_binding_refresh {
         use super::*;
         use crate::sandbox::{AwsSandboxController, AwsSandboxState};
-        use alien_core::{ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+        use alien_core::{
+            ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        };
 
         const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-sb";
 
@@ -11221,8 +11233,9 @@ mod tests {
             lambda
                 .expect_update_function_configuration()
                 .returning(move |name, request| {
-                    *sink.lock().unwrap() =
-                        request.environment.and_then(|environment| environment.variables);
+                    *sink.lock().unwrap() = request
+                        .environment
+                        .and_then(|environment| environment.variables);
                     Ok(create_successful_function_response(name))
                 });
             let mut executor = executor(
@@ -11308,7 +11321,10 @@ mod tests {
 
             executor.step().await.expect("the heartbeat runs");
             assert_eq!(
-                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
                 AwsWorkerState::RefreshingLinkedBindings
             );
             assert_eq!(
@@ -11316,7 +11332,10 @@ mod tests {
                 ResourceStatus::Updating,
                 "the planner must not start an update mid-refresh: updates begin only from Ready"
             );
-            executor.step().await.expect("the refresh applies the binding");
+            executor
+                .step()
+                .await
+                .expect("the refresh applies the binding");
             executor.step().await.expect("the refresh settles");
             let controller = executor.internal_state::<AwsWorkerController>().unwrap();
             assert_eq!(controller.state, AwsWorkerState::Ready);
@@ -11356,7 +11375,10 @@ mod tests {
                 .await;
                 executor.step().await.expect("the heartbeat runs");
                 assert_eq!(
-                    executor.internal_state::<AwsWorkerController>().unwrap().state,
+                    executor
+                        .internal_state::<AwsWorkerController>()
+                        .unwrap()
+                        .state,
                     AwsWorkerState::Ready
                 );
             }
@@ -11391,11 +11413,14 @@ mod tests {
         async fn a_throttled_comparison_is_skipped_without_failing_the_heartbeat() {
             let mut lambda = MockLambdaApi::new();
             active(&mut lambda);
-            lambda.expect_get_function_environment().times(1).returning(|_| {
-                Err(AlienError::new(CloudClientErrorData::RateLimitExceeded {
-                    message: "Rate exceeded".to_string(),
-                }))
-            });
+            lambda
+                .expect_get_function_environment()
+                .times(1)
+                .returning(|_| {
+                    Err(AlienError::new(CloudClientErrorData::RateLimitExceeded {
+                        message: "Rate exceeded".to_string(),
+                    }))
+                });
             lambda.expect_update_function_configuration().times(0);
             let mut executor = executor(
                 lambda,
@@ -11404,9 +11429,15 @@ mod tests {
                 None,
             )
             .await;
-            executor.step().await.expect("a throttled comparison does not fail the heartbeat");
+            executor
+                .step()
+                .await
+                .expect("a throttled comparison does not fail the heartbeat");
             assert_eq!(
-                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
                 AwsWorkerState::Ready
             );
             assert_eq!(executor.status(), ResourceStatus::Running);
@@ -11457,7 +11488,10 @@ mod tests {
             .await;
             executor.step().await.expect("the heartbeat runs");
             assert_eq!(
-                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
                 AwsWorkerState::Ready
             );
         }
@@ -11499,9 +11533,15 @@ mod tests {
                 Some(previous),
             )
             .await;
-            executor.step().await.expect("the update re-renders the binding");
+            executor
+                .step()
+                .await
+                .expect("the update re-renders the binding");
             assert_eq!(
-                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
                 AwsWorkerState::UpdateConfigWaitForActive
             );
         }
@@ -11530,10 +11570,12 @@ mod tests {
             .await;
             executor.step().await.expect("the update runs");
             assert_eq!(
-                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
                 AwsWorkerState::UpdateConfigWaitForActive
             );
         }
     }
-
 }
