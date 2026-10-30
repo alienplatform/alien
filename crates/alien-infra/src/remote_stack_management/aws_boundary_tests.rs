@@ -218,6 +218,71 @@ async fn existing_policy_prunes_nondefault_version_before_installing_and_records
 }
 
 #[tokio::test]
+async fn a_boundary_created_without_a_response_is_replaced_by_the_next_attempt() {
+    // IAM created the policy but the response was lost. The client does not resend the
+    // create, so the error reaches setup with the ARN already recorded.
+    let mut iam = MockIamApi::new();
+    iam.expect_create_policy().times(1).returning(|_, _, _| {
+        Err(AlienError::new(ClientError::Timeout {
+            message: "response lost".to_string(),
+        }))
+    });
+    let first = executor(iam).await;
+    let mut controller = AwsRemoteStackManagementController::default();
+    first
+        .with_context(|ctx| block_on(controller.install_permissions_boundary(ctx)))
+        .unwrap_err();
+    assert_eq!(controller.permissions_boundary_arn.as_deref(), Some(ARN));
+    assert_eq!(controller.permissions_boundary_document, None);
+
+    // The retry finds the policy setup created and installs the document as a new version.
+    let mut sequence = Sequence::new();
+    let mut iam = MockIamApi::new();
+    iam.expect_create_policy()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _, _| {
+            Err(AlienError::new(ClientError::RemoteResourceConflict {
+                resource_type: "policy".to_string(),
+                resource_name: ARN.to_string(),
+                message: "exists".to_string(),
+            }))
+        });
+    iam.expect_list_policy_versions()
+        .withf(|arn| arn == ARN)
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_| {
+            Ok(ListPolicyVersionsResponse {
+                list_policy_versions_result: ListPolicyVersionsResult {
+                    versions: Some(PolicyVersions {
+                        member: vec![version("v1", true)],
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+    iam.expect_create_policy_version()
+        .withf(|arn, _, default| arn == ARN && *default)
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _, _| {
+            Ok(CreatePolicyVersionResponse {
+                create_policy_version_result: CreatePolicyVersionResult {
+                    policy_version: version("v2", true),
+                },
+            })
+        });
+    let retry = executor(iam).await;
+    retry
+        .with_context(|ctx| block_on(controller.install_permissions_boundary(ctx)))
+        .unwrap();
+    assert_eq!(controller.permissions_boundary_arn.as_deref(), Some(ARN));
+    assert!(controller.permissions_boundary_document.is_some());
+}
+
+#[tokio::test]
 async fn setup_never_replaces_a_same_named_policy_it_did_not_record() {
     let mut iam = MockIamApi::new();
     iam.expect_create_policy().times(1).returning(|_, _, _| {

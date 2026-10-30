@@ -168,13 +168,27 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
                 !matches_action("iam:DeleteRolePermissionsBoundary"),
                 "{statement:?}"
             );
+            let conditions = statement
+                .condition
+                .as_ref()
+                .and_then(|c| c.get("StringEquals"));
+            // Detaching one named AWS managed policy only removes permissions, so it may
+            // precede the boundary. The ownership matrix below still requires runtime tags.
+            let detaches_aws_managed_policy = statement.action.len() == 1
+                && action == "iam:DetachRolePolicy"
+                && conditions
+                    .and_then(|c| c.get("iam:PolicyARN"))
+                    .and_then(|arn| arn.as_string())
+                    .is_some_and(|arn| {
+                        arn.starts_with("arn:aws:iam::aws:policy/") && !arn.contains('*')
+                    });
             for write in WRITES.iter().filter(|write| matches_action(write)) {
                 observed_writes.insert(*write);
+                if detaches_aws_managed_policy {
+                    continue;
+                }
                 assert_eq!(
-                    statement
-                        .condition
-                        .as_ref()
-                        .and_then(|c| c.get("StringEquals"))
+                    conditions
                         .and_then(|c| c.get("iam:PermissionsBoundary"))
                         .and_then(|value| value.as_string()),
                     Some(BOUNDARY),
@@ -221,12 +235,31 @@ async fn automatic_profile_bounds_every_role_writer_and_cannot_change_the_bounda
             assert_ne!(evaluate(&bounded, &request), Decision::Allowed, "{action}");
         }
     }
-    // Obsolete-policy cleanup also requires runtime ownership and the boundary.
-    for policy in [
-        "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-        "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
-        "arn:aws:iam::aws:policy/AdministratorAccess",
+    // Obsolete-policy cleanup requires runtime ownership. Without the boundary, only the two
+    // policies earlier releases attached to node roles may be detached.
+    for (policy, without_boundary) in [
+        ("arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore", true),
+        ("arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy", true),
+        ("arn:aws:iam::aws:policy/AdministratorAccess", false),
     ] {
+        let unbounded = |owner| {
+            Request::new(
+                "iam:DetachRolePolicy",
+                "arn:aws:iam::123456789012:role/sample-compute-role",
+            )
+            .with("iam:PolicyARN", policy)
+            .resource_tags(&[("managed-by", owner), ("deployment", "sample")])
+        };
+        assert_eq!(
+            evaluate(&bounded, &unbounded("runtime")) == Decision::Allowed,
+            without_boundary,
+            "unbounded detach: {policy}"
+        );
+        assert_ne!(
+            evaluate(&bounded, &unbounded("setup")),
+            Decision::Allowed,
+            "setup-owned detach: {policy}"
+        );
         for action in ["iam:DetachRolePolicy", "iam:AttachRolePolicy"] {
             let expected = if action == "iam:DetachRolePolicy" {
                 Decision::Allowed

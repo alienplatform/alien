@@ -252,18 +252,53 @@ fn deny_may_match(deny: &Value, allow: &Value) -> bool {
     denied.into_iter().any(|action| {
         if let Some(allowed) = allow.get("Action") {
             strings(allowed).map_or(true, |patterns| {
-                patterns.iter().any(|pattern| {
-                    action_pattern_matches(pattern, action)
-                        || action_pattern_matches(action, pattern)
-                })
+                patterns
+                    .iter()
+                    .any(|pattern| action_patterns_overlap(pattern, action))
             })
         } else {
             strings(&allow["NotAction"]).map_or(true, |excluded| {
                 !excluded
                     .iter()
-                    .any(|pattern| action_pattern_matches(pattern, action))
+                    .any(|pattern| action_pattern_contains(pattern, action))
             })
         }
+    })
+}
+
+/// Whether some action matches both patterns. IAM action names are case-insensitive.
+fn action_patterns_overlap(left: &str, right: &str) -> bool {
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    // overlap[i][j]: some string matches both left[i..] and right[j..].
+    let mut overlap = vec![vec![false; right.len() + 1]; left.len() + 1];
+    for i in (0..=left.len()).rev() {
+        for j in (0..=right.len()).rev() {
+            overlap[i][j] = if i < left.len() && left[i] == b'*' {
+                overlap[i + 1][j] || (j < right.len() && overlap[i][j + 1])
+            } else if j < right.len() && right[j] == b'*' {
+                overlap[i][j + 1] || (i < left.len() && overlap[i + 1][j])
+            } else if i < left.len() && j < right.len() {
+                (left[i] == b'?' || right[j] == b'?' || left[i].eq_ignore_ascii_case(&right[j]))
+                    && overlap[i + 1][j + 1]
+            } else {
+                i == left.len() && j == right.len()
+            };
+        }
+    }
+    overlap[0][0]
+}
+
+/// Whether every action `inner` matches also matches `outer`. Proven only for a literal
+/// `inner` or an `outer` that is a literal prefix followed by `*`; anything else is false.
+fn action_pattern_contains(outer: &str, inner: &str) -> bool {
+    if !inner.contains(['*', '?']) {
+        return action_pattern_matches(outer, inner);
+    }
+    outer.strip_suffix('*').is_some_and(|prefix| {
+        !prefix.contains(['*', '?'])
+            && inner
+                .get(..prefix.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
     })
 }
 
@@ -662,6 +697,55 @@ mod tests {
                     "{malformed}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn installed_denies_with_wildcards_count_when_any_action_overlaps() {
+        let with_deny = |allow: Value, deny: &str| {
+            policy(json!([
+                allow,
+                {"Effect": "Deny", "Action": deny, "Resource": "*"}
+            ]))
+        };
+        for (allowed, denied, overlaps) in [
+            // Neither pattern matches the other's text, but both match iam:GetRole.
+            ("iam:*Role", "iam:Get*", true),
+            ("iam:Get*", "iam:*Role", true),
+            ("IAM:GET*", "iam:*role", true),
+            ("iam:G?tRole", "iam:*Ro?e", true),
+            ("iam:*", "*", true),
+            ("iam:GetRole", "iam:GetRole", true),
+            ("iam:Get*", "iam:List*", false),
+            ("iam:*Role", "iam:*Policy", false),
+            ("s3:Get*", "ec2:*", false),
+            ("iam:GetRole", "iam:GetRole?", false),
+        ] {
+            let required = policy(json!([allow(allowed, "*")]));
+            let installed = with_deny(allow(allowed, "*"), denied);
+            assert_eq!(
+                aws_permissions_boundary_covers(&installed, &required).unwrap(),
+                !overlaps,
+                "allow {allowed}, deny {denied}"
+            );
+        }
+        // A NotAction allow excludes a wildcard Deny only when it provably excludes all of it.
+        for (excluded, denied, overlaps) in [
+            ("iam:*", "iam:Get*", false),
+            ("IAM:*", "iam:Get*", false),
+            ("iam:GetRole", "iam:GetRole", false),
+            ("iam:Get?", "iam:Get*", true),
+            ("iam:GetRole", "iam:Get*", true),
+            ("iam:*Role", "iam:Get*", true),
+        ] {
+            let not_action = json!({"Effect": "Allow", "NotAction": excluded, "Resource": "*"});
+            let required = policy(json!([not_action.clone()]));
+            let installed = with_deny(not_action, denied);
+            assert_eq!(
+                aws_permissions_boundary_covers(&installed, &required).unwrap(),
+                !overlaps,
+                "not action {excluded}, deny {denied}"
+            );
         }
     }
 

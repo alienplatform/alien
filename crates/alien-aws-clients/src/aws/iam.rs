@@ -159,6 +159,29 @@ impl IamClient {
         operation_name: &str,
         resource_name: &str,
     ) -> Result<T> {
+        self.send_xml(body, operation_name, resource_name, false)
+            .await
+    }
+
+    /// For a create IAM cannot make idempotent: only throttling is retried, so a lost response
+    /// reaches the caller instead of coming back as a conflict with the caller's own object.
+    async fn post_xml_retrying_throttling<T: DeserializeOwned + Send + 'static>(
+        &self,
+        body: String,
+        operation_name: &str,
+        resource_name: &str,
+    ) -> Result<T> {
+        self.send_xml(body, operation_name, resource_name, true)
+            .await
+    }
+
+    async fn send_xml<T: DeserializeOwned + Send + 'static>(
+        &self,
+        body: String,
+        operation_name: &str,
+        resource_name: &str,
+        throttling_only: bool,
+    ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
@@ -169,8 +192,15 @@ impl IamClient {
             .content_type_form()
             .body(body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        let result = if throttling_only {
+            crate::aws::aws_request_utils::sign_send_xml_retrying_throttling(
+                builder,
+                &self.sign_config(),
+            )
+            .await
+        } else {
+            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await
+        };
 
         match result {
             Ok(v) => Ok(v),
@@ -606,7 +636,8 @@ impl IamApi for IamClient {
             params.push(("Path".to_string(), path));
         }
         let body = Self::build_form_body("CreatePolicy", "2010-05-08", params);
-        self.post_xml(body, "CreatePolicy", policy_name).await
+        self.post_xml_retrying_throttling(body, "CreatePolicy", policy_name)
+            .await
     }
 
     async fn delete_policy(&self, policy_arn: &str) -> Result<()> {

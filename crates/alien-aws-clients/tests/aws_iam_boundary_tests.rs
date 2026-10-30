@@ -294,6 +294,31 @@ fn client(server: &MockServer) -> IamClient {
 }
 
 #[tokio::test]
+async fn create_policy_is_not_resent_after_a_server_error() {
+    // IAM may have created the policy before the 5xx. Sending it again would answer with a
+    // conflict for the caller's own policy, so the error goes back to the caller instead.
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST).body_contains("Action=CreatePolicy");
+            then.status(500).body(
+                "<ErrorResponse><Error><Type>Receiver</Type><Code>ServiceFailure</Code>\
+                 <Message>internal error</Message></Error></ErrorResponse>",
+            );
+        })
+        .await;
+    let error = client(&server)
+        .create_policy("test-boundary", "{}", None)
+        .await
+        .unwrap_err();
+    assert!(!matches!(
+        error.error,
+        Some(ErrorData::RemoteResourceConflict { .. })
+    ));
+    assert_eq!(mock.hits_async().await, 1);
+}
+
+#[tokio::test]
 async fn create_sends_boundary_only_when_configured() {
     for boundary in [Some(BOUNDARY), None] {
         let server = MockServer::start_async().await;
