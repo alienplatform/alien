@@ -48,7 +48,7 @@ pub struct StorageNotification {
     /// Literal object key prefix, non-empty and at most 512 UTF-8 bytes when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
-    /// Literal object key suffix, non-empty and at most 512 UTF-8 bytes when set.
+    /// Literal object key suffix, non-empty and at most 128 UTF-8 bytes when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suffix: Option<String>,
 }

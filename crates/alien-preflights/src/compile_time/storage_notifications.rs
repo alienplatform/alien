@@ -1,5 +1,6 @@
 use crate::{error::Result, CheckResult, CompileTimeCheck};
 use alien_core::{
+    storage_notifications::{aws_eventbridge_pattern, AWS_EVENTBRIDGE_MAX_PATTERN_CHARACTERS},
     Platform, Queue, Stack, Storage, StorageNotificationEvent, Worker, WorkerTrigger,
 };
 
@@ -55,17 +56,30 @@ impl CompileTimeCheck for StorageNotificationsCheck {
                 if notification.events != [StorageNotificationEvent::Created] {
                     result.add_error(format!("{label}.events must contain exactly ['created']"));
                 }
-                for (field, value) in [
-                    ("prefix", &notification.prefix),
-                    ("suffix", &notification.suffix),
+                let mut filters_valid = true;
+                for (field, value, max_bytes) in [
+                    ("prefix", &notification.prefix, 512),
+                    ("suffix", &notification.suffix, 128),
                 ] {
                     if let Some(value) = value {
-                        if value.is_empty() || value.len() > 512 {
+                        if value.is_empty() || value.len() > max_bytes {
+                            filters_valid = false;
                             result.add_error(format!(
-                                "{label}.{field} must contain 1–512 UTF-8 bytes; got {}",
+                                "{label}.{field} must contain 1–{max_bytes} UTF-8 bytes; got {}",
                                 value.len()
                             ));
                         }
+                    }
+                }
+                if platform == Platform::Aws && filters_valid {
+                    // The deployment prefix is unknown at compile time. Reserving a full
+                    // S3 bucket name guarantees the actual generated pattern will fit.
+                    let pattern = aws_eventbridge_pattern(notification, &"b".repeat(63));
+                    if pattern.to_string().chars().count() > AWS_EVENTBRIDGE_MAX_PATTERN_CHARACTERS
+                    {
+                        result.add_error(format!(
+                            "{label}: prefix and suffix overlap in too many ways; the AWS EventBridge pattern exceeds 4096 characters with space reserved for the bucket name. Shorten the filters or reduce their overlap"
+                        ));
                     }
                 }
                 if notification.queue.resource_type != Queue::RESOURCE_TYPE {
@@ -169,12 +183,12 @@ mod tests {
             vec![
             "Storage 'objects': notifications[0].events must contain exactly ['created']",
             "Storage 'objects': notifications[0].prefix must contain 1–512 UTF-8 bytes; got 514",
-            "Storage 'objects': notifications[0].suffix must contain 1–512 UTF-8 bytes; got 0",
+            "Storage 'objects': notifications[0].suffix must contain 1–128 UTF-8 bytes; got 0",
         ]
         );
         let mut rule = notification();
         rule.prefix = Some("é".repeat(256));
-        rule.suffix = Some("a".repeat(512));
+        rule.suffix = Some("a".repeat(128));
         assert!(
             check(
                 &stack(vec![rule.clone()], ResourceLifecycle::Live),
@@ -358,6 +372,54 @@ mod tests {
             let live = stack(vec![], ResourceLifecycle::Live);
             let notified = stack(vec![notification()], ResourceLifecycle::Live);
             assert!(check.check(&live, &notified).await.unwrap().success);
+        }
+    }
+
+    #[tokio::test]
+    async fn suffix_limit_counts_utf8_bytes_on_every_supported_platform() {
+        let mut rule = notification();
+        rule.suffix = Some("é".repeat(64));
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Local,
+        ] {
+            assert!(
+                check(
+                    &stack(vec![rule.clone()], ResourceLifecycle::Frozen),
+                    platform
+                )
+                .await
+                .success
+            );
+            let mut too_long = rule.clone();
+            too_long.suffix.as_mut().unwrap().push('x');
+            assert_eq!(check(&stack(vec![too_long], ResourceLifecycle::Frozen), platform).await.errors,
+                vec!["Storage 'objects': notifications[0].suffix must contain 1–128 UTF-8 bytes; got 129"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn excessive_overlap_fails_aws_build_and_setup_but_not_other_providers() {
+        let mut rule = notification();
+        rule.prefix = Some("a".repeat(512));
+        rule.suffix = Some("a".repeat(128));
+        let stack = stack(vec![rule], ResourceLifecycle::Frozen);
+        assert_eq!(check(&stack, Platform::Aws).await.errors, vec![
+            "Storage 'objects': notifications[0]: prefix and suffix overlap in too many ways; the AWS EventBridge pattern exceeds 4096 characters with space reserved for the bucket name. Shorten the filters or reduce their overlap"
+        ]);
+        let runner = PreflightRunner::new();
+        assert!(runner
+            .run_build_time_preflights(&stack, Platform::Aws)
+            .await
+            .is_err());
+        assert!(runner
+            .run_template_preflights(&stack, Platform::Aws)
+            .await
+            .is_err());
+        for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
+            assert!(check(&stack, platform).await.success);
         }
     }
 }

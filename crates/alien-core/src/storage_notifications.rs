@@ -1,7 +1,22 @@
 //! Shared notification translation for setup generators and live controllers.
 
 use crate::StorageNotification;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
+
+/// Maximum serialized event-pattern length accepted by EventBridge.
+pub const AWS_EVENTBRIDGE_MAX_PATTERN_CHARACTERS: usize = 4096;
+
+/// The complete rule pattern, shared by setup generators and live controllers.
+pub fn aws_eventbridge_pattern(notification: &StorageNotification, bucket_name: &str) -> Value {
+    json!({
+        "source": ["aws.s3"],
+        "detail-type": ["Object Created"],
+        "detail": {
+            "bucket": { "name": [bucket_name] },
+            "object": { "key": aws_eventbridge_key_matchers(notification) }
+        }
+    })
+}
 
 /// EventBridge ORs the entries in a field's matcher list. A wildcard covers keys
 /// whose prefix and suffix do not overlap; exact alternatives cover shorter keys.
@@ -132,5 +147,18 @@ mod tests {
             aws_eventbridge_key_matchers(&notification("same", "same")),
             vec![json!({"wildcard": "same*same"}), json!("same"),]
         );
+    }
+
+    #[test]
+    fn maximum_nonoverlapping_filters_fit_even_with_json_escape_expansion() {
+        // JSON control characters require six ASCII characters per input byte.
+        // Reserve all 63 characters allowed for an S3 bucket's physical name.
+        let rule = notification(&"\u{1}".repeat(512), &"\u{2}".repeat(128));
+        let pattern = aws_eventbridge_pattern(&rule, &"b".repeat(63));
+        assert_eq!(
+            pattern["detail"]["object"]["key"].as_array().unwrap().len(),
+            1
+        );
+        assert!(pattern.to_string().chars().count() <= AWS_EVENTBRIDGE_MAX_PATTERN_CHARACTERS);
     }
 }
