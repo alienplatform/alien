@@ -84,6 +84,20 @@ pub enum ErrorData {
         secret_name: String,
     },
 
+    /// A provider is still removing notifications from retained storage.
+    #[error(
+        code = "STORAGE_NOTIFICATION_CLEANUP_PENDING",
+        message = "Storage '{resource_id}' notification cleanup is pending: {message}",
+        retryable = "true",
+        internal = "false"
+    )]
+    StorageNotificationCleanupPending {
+        /// Storage whose notification teardown has not finished.
+        resource_id: String,
+        /// Provider operation to await before retrying protection.
+        message: String,
+    },
+
     /// Resource state serialization or deserialization failed.
     #[error(
         code = "RESOURCE_STATE_SERIALIZATION_FAILED",
