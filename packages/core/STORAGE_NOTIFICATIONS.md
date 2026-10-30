@@ -54,6 +54,12 @@ and exceed the limit; shorten the filters or reduce their overlap. AWS rejects
 these declarations at compile time with the Storage ID and rule index.
 EventBridge also applies its own wildcard-complexity checks; unusually repetitive
 suffixes can be rejected by AWS even when the pattern fits the size limit.
+S3 EventBridge activation and rule changes propagate asynchronously. A successful
+setup or update does not mean the new filter is already effective: events can
+still match the old rule or miss the new rule during propagation. Allow the
+provider changes to settle before relying on a new filter; reconcile objects
+from Storage when uploads cannot be paused during a rule change. See the
+[AWS rule update semantics](https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_PutRule.html).
 
 The delivery paths are S3 → EventBridge → SQS, Cloud Storage → Pub/Sub,
 and Blob Storage → Event Grid → Service Bus. GCP suffix filtering happens in the
