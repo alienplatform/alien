@@ -143,101 +143,12 @@ pub(super) fn container_name_expr(storage_id: &str) -> Expression {
     ))
 }
 
-/// One `azurerm_role_assignment` granted on behalf of a Storage.
-struct PlannedAssignment {
-    label: String,
-    name: Expression,
-    scope: String,
-    role_definition_id: Expression,
-    principal_id: Expression,
-}
-
-impl PlannedAssignment {
-    /// Azure allows one assignment per scope, role and principal, whatever its name.
-    fn grants_same_access(&self, other: &Self) -> bool {
-        self.scope == other.scope
-            && self.role_definition_id == other.role_definition_id
-            && self.principal_id == other.principal_id
-    }
-}
-
-/// Everything a Storage contributes to the module's access grants.
-#[derive(Default)]
-struct StoragePermissionPlan {
-    assignments: Vec<PlannedAssignment>,
-    remote_bindings_permission_set: Option<PermissionSet>,
-}
-
-/// Emits the Storage's role assignments, skipping any grant an earlier Storage
-/// already emits. Some permission sets (for example `storage/heartbeat`) grant at
-/// the shared storage account rather than the container, so every Storage plans
-/// the same scope, role and principal; Azure rejects a second assignment for it
-/// with `RoleAssignmentExists`. The first Storage in stack order owns the shared
-/// grant, which keeps the address it has always had.
 fn emit_storage_permissions(
     ctx: &EmitContext<'_>,
     storage_label: &str,
     parent_label: &str,
     fragment: &mut TfFragment,
 ) -> Result<()> {
-    let plan = plan_storage_permissions(ctx, storage_label, parent_label)?;
-    if let Some(permission_set) = &plan.remote_bindings_permission_set {
-        emit_remote_bindings_role_definitions(fragment, permission_set)?;
-    }
-
-    let mut emitted = earlier_storage_assignments(ctx, parent_label)?;
-    for assignment in plan.assignments {
-        if emitted
-            .iter()
-            .any(|existing| existing.grants_same_access(&assignment))
-        {
-            continue;
-        }
-        fragment.resource_blocks.push(resource_block(
-            "azurerm_role_assignment",
-            &assignment.label,
-            [
-                attr("name", assignment.name.clone()),
-                attr("scope", expr::template(assignment.scope.clone())),
-                attr("role_definition_id", assignment.role_definition_id.clone()),
-                attr("principal_id", assignment.principal_id.clone()),
-            ],
-        ));
-        emitted.push(assignment);
-    }
-    Ok(())
-}
-
-/// Assignments planned by the Storages that precede the current one in the stack.
-fn earlier_storage_assignments(
-    ctx: &EmitContext<'_>,
-    parent_label: &str,
-) -> Result<Vec<PlannedAssignment>> {
-    let mut assignments = Vec::new();
-    for (id, entry) in ctx.stack.resources() {
-        if id.as_str() == ctx.resource_id {
-            break;
-        }
-        if entry.config.resource_type() != Storage::RESOURCE_TYPE {
-            continue;
-        }
-        let sibling = EmitContext {
-            resource: entry,
-            resource_id: id,
-            ..*ctx
-        };
-        let label = required_label(&sibling)?;
-        assignments.extend(plan_storage_permissions(&sibling, label, parent_label)?.assignments);
-    }
-    Ok(assignments)
-}
-
-fn plan_storage_permissions(
-    ctx: &EmitContext<'_>,
-    storage_label: &str,
-    parent_label: &str,
-) -> Result<StoragePermissionPlan> {
-    let mut plan = StoragePermissionPlan::default();
     for (profile_name, permission_set_refs) in storage_permission_owners(ctx) {
         let Some(principal_id_expr) = service_account_principal_id(ctx, &profile_name) else {
             continue;
@@ -284,17 +195,17 @@ fn plan_storage_permissions(
                         ])
                     }
                 };
-                plan_role_assignment(
-                    &mut plan.assignments,
+                emit_role_assignment(
+                    fragment,
                     ctx.resource_id,
                     storage_label,
                     &profile_name,
                     binding_index,
                     &binding.role_name,
-                    binding.scope.clone(),
+                    expr::template(binding.scope.clone()),
                     role_definition_id,
                     principal_id_expr.clone(),
-                );
+                )?;
             }
         }
     }
@@ -346,17 +257,17 @@ fn plan_storage_permissions(
                         ])
                     }
                 };
-                plan_role_assignment(
-                    &mut plan.assignments,
+                emit_role_assignment(
+                    fragment,
                     ctx.resource_id,
                     storage_label,
                     "management",
                     binding_index,
                     &binding.role_name,
-                    binding.scope.clone(),
+                    expr::template(binding.scope.clone()),
                     role_definition_id,
                     management_principal_id_expr.clone(),
-                );
+                )?;
             }
         }
     }
@@ -374,7 +285,7 @@ fn plan_storage_permissions(
         let permission_set_ref = &remote_permission;
         let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
         if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none() {
-            return Ok(plan);
+            return Ok(());
         }
 
         let generator = AzureRuntimePermissionsGenerator::new();
@@ -394,6 +305,8 @@ fn plan_storage_permissions(
                 ),
             })?;
 
+        emit_remote_bindings_role_definitions(fragment, &permission_set)?;
+
         for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
             let role_definition_id = match &binding.role_definition {
                 AzureRoleDefinitionRef::Predefined { role_definition_id } => {
@@ -410,22 +323,21 @@ fn plan_storage_permissions(
                     ])
                 }
             };
-            plan_role_assignment(
-                &mut plan.assignments,
+            emit_role_assignment(
+                fragment,
                 ctx.resource_id,
                 storage_label,
                 "access",
                 binding_index,
                 &binding.role_name,
-                binding.scope.clone(),
+                expr::template(binding.scope.clone()),
                 role_definition_id,
                 principal_id_expr.clone(),
-            );
+            )?;
         }
-        plan.remote_bindings_permission_set = Some(permission_set);
     }
 
-    Ok(plan)
+    Ok(())
 }
 
 fn resolve_permission_set(
@@ -463,27 +375,35 @@ fn custom_role_index(
         })
 }
 
-fn plan_role_assignment(
-    assignments: &mut Vec<PlannedAssignment>,
+fn emit_role_assignment(
+    fragment: &mut TfFragment,
     storage_id: &str,
     storage_label: &str,
     principal_label: &str,
     binding_index: usize,
     role_name: &str,
-    scope: String,
+    scope: Expression,
     role_definition_id: Expression,
-    principal_id: Expression,
-) {
+    principal_id_expr: Expression,
+) -> Result<()> {
     let role_label = sanitize_role_label(role_name);
-    assignments.push(PlannedAssignment {
-        label: format!("{storage_label}_{role_label}_{principal_label}_assignment_{binding_index}"),
-        name: expr::raw(&format!(
-            "uuidv5(\"oid\", \"deployment:azure:storage-role-assign:${{local.resource_prefix}}:{storage_id}:{role_label}:{principal_label}:{binding_index}\")"
-        )),
-        scope,
-        role_definition_id,
-        principal_id,
-    });
+    let assignment = resource_block(
+        "azurerm_role_assignment",
+        &format!("{storage_label}_{role_label}_{principal_label}_assignment_{binding_index}"),
+        [
+            attr(
+                "name",
+                expr::raw(&format!(
+                    "uuidv5(\"oid\", \"deployment:azure:storage-role-assign:${{local.resource_prefix}}:{storage_id}:{role_label}:{principal_label}:{binding_index}\")"
+                )),
+            ),
+            attr("scope", scope),
+            attr("role_definition_id", role_definition_id),
+            attr("principal_id", principal_id_expr),
+        ],
+    );
+    fragment.resource_blocks.push(assignment);
+    Ok(())
 }
 
 fn storage_permission_owners<'a>(
@@ -686,130 +606,6 @@ mod tests {
             "blobServices/default/containers/${replace(lower(\"${local.resource_prefix}-files\"), \"_\", \"-\")}",
         )));
         assert!(!storage_module.contains("azurerm_user_assigned_identity.management.principal_id"));
-    }
-
-    /// Azure accepts one role assignment per scope, role and principal; a second one
-    /// with another name fails the apply with `RoleAssignmentExists`.
-    #[test]
-    fn generated_module_grants_each_scope_role_and_principal_once() {
-        let permissions = PermissionProfile::new()
-            .resource("first", ["storage/heartbeat", "storage/data-write"])
-            .resource("second", ["storage/heartbeat", "storage/data-write"])
-            .resource("third", ["storage/heartbeat", "storage/data-write"]);
-        let mut stack = Stack::new("azure-shared-storage-grants".to_string())
-            .permission("app", permissions.clone())
-            .management(ManagementPermissions::override_(permissions))
-            .add(
-                AzureResourceGroup::new("default-resource-group".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .add(
-                AzureStorageAccount::new("default-storage-account".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            );
-        for id in ["first", "second", "third"] {
-            stack = stack.add(
-                Storage::new(id.to_string()).build(),
-                ResourceLifecycle::Frozen,
-            );
-        }
-        let stack = stack
-            .add(
-                ServiceAccount::new("app-sa".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .add(
-                RemoteStackManagement::new("management".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-
-        let registry = TfRegistry::built_in();
-        let module = generate_terraform_module(
-            &stack,
-            TerraformTarget::Azure,
-            TerraformOptions {
-                display_name: None,
-                registry: &registry,
-                stack_settings: StackSettings::default(),
-                registration: None,
-                helm_install: None,
-                supported_aws_regions: Vec::new(),
-            },
-        )
-        .expect("Azure Terraform module should render");
-
-        let mut assignments = Vec::new();
-        for (file, content) in module.iter() {
-            if !file.ends_with(".tf") {
-                continue;
-            }
-            let body = hcl::parse(content).expect("generated HCL should parse");
-            for block in body.blocks() {
-                let labels = block.labels();
-                if block.identifier() != "resource"
-                    || labels.first().map(|label| label.as_str()) != Some("azurerm_role_assignment")
-                {
-                    continue;
-                }
-                let attribute = |key: &str| {
-                    block
-                        .body()
-                        .attributes()
-                        .find(|attribute| attribute.key() == key)
-                        .map(|attribute| attribute.expr().to_string())
-                };
-                let label = labels[1].as_str().to_string();
-                let role = attribute("role_definition_id")
-                    .or_else(|| attribute("role_definition_name"))
-                    .unwrap_or_else(|| panic!("{label} names no role"));
-                let scope = attribute("scope").unwrap_or_else(|| panic!("{label} has no scope"));
-                let principal =
-                    attribute("principal_id").unwrap_or_else(|| panic!("{label} has no principal"));
-                assignments.push((label, (scope, role, principal)));
-            }
-        }
-
-        for (index, (label, access)) in assignments.iter().enumerate() {
-            if let Some((duplicate, _)) = assignments[index + 1..]
-                .iter()
-                .find(|(_, other)| other == access)
-            {
-                panic!("{label} and {duplicate} grant the same scope, role and principal");
-            }
-        }
-
-        let account_scope = "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}\"";
-        for (principal_label, principal) in [
-            ("app", "azurerm_user_assigned_identity.app_sa.principal_id"),
-            (
-                "management",
-                "azurerm_user_assigned_identity.management.principal_id",
-            ),
-        ] {
-            let account_grants = assignments
-                .iter()
-                .filter(|(_, (scope, _, assigned))| scope == account_scope && assigned == principal)
-                .map(|(label, _)| label.as_str())
-                .collect::<Vec<_>>();
-            assert_eq!(
-                account_grants,
-                vec![format!("first_reader_{principal_label}_assignment_0")],
-                "the first Storage keeps the shared account-level grant"
-            );
-            for storage in ["first", "second", "third"] {
-                let container = format!("resource_prefix}}-{storage}");
-                assert!(
-                    assignments.iter().any(|(_, (scope, role, assigned))| {
-                        assigned == principal
-                            && role.contains(STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID)
-                            && scope.contains("/blobServices/default/containers/")
-                            && scope.contains(&container)
-                    }),
-                    "{storage} keeps its own container-scoped grant for {principal_label}"
-                );
-            }
-        }
     }
 
     fn assert_principal_assignment_scopes(rendered: &str, principal_id: &str) {
