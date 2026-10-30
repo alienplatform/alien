@@ -4173,8 +4173,7 @@ impl AwsWorkerController {
                         message: format!("Failed to delete old EventBridge rule '{rule_name}'"),
                         resource_id: Some(current_config.id.clone()),
                     })?;
-                    self.eventbridge_rule_names
-                        .retain(|name| name != &rule_name);
+                    self.eventbridge_rule_names.retain(|name| name != &rule_name);
                 }
                 self.eventbridge_permission_statement_ids.clear();
             }
@@ -4704,8 +4703,7 @@ impl AwsWorkerController {
                         message: format!("Failed to delete EventBridge rule '{rule_name}'"),
                         resource_id: Some(worker_config.id.clone()),
                     })?;
-                self.eventbridge_rule_names
-                    .retain(|name| name != &rule_name);
+                self.eventbridge_rule_names.retain(|name| name != &rule_name);
             }
         }
 

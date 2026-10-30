@@ -1068,7 +1068,7 @@ fn aws_storage_notifications_are_valid_with_shared_queue_and_literal_filters() {
         &stack,
         StackSettings::default(),
         RegistrationMode::OutputsFallback,
-        "Storage EventBridge delivery with native bucket configuration",
+        "Storage S3 queue notifications with native bucket configuration",
     );
 }
 
