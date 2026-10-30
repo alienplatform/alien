@@ -27,6 +27,32 @@
         }
       },
       {
+        "label": "bounded-role-pass",
+        "grant": {
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"],
+            "condition": {
+              "StringEquals": {
+                "iam:PassedToService": "codebuild.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"],
+            "condition": {
+              "StringEquals": {
+                "iam:PassedToService": "codebuild.amazonaws.com"
+              }
+            }
+          }
+        }
+      },
+      // Setups without a boundary retain their existing role-passing grants.
+      {
+        "label": "legacy-role-pass",
         "grant": {
           "actions": ["iam:PassRole"]
         },

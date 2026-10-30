@@ -181,6 +181,80 @@ fn catalog_tag_grants_require_creation_or_existing_stack_ownership() {
     }
 }
 
+#[test]
+fn catalog_pass_role_grants_require_the_consuming_service() {
+    for id in alien_permissions::list_permission_set_ids() {
+        let set = get_permission_set(id).expect("registered permission set");
+        let passes_roles = |actions: &[String]| {
+            actions.iter().any(|action| {
+                iam_policy::wildcard_match(&action.to_ascii_lowercase(), "iam:passrole")
+            })
+        };
+        if !set.platforms.aws.iter().flatten().any(|entry| {
+            entry.effect == alien_core::AwsPermissionEffect::Allow
+                && entry.grant.actions.as_deref().is_some_and(passes_roles)
+        }) {
+            continue;
+        }
+        let service = match id {
+            "worker/management" | "worker/provision" | "sandbox/provision" => {
+                "lambda.amazonaws.com"
+            }
+            "build/provision" => "codebuild.amazonaws.com",
+            "compute-cluster/management" | "compute-cluster/provision" => "ec2.amazonaws.com",
+            "container/provision" => "dlm.amazonaws.com",
+            _ => panic!("review the consuming service for {id}"),
+        };
+        // Render both binding scopes with the boundary selected: legacy grants must
+        // disappear, and every remaining Allow must require the consuming service.
+        for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            let generated = AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    set,
+                    target,
+                    &context().with_aws_permissions_boundary_arn(
+                        "arn:aws:iam::123456789012:policy/stack-a-boundary",
+                    ),
+                )
+                .unwrap();
+            let grants = generated
+                .statement
+                .iter()
+                .filter(|statement| statement.effect == "Allow" && passes_roles(&statement.action))
+                .collect::<Vec<_>>();
+            assert!(!grants.is_empty(), "{id} / {target}");
+            for statement in grants {
+                assert_eq!(
+                    statement
+                        .condition
+                        .as_ref()
+                        .and_then(|condition| condition.get("StringEquals"))
+                        .and_then(|equals| equals.get("iam:PassedToService"))
+                        .and_then(|value| value.as_string()),
+                    Some(service),
+                    "{id} / {target}"
+                );
+                for resource in &statement.resource {
+                    let role = resource.replace('*', "example");
+                    for candidate in [service, "unrelated.amazonaws.com", ""] {
+                        let request = Request::new("iam:PassRole", &role);
+                        let request = if candidate.is_empty() {
+                            request
+                        } else {
+                            request.with("iam:PassedToService", candidate)
+                        };
+                        assert_eq!(
+                            evaluate(&generated.statement, &request) == Decision::Allowed,
+                            candidate == service,
+                            "{id} / {target}: {candidate}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn policy(id: &str, binding: BindingTarget) -> AwsIamPolicy {
     AwsRuntimePermissionsGenerator::new()
         .generate_policy(get_permission_set(id).unwrap(), binding, &context())
