@@ -29,6 +29,9 @@ use tempfile::TempDir;
 /// Path to the example app used as a test fixture, relative to workspace root.
 const TEST_APP_PATH: &str = "examples/basic-worker-ts";
 
+#[path = "worker_integration/storage_notifications.rs"]
+mod storage_notifications;
+
 /// Builds the example app using alien-build and returns the path to the OCI tarball.
 ///
 /// This uses the real build system:
@@ -36,8 +39,12 @@ const TEST_APP_PATH: &str = "examples/basic-worker-ts";
 /// - Creates proper OCI image with CMD set correctly
 /// - Returns path to the OCI tarball
 async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBuf {
+    build_app(output_dir, TEST_APP_PATH).await
+}
+
+async fn build_app(output_dir: &std::path::Path, app_path: &str) -> PathBuf {
     let workspace_root = workspace_root::get_workspace_root();
-    let test_app_src = workspace_root.join(TEST_APP_PATH);
+    let test_app_src = workspace_root.join(app_path);
 
     // Create a worker with the test-app source
     let func = Worker::new("test-func".to_string())
