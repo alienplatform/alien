@@ -27,6 +27,9 @@ pub struct AwsQueueController {
     /// Whether the queue has reconciled its derived storage ingress requirement.
     #[serde(default)]
     pub(crate) storage_ingress_enabled: bool,
+    /// Persist intent before a policy write, including recovery after a lost response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) storage_ingress_pending: Option<bool>,
 }
 
 #[controller]
@@ -189,6 +192,18 @@ impl AwsQueueController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        self.prepare_storage_ingress(ctx)?;
+        Ok(HandlerAction::Continue {
+            state: ApplyingStorageIngress,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = ApplyingStorageIngress, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn applying_storage_ingress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
         self.reconcile_storage_ingress(ctx).await?;
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -199,8 +214,9 @@ impl AwsQueueController {
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let queue = ctx.desired_resource_config::<Queue>()?;
         Ok(may_manage_storage_ingress(ctx, &queue.id)
-            && queue_receives_storage_notifications(ctx.desired_stack, &queue.id)
-                != self.storage_ingress_enabled)
+            && (self.storage_ingress_pending.is_some()
+                || queue_receives_storage_notifications(ctx.desired_stack, &queue.id)
+                    != self.storage_ingress_enabled))
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -264,6 +280,18 @@ impl AwsQueueController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        self.prepare_storage_ingress(ctx)?;
+        Ok(HandlerAction::Continue {
+            state: UpdatingStorageIngress,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = UpdatingStorageIngress, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_storage_ingress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
         self.reconcile_storage_ingress(ctx).await?;
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -354,6 +382,17 @@ impl AwsQueueController {
 }
 
 impl AwsQueueController {
+    fn prepare_storage_ingress(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        let desired = queue_receives_storage_notifications(ctx.desired_stack, &queue.id);
+        if may_manage_storage_ingress(ctx, &queue.id)
+            && (self.storage_ingress_pending.is_some() || desired != self.storage_ingress_enabled)
+        {
+            self.storage_ingress_pending = Some(desired);
+        }
+        Ok(())
+    }
+
     async fn reconcile_storage_ingress(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -363,7 +402,7 @@ impl AwsQueueController {
             return Ok(());
         }
         let desired = queue_receives_storage_notifications(ctx.desired_stack, &queue.id);
-        if desired == self.storage_ingress_enabled {
+        if desired == self.storage_ingress_enabled && self.storage_ingress_pending.is_none() {
             return Ok(());
         }
         let invalid = |message: &str| {
@@ -400,15 +439,16 @@ impl AwsQueueController {
             .into_iter()
             .find(|attribute| attribute.name == "Policy")
             .map(|attribute| attribute.value);
-        let mut policy: serde_json::Value = match existing.as_deref().filter(|value| !value.is_empty()) {
-            Some(value) => serde_json::from_str(value).into_alien_error().context(
-                ErrorData::ResourceConfigInvalid {
-                    resource_id: Some(queue.id.clone()),
-                    message: format!("Queue '{name}' has an invalid policy document"),
-                },
-            )?,
-            None => serde_json::json!({"Version": "2012-10-17", "Statement": []}),
-        };
+        let mut policy: serde_json::Value =
+            match existing.as_deref().filter(|value| !value.is_empty()) {
+                Some(value) => serde_json::from_str(value).into_alien_error().context(
+                    ErrorData::ResourceConfigInvalid {
+                        resource_id: Some(queue.id.clone()),
+                        message: format!("Queue '{name}' has an invalid policy document"),
+                    },
+                )?,
+                None => serde_json::json!({"Version": "2012-10-17", "Statement": []}),
+            };
         let original = policy.clone();
         let document = policy
             .as_object_mut()
@@ -452,6 +492,7 @@ impl AwsQueueController {
                 })?;
         }
         self.storage_ingress_enabled = desired;
+        self.storage_ingress_pending = None;
         Ok(())
     }
 

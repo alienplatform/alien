@@ -116,18 +116,47 @@ pub async fn protect_retained_storage(
                 let client = provider.get_aws_s3_client(config).await?;
                 // Legacy checkpoints may contain a name saved before a failed create.
                 let tags = match client.get_bucket_tagging(name).await {
-                    Ok(tags) => tags,
-                    Err(error) if missing(&error) => continue,
+                    Ok(tags) => Some(tags),
+                    Err(error) if missing(&error) => None,
                     Err(error) => return Err(error.context(cloud_error(id))),
                 };
-                if !is_tagged_as_ours(
-                    &tags,
-                    &alien_core::standard_resource_tags(&state.resource_prefix, id),
-                ) {
+                if tags.as_ref().is_some_and(|tags| {
+                    !is_tagged_as_ours(
+                        tags,
+                        &alien_core::standard_resource_tags(&state.resource_prefix, id),
+                    )
+                }) {
                     return Err(invalid(
                         id,
                         "Bucket ownership tags do not match the retained resource",
                     ));
+                }
+                if controller.notifications_managed
+                    || !storage.notifications.is_empty()
+                    || resource
+                        .previous_config
+                        .as_ref()
+                        .and_then(|previous| previous.downcast_ref::<Storage>())
+                        .is_some_and(|previous| !previous.notifications.is_empty())
+                {
+                    let events = provider.get_aws_eventbridge_client(config).await?;
+                    if !super::aws_notifications::remove_owned_step(
+                        events.as_ref(),
+                        &state.resource_prefix,
+                        name,
+                        id,
+                    )
+                    .await?
+                    {
+                        return Err(AlienError::new(ErrorData::StorageNotificationCleanupPending {
+                            resource_id:id.clone(), message:"EventBridge rule removal is still in progress; retry retained storage protection".into(),
+                        }));
+                    }
+                }
+                // Rules outlive a bucket deleted out of band. Clean them before
+                // treating that missing bucket as successful retention cleanup.
+                if tags.is_none() {
+                    continue;
                 }
                 stop_s3_lifecycle(client.as_ref(), name, id).await?;
                 if was_public {
@@ -526,6 +555,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use alien_aws_clients::{
+        eventbridge::{EventBridgeRule, MockEventBridgeApi},
         s3::{GetBucketPolicyOutput, MockS3Api},
         AwsClientConfigExt,
     };
@@ -554,6 +584,90 @@ mod tests {
         resource.set_internal_controller(Some(controller)).unwrap();
         state.resources.insert("data".into(), resource);
         serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn s3_retention_removes_rules_even_when_bucket_is_already_gone() {
+        let rule_name =
+            alien_core::storage_notifications::aws_notification_rule_name("owned", "owned-data", 0);
+        let remaining = Arc::new(Mutex::new(true));
+        let mut events = MockEventBridgeApi::new();
+        let read = remaining.clone();
+        let expected = rule_name.clone();
+        events
+            .expect_describe_rule()
+            .times(11)
+            .returning(move |name| {
+                if name == expected && *read.lock().unwrap() {
+                    Ok(EventBridgeRule {
+                        name: name.into(),
+                        description: Some("Storage queue notifications for owned-data".into()),
+                        ..Default::default()
+                    })
+                } else {
+                    Err(AlienError::new(ClientError::RemoteResourceNotFound {
+                        resource_type: "rule".into(),
+                        resource_name: name.into(),
+                    }))
+                }
+            });
+        events
+            .expect_list_targets_by_rule()
+            .times(1)
+            .returning(|_| Ok(vec![]));
+        let remove = remaining.clone();
+        events.expect_delete_rule().times(1).returning(move |name| {
+            assert_eq!(name, rule_name);
+            *remove.lock().unwrap() = false;
+            Ok(())
+        });
+        let mut s3 = MockS3Api::new();
+        s3.expect_get_bucket_tagging().times(2).returning(|name| {
+            Err(AlienError::new(ClientError::RemoteResourceNotFound {
+                resource_type: "bucket".into(),
+                resource_name: name.into(),
+            }))
+        });
+        let s3 = Arc::new(s3);
+        let events = Arc::new(events);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_s3_client()
+            .returning(move |_| Ok(s3.clone()));
+        provider
+            .expect_get_aws_eventbridge_client()
+            .returning(move |_| Ok(events.clone()));
+        let state = installed(
+            Platform::Aws,
+            Box::new(AwsStorageController {
+                bucket_name: Some("owned-data".into()),
+                notifications_managed: true,
+                ..Default::default()
+            }),
+        );
+        let config = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+        let error = protect_retained_storage(
+            &state,
+            &["data".into()],
+            &config,
+            &provider,
+            &ExternalBindings::default(),
+            &[ResourceLifecycle::Live],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "STORAGE_NOTIFICATION_CLEANUP_PENDING");
+        assert!(!*remaining.lock().unwrap());
+        protect_retained_storage(
+            &state,
+            &["data".into()],
+            &config,
+            &provider,
+            &ExternalBindings::default(),
+            &[ResourceLifecycle::Live],
+        )
+        .await
+        .unwrap();
     }
 
     fn transient() -> AlienError<ClientError> {

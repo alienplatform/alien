@@ -192,6 +192,7 @@ async fn lost_policy_response_is_recovered_without_duplicate_or_second_write() {
         .await
         .unwrap();
     run.update(queue).unwrap();
+    run.step().await.unwrap(); // Checkpoint policy intent before the mutation.
     run.step()
         .await
         .expect_err("lost policy write response must fail");
@@ -209,4 +210,53 @@ async fn lost_policy_response_is_recovered_without_duplicate_or_second_write() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn pending_ingress_is_removed_when_declaration_changes_after_lost_write() {
+    let queue = Queue::new("work".into()).build();
+    let controller = AwsQueueController {
+        state: AwsQueueState::UpdatingStorageIngress,
+        storage_ingress_pending: Some(true),
+        ..queue_controller()
+    };
+    let checkpoint = serde_json::to_value(controller).unwrap();
+    let mut sqs = MockSqsApi::new();
+    sqs.expect_get_queue_attributes().times(1).returning(|_,_| Ok(GetQueueAttributesResponse {
+        get_queue_attributes_result:GetQueueAttributesResult {attributes:vec![Attribute {
+            name:"Policy".into(),value:json!({"Version":"2012-10-17","Statement":[{"Sid":"External"},{"Sid":"StorageNotificationIngress"}]}).to_string(),
+        }]},
+    }));
+    sqs.expect_set_queue_attributes()
+        .times(1)
+        .returning(|_, request| {
+            let policy: Value = serde_json::from_str(&request.attributes["Policy"]).unwrap();
+            assert_eq!(
+                policy,
+                json!({"Version":"2012-10-17","Statement":[{"Sid":"External"}]})
+            );
+            Ok(())
+        });
+    let sqs = Arc::new(sqs);
+    let mut provider = MockPlatformServiceProvider::new();
+    provider
+        .expect_get_aws_sqs_client()
+        .returning(move |_| Ok(sqs.clone()));
+    let mut run = SingleControllerExecutor::builder()
+        .resource(queue)
+        .controller(serde_json::from_value::<AwsQueueController>(checkpoint).unwrap())
+        .platform(Platform::Aws)
+        .service_provider(Arc::new(provider))
+        .build()
+        .await
+        .unwrap();
+    assert!(
+        run.needs_update().unwrap(),
+        "unfinished policy intent survives a checkpoint"
+    );
+    run.run_until_terminal().await.unwrap();
+    assert!(!run.needs_update().unwrap());
+    let controller = run.internal_state::<AwsQueueController>().unwrap();
+    assert!(!controller.storage_ingress_enabled);
+    assert_eq!(controller.storage_ingress_pending, None);
 }

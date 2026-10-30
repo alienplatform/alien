@@ -1,4 +1,5 @@
 mod aws;
+mod aws_notifications;
 pub use aws::*;
 
 mod aws_import;
@@ -41,3 +42,6 @@ pub use retention::protect_retained_storage;
 
 #[cfg(test)]
 mod gcp_notifications_live;
+
+#[cfg(test)]
+mod aws_notifications_live;

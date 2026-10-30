@@ -29,6 +29,7 @@ impl ResourceImporter for AwsQueueImporter {
             queue_url: Some(data.queue_url),
             queue_name: Some(data.queue_name),
             storage_ingress_enabled: false,
+            storage_ingress_pending: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
