@@ -83,6 +83,10 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
         }
         TestApp::StorageNotifications => {
             common::storage_notifications::check_delivery(&ctx.deployment).await;
+            alien_test::distribution::verify_rule_update(ctx)
+                .await
+                .expect("frozen notification change must require and recover through setup");
+            common::storage_notifications::check_updated_delivery(&ctx.deployment).await;
         }
         TestApp::AutomaticSetup => {
             let installed = ctx

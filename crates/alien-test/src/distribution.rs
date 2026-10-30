@@ -58,6 +58,9 @@ const AZURE_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
 const KUBERNETES_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
 const KUBERNETES_FULL_STACK_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(3_600);
 
+mod notifications;
+pub use notifications::verify_rule_update;
+
 /// Artifact cleanup that sits outside the manager's normal destroy flow.
 pub enum DistributionArtifactCleanup {
     CloudFormation {
@@ -586,7 +589,8 @@ async fn cleanup_retained_dynamodb_table(
     Ok(())
 }
 
-struct DistributionPrepared {
+#[derive(Clone)]
+pub(crate) struct DistributionPrepared {
     manager: Arc<TestManager>,
     config: TestConfig,
     built_stack: Stack,
@@ -2927,6 +2931,7 @@ fn context_from_deployment(
         app: prepared.app,
         agent: None,
         distribution_cleanups: cleanups,
+        distribution_setup: Some(prepared.clone()),
     }
 }
 
@@ -2941,7 +2946,10 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
     if ctx.model == DeploymentModel::Push
         && !matches!(
             ctx.app,
-            TestApp::ByoEncryptionKey | TestApp::ByoAi | TestApp::AutomaticSetup
+            TestApp::ByoEncryptionKey
+                | TestApp::ByoAi
+                | TestApp::AutomaticSetup
+                | TestApp::StorageNotifications
         )
         && matches!(
             ctx.platform,

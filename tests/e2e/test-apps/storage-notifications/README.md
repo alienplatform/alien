@@ -51,7 +51,12 @@ Cloud execution needs the standard E2E credentials and build prerequisites.
 The callback tunnel must connect successfully before setup starts. Environments
 with a custom certificate trust store may set `NGROK_ROOT_CAS=host` or provide a
 PEM file path; TLS certificate verification remains enabled.
-These entry points do not yet assert rule-update setup rejection/re-import,
-or multipart upload; retain separate cloud
-qualification for those behaviors. A cloud test being compiled is not evidence
+The four generated-setup entries also publish a changed first rule, require the
+manager to reject it with `DEPLOYMENT_SETUP_REQUIRED`, regenerate and reapply the
+same setup artifact, and re-import the same deployment. A second cohort requires
+the new prefix to deliver, the old prefix to stop, both untouched rules to remain
+effective, and another multi-message batch. Historical records stay intact, so
+late excluded deliveries cannot disappear between phases.
+
+These entry points do not yet exercise multipart upload. A cloud test being compiled is not evidence
 that its deployment or cleanup passed.
