@@ -1378,7 +1378,7 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
         Some(DevSubcommand::Whoami(args)) => whoami_task(args, ctx).await?,
         Some(DevSubcommand::Deploy(args)) => deploy_task(args, ctx).await?,
         Some(DevSubcommand::Destroy(args)) => {
-            destroy_local_deployment(port, &args.name, args.force).await?;
+            destroy_local_deployment(port, &args).await?;
             println!("{}", success_line("Deployment destroyed."));
         }
         Some(DevSubcommand::Release(args)) => release_command(args, ctx).await?,
