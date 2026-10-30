@@ -596,22 +596,61 @@ mod tests {
                 "String",
                 CfExpression::sub("arn:aws:iam::${AWS::AccountId}:role/${Free}"),
             ),
+            (
+                "String",
+                CfExpression::sub_with("${Local}", [("Local", CfExpression::ref_("Free"))]),
+            ),
+            (
+                "String",
+                CfExpression::sub_with("${Free}", [("Free", CfExpression::ref_("Free"))]),
+            ),
+            (
+                "String",
+                CfExpression::sub_with("${Free}/${Other}", [("Other", CfExpression::from("safe"))]),
+            ),
+            (
+                "String",
+                CfExpression::sub_with("${Local}", [("Local", CfExpression::sub("${Free}"))]),
+            ),
+            (
+                "String",
+                CfExpression::sub_with(
+                    "${Local}",
+                    [(
+                        "Local",
+                        CfExpression::if_(
+                            "Enabled",
+                            CfExpression::from("safe"),
+                            CfExpression::ref_("Free"),
+                        ),
+                    )],
+                ),
+            ),
         ] {
-            let mut template = CfTemplate::default();
-            template
-                .parameters
-                .insert("Free".to_string(), parameter(parameter_type, None));
-            template.outputs.insert(
-                "Json".to_string(),
-                CfOutput {
-                    value: CfExpression::to_json_string(CfExpression::object([("v", value)])),
-                    description: None,
-                    export: None,
-                },
-            );
-            let error = lower_json_strings(&mut template)
-                .expect_err("an unconstrained parameter must not be inserted unescaped");
-            assert!(error.to_string().contains("'Free'"), "{error}");
+            for value in [
+                value.clone(),
+                CfExpression::object([("v", value.clone())]),
+                CfExpression::list([value]),
+            ] {
+                let mut template = CfTemplate::default();
+                template
+                    .parameters
+                    .insert("Free".to_string(), parameter(parameter_type, None));
+                template.outputs.insert(
+                    "Json".to_string(),
+                    CfOutput {
+                        value: CfExpression::to_json_string(value.clone()),
+                        description: None,
+                        export: None,
+                    },
+                );
+                let error = lower_json_strings(&mut template)
+                    .expect_err("an unconstrained parameter must not be inserted unescaped");
+                assert!(
+                    error.to_string().contains("'Free'"),
+                    "{parameter_type}: {value:?}: {error}"
+                );
+            }
         }
 
         let mut template = CfTemplate::default();
@@ -714,42 +753,6 @@ mod tests {
             )
             .unwrap();
             assert_eq!(actual, expected);
-        }
-    }
-
-    #[test]
-    fn substitution_maps_do_not_hide_unsafe_parameter_reads() {
-        for value in [
-            CfExpression::sub_with("${Local}", [("Local", CfExpression::ref_("Free"))]),
-            CfExpression::sub_with("${Free}", [("Free", CfExpression::ref_("Free"))]),
-            CfExpression::sub_with("${Free}/${Other}", [("Other", CfExpression::from("safe"))]),
-            CfExpression::sub_with("${Local}", [("Local", CfExpression::sub("${Free}"))]),
-            CfExpression::sub_with(
-                "${Local}",
-                [(
-                    "Local",
-                    CfExpression::if_(
-                        "Enabled",
-                        CfExpression::from("safe"),
-                        CfExpression::ref_("Free"),
-                    ),
-                )],
-            ),
-        ] {
-            let mut template = CfTemplate::default();
-            template
-                .parameters
-                .insert("Free".into(), parameter("String", None));
-            template.outputs.insert(
-                "Json".into(),
-                CfOutput {
-                    value: CfExpression::to_json_string(value),
-                    description: None,
-                    export: None,
-                },
-            );
-            let error = lower_json_strings(&mut template).unwrap_err();
-            assert!(error.to_string().contains("'Free'"), "{error}");
         }
     }
 
