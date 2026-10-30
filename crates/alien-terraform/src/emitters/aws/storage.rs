@@ -13,9 +13,11 @@ use crate::{
     },
     expr,
 };
+use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
+use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
 use alien_core::{
-    LifecycleRule, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
-    ServiceAccount, Storage, import::EmitContext,
+    import::EmitContext, LifecycleRule, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, Result, ServiceAccount, Storage,
 };
 use alien_permissions::BindingTarget;
 use hcl::{
@@ -411,6 +413,22 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
                 label.to_string(),
                 vec![PermissionSetReference::from_name(definition.permission_set)],
             ));
+        }
+    }
+
+    // The image builds of the sandboxes that render their bundles here. The sandbox emitter labels
+    // each build role with its sandbox's label.
+    if ctx.resource_id == SANDBOX_BUNDLE_STORAGE_ID {
+        for (id, _) in ctx.stack.resources() {
+            if let Some(label) = ctx
+                .name_for(id)
+                .filter(|_| aws_sandbox_renders_bundle(ctx.stack, id))
+            {
+                owners.push((
+                    label.to_string(),
+                    vec![PermissionSetReference::from_name("storage/data-read")],
+                ));
+            }
         }
     }
 

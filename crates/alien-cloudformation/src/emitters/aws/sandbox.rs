@@ -15,10 +15,7 @@ use crate::{
     emitters::aws::service_account::permission_context,
     template::{CfExpression, CfResource},
 };
-use alien_core::sandbox_build_role::{
-    sandbox_build_role_name, sandbox_bundle_bucket_name, sandbox_bundle_store_uri,
-    SANDBOX_BUNDLE_KEY_PREFIX,
-};
+use alien_core::sandbox_build_role::sandbox_build_role_name;
 use alien_core::sandbox_egress::{
     sandbox_egress_network, sandbox_needs_connector, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
 };
@@ -54,8 +51,9 @@ impl CfEmitter for AwsSandboxEmitter {
         let image_id = required_logical_id(ctx)?;
         let role_id = format!("{image_id}BuildRole");
 
-        // A sandbox whose controller renders its own bundle has no published one to grant.
-        let artifact_uri = if aws_sandbox_renders_bundle(sandbox, ctx.resource.lifecycle) {
+        // A sandbox whose controller renders its own bundle reads it through the bundle Storage's
+        // grant, and has no published one.
+        let artifact_uri = if aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
             None
         } else {
             Some(artifact_uri(sandbox)?)
@@ -88,7 +86,7 @@ impl CfEmitter for AwsSandboxEmitter {
             "Policies".to_string(),
             match artifact_uri {
                 Some(uri) => build_policies(sandbox, uri, provisioned_at_runtime(ctx))?,
-                None => deployment_bucket_build_policies(sandbox),
+                None => image_pull_build_policies(),
             },
         );
         role.properties.insert("Tags".to_string(), tags(ctx));
@@ -593,7 +591,7 @@ fn runtime_import_ref(
     // Mirrors the logical id `emit_resources` gives the build role. No shared constant ties them,
     // so a rename there leaves this GetAtt pointing at nothing and the template fails at deploy.
     let role_id = format!("{image_id}BuildRole");
-    Ok(CfExpression::object([
+    let mut fields = vec![
         ("previewPorts", preview_ports(sandbox)),
         (
             "egressConnectorArns",
@@ -604,18 +602,11 @@ fn runtime_import_ref(
             CfExpression::from(!sandbox_needs_connector(ctx.stack, sandbox)),
         ),
         ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
-        (
-            "bundleUri",
-            if aws_sandbox_renders_bundle(sandbox, ctx.resource.lifecycle) {
-                CfExpression::sub(sandbox_bundle_store_uri(&sandbox_bundle_bucket_name(
-                    "${AWS::StackName}",
-                    sandbox.id(),
-                )))
-            } else {
-                code_artifact_uri(artifact_uri(sandbox)?)
-            },
-        ),
-    ]))
+    ];
+    if !aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
+        fields.push(("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)));
+    }
+    Ok(CfExpression::object(fields))
 }
 
 /// AWS's MicroVM build-role guidance prescribes this `aws:SourceAccount` condition on the trust
@@ -759,36 +750,11 @@ fn build_policies(
     ])]))
 }
 
-/// What the build role may do when the controller renders the bundle: read the deployment's own
-/// bundle bucket, and pull the released image from another account's registry.
+/// What the build role may do when the controller renders the bundle beyond reading it, which the
+/// bundle Storage grants: pull the released image from another account's registry.
 /// `SandboxBuildRole::policy` holds the resolved form and says why.
-fn deployment_bucket_build_policies(sandbox: &Sandbox) -> CfExpression {
-    let bucket = sandbox_bundle_bucket_name("${AWS::StackName}", sandbox.id());
+fn image_pull_build_policies() -> CfExpression {
     let statements = vec![
-        CfExpression::object([
-            ("Sid", CfExpression::from("ReadSandboxBundlePrefix")),
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                CfExpression::list([CfExpression::from("s3:GetObject")]),
-            ),
-            (
-                "Resource",
-                CfExpression::sub(format!(
-                    "arn:${{AWS::Partition}}:s3:::{bucket}/{SANDBOX_BUNDLE_KEY_PREFIX}/*"
-                )),
-            ),
-            (
-                "Condition",
-                CfExpression::object([(
-                    "StringEquals",
-                    CfExpression::object([(
-                        "s3:ResourceAccount",
-                        CfExpression::ref_("AWS::AccountId"),
-                    )]),
-                )]),
-            ),
-        ]),
         CfExpression::object([
             ("Sid", CfExpression::from("AuthorizeSandboxImagePull")),
             ("Effect", CfExpression::from("Allow")),

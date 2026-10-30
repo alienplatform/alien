@@ -7,11 +7,11 @@ use serde_json::Value;
 use crate::remote_bindings::{
     remote_binding_for_entry, remote_binding_is_deliverable, RemoteBindingDefinition,
 };
-use crate::sandbox_build_role::SandboxBuildRole;
+use crate::sandbox_build_role::{SandboxBuildRole, SANDBOX_BUNDLE_STORAGE_ID};
 use crate::sandbox_egress::{sandbox_egress_network, sandbox_needs_connector};
 use crate::{
     parse_ecr_image_repository, ErrorData, ResourceLifecycle, Result, Sandbox, SandboxCode, Stack,
-    BUNDLE_REGION_TOKEN,
+    Storage, BUNDLE_REGION_TOKEN,
 };
 
 /// The account a sandbox's scaffolding is rendered into.
@@ -53,21 +53,25 @@ pub fn aws_sandbox_egress_network_id<'a>(
     Ok(Some(network.id))
 }
 
-/// Whether the controller renders this sandbox's bundle into the deployment's own bucket: a Live
-/// sandbox whose `code.image` is a container image rather than a prebuilt `s3://` bundle. A Frozen
-/// image is built by setup, which has no controller to render one.
-pub fn aws_sandbox_renders_bundle(sandbox: &Sandbox, lifecycle: ResourceLifecycle) -> bool {
-    lifecycle == ResourceLifecycle::Live
-        && matches!(&sandbox.code, SandboxCode::Image { image } if !image.starts_with("s3://"))
+/// Whether the controller renders this sandbox's bundle into the deployment's bundle Storage,
+/// [`SANDBOX_BUNDLE_STORAGE_ID`]: the sandbox depends on it. Setup adds the Storage for a Live
+/// sandbox released as a container image; a deployment set up before it existed builds from the
+/// bundle a publisher wrote into the store its setup granted.
+pub fn aws_sandbox_renders_bundle(stack: &Stack, sandbox_id: &str) -> bool {
+    stack.resources.get(sandbox_id).is_some_and(|entry| {
+        entry.dependencies.iter().any(|dependency| {
+            dependency.resource_type == Storage::RESOURCE_TYPE
+                && dependency.id == SANDBOX_BUNDLE_STORAGE_ID
+        })
+    })
 }
 
-/// The build role setup renders for this sandbox. `deployment_bucket` is the deployment's own
-/// bundle bucket, set exactly when [`aws_sandbox_renders_bundle`]; otherwise the role reads
-/// `bundle_uri`.
+/// The build role setup renders for this sandbox. With `renders_bundle` it only pulls the image
+/// the rendered bundle names; otherwise it reads `bundle_uri`.
 pub fn aws_sandbox_build_role<'a>(
     sandbox: &'a Sandbox,
     bundle_uri: &'a str,
-    deployment_bucket: Option<&'a str>,
+    renders_bundle: bool,
     lifecycle: ResourceLifecycle,
     account: SetupAccount<'a>,
 ) -> SandboxBuildRole<'a> {
@@ -79,7 +83,7 @@ pub fn aws_sandbox_build_role<'a>(
         .bundle_uri(bundle_uri)
         .runtime_built(lifecycle == ResourceLifecycle::Live)
         .maybe_private_base_image(sandbox.private_base_image.as_deref())
-        .maybe_deployment_bucket(deployment_bucket)
+        .renders_bundle(renders_bundle)
         .build()
 }
 
@@ -147,27 +151,22 @@ pub fn aws_sandbox_setup_inputs(
             "an AWS sandbox is built from a prebuilt s3:// bundle, not from source".to_string(),
         ));
     };
-    // A published bundle is what a deployment whose setup granted the publisher's store builds
-    // from, so a release that adds one beside a container image keeps that setup's inputs: the
-    // deployment goes on building without a setup rerun, and moves to a bucket of its own only
-    // when setup runs again.
-    let image = sandbox.published_bundle.as_deref().unwrap_or(image);
-    let policy = if lifecycle == ResourceLifecycle::Live && !image.starts_with("s3://") {
-        // The bucket is named after the deployment, so only the shape of the grant is an input.
-        aws_sandbox_build_role(
-            sandbox,
-            image,
-            Some(SETUP_GRANTED_STORE),
-            lifecycle,
-            account,
-        )
-        .policy()?
+    let policy = if aws_sandbox_renders_bundle(stack, &sandbox.id) {
+        // The bundle Storage is a setup-owned resource of its own, compared as one, so only the
+        // image grant is an input here.
+        aws_sandbox_build_role(sandbox, image, true, lifecycle, account).policy()?
     } else if lifecycle == ResourceLifecycle::Live {
+        // A deployment set up before the bundle Storage existed builds from the publisher's
+        // bundle, so a release that adds one beside a container image keeps that setup's inputs:
+        // it goes on building without a setup rerun, and moves to the Storage when setup runs
+        // again.
+        //
         // A Live sandbox's store and base image repository are fixed by its setup: the runtime
         // reads each release's bundle key from the store this setup granted, and the publisher
         // puts a bundle there whose base image this role can pull. Only the shape of the grant
         // (stable prefix, whether a private base exists, its repository namespace) is a setup
         // input.
+        let image = sandbox.published_bundle.as_deref().unwrap_or(image);
         let mut granted = sandbox.clone();
         granted.private_base_image = sandbox
             .private_base_image
@@ -176,9 +175,9 @@ pub fn aws_sandbox_setup_inputs(
             .transpose()
             .map_err(refuse)?;
         let bundle = setup_granted_bundle(image).map_err(refuse)?;
-        aws_sandbox_build_role(&granted, &bundle, None, lifecycle, account).policy()?
+        aws_sandbox_build_role(&granted, &bundle, false, lifecycle, account).policy()?
     } else {
-        aws_sandbox_build_role(sandbox, image, None, lifecycle, account).policy()?
+        aws_sandbox_build_role(sandbox, image, false, lifecycle, account).policy()?
     };
     let network = aws_sandbox_egress_network_id(stack, sandbox).map_err(refuse)?;
     // An update that stops publishing keeps the setup-owned Remote Bindings role, so without

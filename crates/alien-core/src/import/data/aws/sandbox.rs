@@ -1,11 +1,8 @@
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
 
-use crate::sandbox_build_role::{sandbox_bundle_bucket_name, sandbox_bundle_store_uri};
 use crate::sandbox_setup_inputs::aws_sandbox_renders_bundle;
-use crate::{
-    parse_bundle_uri, BundleUri, ErrorData, ResourceLifecycle, Result, Sandbox, SandboxCode, Stack,
-};
+use crate::{parse_bundle_uri, BundleUri, ErrorData, Result, Sandbox, SandboxCode, Stack};
 
 /// AWS Sandbox ImportData.
 ///
@@ -37,8 +34,8 @@ pub struct AwsSandboxImportData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_role_arn: Option<String>,
     /// Bundle the controller builds the image from. Only a runtime-provisioned sandbox carries it.
-    /// For a sandbox whose controller renders its own bundle this names the deployment's bucket
-    /// and key prefix, `s3://<bucket>/sandbox-bundle/`, rather than one object.
+    /// Absent for a sandbox whose controller renders its own bundle into the deployment's bundle
+    /// Storage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_uri: Option<String>,
     /// Egress network connectors. Deleting one while MicroVMs still reference it breaks their
@@ -71,7 +68,6 @@ impl AwsSandboxImportData {
         stack: &Stack,
         sandbox: &Sandbox,
         build_role_arn: String,
-        resource_prefix: &str,
         region: &str,
         recorded_connector_arn: Option<&str>,
     ) -> Result<Self> {
@@ -86,13 +82,13 @@ impl AwsSandboxImportData {
                 "an AWS sandbox is built from a prebuilt s3:// bundle, not from source".to_string(),
             ));
         };
-        let bundle_uri = if aws_sandbox_renders_bundle(sandbox, ResourceLifecycle::Live) {
-            sandbox_bundle_store_uri(&sandbox_bundle_bucket_name(resource_prefix, &sandbox.id))
+        let bundle_uri = if aws_sandbox_renders_bundle(stack, &sandbox.id) {
+            None
         } else {
-            match parse_bundle_uri(image).map_err(refuse)? {
+            Some(match parse_bundle_uri(image).map_err(refuse)? {
                 BundleUri::Literal(uri) => uri.to_string(),
                 BundleUri::Regional { before, after } => format!("{before}{region}{after}"),
-            }
+            })
         };
         let isolated = crate::sandbox_egress::sandbox_needs_connector(stack, sandbox);
         let egress_connector_arns = if isolated {
@@ -108,7 +104,7 @@ impl AwsSandboxImportData {
             image_arn: None,
             image_version: None,
             build_role_arn: Some(build_role_arn),
-            bundle_uri: Some(bundle_uri),
+            bundle_uri,
             egress_connector_arns,
             preview_ports: sandbox.preview_ports.clone(),
             allow_egress: !isolated,

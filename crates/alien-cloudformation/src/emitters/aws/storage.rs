@@ -17,6 +17,8 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
+use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
+use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, Email, ErrorData, PermissionProfile,
     PermissionSetReference, RemoteStackManagement, Result, ServiceAccount, Storage,
@@ -541,6 +543,22 @@ fn storage_permission_owners(
                 role_id,
                 vec![PermissionSetReference::from_name(definition.permission_set)],
             ));
+        }
+    }
+
+    // The image builds of the sandboxes that render their bundles here. The sandbox emitter names
+    // each build role after its sandbox's logical id.
+    if ctx.resource_id == SANDBOX_BUNDLE_STORAGE_ID {
+        for (id, _) in ctx.stack.resources() {
+            if let Some(logical_id) = ctx
+                .name_for(id)
+                .filter(|_| aws_sandbox_renders_bundle(ctx.stack, id))
+            {
+                owners.push((
+                    format!("{logical_id}BuildRole"),
+                    vec![PermissionSetReference::from_name("storage/data-read")],
+                ));
+            }
         }
     }
 

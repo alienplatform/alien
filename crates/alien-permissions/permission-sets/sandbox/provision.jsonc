@@ -5,39 +5,6 @@
     "aws": [
       {
         "grant": {
-          // The bucket a Live sandbox's controller renders its image-build bundle into: created on
-          // the first build, written before every build, and emptied and deleted with the sandbox.
-          // The `-sbx` suffix keeps this off the deployment's Storage buckets, which share the
-          // prefix.
-          "actions": [
-            "s3:CreateBucket",
-            "s3:PutBucketTagging",
-            "s3:GetBucketTagging",
-            "s3:PutObject",
-            "s3:ListBucket",
-            "s3:ListBucketVersions",
-            "s3:DeleteObject",
-            "s3:DeleteObjectVersion",
-            "s3:DeleteBucket"
-          ]
-        },
-        "binding": {
-          "stack": {
-            "resources": [
-              "arn:aws:s3:::${stackPrefix}-*-sbx",
-              "arn:aws:s3:::${stackPrefix}-*-sbx/*"
-            ]
-          },
-          "resource": {
-            "resources": [
-              "arn:aws:s3:::${stackPrefix}-${resourceName}-sbx",
-              "arn:aws:s3:::${stackPrefix}-${resourceName}-sbx/*"
-            ]
-          }
-        }
-      },
-      {
-        "grant": {
           // The parent on AWS is a MicroVM image and its versions. run-microvm rejects the
           // AWS-managed base image, so every AWS sandbox builds one — provision therefore covers
           // the build and its status reads, not just create and delete, whether the installer
