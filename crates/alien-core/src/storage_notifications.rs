@@ -41,11 +41,12 @@ pub fn aws_eventbridge_pattern(notification: &StorageNotification, bucket_name: 
     })
 }
 
-/// A bounded, deterministic rule identity, including the complete bucket identity in
-/// the hash. Keep the stack prefix intact for the queue policy and management grants.
-pub fn aws_notification_rule_name(prefix: &str, bucket: &str, index: usize) -> String {
-    let hash = format!("{:x}", Sha256::digest(bucket.as_bytes()));
-    format!("{prefix}-sn-{}-{index}", &hash[..24])
+/// A bounded, deterministic rule identity, including the storage resource identity in
+/// the hash. This identity is available before setup resolves the bucket name.
+/// Keep the stack prefix intact for the queue policy and management grants.
+pub fn aws_notification_rule_name(prefix: &str, storage_id: &str, index: usize) -> String {
+    let hash = format!("{:x}", Sha256::digest(storage_id.as_bytes()));
+    format!("{prefix}-sn-{}-{index}", &hash[..16])
 }
 
 /// JSON paths shared by all AWS setup and controller target writers.
@@ -106,6 +107,7 @@ mod tests {
     use super::*;
     use crate::{Queue, ResourceRef};
     use regex::Regex;
+    use std::collections::HashSet;
 
     fn notification(prefix: &str, suffix: &str) -> StorageNotification {
         StorageNotification::builder()
@@ -148,6 +150,22 @@ mod tests {
         }
         expression.push_str(r"\z");
         Regex::new(&expression).unwrap()
+    }
+
+    #[test]
+    fn rule_names_fit_the_provider_limit_with_the_full_setup_prefix() {
+        let mut names = HashSet::new();
+        for length in 3..=40 {
+            let prefix = "p".repeat(length);
+            for storage_id in ["source", "second", "long-resource-identity".repeat(10).as_str()] {
+                for index in 0..10 {
+                    let name = aws_notification_rule_name(&prefix, storage_id, index);
+                    assert!(name.len() <= 64, "EventBridge rejects {name}");
+                    assert!(name.starts_with(&format!("{prefix}-sn-")), "IAM scope must stay intact");
+                    assert!(names.insert(name), "storage/rule identities must be distinct");
+                }
+            }
+        }
     }
 
     #[test]

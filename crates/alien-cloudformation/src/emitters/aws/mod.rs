@@ -22,6 +22,7 @@ pub mod remote_stack_management;
 pub mod sandbox;
 pub mod service_account;
 pub mod storage;
+mod storage_notifications;
 pub mod vault;
 pub mod worker;
 

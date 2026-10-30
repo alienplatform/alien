@@ -82,6 +82,15 @@ impl CfEmitter for AwsStorageEmitter {
                 .extend(storage_notification_dependencies(ctx));
         }
 
+        if !storage.notifications.is_empty() {
+            bucket.properties.insert(
+                "NotificationConfiguration".into(),
+                CfExpression::object([("EventBridgeConfiguration", CfExpression::object([
+                    ("EventBridgeEnabled", CfExpression::from(true)),
+                ]))]),
+            );
+        }
+
         if storage.versioning {
             bucket.properties.insert(
                 "VersioningConfiguration".to_string(),
@@ -180,6 +189,9 @@ impl CfEmitter for AwsStorageEmitter {
 
         let mut resources = vec![bucket, policy];
         resources.extend(storage_iam_policies(ctx, storage, bucket_id)?);
+        resources.extend(super::storage_notifications::resources(
+            ctx, storage, bucket_id,
+        )?);
 
         Ok(resources)
     }

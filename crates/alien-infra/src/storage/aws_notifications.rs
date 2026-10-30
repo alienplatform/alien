@@ -103,7 +103,7 @@ pub(super) async fn reconcile(
     // The portable maximum bounds discovery, including rules created before a lost
     // checkpoint. No account-wide ListRules permission is needed.
     for index in 0..10 {
-        let name = aws_notification_rule_name(ctx.resource_prefix, bucket, index);
+        let name = aws_notification_rule_name(ctx.resource_prefix, &storage.id, index);
         let observed = read_rule(client.as_ref(), &name, bucket, &storage.id).await?;
         if index >= count {
             if observed.is_some() && !remove_rule_step(client.as_ref(), &name, &storage.id).await? {
@@ -203,7 +203,7 @@ pub(super) async fn remove_owned_step(
     id: &str,
 ) -> Result<bool> {
     for index in 0..10 {
-        let name = aws_notification_rule_name(prefix, bucket, index);
+        let name = aws_notification_rule_name(prefix, id, index);
         if read_rule(client, &name, bucket, id).await?.is_some()
             && !remove_rule_step(client, &name, id).await?
         {
