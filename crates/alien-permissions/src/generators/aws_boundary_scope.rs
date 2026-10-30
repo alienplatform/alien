@@ -8,6 +8,41 @@ use crate::{
     PermissionContext,
 };
 
+/// Validate a setup boundary using maximum input lengths and distinct provider key IDs.
+pub fn validate_aws_boundary_size(stack: &Stack) -> Result<()> {
+    let base = PermissionContext::new()
+        .with_stack_prefix("s".repeat(40))
+        .with_aws_region("r".repeat(16))
+        .with_aws_account_id("123456789012")
+        .with_managing_role_arn(format!(
+            "arn:aws:iam::210987654321:role/{}",
+            "r".repeat(2019)
+        ))
+        .with_managing_account_id("210987654321")
+        .with_aws_permissions_boundary_arn(format!(
+            "arn:aws:iam::123456789012:policy/{}-deployment-management-boundary",
+            "s".repeat(40)
+        ));
+    super::aws_stack_permissions_boundary(stack, &base, |_, scope| {
+        aws_boundary_scope_context(stack, &base, scope, |scope| {
+            if stack.resources[scope].config.resource_type() != alien_core::Key::RESOURCE_TYPE {
+                return Ok(None);
+            }
+            let index = stack.resources.get_index_of(scope).ok_or_else(|| {
+                AlienError::new(ErrorData::InvalidPermissionSet {
+                    message: format!("AWS permissions boundary key '{scope}' is missing"),
+                })
+            })?;
+            // Distinct UUIDs prevent separate key grants from collapsing during sizing.
+            Ok(Some(format!(
+                "arn:aws:kms:{}:123456789012:key/00000000-0000-0000-0000-{index:012x}",
+                "r".repeat(16)
+            )))
+        })
+    })?;
+    Ok(())
+}
+
 /// Resolve a boundary grant's resource scope. The callback supplies recorded names or
 /// setup key references; `None` uses the default name for resources with predictable names.
 pub fn aws_boundary_scope_context(

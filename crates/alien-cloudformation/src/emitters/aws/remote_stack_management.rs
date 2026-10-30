@@ -23,7 +23,10 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    generators::{aws_stack_permissions_boundary, AwsCloudFormationPermissionsGenerator},
+    generators::{
+        aws_stack_permissions_boundary, validate_aws_boundary_size,
+        AwsCloudFormationPermissionsGenerator,
+    },
     BindingTarget, PermissionContext,
 };
 
@@ -86,8 +89,6 @@ fn boundary_logical_id(resource_logical_id: &str) -> String {
 }
 
 fn boundary_document(ctx: &EmitContext<'_>) -> Result<CfExpression> {
-    // Validate the resolved document at the supported maximum input lengths too.
-    // Short template tokens must not hide an oversized installed IAM policy.
     let generate = |context: &PermissionContext| {
         aws_stack_permissions_boundary(ctx.stack, context, |_, scope| {
             boundary_grant_context(ctx, context, scope)
@@ -96,21 +97,9 @@ fn boundary_document(ctx: &EmitContext<'_>) -> Result<CfExpression> {
             message: "failed to generate AWS permissions boundary".to_string(),
         })
     };
-    generate(
-        &PermissionContext::new()
-            .with_stack_prefix("s".repeat(40))
-            .with_aws_region("r".repeat(16))
-            .with_aws_account_id("123456789012")
-            .with_managing_role_arn(format!(
-                "arn:aws:iam::210987654321:role/{}",
-                "r".repeat(2019)
-            ))
-            .with_managing_account_id("210987654321")
-            .with_aws_permissions_boundary_arn(format!(
-                "arn:aws:iam::123456789012:policy/{}-deployment-management-boundary",
-                "s".repeat(40)
-            )),
-    )?;
+    validate_aws_boundary_size(ctx.stack).context(ErrorData::GenericError {
+        message: "failed to generate AWS permissions boundary".to_string(),
+    })?;
     let document = generate(
         &PermissionContext::new()
             .with_stack_prefix("${AWS::StackName}")
@@ -203,19 +192,8 @@ fn boundary_grant_context(
             })
         })?;
         // Ref returns the generated key ID. Use that exact ID, never the stack prefix.
-        let key_id = if base.stack_prefix.as_deref() == Some("${AWS::StackName}") {
-            format!("${{{logical_id}}}")
-        } else {
-            // Keep keys distinct while budgeting their provider-assigned UUIDs.
-            let index = ctx.stack.resources.get_index_of(scope).ok_or_else(|| {
-                AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
-                    message: format!("AWS permissions boundary key '{scope}' is missing"),
-                })
-            })?;
-            format!("00000000-0000-0000-0000-{index:012x}")
-        };
         Ok(Some(format!(
-            "arn:aws:kms:{}:{}:key/{key_id}",
+            "arn:aws:kms:{}:{}:key/${{{logical_id}}}",
             base.aws_region.as_deref().unwrap_or_default(),
             base.aws_account_id.as_deref().unwrap_or_default(),
         )))

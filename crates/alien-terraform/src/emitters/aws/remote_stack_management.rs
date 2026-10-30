@@ -27,7 +27,10 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
-    generators::{aws_stack_permissions_boundary, AwsIamStatement, AwsRuntimePermissionsGenerator},
+    generators::{
+        aws_stack_permissions_boundary, validate_aws_boundary_size, AwsIamStatement,
+        AwsRuntimePermissionsGenerator,
+    },
     BindingTarget, PermissionContext,
 };
 use hcl::expr::Expression;
@@ -215,19 +218,9 @@ fn boundary_document(ctx: &EmitContext<'_>) -> Result<Expression> {
             message: "failed to generate AWS permissions boundary".to_string(),
         })
     };
-    // Template tokens must not hide an oversized resolved document. Key UUID
-    // budgets are distinct so separate physical grants cannot collapse here.
-    generate(
-        &PermissionContext::new()
-            .with_stack_prefix("s".repeat(40))
-            .with_aws_region("r".repeat(16))
-            .with_aws_account_id("123456789012")
-            .with_managing_role_arn(format!(
-                "arn:aws:iam::210987654321:role/{}",
-                "r".repeat(2019)
-            ))
-            .with_managing_account_id("210987654321"),
-    )?;
+    validate_aws_boundary_size(ctx.stack).context(ErrorData::GenericError {
+        message: "failed to generate AWS permissions boundary".to_string(),
+    })?;
     let context = PermissionContext::new()
         .with_stack_prefix("${Prefix}")
         .with_aws_region("${Region}")
@@ -362,15 +355,9 @@ fn boundary_grant_context(
                 message: format!("AWS permissions boundary key '{scope}' is missing"),
             })
         })?;
-        Ok(Some(if base.stack_prefix.as_deref() == Some("${Prefix}") {
-            format!("arn:aws:kms:${{Region}}:${{Account}}:key/${{Key{index}}}")
-        } else {
-            format!(
-                "arn:aws:kms:{}:{}:key/00000000-0000-0000-0000-{index:012x}",
-                base.aws_region.as_deref().unwrap_or_default(),
-                base.aws_account_id.as_deref().unwrap_or_default()
-            )
-        }))
+        Ok(Some(format!(
+            "arn:aws:kms:${{Region}}:${{Account}}:key/${{Key{index}}}"
+        )))
     })
 }
 
