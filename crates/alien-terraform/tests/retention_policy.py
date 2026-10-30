@@ -39,6 +39,25 @@ class AzureRetention(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Disable Azure storage lifecycle'):
             retention.azure_expiry_guard(self.state, self.selected)
 
+    def test_name_based_container_state_preserves_expiry_guard(self):
+        account = '/subscriptions/sub/resourceGroups/group/providers/Microsoft.Storage/storageAccounts/shared'
+        attributes = self.state['resources'][1]['instances'][0]['attributes']
+        attributes.update(storage_account_id=None, storage_account_name='shared',
+                          resource_manager_id=account + '/blobServices/default/containers/data')
+        self.state['resources'][2]['instances'][0]['attributes']['storage_account_id'] = account
+        with self.assertRaisesRegex(RuntimeError, 'Disable Azure storage lifecycle'):
+            retention.azure_expiry_guard(self.state, self.selected)
+        self.rule['enabled'] = False
+        retention.azure_expiry_guard(self.state, self.selected)
+
+        for invalid in [None, 'https://shared.blob.core.windows.net/data',
+                        account + '/blobServices/default/containers/other',
+                        account.replace('/shared', '/other') + '/blobServices/default/containers/data']:
+            with self.subTest(resource_manager_id=invalid):
+                attributes['resource_manager_id'] = invalid
+                with self.assertRaisesRegex(RuntimeError, 'Cannot identify retained Azure container'):
+                    retention.azure_expiry_guard(self.state, self.selected)
+
     def test_unrelated_prefix_and_disabled_delete_do_not_block(self):
         for prefix in ['sibling/', 'database/']:
             self.rule['filters'][0]['prefix_match'] = [prefix]

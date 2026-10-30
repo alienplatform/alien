@@ -413,6 +413,17 @@ def azure_expiry_guard(state, selected):
             elif resource['type'] == 'azurerm_storage_container':
                 account = attributes.get('storage_account_id')
                 name = attributes.get('name')
+                if not account:
+                    # AzureRM keeps storage_account_id null when the installed
+                    # resource uses storage_account_name. Its resource_manager_id
+                    # still contains the complete account and container identity.
+                    identity = re.fullmatch(
+                        r'(/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Storage/storageAccounts/[^/]+)/blobServices/default/containers/([^/]+)',
+                        attributes.get('resource_manager_id') or '', re.IGNORECASE)
+                    if (identity and identity[2] == name
+                            and identity[1].rsplit('/', 1)[1].lower()
+                            == (attributes.get('storage_account_name') or '').lower()):
+                        account = identity[1]
                 if not account or not name:
                     raise RuntimeError('Cannot identify retained Azure container account/name; refresh or upgrade the installed package before detachment')
                 containers.setdefault(account.lower(), set()).add(name)
