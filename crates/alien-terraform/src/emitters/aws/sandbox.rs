@@ -431,6 +431,9 @@ impl TfEmitter for AwsSandboxEmitter {
         if !provisioned_at_runtime(ctx) {
             fragment = fragment.with_resource(image);
         }
+        if aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
+            super::storage::emit_sandbox_bundle_read(ctx, &mut fragment, label)?;
+        }
         fragment.resource_blocks.extend(egress_resources);
         emit_remote_bindings_policy(ctx, &mut fragment)?;
         emit_profile_policies(ctx, &mut fragment)?;

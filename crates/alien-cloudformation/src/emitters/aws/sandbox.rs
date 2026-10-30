@@ -264,6 +264,9 @@ impl CfEmitter for AwsSandboxEmitter {
         properties.insert("Tags".to_string(), tags(ctx));
 
         let mut resources = vec![role];
+        if artifact_uri.is_none() {
+            resources.push(super::storage::sandbox_bundle_read_policy(ctx, &role_id)?);
+        }
         resources.append(&mut egress_resources);
         // A Live sandbox's image is built by the runtime controller once the deployment registers —
         // only then is a customer account a principal Alien's registry can open to. The build role
