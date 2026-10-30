@@ -78,10 +78,10 @@ impl<'a> IamRoleWriter<'a> {
             .await?
             .list_attached_role_policies_result;
         // Never adopt on a partial audit, including responses from other IamApi implementations.
-        if policies.is_truncated == Some(true) {
+        if policies.is_truncated != Some(false) {
             return Err(AlienError::new(ErrorData::InvalidInput {
                 message: format!(
-                    "Cannot adopt role '{role_name}': its attached policy list is truncated"
+                    "Cannot adopt role '{role_name}': its attached policy list is truncated or not confirmed complete"
                 ),
                 field_name: Some("attachedPolicies".to_owned()),
             }));

@@ -169,18 +169,28 @@ async fn different_boundary_is_not_overwritten() {
 
 #[tokio::test]
 async fn unsafe_or_incomplete_policy_audit_prevents_adoption() {
-    for result in [
-        json!({"AttachedPolicies": {"member": [{"PolicyName": "AdministratorAccess", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}]}}),
-        json!({"IsTruncated": true, "Marker": "next"}),
+    for (result, diagnostic) in [
+        (
+            json!({"AttachedPolicies": {"member": [{"PolicyName": "AdministratorAccess", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}]}, "IsTruncated": false}),
+            "AWS-managed policy",
+        ),
+        (json!({"IsTruncated": true, "Marker": "next"}), "truncated"),
+        (json!({}), "not confirmed complete"),
+        (
+            json!({"AttachedPolicies": {"member": []}}),
+            "not confirmed complete",
+        ),
     ] {
         let mut iam = MockIamApi::new();
         expect_role(&mut iam, None);
         expect_policies(&mut iam, result);
+        iam.expect_put_role_permissions_boundary().never();
         let error = IamRoleWriter::new(&iam, Some(BOUNDARY))
             .prepare_existing("test-role", "test", "worker")
             .await
             .unwrap_err();
         assert!(matches!(error.error, Some(ErrorData::InvalidInput { .. })));
+        assert!(error.to_string().contains(diagnostic));
     }
 }
 
@@ -188,7 +198,7 @@ async fn unsafe_or_incomplete_policy_audit_prevents_adoption() {
 async fn adoption_failure_is_returned_to_the_writer() {
     let mut iam = MockIamApi::new();
     expect_role(&mut iam, None);
-    expect_policies(&mut iam, json!({}));
+    expect_policies(&mut iam, json!({"IsTruncated": false}));
     iam.expect_put_role_permissions_boundary()
         .once()
         .returning(|_, _| {
