@@ -3,12 +3,12 @@
 //! Each test gets its own manager with an ephemeral SQLite database, a random
 //! port, and a freshly bootstrapped admin token.
 
-use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::sync::Arc;
 
 use alien_core::{ClientConfig, ManagementConfig, Platform};
 use alien_error::AlienError;
 use sha2::{Digest, Sha256};
+use tokio::net::TcpListener;
 use tracing::info;
 
 use alien_manager::{
@@ -22,14 +22,6 @@ use alien_manager::{
 use async_trait::async_trait;
 
 use crate::config::{AzureConfig, TestConfig};
-
-/// Find a free TCP port by binding to port 0 and reading back the assigned port.
-fn find_free_port() -> u16 {
-    let listener = StdTcpListener::bind("127.0.0.1:0").expect("failed to bind to port 0");
-    let port = listener.local_addr().expect("no local addr").port();
-    drop(listener);
-    port
-}
 
 fn derive_response_signing_key(admin_token: &str) -> Vec<u8> {
     let mut hasher = Sha256::new();
@@ -147,8 +139,10 @@ impl TestManager {
         let state_dir = tempfile::tempdir()?;
         let db_path = state_dir.path().join("test.db");
 
-        // 2. Find a free port
-        let port = find_free_port();
+        // 2. Reserve the listener before the embedded registry starts; releasing
+        // the port here lets that registry (or another process) claim it.
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
         let url = format!("http://127.0.0.1:{}", port);
 
         // 2b. Start ngrok tunnel if configured. Cloud-deployed workers and
@@ -301,9 +295,8 @@ impl TestManager {
         let deployment_store = server.deployment_store().clone();
 
         // 8. Spawn the server in a background task
-        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
         let server_handle = tokio::spawn(async move {
-            if let Err(e) = server.start(addr).await {
+            if let Err(e) = server.start_with_listener(listener).await {
                 tracing::error!(error = %e, "TestManager server error");
             }
         });
@@ -750,7 +743,21 @@ impl TestManager {
 
 #[cfg(test)]
 mod tests {
-    use super::derive_response_signing_key;
+    use super::{derive_response_signing_key, TestManager};
+
+    #[tokio::test]
+    async fn manager_serves_requests_with_embedded_registry() {
+        let manager = TestManager::start()
+            .await
+            .expect("manager and registry should start");
+        let response = reqwest::Client::new()
+            .get(format!("{}/health", manager.url))
+            .send()
+            .await
+            .expect("manager listener should accept requests");
+        assert!(response.status().is_success());
+        manager.stop().await;
+    }
 
     #[test]
     fn response_signing_key_is_derived_from_admin_token() {
