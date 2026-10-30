@@ -1420,6 +1420,7 @@ dependencies = [
  "dockdash",
  "dotenvy",
  "futures",
+ "hcl-rs",
  "hex",
  "libc",
  "ngrok",
