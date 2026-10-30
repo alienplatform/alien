@@ -458,6 +458,9 @@ pub async fn handle_updating(
                 if let Some(target) = target_stack.resources.get(resource_id) {
                     retained.display_name = target.display_name.clone();
                     retained.description = target.description.clone();
+                    // Retain setup-approved grants, but keep the freshly prepared
+                    // ordering edges. Re-import may have installed those already.
+                    retained.dependencies = target.dependencies.clone();
                 }
                 target_stack.resources.insert(resource_id.clone(), retained);
             }
@@ -1714,5 +1717,132 @@ mod tests {
         prune_deprovisioned_resources(&mut state, &target_stack, Some(&release_stack));
 
         assert!(state.resources.contains_key("cache"));
+    }
+}
+
+#[cfg(test)]
+mod aws_handoff_tests {
+    use super::*;
+    use alien_aws_clients::AwsClientConfigExt;
+    use alien_core::{
+        AwsClientConfig, ClientConfig, EnvironmentVariablesSnapshot, PermissionProfile, Resource,
+        ResourceRef, ServiceAccount, StackResourceState,
+    };
+    use alien_infra::{
+        AwsRemoteStackManagementController, AwsServiceAccountController,
+        MockPlatformServiceProvider, StackResourceStateExt,
+    };
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn repeated_setup_keeps_new_ordering_while_retaining_installed_grants() {
+        for narrow_grants in [false, true] {
+            let account = ServiceAccount::from_permission_profile(
+                "execution-sa".into(),
+                &PermissionProfile::new().resource("objects", ["storage/data-read"]),
+                |id| alien_permissions::get_permission_set(id).cloned(),
+            )
+            .unwrap();
+            let baseline = Stack::new("handoff".into())
+                .add(
+                    alien_core::RemoteStackManagement::new("management".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(account, ResourceLifecycle::Frozen)
+                .build();
+            let dependency = ResourceRef::new(
+                alien_core::RemoteStackManagement::RESOURCE_TYPE,
+                "management",
+            );
+            let mut target = baseline.clone();
+            let entry = target.resources.get_mut("execution-sa").unwrap();
+            entry.dependencies.push(dependency.clone());
+            if narrow_grants {
+                entry.config = Resource::new(ServiceAccount::new("execution-sa".into()).build());
+            }
+            // Setup re-imported the same role and grants with the new ordering
+            // edge; the last successful release still has the older entry.
+            let mut saved = StackState::with_resource_prefix(Platform::Aws, "test".into());
+            for (id, entry) in baseline.resources() {
+                let mut resource = StackResourceState::new_pending(
+                    entry.config.resource_type().to_string(),
+                    entry.config.clone(),
+                    Some(ResourceLifecycle::Frozen),
+                    Vec::new(),
+                );
+                resource.status = ResourceStatus::Running;
+                if id == "execution-sa" {
+                    resource.dependencies.push(dependency.clone());
+                    let controller: AwsServiceAccountController = serde_json::from_value(serde_json::json!({
+                        "state": "ready", "roleArn": "arn:aws:iam::123456789012:role/test-execution-sa",
+                        "roleName": "test-execution-sa", "stackPermissionsApplied": true
+                    })).unwrap();
+                    resource
+                        .set_internal_controller(Some(Box::new(controller)))
+                        .unwrap();
+                } else {
+                    resource
+                        .set_internal_controller(Some(Box::new(
+                            AwsRemoteStackManagementController::mock_ready("management"),
+                        )))
+                        .unwrap();
+                }
+                saved.resources.insert(id.clone(), resource);
+            }
+            let before = saved.resources["execution-sa"].clone();
+            let config = DeploymentConfig::builder()
+                .stack_settings(Default::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(Default::default())
+                .allow_frozen_changes(false)
+                .build();
+            let result = handle_updating(
+                DeploymentState {
+                    status: DeploymentStatus::Updating,
+                    platform: Platform::Aws,
+                    current_release: None,
+                    target_release: None,
+                    stack_state: Some(saved),
+                    error: None,
+                    environment_info: None,
+                    runtime_metadata: Some(alien_core::RuntimeMetadata {
+                        initial_setup_authority: InitialSetupAuthority::ImportedHandoff,
+                        prepared_stack: Some(baseline),
+                        pending_prepared_stack: Some(target),
+                        ..Default::default()
+                    }),
+                    retry_requested: false,
+                    protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                },
+                config,
+                ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+                Arc::new(MockPlatformServiceProvider::new()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.state.status, DeploymentStatus::Running);
+            let after = &result.state.stack_state.as_ref().unwrap().resources["execution-sa"];
+            assert_eq!(after.status, ResourceStatus::Running);
+            assert_eq!(after.config, before.config);
+            assert_eq!(after.dependencies, before.dependencies);
+            assert_eq!(after.internal_state, before.internal_state);
+            assert!(after.previous_config.is_none());
+            assert!(after.error.is_none());
+            let prepared = result
+                .state
+                .runtime_metadata
+                .unwrap()
+                .prepared_stack
+                .unwrap();
+            assert_eq!(
+                prepared.resources["execution-sa"].dependencies,
+                vec![dependency]
+            );
+            assert_eq!(prepared.resources["execution-sa"].config, before.config);
+        }
     }
 }
