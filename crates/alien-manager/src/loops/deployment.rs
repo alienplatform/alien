@@ -2612,6 +2612,8 @@ mod tests {
     #[cfg(feature = "sqlite")]
     mod credential_retry_tests {
         use super::*;
+        use alien_core::Storage;
+        use alien_infra::{LocalStorageController, state_utils::StackResourceStateExt};
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
         struct Credentials {
@@ -3511,11 +3513,64 @@ mod tests {
                     .credentials
                     .unavailable
                     .store(false, Ordering::SeqCst);
+                let storage_path = fixture
+                    ._directory
+                    .path()
+                    .join(&fixture.id)
+                    .join("storage/data");
+                tokio::fs::create_dir_all(&storage_path).await.unwrap();
+                let object = storage_path.join("retained.txt");
+                tokio::fs::write(&object, b"retained object").await.unwrap();
+                let controller: LocalStorageController =
+                    serde_json::from_value(serde_json::json!({
+                        "state": "ready", "storagePath": storage_path,
+                    }))
+                    .unwrap();
+                let mut resource = StackResourceState::builder()
+                    .resource_type("storage".into())
+                    .status(ResourceStatus::Running)
+                    .config(Resource::new(Storage::new("data".into()).build()))
+                    .lifecycle(ResourceLifecycle::Frozen)
+                    .dependencies(vec![])
+                    .build();
+                resource
+                    .set_internal_controller(Some(Box::new(controller)))
+                    .unwrap();
+                let mut saved = fixture.record().await.stack_state.unwrap();
+                saved.resources.insert("data".into(), resource);
+                let encoded = serde_json::to_string(&saved).unwrap().replace('\'', "''");
+                fixture
+                    .db
+                    .execute(&format!("UPDATE deployments SET stack_state = '{encoded}'"))
+                    .await
+                    .unwrap();
                 fixture.db.execute("UPDATE deployments SET current_release_id = NULL, desired_release_id = NULL, retry_requested = 1, runtime_metadata = json_set(runtime_metadata, '$.deletionPolicy', 'erase')").await.unwrap();
+                assert_eq!(tokio::fs::read(&object).await.unwrap(), b"retained object");
                 let runner = fixture.runner();
                 for _ in 0..4 {
                     runner.tick().await;
+                    if fixture
+                        .manager
+                        .deployment_store
+                        .get_deployment(&Subject::system(), &fixture.id)
+                        .await
+                        .unwrap()
+                        .is_none()
+                    {
+                        assert!(
+                            !storage_path.exists(),
+                            "record must not disappear before its saved storage controller erases data"
+                        );
+                    }
                 }
+                assert!(
+                    !object.exists(),
+                    "retained object must be erased ({status:?})"
+                );
+                assert!(
+                    !storage_path.exists(),
+                    "storage directory must be erased ({status:?})"
+                );
                 assert!(
                     fixture
                         .manager
