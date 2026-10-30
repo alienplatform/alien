@@ -15,11 +15,15 @@ use crate::{
     },
     expr,
 };
-use alien_core::sandbox_build_role::sandbox_build_role_name;
+use alien_core::sandbox_build_role::{
+    sandbox_build_role_name, sandbox_bundle_bucket_name, sandbox_bundle_store_uri,
+    SANDBOX_BUNDLE_KEY_PREFIX,
+};
 use alien_core::sandbox_egress::{
     sandbox_egress_name, sandbox_egress_network, sandbox_needs_connector, LOOPBACK_ONLY_CIDR,
 };
 use alien_core::sandbox_image::AWS_MICROVM;
+use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
 use alien_core::{
     import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData, RemoteBindings,
     ResourceLifecycle, Result, Sandbox, SandboxCode, SandboxEgress, ServiceAccount,
@@ -78,7 +82,12 @@ impl TfEmitter for AwsSandboxEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
-        let artifact_uri = artifact_uri(sandbox)?;
+        // A sandbox whose controller renders its own bundle has no published one to grant.
+        let artifact_uri = if aws_sandbox_renders_bundle(sandbox, ctx.resource.lifecycle) {
+            None
+        } else {
+            Some(artifact_uri(sandbox)?)
+        };
         let open = !sandbox_needs_connector(ctx.stack, sandbox);
         let subnet_ids = if open {
             Expression::Null
@@ -115,104 +124,12 @@ impl TfEmitter for AwsSandboxEmitter {
         // rejects with MalformedPolicyDocument. `terraform validate` cannot see it — the HCL
         // and the string are both well-formed — so it only shows up at apply.
         let runtime_built = provisioned_at_runtime(ctx);
-        let mut build_statements = vec![Expression::from_iter([
-            (
-                "Sid",
-                Expression::String(
-                    if runtime_built {
-                        "ReadSandboxBundlePrefix"
-                    } else {
-                        "ReadSandboxBundle"
-                    }
-                    .to_string(),
-                ),
-            ),
-            ("Effect", Expression::String("Allow".to_string())),
-            (
-                "Action",
-                Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
-            ),
-            (
-                "Resource",
-                // A template for the same reason the operator policy's ARNs are: a plain
-                // string literal has its `${` escaped, so the partition would reach IAM as
-                // literal text and the grant would match nothing.
-                expr::template(if runtime_built {
-                    artifact_prefix_arn(sandbox, artifact_uri)?
-                } else {
-                    artifact_object_arn(artifact_uri)
-                }),
-            ),
-        ])];
-        // With no `privateBaseImage` the base is public and pulled anonymously: no ECR grant.
-        if let Some(image) = sandbox.private_base_image.as_deref() {
-            let repository = alien_core::parse_ecr_image_repository(image).map_err(|reason| {
-                AlienError::new(ErrorData::OperationNotSupported {
-                    operation: format!("terraform emit sandbox '{}'", sandbox.id()),
-                    reason,
-                })
-            })?;
-            // ECR also requires these in the caller's own policy; the repository policy alone does not
-            // authorize the pull.
-            build_statements.push(Expression::from_iter([
-                (
-                    "Sid",
-                    Expression::String("AuthorizeSandboxBaseImagePull".to_string()),
-                ),
-                ("Effect", Expression::String("Allow".to_string())),
-                (
-                    "Action",
-                    Expression::from(vec![Expression::String(
-                        "ecr:GetAuthorizationToken".to_string(),
-                    )]),
-                ),
-                ("Resource", Expression::String("*".to_string())),
-            ]));
-            build_statements.push(Expression::from_iter([
-                (
-                    "Sid",
-                    Expression::String("PullSandboxBaseImage".to_string()),
-                ),
-                ("Effect", Expression::String("Allow".to_string())),
-                (
-                    "Action",
-                    Expression::from(vec![
-                        Expression::String("ecr:BatchGetImage".to_string()),
-                        Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
-                        Expression::String("ecr:BatchImportUpstreamImage".to_string()),
-                        Expression::String("ecr:GetImageCopyStatus".to_string()),
-                    ]),
-                ),
-                (
-                    "Resource",
-                    expr::template(repository.arn(
-                        "${data.aws_partition.current.partition}",
-                        "${data.aws_region.current.region}",
-                    )),
-                ),
-            ]));
-            // See `SandboxBuildRole::policy` for why a same-account base is refused.
-            build_statements.push(Expression::from_iter([
-                (
-                    "Sid",
-                    Expression::String("DenySameAccountImagePull".to_string()),
-                ),
-                ("Effect", Expression::String("Deny".to_string())),
-                (
-                    "Action",
-                    Expression::from(vec![
-                        Expression::String("ecr:BatchGetImage".to_string()),
-                        Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
-                    ]),
-                ),
-                (
-                    "Resource",
-                    expr::template(
-                        "arn:${data.aws_partition.current.partition}:ecr:*:${data.aws_caller_identity.current.account_id}:repository/*",
-                    ),
-                ),
-            ]));
-        }
+        let build_statements = match artifact_uri {
+            None => deployment_bucket_build_statements(sandbox),
+            Some(artifact_uri) => {
+                published_bundle_build_statements(sandbox, artifact_uri, runtime_built)?
+            }
+        };
         let build_policy =
             iam_role_policy_block(label, label, "sandbox-image-build", build_statements);
 
@@ -433,9 +350,13 @@ impl TfEmitter for AwsSandboxEmitter {
                 "BuildRoleArn",
                 expr::traversal(["aws_iam_role", label, "arn"]),
             ),
+            // Only a Frozen image is emitted, and a Frozen sandbox always names a published bundle.
             (
                 "CodeArtifact",
-                Expression::from_iter([("Uri", code_artifact_uri(artifact_uri))]),
+                Expression::from_iter([(
+                    "Uri",
+                    artifact_uri.map_or(Expression::Null, code_artifact_uri),
+                )]),
             ),
             // Content-bearing logging off: the control plane must never see session contents,
             // and this is the switch rather than an approximation of it.
@@ -619,6 +540,200 @@ fn lifecycle_fields(sandbox: &Sandbox) -> Vec<(&'static str, Expression)> {
     .collect()
 }
 
+/// What the build role may do when it reads a published bundle: read the bundle, and pull the
+/// declared private base image. With no `privateBaseImage` the base is public and pulled
+/// anonymously: no ECR grant.
+fn published_bundle_build_statements(
+    sandbox: &Sandbox,
+    artifact_uri: BundleUri<'_>,
+    runtime_built: bool,
+) -> Result<Vec<Expression>> {
+    let mut build_statements = vec![Expression::from_iter([
+        (
+            "Sid",
+            Expression::String(
+                if runtime_built {
+                    "ReadSandboxBundlePrefix"
+                } else {
+                    "ReadSandboxBundle"
+                }
+                .to_string(),
+            ),
+        ),
+        ("Effect", Expression::String("Allow".to_string())),
+        (
+            "Action",
+            Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
+        ),
+        (
+            "Resource",
+            // A template for the same reason the operator policy's ARNs are: a plain
+            // string literal has its `${` escaped, so the partition would reach IAM as
+            // literal text and the grant would match nothing.
+            expr::template(if runtime_built {
+                artifact_prefix_arn(sandbox, artifact_uri)?
+            } else {
+                artifact_object_arn(artifact_uri)
+            }),
+        ),
+    ])];
+    // With no `privateBaseImage` the base is public and pulled anonymously: no ECR grant.
+    if let Some(image) = sandbox.private_base_image.as_deref() {
+        let repository = alien_core::parse_ecr_image_repository(image).map_err(|reason| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("terraform emit sandbox '{}'", sandbox.id()),
+                reason,
+            })
+        })?;
+        // ECR also requires these in the caller's own policy; the repository policy alone does not
+        // authorize the pull.
+        build_statements.push(Expression::from_iter([
+            (
+                "Sid",
+                Expression::String("AuthorizeSandboxBaseImagePull".to_string()),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::from(vec![Expression::String(
+                    "ecr:GetAuthorizationToken".to_string(),
+                )]),
+            ),
+            ("Resource", Expression::String("*".to_string())),
+        ]));
+        build_statements.push(Expression::from_iter([
+            (
+                "Sid",
+                Expression::String("PullSandboxBaseImage".to_string()),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::from(vec![
+                    Expression::String("ecr:BatchGetImage".to_string()),
+                    Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                    Expression::String("ecr:BatchImportUpstreamImage".to_string()),
+                    Expression::String("ecr:GetImageCopyStatus".to_string()),
+                ]),
+            ),
+            (
+                "Resource",
+                expr::template(repository.arn(
+                    "${data.aws_partition.current.partition}",
+                    "${data.aws_region.current.region}",
+                )),
+            ),
+        ]));
+        // See `SandboxBuildRole::policy` for why a same-account base is refused.
+        build_statements.push(Expression::from_iter([
+                (
+                    "Sid",
+                    Expression::String("DenySameAccountImagePull".to_string()),
+                ),
+                ("Effect", Expression::String("Deny".to_string())),
+                (
+                    "Action",
+                    Expression::from(vec![
+                        Expression::String("ecr:BatchGetImage".to_string()),
+                        Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                    ]),
+                ),
+                (
+                    "Resource",
+                    expr::template(
+                        "arn:${data.aws_partition.current.partition}:ecr:*:${data.aws_caller_identity.current.account_id}:repository/*",
+                    ),
+                ),
+            ]));
+    }
+    Ok(build_statements)
+}
+
+/// What the build role may do when the controller renders the bundle: read the deployment's own
+/// bundle bucket, and pull the released image from another account's registry.
+/// `SandboxBuildRole::policy` holds the resolved form and says why.
+fn deployment_bucket_build_statements(sandbox: &Sandbox) -> Vec<Expression> {
+    let bucket = sandbox_bundle_bucket_name("${local.resource_prefix}", sandbox.id());
+    vec![
+        Expression::from_iter([
+            (
+                "Sid",
+                Expression::String("ReadSandboxBundlePrefix".to_string()),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
+            ),
+            (
+                "Resource",
+                expr::template(format!(
+                    "arn:${{data.aws_partition.current.partition}}:s3:::{bucket}/{SANDBOX_BUNDLE_KEY_PREFIX}/*"
+                )),
+            ),
+            (
+                "Condition",
+                Expression::from_iter([(
+                    "StringEquals",
+                    Expression::from_iter([(
+                        "s3:ResourceAccount",
+                        expr::template("${data.aws_caller_identity.current.account_id}"),
+                    )]),
+                )]),
+            ),
+        ]),
+        Expression::from_iter([
+            (
+                "Sid",
+                Expression::String("AuthorizeSandboxImagePull".to_string()),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::from(vec![Expression::String(
+                    "ecr:GetAuthorizationToken".to_string(),
+                )]),
+            ),
+            ("Resource", Expression::String("*".to_string())),
+        ]),
+        Expression::from_iter([
+            ("Sid", Expression::String("PullSandboxImage".to_string())),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::from(vec![
+                    Expression::String("ecr:BatchGetImage".to_string()),
+                    Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                ]),
+            ),
+            (
+                "Resource",
+                expr::template("arn:${data.aws_partition.current.partition}:ecr:*:*:repository/*"),
+            ),
+        ]),
+        Expression::from_iter([
+            (
+                "Sid",
+                Expression::String("DenySameAccountImagePull".to_string()),
+            ),
+            ("Effect", Expression::String("Deny".to_string())),
+            (
+                "Action",
+                Expression::from(vec![
+                    Expression::String("ecr:BatchGetImage".to_string()),
+                    Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                ]),
+            ),
+            (
+                "Resource",
+                expr::template(
+                    "arn:${data.aws_partition.current.partition}:ecr:*:${data.aws_caller_identity.current.account_id}:repository/*",
+                ),
+            ),
+        ]),
+    ]
+}
+
 /// Whether this sandbox's image is built by the runtime controller rather than by `terraform apply`.
 fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
     ctx.resource.lifecycle == ResourceLifecycle::Live
@@ -644,7 +759,17 @@ fn runtime_import_ref(ctx: &EmitContext<'_>, sandbox: &Sandbox, label: &str) -> 
             "buildRoleArn",
             expr::traversal(["aws_iam_role", label, "arn"]),
         ),
-        ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
+        (
+            "bundleUri",
+            if aws_sandbox_renders_bundle(sandbox, ctx.resource.lifecycle) {
+                expr::template(sandbox_bundle_store_uri(&sandbox_bundle_bucket_name(
+                    "${local.resource_prefix}",
+                    sandbox.id(),
+                )))
+            } else {
+                code_artifact_uri(artifact_uri(sandbox)?)
+            },
+        ),
     ]))
 }
 

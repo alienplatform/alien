@@ -6,7 +6,7 @@ use super::helpers::{
 use alien_cloudformation::{CfExpression, CloudFormationTarget};
 use alien_core::{
     import::data::AwsSandboxImportData,
-    sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
+    sandbox_build_role::{sandbox_bundle_bucket_name, SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
     sandbox_egress::{
         sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy,
         SandboxEgressConnector, LOOPBACK_ONLY_CIDR, SANDBOX_EGRESS_POLICY_NAME,
@@ -1327,7 +1327,10 @@ const PARITY_REGION: &str = "us-gov-east-1";
 /// Every combination the build role's grant branches on: lifecycle, whether the bundle URI
 /// carries the region token, and whether a private base image is declared and where its region
 /// comes from.
-const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
+/// A released container image, which a Live sandbox's controller renders its own bundle from.
+const RELEASED_IMAGE: &str = "210987654321.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:f00d";
+
+const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 7] = [
     (
         ResourceLifecycle::Frozen,
         "s3://acme-artifacts/agents/bundle.zip",
@@ -1354,6 +1357,7 @@ const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
         LIVE_BUNDLE,
         Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base@sha256:f00d"),
     ),
+    (ResourceLifecycle::Live, RELEASED_IMAGE, None),
 ];
 
 /// Resolves the intrinsics the build role uses to the fixed parity values, and panics on any
@@ -1363,6 +1367,7 @@ fn resolve_intrinsics(value: &serde_json::Value) -> serde_json::Value {
         "AWS::Partition" => PARITY_PARTITION,
         "AWS::AccountId" => PARITY_ACCOUNT,
         "AWS::Region" => PARITY_REGION,
+        "AWS::StackName" => PARITY_PREFIX,
         other => panic!("the build role references {other}, which the parity test cannot resolve"),
     };
     match value {
@@ -1370,11 +1375,16 @@ fn resolve_intrinsics(value: &serde_json::Value) -> serde_json::Value {
             let text = map["Fn::Sub"].as_str().unwrap_or_else(|| {
                 panic!("only the string form of Fn::Sub is resolvable: {value}")
             });
-            let resolved = ["AWS::Partition", "AWS::AccountId", "AWS::Region"]
-                .into_iter()
-                .fold(text.to_string(), |acc, name| {
-                    acc.replace(&format!("${{{name}}}"), pseudo(name))
-                });
+            let resolved = [
+                "AWS::Partition",
+                "AWS::AccountId",
+                "AWS::Region",
+                "AWS::StackName",
+            ]
+            .into_iter()
+            .fold(text.to_string(), |acc, name| {
+                acc.replace(&format!("${{{name}}}"), pseudo(name))
+            });
             assert!(
                 !resolved.contains("${"),
                 "unresolved substitution left in {resolved}"
@@ -1441,6 +1451,9 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             .as_array()
             .unwrap_or_else(|| panic!("{case}: Policies must be a list: {role:#}"));
 
+        let deployment_bucket = (lifecycle == ResourceLifecycle::Live
+            && !bundle_uri.starts_with("s3://"))
+        .then(|| sandbox_bundle_bucket_name(PARITY_PREFIX, "agents"));
         let expected = SandboxBuildRole::builder()
             .sandbox_id("agents")
             .partition(PARITY_PARTITION)
@@ -1449,6 +1462,7 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             .bundle_uri(bundle_uri)
             .runtime_built(lifecycle == ResourceLifecycle::Live)
             .maybe_private_base_image(private_base_image)
+            .maybe_deployment_bucket(deployment_bucket.as_deref())
             .build();
 
         assert_eq!(policies.len(), 1, "{case}: one inline policy: {role:#}");
@@ -1871,6 +1885,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
         // that read the declared egress instead refused this sandbox on direct deployments only.
         (SandboxEgress::Allow, supervised.clone(), LIVE_BUNDLE),
         (SandboxEgress::None, supervised.clone(), LIVE_BUNDLE),
+        (SandboxEgress::Allow, None, RELEASED_IMAGE),
     ] {
         let sandbox = Sandbox {
             preview_ports: vec![8080, 3000],
@@ -1916,6 +1931,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
                 PARITY_PREFIX,
                 "agents",
             ),
+            PARITY_PREFIX,
             PARITY_REGION,
             Some(PARITY_CONNECTOR_ARN),
         )
