@@ -4,11 +4,12 @@ use alien_core::permissions::{
     ManagementPermissions, PermissionProfile, PermissionSet, PermissionSetReference,
 };
 use alien_core::{
-    ownership_policy_for_resource_type, Container, DeploymentConfig, KubernetesCertificateMode,
-    KubernetesCluster, KubernetesExposureSettings, KubernetesHeartbeatMode,
-    KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
-    Platform, Postgres, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker,
-    WorkerTrigger,
+    ownership_policy_for_resource_type,
+    storage_notifications::queue_receives_storage_notifications, Container, DeploymentConfig,
+    KubernetesCertificateMode, KubernetesCluster, KubernetesExposureSettings,
+    KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
+    KubernetesRouteProviderOptions, Platform, Postgres, ResourceLifecycle, Sandbox, Stack,
+    StackState, Storage, Worker, WorkerTrigger,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -572,6 +573,15 @@ fn generate_auto_management_profile(
                 // telemetry, and explicit policy-granted management are added
                 // independently.
             }
+        }
+
+        if platform == Platform::Gcp
+            && resource_type == "queue"
+            && resource_entry.lifecycle == ResourceLifecycle::Live
+            && queue_receives_storage_notifications(stack, resource_id)
+        {
+            // Live queues may not exist at setup time, so this grant must be project-scoped.
+            permission_set_ids.insert("queue/storage-notifications".to_string());
         }
 
         // After a Terraform setup the manager builds and replaces a Frozen GCP sandbox's template;
@@ -1827,6 +1837,45 @@ mod tests {
                 assert!(!permission_names.contains(&"aws/tag-tamper-protection".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
+        }
+    }
+
+    #[tokio::test]
+    async fn storage_notification_ingress_permissions_are_only_for_notified_live_queues() {
+        for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
+            for notifying in [false, true] {
+                let queue = alien_core::Queue::new("work".into()).build();
+                let mut storage = Storage::new("uploads".into()).build();
+                if notifying {
+                    storage.notifications.push(
+                        alien_core::StorageNotification::builder()
+                            .queue((&queue).into())
+                            .build(),
+                    );
+                }
+                let stack = Stack::new("test".into())
+                    .add(queue, lifecycle)
+                    .add(storage, lifecycle)
+                    .build();
+                let config = DeploymentConfig::builder()
+                    .stack_settings(StackSettings::default())
+                    .environment_variables(empty_env_snapshot())
+                    .allow_frozen_changes(false)
+                    .external_bindings(ExternalBindings::default())
+                    .build();
+                let prepared = ManagementPermissionProfileMutation
+                    .mutate(stack, &StackState::new(Platform::Gcp), &config)
+                    .await
+                    .unwrap();
+                let granted = prepared.management().profile().is_some_and(|profile| {
+                    profile
+                        .0
+                        .values()
+                        .flatten()
+                        .any(|permission| permission.id() == "queue/storage-notifications")
+                });
+                assert_eq!(granted, notifying && lifecycle == ResourceLifecycle::Live);
+            }
         }
     }
 

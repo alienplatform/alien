@@ -6,6 +6,9 @@ use serde_json::{json, Value};
 /// Custom GCS notification attribute carrying the literal consumer-side suffix.
 pub const GCS_SUFFIX_ATTRIBUTE: &str = "storageEventSuffix";
 
+/// Stable rule identity for additive GCS notification reconciliation.
+pub const GCS_RULE_ATTRIBUTE: &str = "storageNotificationRule";
+
 /// Whether this queue owns an ingress grant for storage notifications in its stack.
 pub fn queue_receives_storage_notifications(stack: &Stack, queue_id: &str) -> bool {
     stack.resources().any(|(_, entry)| {
