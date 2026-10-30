@@ -31,6 +31,8 @@ each produce a delivery.
 - At most 10 rules per Storage resource.
 - A supplied prefix must contain 1–512 UTF-8 bytes; a supplied suffix must contain
   1–128 UTF-8 bytes. Omit a filter to match every prefix or suffix.
+- Filters cannot contain control characters U+0000–U+001F or U+007F. These
+  declarations fail at compile time on every platform.
 - The target must be a Queue in the same stack. Storage depends on its queues.
 - Storage and Queue must have the same lifecycle: both Frozen or both Live.
 - A Storage with notifications cannot also be a Worker's direct storage-trigger

@@ -69,6 +69,15 @@ impl CompileTimeCheck for StorageNotificationsCheck {
                                 value.len()
                             ));
                         }
+                        if let Some(character) =
+                            value.chars().find(|character| character.is_ascii_control())
+                        {
+                            filters_valid = false;
+                            result.add_error(format!(
+                                "{label}.{field} contains control character U+{:04X}; control characters are not supported",
+                                u32::from(character)
+                            ));
+                        }
                     }
                 }
                 if platform == Platform::Aws && filters_valid {
@@ -420,6 +429,32 @@ mod tests {
             .is_err());
         for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
             assert!(check(&stack, platform).await.success);
+        }
+    }
+
+    #[tokio::test]
+    async fn control_characters_in_either_filter_are_rejected_on_every_supported_platform() {
+        for character in (0u8..=31).chain(std::iter::once(127)) {
+            for field in ["prefix", "suffix"] {
+                let mut rule = notification();
+                let value = Some(format!("before{}after", char::from(character)));
+                if field == "prefix" {
+                    rule.prefix = value;
+                } else {
+                    rule.suffix = value;
+                }
+                let stack = stack(vec![rule], ResourceLifecycle::Frozen);
+                for platform in [
+                    Platform::Aws,
+                    Platform::Gcp,
+                    Platform::Azure,
+                    Platform::Local,
+                ] {
+                    assert_eq!(check(&stack, platform).await.errors, vec![format!(
+                        "Storage 'objects': notifications[0].{field} contains control character U+{character:04X}; control characters are not supported"
+                    )]);
+                }
+            }
         }
     }
 }
