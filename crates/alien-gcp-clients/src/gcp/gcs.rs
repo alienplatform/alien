@@ -468,7 +468,8 @@ impl GcsApi for GcsClient {
             bucket_name
         );
         let builder = self.http.post(url).json(&notification);
-        auth_send_json(
+        // The server assigns an ID; retrying POST can create duplicate deliveries.
+        auth_send_json_once(
             builder,
             &self.auth().await?,
             "InsertNotification",
@@ -813,15 +814,19 @@ pub struct GcsNotification {
     pub topic: Option<String>,
     /// Event types to trigger on (e.g., "OBJECT_FINALIZE", "OBJECT_DELETE")
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "event_types")]
     pub event_types: Vec<String>,
     /// Payload format: "JSON_API_V1" or "NONE"
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "payload_format")]
     pub payload_format: Option<String>,
     /// Optional object name prefix filter
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "object_name_prefix")]
     pub object_name_prefix: Option<String>,
     /// Custom attributes to attach to each notification message
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(rename = "custom_attributes")]
     pub custom_attributes: HashMap<String, String>,
 }
 
