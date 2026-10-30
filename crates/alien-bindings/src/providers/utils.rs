@@ -4,7 +4,7 @@ use object_store::path::Path;
 ///
 /// * If `base` is empty, returns `location.clone()`.
 /// * If `location` is empty, returns `base.clone()`.
-/// * Otherwise, concatenates them with a single `/` separator and constructs a `Path` from the raw string.
+/// * Otherwise, joins already validated segments without encoding them again.
 ///
 /// This is preferred over `base.child(location)` when `location` may already contain
 /// internal `/` segments, because `Path::child` treats the whole string as a single
@@ -16,8 +16,7 @@ pub(crate) fn prefixed_path(base: &Path, location: &Path) -> Path {
     if location.as_ref().is_empty() {
         return base.clone();
     }
-    let joined = format!("{}/{}", base.as_ref(), location.as_ref());
-    Path::from(joined)
+    Path::from_iter(base.parts().chain(location.parts()))
 }
 
 /// Takes a `full_path` and attempts to make it relative to `base_dir`.
@@ -48,5 +47,52 @@ pub(crate) fn relativize_path(
                 base_dir, full_path
             ).into(),
         }),
+    }
+}
+
+#[cfg(all(test, feature = "local"))]
+mod tests {
+    use super::*;
+    use crate::providers::storage::LocalStorage;
+    use bytes::Bytes;
+    use futures::TryStreamExt;
+    use object_store::ObjectStore;
+
+    #[tokio::test]
+    async fn local_url_binding_preserves_literal_keys_through_write_list_copy_and_delete() {
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            LocalStorage::new_from_url(&format!("file://{}/", directory.path().display())).unwrap();
+        let key = "nested/quote\"é*%2F space.json";
+        let path = Path::parse(key).unwrap();
+        store
+            .put(&path, Bytes::from_static(b"payload").into())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(directory.path().join(key)).unwrap(),
+            b"payload"
+        );
+        assert_eq!(
+            store.get(&path).await.unwrap().bytes().await.unwrap(),
+            "payload"
+        );
+        let listed: Vec<_> = store.list(None).try_collect().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].location.as_ref(), key);
+        let target = Path::parse("copy/é%2F.json").unwrap();
+        store.copy(&path, &target).await.unwrap();
+        assert_eq!(
+            std::fs::read(directory.path().join(target.as_ref())).unwrap(),
+            b"payload"
+        );
+        store.delete(&path).await.unwrap();
+        store.delete(&target).await.unwrap();
+        assert!(store
+            .list(None)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .is_empty());
     }
 }
