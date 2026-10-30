@@ -6,8 +6,12 @@
       {
         "grant": {
           "actions": [
-            "events:PutRule", "events:DescribeRule", "events:DeleteRule",
-            "events:PutTargets", "events:ListTargetsByRule", "events:RemoveTargets"
+            "events:PutRule",
+            "events:DescribeRule",
+            "events:DeleteRule",
+            "events:PutTargets",
+            "events:ListTargetsByRule",
+            "events:RemoveTargets"
           ]
         },
         "binding": {
