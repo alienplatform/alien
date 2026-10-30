@@ -199,12 +199,19 @@ export class EventLoop {
       let matchedEntry:
         | { handler: (event: unknown) => Promise<void> | Promise<QueueDeliveryOutcome[]> }
         | undefined
+      let storageSourceMatched = false
       for (const entry of getEventHandlers().values()) {
         const src = entry.registration.source
         if (task.storageEvent && entry.registration.type === "storage") {
           if (sourceMatches(src, task.storageEvent.bucket)) {
-            matchedEntry = entry
-            break
+            storageSourceMatched = true
+            if (
+              entry.registration.prefix === undefined ||
+              task.storageEvent.key.startsWith(entry.registration.prefix)
+            ) {
+              matchedEntry = entry
+              break
+            }
           }
         } else if (task.cronEvent && entry.registration.type === "cron") {
           if (src === "*" || src === task.cronEvent.scheduleName) {
@@ -228,6 +235,12 @@ export class EventLoop {
       }
 
       if (!matchedEntry) {
+        if (storageSourceMatched) {
+          // A registered source whose key is filtered out is successfully consumed.
+          // Retrying it cannot make it match the application's prefix.
+          await this.sendTaskResult(task.taskId, { success: true })
+          return
+        }
         // Report the miss as a failed result — without it the runtime waits
         // for the task until its event timeout (a 2-minute hang per event on
         // Lambda) instead of failing loudly.
