@@ -342,7 +342,12 @@ impl AwsServiceAccountController {
             }
         };
 
-        self.validate_delete_authority(ctx)?;
+        if !self.can_delete_role(ctx).await? {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
 
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
@@ -516,7 +521,12 @@ impl AwsServiceAccountController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        self.validate_delete_authority(ctx)?;
+        if !self.can_delete_role(ctx).await? {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
         let role_name = self.role_name.as_ref().unwrap();
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
@@ -619,19 +629,56 @@ impl AwsServiceAccountController {
 
 // Separate impl block for helper methods
 impl AwsServiceAccountController {
-    fn validate_delete_authority(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+    async fn can_delete_role(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         if ctx.deployment_config.stack_settings.setup_management
-            == alien_core::SetupManagement::Automatic
-            && ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
-            && !self.runtime_created
+            != alien_core::SetupManagement::Automatic
+            || ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+            || self.runtime_created
         {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Runtime creation of this IAM role is not recorded; use privileged setup teardown to remove it".to_string(),
-                resource_id: Some(ctx.desired_resource_config::<ServiceAccount>()?.id.clone()),
-            }));
+            return Ok(true);
         }
 
-        Ok(())
+        let Some(role_name) = &self.role_name else {
+            return Ok(false);
+        };
+        let client = ctx
+            .service_provider
+            .get_aws_iam_client(ctx.get_aws_config()?)
+            .await?;
+        let role = match client.get_role(role_name).await {
+            Ok(response) => response.get_role_result.role,
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Ok(false);
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Failed to verify IAM role ownership before deletion".to_string(),
+                    resource_id: Some(ctx.desired_config.id().to_string()),
+                }))
+            }
+        };
+        // Older checkpoints have no creation marker. Require all creation tags from
+        // the live role; a matching name alone does not establish ownership.
+        let expected = standard_resource_tags(ctx.resource_prefix, ctx.desired_config.id());
+        let owned = role.tags.as_ref().is_some_and(|tags| {
+            expected.iter().all(|(key, value)| {
+                tags.member
+                    .iter()
+                    .any(|tag| &tag.key == key && &tag.value == value)
+            })
+        });
+        if !owned {
+            info!(
+                role_name,
+                "Leaving IAM role without runtime ownership proof for setup teardown"
+            );
+        }
+        Ok(owned)
     }
 
     /// Write the stack-level inline policy, or remove it when an update leaves
@@ -1352,6 +1399,63 @@ mod tests {
                 management == alien_core::SetupManagement::Automatic
             );
             assert!(restored.role_arn.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn resumed_legacy_role_deletion_checks_live_ownership() {
+        for owner in ["runtime", "setup"] {
+            let mut iam = alien_aws_clients::iam::MockIamApi::new();
+            iam.expect_get_role().times(1).returning(move |_| {
+                Ok(
+                    serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": {
+                        "Path": "/", "RoleName": "test-execution-sa", "RoleId": "existing-role",
+                        "Arn": "arn:aws:iam::123456789012:role/test-execution-sa",
+                        "CreateDate": "2026-10-30T00:00:00Z", "Tags": {"member": [
+                            {"Key": "managed-by", "Value": owner},
+                            {"Key": "deployment", "Value": "test"},
+                            {"Key": "resource", "Value": "execution-sa"}
+                        ]}
+                    }}}))
+                    .unwrap(),
+                )
+            });
+            iam.expect_delete_role()
+                .withf(|role| role == "test-execution-sa")
+                .times(usize::from(owner == "runtime"))
+                .returning(|_| Ok(()));
+            let iam = Arc::new(iam);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_iam_client()
+                .returning(move |_| Ok(iam.clone()));
+            let controller: AwsServiceAccountController =
+                serde_json::from_value(serde_json::json!({
+                    "state": "deletingRole", "roleName": "test-execution-sa",
+                    "roleArn": "arn:aws:iam::123456789012:role/test-execution-sa",
+                    "stackPermissionsApplied": true
+                }))
+                .unwrap();
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(ServiceAccount::new("execution-sa".to_string()).build())
+                .controller(controller)
+                .platform(Platform::Aws)
+                .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+                .stack_settings(alien_core::StackSettings {
+                    setup_management: alien_core::SetupManagement::Automatic,
+                    ..Default::default()
+                })
+                .service_provider(Arc::new(provider))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            executor.step().await.unwrap();
+            let restored = executor
+                .internal_state::<AwsServiceAccountController>()
+                .unwrap();
+            assert_eq!(restored.get_status(), ResourceStatus::Deleted);
+            assert_eq!(restored.role_name.is_some(), owner == "setup");
         }
     }
 
