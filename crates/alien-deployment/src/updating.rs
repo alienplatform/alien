@@ -1732,6 +1732,7 @@ mod aws_handoff_tests {
         AwsRemoteStackManagementController, AwsServiceAccountController,
         MockPlatformServiceProvider, StackResourceStateExt,
     };
+    use alien_preflights::{mutations::InfrastructureDependenciesMutation, StackMutation};
     use std::sync::Arc;
 
     #[tokio::test]
@@ -1754,9 +1755,29 @@ mod aws_handoff_tests {
                 alien_core::RemoteStackManagement::RESOURCE_TYPE,
                 "management",
             );
-            let mut target = baseline.clone();
+            let config = DeploymentConfig::builder()
+                .stack_settings(Default::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(Default::default())
+                .allow_frozen_changes(false)
+                .build();
+            let empty_state = StackState::with_resource_prefix(Platform::Aws, "test".into());
+            assert!(InfrastructureDependenciesMutation.should_run(
+                &baseline,
+                &empty_state,
+                &config
+            ));
+            let mut target = InfrastructureDependenciesMutation
+                .mutate(baseline.clone(), &empty_state, &config)
+                .await
+                .unwrap();
             let entry = target.resources.get_mut("execution-sa").unwrap();
-            entry.dependencies.push(dependency.clone());
+            assert!(baseline.resources["execution-sa"].dependencies.is_empty());
+            assert_eq!(entry.dependencies, vec![dependency.clone()]);
             if narrow_grants {
                 entry.config = Resource::new(ServiceAccount::new("execution-sa".into()).build());
             }
@@ -1772,7 +1793,7 @@ mod aws_handoff_tests {
                 );
                 resource.status = ResourceStatus::Running;
                 if id == "execution-sa" {
-                    resource.dependencies.push(dependency.clone());
+                    resource.dependencies = target.resources[id].dependencies.clone();
                     let controller: AwsServiceAccountController = serde_json::from_value(serde_json::json!({
                         "state": "ready", "roleArn": "arn:aws:iam::123456789012:role/test-execution-sa",
                         "roleName": "test-execution-sa", "stackPermissionsApplied": true
@@ -1790,16 +1811,6 @@ mod aws_handoff_tests {
                 saved.resources.insert(id.clone(), resource);
             }
             let before = saved.resources["execution-sa"].clone();
-            let config = DeploymentConfig::builder()
-                .stack_settings(Default::default())
-                .environment_variables(EnvironmentVariablesSnapshot {
-                    variables: Vec::new(),
-                    hash: String::new(),
-                    created_at: String::new(),
-                })
-                .external_bindings(Default::default())
-                .allow_frozen_changes(false)
-                .build();
             let result = handle_updating(
                 DeploymentState {
                     status: DeploymentStatus::Updating,
