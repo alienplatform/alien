@@ -1383,7 +1383,7 @@ mod tests {
             iam.expect_delete_role()
                 .withf(|name| name == "test-execution-sa")
                 .times(1)
-                .returning(move |_| {
+                .return_once(move |_| {
                     if fail_delete {
                         Err(alien_error::AlienError::new(
                             alien_client_core::ErrorData::RemoteAccessDenied {
@@ -1395,6 +1395,12 @@ mod tests {
                         Ok(())
                     }
                 });
+            if fail_delete {
+                iam.expect_delete_role()
+                    .withf(|name| name == "test-execution-sa")
+                    .times(1)
+                    .return_once(|_| Ok(()));
+            }
             let iam = Arc::new(iam);
             let mut provider = MockPlatformServiceProvider::new();
             provider
@@ -1428,6 +1434,7 @@ mod tests {
                 environment_info: None,
                 runtime_metadata: Some(RuntimeMetadata {
                     deletion_policy: alien_core::DeletionPolicy::Erase,
+                    vault_credentials_revoked: true,
                     ..Default::default()
                 }),
                 retry_requested: false,
@@ -1452,11 +1459,12 @@ mod tests {
                 .get_mut("execution-sa")
                 .unwrap()
                 .retry_attempt = 9;
-            let finished = handle_deleting(pending, config, client, provider)
+            let pending = serde_json::from_value(serde_json::to_value(pending).unwrap()).unwrap();
+            let finished = handle_deleting(pending, config.clone(), client.clone(), provider.clone())
                 .await
                 .expect("role deletion step")
                 .state;
-            let stack = finished.stack_state.unwrap();
+            let stack = finished.stack_state.as_ref().unwrap();
             assert_eq!(
                 serde_json::to_value(&stack.resources["secrets"]).unwrap(),
                 vault_before
@@ -1468,6 +1476,41 @@ mod tests {
                     ResourceStatus::DeleteFailed
                 );
                 assert!(stack.resources["execution-sa"].error.is_some());
+                let mut restored: DeploymentState =
+                    serde_json::from_value(serde_json::to_value(&finished).unwrap()).unwrap();
+                restored.retry_requested = true;
+                let mut retried = handle_delete_failed(
+                    restored,
+                    config.clone(),
+                    client.clone(),
+                    provider.clone(),
+                )
+                .await
+                .expect("retry checkpointed role deletion")
+                .state;
+                assert_eq!(retried.status, DeploymentStatus::Deleting);
+                assert!(!retried.retry_requested);
+                for _ in 0..4 {
+                    retried = serde_json::from_value(serde_json::to_value(retried).unwrap()).unwrap();
+                    retried = handle_deleting(
+                        retried,
+                        config.clone(),
+                        client.clone(),
+                        provider.clone(),
+                    )
+                    .await
+                    .expect("resume role deletion")
+                    .state;
+                    if retried.status == DeploymentStatus::TeardownRequired {
+                        break;
+                    }
+                    assert_eq!(retried.status, DeploymentStatus::Deleting);
+                }
+                assert_eq!(retried.status, DeploymentStatus::TeardownRequired);
+                let stack = retried.stack_state.unwrap();
+                assert_eq!(stack.resources["execution-sa"].status, ResourceStatus::Deleted);
+                assert!(stack.resources["execution-sa"].error.is_none());
+                assert_eq!(serde_json::to_value(&stack.resources["secrets"]).unwrap(), vault_before);
             } else {
                 assert_eq!(finished.status, DeploymentStatus::TeardownRequired);
                 assert_eq!(
