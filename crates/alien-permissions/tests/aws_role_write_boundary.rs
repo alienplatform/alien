@@ -50,100 +50,80 @@ fn render(bounded: bool) -> Vec<AwsIamStatement> {
 }
 
 #[test]
-fn role_writes_require_our_boundary_and_ownership() {
-    let policies = render(true);
-    for action in WRITES {
-        // Not every writer needs every operation, but none may allow it unbounded.
-        assert_eq!(
-            evaluate(&policies, &Request::new(action, ROLE)),
-            Decision::NotAllowed,
-            "{action}"
-        );
-        assert_eq!(
-            evaluate(
-                &policies,
-                &Request::new(action, ROLE).with("iam:PermissionsBoundary", "another-boundary")
-            ),
-            Decision::NotAllowed,
-            "{action}"
-        );
-    }
-    for action in [
-        "iam:CreateRole",
-        "iam:PutRolePolicy",
-        "iam:DeleteRolePolicy",
-        "iam:DetachRolePolicy",
-        "iam:UpdateAssumeRolePolicy",
-        "iam:PutRolePermissionsBoundary",
-    ] {
-        assert_eq!(
-            evaluate(
-                &policies,
-                &Request::new(action, ROLE)
-                    .with("iam:PermissionsBoundary", BOUNDARY)
-                    .resource_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
-                    .request_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
-            ),
-            Decision::Allowed,
-            "{action}"
-        );
-    }
-    for action in ["iam:GetRole", "iam:ListAttachedRolePolicies"] {
-        assert_eq!(
-            evaluate(&policies, &Request::new(action, ROLE)),
-            Decision::Allowed,
-            "{action}"
-        );
-    }
-    for action in [
-        "iam:DeleteRolePermissionsBoundary",
-        "iam:CreatePolicyVersion",
-        "iam:SetDefaultPolicyVersion",
-        "iam:DeletePolicy",
-        "iam:DeletePolicyVersion",
-    ] {
-        for resource in [ROLE, BOUNDARY] {
+fn role_writes_require_boundary_and_ownership_only_for_bounded_setups() {
+    for bounded in [false, true] {
+        let policies = render(bounded);
+        for action in WRITES {
+            for boundary in [None, Some("another-boundary"), Some(BOUNDARY)] {
+                for (owner, manager) in [
+                    (None, None),
+                    (Some("my-stack"), None),
+                    (None, Some("runtime")),
+                    (Some("other-stack"), Some("runtime")),
+                    (Some("my-stack"), Some("setup")),
+                    (Some("my-stack"), Some("runtime")),
+                ] {
+                    let mut request = Request::new(action, ROLE);
+                    if let Some(boundary) = boundary {
+                        request = request.with("iam:PermissionsBoundary", boundary);
+                    }
+                    let tag_source = if *action == "iam:CreateRole" {
+                        "aws:RequestTag"
+                    } else {
+                        "aws:ResourceTag"
+                    };
+                    if let Some(owner) = owner {
+                        request = request.with(format!("{tag_source}/deployment"), owner);
+                    }
+                    if let Some(manager) = manager {
+                        request = request.with(format!("{tag_source}/managed-by"), manager);
+                    }
+                    // These writers use inline policies, never attached policies.
+                    let allowed = *action != "iam:AttachRolePolicy"
+                        && if bounded {
+                            boundary == Some(BOUNDARY)
+                                && owner == Some("my-stack")
+                                && manager == Some("runtime")
+                        } else {
+                            *action != "iam:PutRolePermissionsBoundary"
+                        };
+                    assert_eq!(
+                        evaluate(&policies, &request) == Decision::Allowed,
+                        allowed,
+                        "{action}: bounded={bounded}, boundary={boundary:?}, owner={owner:?}, manager={manager:?}"
+                    );
+                }
+            }
+        }
+        for action in ["iam:GetRole", "iam:ListAttachedRolePolicies"] {
             assert_eq!(
-                evaluate(
-                    &policies,
-                    &Request::new(action, resource)
-                        .with("iam:PermissionsBoundary", BOUNDARY)
-                        .resource_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
-                        .request_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
-                ),
-                Decision::NotAllowed,
-                "{action}"
+                evaluate(&policies, &Request::new(action, ROLE)),
+                Decision::Allowed,
+                "{action}: bounded={bounded}"
             );
         }
+        for action in [
+            "iam:DeleteRolePermissionsBoundary",
+            "iam:CreatePolicyVersion",
+            "iam:SetDefaultPolicyVersion",
+            "iam:DeletePolicy",
+            "iam:DeletePolicyVersion",
+        ] {
+            for resource in [ROLE, BOUNDARY] {
+                assert_eq!(
+                    evaluate(
+                        &policies,
+                        &Request::new(action, resource)
+                            .with("iam:PermissionsBoundary", BOUNDARY)
+                            .resource_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
+                            .request_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
+                    ),
+                    Decision::NotAllowed,
+                    "{action} on {resource}: bounded={bounded}"
+                );
+            }
+        }
     }
-}
-
-#[test]
-fn legacy_setup_keeps_role_writes_without_granting_boundary_adoption() {
-    let policies = render(false);
-    for action in [
-        "iam:CreateRole",
-        "iam:PutRolePolicy",
-        "iam:DeleteRolePolicy",
-        "iam:DetachRolePolicy",
-        "iam:UpdateAssumeRolePolicy",
-    ] {
-        assert_eq!(
-            evaluate(&policies, &Request::new(action, ROLE)),
-            Decision::Allowed,
-            "{action}"
-        );
-    }
-    assert_eq!(
-        evaluate(
-            &policies,
-            &Request::new("iam:PutRolePermissionsBoundary", ROLE)
-                .with("iam:PermissionsBoundary", BOUNDARY)
-                .resource_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
-                .request_tags(&[("managed-by", "runtime"), ("deployment", "my-stack")])
-        ),
-        Decision::NotAllowed
-    );
 }
 
 #[test]
