@@ -169,3 +169,23 @@ For applications that explicitly receive through a queue binding,
 local queues reset the remaining lease, so a smaller value intentionally
 shortens it. Azure renews the queue's configured lock duration; the requested
 value is a validated hint, not an exact duration guarantee.
+
+
+## Storage notifications in queues
+
+Parse a binding `QueueMessage` or a Worker's `QueueEvent` (including
+`delivery.message` inside a batch) with the typed helper:
+
+```python
+from alienplatform import storage_event_from_message
+
+event = storage_event_from_message(message)
+print(event.bucket_name, event.object_key, event.timestamp, event.etag)
+```
+
+The helper validates the portable camelCase JSON payload and returns Python
+attributes in snake_case, including a timezone-aware UTC timestamp and optional
+object metadata. Invalid JSON or schema fields raise `AlienError` with code
+`INVALID_STORAGE_EVENT_MESSAGE`. Parsing does not acknowledge a message. Use
+normal queue-binding acknowledgment or Worker outcomes after processing succeeds.
+Notifications are at least once and unordered; make processing idempotent.

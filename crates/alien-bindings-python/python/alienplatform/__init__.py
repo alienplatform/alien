@@ -40,6 +40,7 @@ from .bindings import (
     worker,
 )
 from .errors import AlienError
+from .storage_events import StorageEvent, StorageEventType, storage_event_from_message
 from .worker_runtime import (
     QueueBatch,
     QueueDelivery,
@@ -51,6 +52,9 @@ from .worker_runtime import (
 )
 
 __all__ = [
+    "StorageEvent",
+    "StorageEventType",
+    "storage_event_from_message",
     "QueueBatch",
     "QueueDelivery",
     "QueueEvent",
