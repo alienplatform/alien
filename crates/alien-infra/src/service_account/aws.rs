@@ -357,9 +357,11 @@ impl AwsServiceAccountController {
             "Starting comprehensive policy cleanup before role deletion"
         );
 
+        let mut more_policies = false;
         // Step 1: List and detach all managed policies
         match client.list_attached_role_policies(role_name).await {
             Ok(response) => {
+                more_policies |= response.list_attached_role_policies_result.is_truncated == Some(true);
                 if let Some(attached_policies) = response
                     .list_attached_role_policies_result
                     .attached_policies
@@ -437,6 +439,7 @@ impl AwsServiceAccountController {
         // Step 2: List and delete all inline policies
         match client.list_role_policies(role_name).await {
             Ok(response) => {
+                more_policies |= response.list_role_policies_result.is_truncated == Some(true);
                 if let Some(policy_names) = response.list_role_policies_result.policy_names {
                     for policy_name in &policy_names.member {
                         info!(
@@ -502,6 +505,15 @@ impl AwsServiceAccountController {
                         .into());
                 }
             }
+        }
+
+        if more_policies {
+            // Deleting this page makes the remaining policies available on the next
+            // first-page read. Keep the cleanup checkpoint until both lists finish.
+            return Ok(HandlerAction::Stay {
+                max_times: Some(60),
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
         }
 
         info!(role_name = %role_name, "Policy cleanup completed, proceeding to role deletion");
