@@ -33,6 +33,7 @@ pub mod single_exposed_port_check;
 pub mod single_queue_trigger;
 pub mod stack_inputs;
 pub mod storage_lifecycle_rules;
+pub mod storage_notifications;
 pub mod trigger_edge_ownership;
 pub mod unique_endpoint_host_labels;
 pub mod unique_resources;
@@ -68,6 +69,7 @@ pub use single_exposed_port_check::SingleExposedPortCheck;
 pub use single_queue_trigger::SingleQueueTriggerCheck;
 pub use stack_inputs::{StackInputPlatformsCheck, StackInputsDefinitionCheck};
 pub use storage_lifecycle_rules::StorageLifecycleRulesCheck;
+pub use storage_notifications::StorageNotificationsCheck;
 pub use trigger_edge_ownership::TriggerEdgeOwnershipCheck;
 pub use unique_endpoint_host_labels::{
     endpoint_host_label_conflicts, UniqueEndpointHostLabelsCheck,

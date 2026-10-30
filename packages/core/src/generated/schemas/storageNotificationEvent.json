@@ -1,0 +1,1 @@
+{"type":"string","description":"Object events that can be delivered to a queue.","enum":["created"],"x-readme-ref-name":"StorageNotificationEvent"}
