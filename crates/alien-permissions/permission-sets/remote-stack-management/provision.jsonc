@@ -10,10 +10,14 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-boundary"]
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-boundary"
+            ]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-boundary"]
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-boundary"
+            ]
           }
         }
       },
