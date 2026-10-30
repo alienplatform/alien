@@ -76,10 +76,11 @@ async fn ingress_reconciles_only_on_change_and_preserves_foreign_policy() {
         run.update(queue.clone()).unwrap();
         run.run_until_terminal().await.unwrap();
         assert!(!run.needs_update().unwrap());
-        assert!(
+        assert_eq!(
             run.internal_state::<AwsQueueController>()
                 .unwrap()
-                .storage_ingress_enabled
+                .storage_ingress_buckets,
+            ["test-uploads"]
         );
         {
             let actual = policy.lock().unwrap();
@@ -89,7 +90,7 @@ async fn ingress_reconciles_only_on_change_and_preserves_foreign_policy() {
             let grant = &actual["Statement"][1];
             assert_eq!(
                 grant["Principal"],
-                json!({"Service":"events.amazonaws.com"})
+                json!({"Service":"s3.amazonaws.com"})
             );
             assert_eq!(grant["Action"], "sqs:SendMessage");
             assert_eq!(
@@ -100,7 +101,7 @@ async fn ingress_reconciles_only_on_change_and_preserves_foreign_policy() {
                 grant["Condition"],
                 json!({
                     "StringEquals":{"aws:SourceAccount":"123456789012"},
-                    "ArnLike":{"aws:SourceArn":"arn:aws:events:us-east-1:123456789012:rule/test-sn-*"}
+                    "ArnLike":{"aws:SourceArn":["arn:aws:s3:::test-uploads"]}
                 })
             );
         }
@@ -196,11 +197,11 @@ async fn lost_policy_response_is_recovered_without_duplicate_or_second_write() {
     run.step()
         .await
         .expect_err("lost policy write response must fail");
-    assert!(
-        !run.internal_state::<AwsQueueController>()
-            .unwrap()
-            .storage_ingress_enabled
-    );
+    assert!(run
+        .internal_state::<AwsQueueController>()
+        .unwrap()
+        .storage_ingress_buckets
+        .is_empty());
     run.step().await.unwrap();
     assert!(!run.needs_update().unwrap());
     assert_eq!(
@@ -217,7 +218,7 @@ async fn pending_ingress_is_removed_when_declaration_changes_after_lost_write() 
     let queue = Queue::new("work".into()).build();
     let controller = AwsQueueController {
         state: AwsQueueState::UpdatingStorageIngress,
-        storage_ingress_pending: Some(true),
+        storage_ingress_pending: Some(vec!["test-uploads".into()]),
         ..queue_controller()
     };
     let checkpoint = serde_json::to_value(controller).unwrap();
@@ -257,6 +258,6 @@ async fn pending_ingress_is_removed_when_declaration_changes_after_lost_write() 
     run.run_until_terminal().await.unwrap();
     assert!(!run.needs_update().unwrap());
     let controller = run.internal_state::<AwsQueueController>().unwrap();
-    assert!(!controller.storage_ingress_enabled);
+    assert!(controller.storage_ingress_buckets.is_empty());
     assert_eq!(controller.storage_ingress_pending, None);
 }

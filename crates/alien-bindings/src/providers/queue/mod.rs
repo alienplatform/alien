@@ -1,4 +1,4 @@
-#[cfg(any(feature = "gcp", feature = "azure"))]
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub mod storage_notifications;
 
 #[cfg(feature = "aws")]

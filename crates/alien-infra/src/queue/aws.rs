@@ -8,9 +8,7 @@ use alien_aws_clients::sqs::{GetQueueAttributesResponse, SetQueueAttributesReque
 use alien_core::{
     bindings::{BindingValue, QueueBinding},
     standard_resource_tags,
-    storage_notifications::{
-        aws_notification_rule_name_pattern, queue_receives_storage_notifications,
-    },
+    storage_notifications::{storages_notifying_queue, AWS_QUEUE_INGRESS_SID},
     AwsSqsQueueHeartbeatData, HeartbeatBackend, InitialSetupAuthority, ObservedHealth, Platform,
     ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
     ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus,
@@ -26,12 +24,13 @@ pub struct AwsQueueController {
     pub(crate) queue_url: Option<String>,
     /// The SQS queue name (physical)
     pub(crate) queue_name: Option<String>,
-    /// Whether the queue has reconciled its derived storage ingress requirement.
-    #[serde(default)]
-    pub(crate) storage_ingress_enabled: bool,
+    /// Buckets the queue's storage ingress statement currently admits, sorted. Derived
+    /// from the Storages that notify this queue, so an unchanged stack never rewrites it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) storage_ingress_buckets: Vec<String>,
     /// Persist intent before a policy write, including recovery after a lost response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) storage_ingress_pending: Option<bool>,
+    pub(crate) storage_ingress_pending: Option<Vec<String>>,
 }
 
 #[controller]
@@ -217,8 +216,7 @@ impl AwsQueueController {
         let queue = ctx.desired_resource_config::<Queue>()?;
         Ok(may_manage_storage_ingress(ctx, &queue.id)
             && (self.storage_ingress_pending.is_some()
-                || queue_receives_storage_notifications(ctx.desired_stack, &queue.id)
-                    != self.storage_ingress_enabled))
+                || ingress_buckets(ctx, &queue.id) != self.storage_ingress_buckets))
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -386,9 +384,9 @@ impl AwsQueueController {
 impl AwsQueueController {
     fn prepare_storage_ingress(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let queue = ctx.desired_resource_config::<Queue>()?;
-        let desired = queue_receives_storage_notifications(ctx.desired_stack, &queue.id);
+        let desired = ingress_buckets(ctx, &queue.id);
         if may_manage_storage_ingress(ctx, &queue.id)
-            && (self.storage_ingress_pending.is_some() || desired != self.storage_ingress_enabled)
+            && (self.storage_ingress_pending.is_some() || desired != self.storage_ingress_buckets)
         {
             self.storage_ingress_pending = Some(desired);
         }
@@ -403,8 +401,8 @@ impl AwsQueueController {
         if !may_manage_storage_ingress(ctx, &queue.id) {
             return Ok(());
         }
-        let desired = queue_receives_storage_notifications(ctx.desired_stack, &queue.id);
-        if desired == self.storage_ingress_enabled && self.storage_ingress_pending.is_none() {
+        let desired = ingress_buckets(ctx, &queue.id);
+        if desired == self.storage_ingress_buckets && self.storage_ingress_pending.is_none() {
             return Ok(());
         }
         let invalid = |message: &str| {
@@ -464,15 +462,19 @@ impl AwsQueueController {
         let statements = statements
             .as_array_mut()
             .ok_or_else(|| invalid("Queue policy Statement must be an object or array"))?;
-        statements.retain(|statement| statement["Sid"] != "StorageNotificationIngress");
-        if desired {
+        statements.retain(|statement| statement["Sid"] != AWS_QUEUE_INGRESS_SID);
+        if !desired.is_empty() {
+            let sources: Vec<String> = desired
+                .iter()
+                .map(|bucket| format!("arn:aws:s3:::{bucket}"))
+                .collect();
             statements.push(serde_json::json!({
-                "Sid": "StorageNotificationIngress", "Effect": "Allow",
-                "Principal": {"Service": "events.amazonaws.com"}, "Action": "sqs:SendMessage",
+                "Sid": AWS_QUEUE_INGRESS_SID, "Effect": "Allow",
+                "Principal": {"Service": "s3.amazonaws.com"}, "Action": "sqs:SendMessage",
                 "Resource": format!("arn:aws:sqs:{}:{}:{name}", cfg.region, cfg.account_id),
                 "Condition": {
                     "StringEquals": {"aws:SourceAccount": cfg.account_id},
-                    "ArnLike": {"aws:SourceArn": format!("arn:aws:events:{}:{}:rule/{}", cfg.region, cfg.account_id, aws_notification_rule_name_pattern(&ctx.resource_prefix))}
+                    "ArnLike": {"aws:SourceArn": sources}
                 }
             }));
         }
@@ -493,7 +495,7 @@ impl AwsQueueController {
                     message: format!("Reconcile storage ingress policy for queue '{name}'"),
                 })?;
         }
-        self.storage_ingress_enabled = desired;
+        self.storage_ingress_buckets = desired;
         self.storage_ingress_pending = None;
         Ok(())
     }
@@ -558,6 +560,18 @@ impl AwsQueueController {
 
         Ok(visibility_timeout)
     }
+}
+
+/// Names of the buckets whose notifications this queue must admit. Live Storage bucket
+/// names are deterministic, so the queue needs no dependency on the Storages that depend
+/// on it.
+fn ingress_buckets(ctx: &ResourceControllerContext<'_>, queue_id: &str) -> Vec<String> {
+    let mut buckets: Vec<String> = storages_notifying_queue(ctx.desired_stack, queue_id)
+        .iter()
+        .map(|storage_id| aws_prefixed_resource_name(ctx.resource_prefix, storage_id))
+        .collect();
+    buckets.sort();
+    buckets
 }
 
 fn may_manage_storage_ingress(ctx: &ResourceControllerContext<'_>, id: &str) -> bool {

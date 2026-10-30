@@ -132,3 +132,48 @@ fn aws_storage_notifications_follow_deployer_enablement() {
         .build();
     assert_terraform_valid(&render(&stack, TerraformTarget::Aws, StackSettings::default()), "Gated storage notifications");
 }
+
+/// A gated Storage notifying an always-on queue: the queue's ingress policy exists only
+/// while the Storage does, and never indexes into a bucket the deployer turned off.
+#[test]
+fn aws_queue_ingress_follows_the_only_notifying_storage_gate() {
+    let storage = Storage::new("files".into())
+        .notifications(vec![StorageNotification::builder()
+            .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs"))
+            .build()])
+        .build();
+    let stack = Stack::new("gated-source".into())
+        .inputs(vec![super::helpers::gate_input(
+            "filesEnabled",
+            "Enable files",
+            "Create the bucket",
+        )])
+        .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen)
+        .add_enabled_when(storage, ResourceLifecycle::Frozen, "filesEnabled")
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let body = hcl::parse(module.get("jobs.tf").expect("queue module")).expect("valid HCL");
+    let policy = body
+        .blocks()
+        .find(|block| {
+            block.identifier() == "resource"
+                && block.labels().iter().map(|label| label.as_str()).collect::<Vec<_>>()
+                    == ["aws_sqs_queue_policy", "jobs_storage_ingress"]
+        })
+        .expect("queue ingress policy");
+    let attribute = |key: &str| {
+        policy
+            .body()
+            .attributes()
+            .find(|attribute| attribute.key() == key)
+            .map(|attribute| attribute.expr().to_string())
+            .unwrap_or_else(|| panic!("policy has no {key}"))
+    };
+    assert_eq!(attribute("count"), "var.input_files_enabled ? 1 : 0");
+    assert!(
+        attribute("policy").contains("flatten([aws_s3_bucket.files[*].arn])"),
+        "{}",
+        attribute("policy")
+    );
+    assert_terraform_valid(&module, "Gated notifying storage with an always-on queue");
+}

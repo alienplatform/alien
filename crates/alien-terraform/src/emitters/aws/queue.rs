@@ -48,9 +48,8 @@ impl TfEmitter for AwsQueueEmitter {
             ctx.stack,
             ctx.resource_id,
         ) {
-            fragment
-                .resource_blocks
-                .push(super::storage_notifications::queue_policy(label));
+            let (policy, gates) = super::storage_notifications::queue_policy(ctx, label)?;
+            fragment.push_gated_resource(policy, &gates);
         }
         if ctx.stack.management().profile().is_some_and(|profile| {
             profile.0.get(ctx.resource_id).is_some_and(|grants| {

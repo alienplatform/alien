@@ -28,7 +28,7 @@ impl ResourceImporter for AwsQueueImporter {
             state: AwsQueueState::Ready,
             queue_url: Some(data.queue_url),
             queue_name: Some(data.queue_name),
-            storage_ingress_enabled: false,
+            storage_ingress_buckets: Vec::new(),
             storage_ingress_pending: None,
             _internal_stay_count: None,
         };

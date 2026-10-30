@@ -1,12 +1,12 @@
 //! Observe the actual cloud before and after notification deployment teardown.
 
 use alien_aws_clients::{
-    aws::sqs::GetQueueUrlRequest, AwsCredentialProvider, EventBridgeApi, EventBridgeClient, S3Api,
-    S3Client, SqsApi, SqsClient,
+    aws::sqs::{GetQueueAttributesRequest, GetQueueUrlRequest},
+    AwsCredentialProvider, S3Api, S3Client, SqsApi, SqsClient,
 };
 use alien_azure_clients::{AzureResourcesClient, AzureTokenCache, ResourcesApi};
 use alien_core::{
-    storage_notifications::aws_notification_rule_name, AzureResourceGroupOutputs, ClientConfig,
+    storage_notifications::AWS_QUEUE_INGRESS_SID, AzureResourceGroupOutputs, ClientConfig,
     QueueOutputs, StackState, StorageOutputs,
 };
 use alien_gcp_clients::{
@@ -81,35 +81,87 @@ impl Observation {
             ClientConfig::Aws(config) => {
                 let credentials = AwsCredentialProvider::from_config(*config.clone()).await?;
                 let s3 = S3Client::new(http.clone(), credentials.clone());
-                let sqs = SqsClient::new(http.clone(), credentials.clone());
-                let events = EventBridgeClient::new(http, credentials);
-                for id in ["objects", "second", "results"] {
-                    check_presence(
-                        s3.get_bucket_notification_configuration(self.bucket(id)?)
-                            .await,
-                        present,
-                        id,
-                    )?;
+                let sqs = SqsClient::new(http, credentials);
+                let queue_arn = format!(
+                    "arn:aws:sqs:{}:{}:{}",
+                    config.region,
+                    config.account_id,
+                    self.queue()?.queue_name
+                );
+                // Native S3 delivery: each rule is a queue configuration on its bucket.
+                for (id, rules) in [("objects", 2), ("second", 1), ("results", 0)] {
+                    let bucket = self.bucket(id)?;
+                    let notifications = s3.get_bucket_notification_configuration(bucket).await;
+                    if present {
+                        let notifications = notifications
+                            .with_context(|| format!("Read notifications of {bucket}"))?;
+                        ensure!(
+                            notifications.queue_configurations.len() == rules
+                                && notifications
+                                    .queue_configurations
+                                    .iter()
+                                    .all(|rule| rule.queue_arn == queue_arn
+                                        && rule.events == ["s3:ObjectCreated:*"]),
+                            "Unexpected notification rules on {bucket}: {notifications:?}"
+                        );
+                    } else {
+                        check_presence(notifications, present, bucket)?;
+                    }
                 }
-                check_presence(
-                    sqs.get_queue_url(GetQueueUrlRequest {
+                let queue_url = sqs
+                    .get_queue_url(GetQueueUrlRequest {
                         queue_name: self.queue()?.queue_name.clone(),
                         queue_owner_aws_account_id: Some(config.account_id.clone()),
                     })
-                    .await,
-                    present,
-                    "queue and its policy",
-                )?;
-                for (storage, index) in [("objects", 0), ("objects", 1), ("second", 0)] {
-                    let name = aws_notification_rule_name(prefix, storage, index);
-                    check_presence(events.describe_rule(&name).await, present, &name)?;
-                    if present {
-                        ensure!(
-                            events.list_targets_by_rule(&name).await?.len() == 1,
-                            "Notification rule must have exactly one queue target"
-                        );
-                    }
+                    .await;
+                if !present {
+                    check_presence(queue_url, present, "queue and its policy")?;
+                    return Ok(());
                 }
+                let queue_url = queue_url
+                    .context("Read queue URL")?
+                    .get_queue_url_result
+                    .queue_url;
+                let policy = sqs
+                    .get_queue_attributes(
+                        &queue_url,
+                        GetQueueAttributesRequest::builder()
+                            .attribute_names(vec!["Policy".into()])
+                            .build(),
+                    )
+                    .await?
+                    .get_queue_attributes_result
+                    .attributes
+                    .into_iter()
+                    .find(|attribute| attribute.name == "Policy")
+                    .context("Queue has no policy")?
+                    .value;
+                let policy: serde_json::Value = serde_json::from_str(&policy)?;
+                let ingress = policy["Statement"]
+                    .as_array()
+                    .context("Queue policy has no statements")?
+                    .iter()
+                    .find(|statement| statement["Sid"] == AWS_QUEUE_INGRESS_SID)
+                    .context("Queue policy has no storage ingress statement")?;
+                let mut sources: Vec<String> =
+                    match &ingress["Condition"]["ArnLike"]["aws:SourceArn"] {
+                        serde_json::Value::String(source) => vec![source.clone()],
+                        serde_json::Value::Array(sources) => sources
+                            .iter()
+                            .filter_map(|source| source.as_str().map(str::to_string))
+                            .collect(),
+                        other => bail!("Unexpected ingress sources: {other}"),
+                    };
+                sources.sort();
+                let mut expected = vec![
+                    format!("arn:aws:s3:::{}", self.bucket("objects")?),
+                    format!("arn:aws:s3:::{}", self.bucket("second")?),
+                ];
+                expected.sort();
+                ensure!(
+                    ingress["Principal"]["Service"] == "s3.amazonaws.com" && sources == expected,
+                    "Queue ingress must admit exactly the notifying buckets: {ingress}"
+                );
             }
             ClientConfig::Gcp(config) => {
                 let gcs = GcsClient::new(http.clone(), *config.clone());

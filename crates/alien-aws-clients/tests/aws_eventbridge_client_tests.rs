@@ -251,7 +251,6 @@ async fn test_put_targets(ctx: &mut EventBridgeTestContext) {
     let put_targets_request = PutTargetsRequest {
         rule: rule_name.clone(),
         targets: vec![EventBridgeTarget {
-            input_transformer: None,
             id: "target-1".to_string(),
             arn: fake_lambda_arn.clone(),
         }],
@@ -302,7 +301,6 @@ async fn test_remove_targets(ctx: &mut EventBridgeTestContext) {
     let put_targets_request = PutTargetsRequest {
         rule: rule_name.clone(),
         targets: vec![EventBridgeTarget {
-            input_transformer: None,
             id: "target-1".to_string(),
             arn: fake_lambda_arn,
         }],

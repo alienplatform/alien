@@ -1,9 +1,7 @@
 //! Shared notification translation for setup generators and live controllers.
 
 use crate::{Queue, Stack, Storage, StorageNotification};
-use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 
 /// Custom GCS notification attribute carrying the literal consumer-side suffix.
 pub const GCS_SUFFIX_ATTRIBUTE: &str = "storageEventSuffix";
@@ -26,110 +24,93 @@ pub fn queue_receives_storage_notifications(stack: &Stack, queue_id: &str) -> bo
     })
 }
 
-/// Maximum serialized event-pattern length accepted by EventBridge.
-pub const AWS_EVENTBRIDGE_MAX_PATTERN_CHARACTERS: usize = 4096;
-
-/// The complete rule pattern, shared by setup generators and live controllers.
-pub fn aws_eventbridge_pattern(notification: &StorageNotification, bucket_name: &str) -> Value {
-    json!({
-        "source": ["aws.s3"],
-        "detail-type": ["Object Created"],
-        "detail": {
-            "bucket": { "name": [bucket_name] },
-            "object": { "key": aws_eventbridge_key_matchers(notification) }
-        }
-    })
+/// Ids of the Storages in the stack that notify this queue, sorted for deterministic output.
+pub fn storages_notifying_queue(stack: &Stack, queue_id: &str) -> Vec<String> {
+    let mut storages: Vec<String> = stack
+        .resources()
+        .filter(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Storage>()
+                .is_some_and(|storage| {
+                    storage.notifications.iter().any(|notification| {
+                        notification.queue.resource_type == Queue::RESOURCE_TYPE
+                            && notification.queue.id == queue_id
+                    })
+                })
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    storages.sort();
+    storages
 }
 
-/// A bounded, deterministic rule identity, including the storage resource identity in
-/// the hash. This identity is available before setup resolves the bucket name.
-/// Keep the stack prefix intact for the queue policy and management grants.
-pub fn aws_notification_rule_name(prefix: &str, storage_id: &str, index: usize) -> String {
+/// Whether one object key can match both rules. Rules on one Storage must not overlap:
+/// S3 rejects such a configuration ("Configuration is ambiguously defined"), so the
+/// portable declaration rejects it everywhere. Prefixes overlap when either is absent or
+/// one starts with the other; suffixes when either is absent or one ends with the other.
+pub fn notifications_overlap(a: &StorageNotification, b: &StorageNotification) -> bool {
+    let prefixes = match (a.prefix.as_deref(), b.prefix.as_deref()) {
+        (Some(a), Some(b)) => a.starts_with(b) || b.starts_with(a),
+        _ => true,
+    };
+    let suffixes = match (a.suffix.as_deref(), b.suffix.as_deref()) {
+        (Some(a), Some(b)) => a.ends_with(b) || b.ends_with(a),
+        _ => true,
+    };
+    prefixes && suffixes
+}
+
+/// Id of a rule's S3 queue configuration. The stack prefix and a hash of the Storage's
+/// identity let the owning controller recognise its own entries among everyone else's.
+pub fn aws_notification_id(prefix: &str, storage_id: &str, index: usize) -> String {
+    format!("{}{index}", aws_notification_id_prefix(prefix, storage_id))
+}
+
+/// Every [`aws_notification_id`] of one Storage starts with this.
+pub fn aws_notification_id_prefix(prefix: &str, storage_id: &str) -> String {
     let hash = format!("{:x}", Sha256::digest(storage_id.as_bytes()));
-    format!("{prefix}-sn-{}-{index}", &hash[..16])
+    format!("{prefix}-sn-{}-", &hash[..16])
 }
 
-/// Matches every rule name [`aws_notification_rule_name`] produces for `prefix`. Queue
-/// policies and management grants scope EventBridge access with it.
-pub fn aws_notification_rule_name_pattern(prefix: &str) -> String {
-    format!("{prefix}-sn-*")
-}
-
-/// JSON paths shared by all AWS setup and controller target writers.
-pub fn aws_notification_input_paths() -> BTreeMap<String, String> {
-    [
-        ("bucket", "$.detail.bucket.name"),
-        ("key", "$.detail.object.key"),
-        ("timestamp", "$.time"),
-        ("size", "$.detail.object.size"),
-        ("etag", "$.detail.object.etag"),
-    ]
-    .into_iter()
-    .map(|(key, path)| (key.into(), path.into()))
-    .collect()
-}
-
-/// EventBridge substitutes JSON values, preserving literal quotes and Unicode keys.
-pub const AWS_NOTIFICATION_INPUT_TEMPLATE: &str = r#"{"eventType":"created","bucketName":<bucket>,"objectKey":<key>,"timestamp":<timestamp>,"size":<size>,"etag":<etag>}"#;
-
-/// EventBridge ORs the entries in a field's matcher list. A wildcard covers keys
-/// whose prefix and suffix do not overlap; exact alternatives cover shorter keys.
-/// Both filters remain literal, including `*`, backslashes and Unicode.
-pub fn aws_eventbridge_key_matchers(notification: &StorageNotification) -> Vec<Value> {
-    let prefix = notification.prefix.as_deref().unwrap_or("");
-    let suffix = notification.suffix.as_deref().unwrap_or("");
-    let mut matchers = vec![json!({
-        "wildcard": format!("{}*{}", escape_wildcard(prefix), escape_wildcard(suffix))
-    })];
-
-    // Only UTF-8 boundaries can be an overlap. Include the whole suffix as well
-    // as proper prefixes, but exclude the empty overlap covered by the wildcard.
-    for overlap in suffix
-        .char_indices()
-        .map(|(offset, _)| offset)
-        .skip(1)
-        .chain(std::iter::once(suffix.len()))
-    {
-        if overlap > 0 && prefix.ends_with(&suffix[..overlap]) {
-            matchers.push(Value::String(format!("{prefix}{}", &suffix[overlap..])));
-        }
-    }
-    matchers
-}
-
-fn escape_wildcard(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        if matches!(character, '*' | '\\') {
-            escaped.push('\\');
-        }
-        escaped.push(character);
-    }
-    escaped
-}
+/// `Sid` of the queue policy statement that lets S3 deliver a stack's notifications.
+pub const AWS_QUEUE_INGRESS_SID: &str = "StorageNotificationIngress";
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Queue, ResourceRef};
-    use regex::Regex;
     use std::collections::HashSet;
 
-    fn notification(prefix: &str, suffix: &str) -> StorageNotification {
+    fn notification(prefix: Option<&str>, suffix: Option<&str>) -> StorageNotification {
         StorageNotification::builder()
             .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "work"))
-            .maybe_prefix((!prefix.is_empty()).then(|| prefix.to_string()))
-            .maybe_suffix((!suffix.is_empty()).then(|| suffix.to_string()))
+            .maybe_prefix(prefix.map(str::to_string))
+            .maybe_suffix(suffix.map(str::to_string))
             .build()
     }
 
-    fn generated_keys(max_length: usize) -> Vec<String> {
-        let mut all = vec![String::new()];
+    fn filters() -> Vec<Option<String>> {
+        let mut all = vec![None];
         let mut level = vec![String::new()];
-        for _ in 0..max_length {
+        for _ in 0..3 {
             let next: Vec<_> = level
                 .iter()
-                .flat_map(|key| ['a', '*', '\\', 'é'].map(|character| format!("{key}{character}")))
+                .flat_map(|value| ['a', 'b', 'é'].map(|character| format!("{value}{character}")))
+                .collect();
+            all.extend(next.iter().cloned().map(Some));
+            level = next;
+        }
+        all
+    }
+
+    fn keys() -> Vec<String> {
+        let mut all = vec![String::new()];
+        let mut level = vec![String::new()];
+        for _ in 0..6 {
+            let next: Vec<_> = level
+                .iter()
+                .flat_map(|key| ['a', 'b', 'é'].map(|character| format!("{key}{character}")))
                 .collect();
             all.extend(next.clone());
             level = next;
@@ -137,109 +118,44 @@ mod tests {
         all
     }
 
-    /// Interpret the emitted EventBridge wildcard independently of its construction.
-    fn wildcard_regex(wildcard: &str) -> Regex {
-        let mut expression = String::from(r"(?s)\A");
-        let mut characters = wildcard.chars();
-        while let Some(character) = characters.next() {
-            match character {
-                '\\' => {
-                    let escaped = characters
-                        .next()
-                        .expect("escape must have a following character");
-                    assert!(matches!(escaped, '*' | '\\'));
-                    expression.push_str(&regex::escape(&escaped.to_string()));
-                }
-                '*' => expression.push_str(".*"),
-                literal => expression.push_str(&regex::escape(&literal.to_string())),
-            }
-        }
-        expression.push_str(r"\z");
-        Regex::new(&expression).unwrap()
+    fn matches(rule: &StorageNotification, key: &str) -> bool {
+        rule.prefix.as_deref().map_or(true, |prefix| key.starts_with(prefix))
+            && rule.suffix.as_deref().map_or(true, |suffix| key.ends_with(suffix))
     }
 
+    /// Rules overlap exactly when they share a key that S3 would have to route twice.
+    /// Keys are long enough (6 characters vs filters of at most 3) that every
+    /// overlapping pair has a witness key.
     #[test]
-    fn rule_names_fit_the_provider_limit_with_the_full_setup_prefix() {
-        let mut names = HashSet::new();
-        for length in 3..=40 {
-            let prefix = "p".repeat(length);
-            for storage_id in [
-                "source",
-                "second",
-                "long-resource-identity".repeat(10).as_str(),
-            ] {
-                for index in 0..10 {
-                    let name = aws_notification_rule_name(&prefix, storage_id, index);
-                    assert!(name.len() <= 64, "EventBridge rejects {name}");
-                    assert!(
-                        name.starts_with(&format!("{prefix}-sn-")),
-                        "IAM scope must stay intact"
-                    );
-                    assert!(
-                        names.insert(name),
-                        "storage/rule identities must be distinct"
-                    );
-                }
+    fn overlap_equals_existence_of_a_key_matching_both_rules() {
+        let keys = keys();
+        let filters = filters();
+        for (ap, asf) in filters.iter().flat_map(|p| filters.iter().map(move |s| (p, s))) {
+            let a = notification(ap.as_deref(), asf.as_deref());
+            for (bp, bsf) in filters.iter().flat_map(|p| filters.iter().map(move |s| (p, s))) {
+                let b = notification(bp.as_deref(), bsf.as_deref());
+                let witnessed = keys.iter().any(|key| matches(&a, key) && matches(&b, key));
+                assert_eq!(
+                    notifications_overlap(&a, &b),
+                    witnessed,
+                    "a={a:?} b={b:?}"
+                );
             }
         }
     }
 
     #[test]
-    fn eventbridge_matchers_equal_literal_filters_for_exhaustive_short_keys() {
-        let filters = generated_keys(2);
-        let keys = generated_keys(4);
-        for prefix in &filters {
-            for suffix in &filters {
-                let rule = notification(prefix, suffix);
-                let matchers = aws_eventbridge_key_matchers(&rule);
-                let wildcard = wildcard_regex(matchers[0]["wildcard"].as_str().unwrap());
-                for key in &keys {
-                    let actual = wildcard.is_match(key)
-                        || matchers
-                            .iter()
-                            .skip(1)
-                            .any(|exact| exact.as_str() == Some(key));
-                    assert_eq!(
-                        actual,
-                        key.starts_with(prefix) && key.ends_with(suffix),
-                        "prefix={prefix:?}, suffix={suffix:?}, key={key:?}, matchers={matchers:?}"
-                    );
-                }
+    fn ids_are_distinct_per_storage_and_rule_and_carry_the_storage_prefix() {
+        let mut ids = HashSet::new();
+        for storage in ["source", "second", "long-resource-identity"] {
+            let prefix = aws_notification_id_prefix("stack", storage);
+            for index in 0..10 {
+                let id = aws_notification_id("stack", storage, index);
+                assert!(id.starts_with(&prefix));
+                assert!(ids.insert(id));
             }
         }
-    }
-
-    #[test]
-    fn preserves_every_overlap_and_unicode_boundary() {
-        assert_eq!(
-            aws_eventbridge_key_matchers(&notification("aaa", "aaa")),
-            vec![
-                json!({"wildcard": "aaa*aaa"}),
-                json!("aaaaa"),
-                json!("aaaa"),
-                json!("aaa"),
-            ]
-        );
-        assert_eq!(
-            aws_eventbridge_key_matchers(&notification("é*", "*雪")),
-            vec![json!({"wildcard": r"é\**\*雪"}), json!("é*雪"),]
-        );
-        assert_eq!(
-            aws_eventbridge_key_matchers(&notification("same", "same")),
-            vec![json!({"wildcard": "same*same"}), json!("same"),]
-        );
-    }
-
-    #[test]
-    fn maximum_nonoverlapping_filters_fit_even_with_json_escape_expansion() {
-        // Backslashes expand in both wildcard and JSON encoding; quotes expand in JSON.
-        // Reserve all 63 characters allowed for an S3 bucket's physical name.
-        let rule = notification(&"\\".repeat(512), &"\"".repeat(128));
-        let pattern = aws_eventbridge_pattern(&rule, &"b".repeat(63));
-        assert_eq!(
-            pattern["detail"]["object"]["key"].as_array().unwrap().len(),
-            1
-        );
-        assert!(pattern.to_string().chars().count() <= AWS_EVENTBRIDGE_MAX_PATTERN_CHARACTERS);
+        assert!(!aws_notification_id("stack", "source", 1)
+            .starts_with(&aws_notification_id_prefix("stack", "second")));
     }
 }

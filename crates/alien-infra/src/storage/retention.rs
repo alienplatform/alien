@@ -134,6 +134,9 @@ pub async fn protect_retained_storage(
                         "Bucket ownership tags do not match the retained resource",
                     ));
                 }
+                if tags.is_none() {
+                    continue;
+                }
                 if controller.notifications_managed
                     || !storage.notifications.is_empty()
                     || resource
@@ -142,20 +145,13 @@ pub async fn protect_retained_storage(
                         .and_then(|previous| previous.downcast_ref::<Storage>())
                         .is_some_and(|previous| !previous.notifications.is_empty())
                 {
-                    let events = provider.get_aws_eventbridge_client(config).await?;
-                    // One mutation per call; the remaining steps below are independent.
-                    complete &= super::aws_notifications::remove_owned_step(
-                        events.as_ref(),
+                    super::aws_notifications::remove_owned(
+                        client.as_ref(),
                         &state.resource_prefix,
                         name,
                         id,
                     )
                     .await?;
-                }
-                // Rules outlive a bucket deleted out of band. Clean them before
-                // treating that missing bucket as successful retention cleanup.
-                if tags.is_none() {
-                    continue;
                 }
                 stop_s3_lifecycle(client.as_ref(), name, id).await?;
                 if was_public {
@@ -554,7 +550,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use alien_aws_clients::{
-        eventbridge::{EventBridgeRule, MockEventBridgeApi},
         s3::{GetBucketPolicyOutput, MockS3Api},
         AwsClientConfigExt,
     };
@@ -586,56 +581,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn s3_retention_removes_rules_even_when_bucket_is_already_gone() {
-        let rule_name =
-            alien_core::storage_notifications::aws_notification_rule_name("owned", "data", 0);
-        let remaining = Arc::new(Mutex::new(true));
-        let mut events = MockEventBridgeApi::new();
-        let read = remaining.clone();
-        let expected = rule_name.clone();
-        events
-            .expect_describe_rule()
-            .times(11)
-            .returning(move |name| {
-                if name == expected && *read.lock().unwrap() {
-                    Ok(EventBridgeRule {
-                        name: name.into(),
-                        description: Some("Storage queue notifications for owned-data".into()),
-                        ..Default::default()
-                    })
-                } else {
-                    Err(AlienError::new(ClientError::RemoteResourceNotFound {
-                        resource_type: "rule".into(),
-                        resource_name: name.into(),
-                    }))
-                }
-            });
-        events
-            .expect_list_targets_by_rule()
-            .times(1)
-            .returning(|_| Ok(vec![]));
-        let remove = remaining.clone();
-        events.expect_delete_rule().times(1).returning(move |name| {
-            assert_eq!(name, rule_name);
-            *remove.lock().unwrap() = false;
-            Ok(())
-        });
+    async fn s3_retention_of_a_bucket_already_gone_completes_without_notification_writes() {
+        // The notification configuration lives in the bucket, so a bucket deleted out of
+        // band has nothing left to remove. Any notification call would hit an unset mock.
         let mut s3 = MockS3Api::new();
-        s3.expect_get_bucket_tagging().times(2).returning(|name| {
+        s3.expect_get_bucket_tagging().times(1).returning(|name| {
             Err(AlienError::new(ClientError::RemoteResourceNotFound {
                 resource_type: "bucket".into(),
                 resource_name: name.into(),
             }))
         });
         let s3 = Arc::new(s3);
-        let events = Arc::new(events);
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_aws_s3_client()
             .returning(move |_| Ok(s3.clone()));
-        provider
-            .expect_get_aws_eventbridge_client()
-            .returning(move |_| Ok(events.clone()));
         let state = installed(
             Platform::Aws,
             Box::new(AwsStorageController {
@@ -644,23 +604,10 @@ mod tests {
                 ..Default::default()
             }),
         );
-        let config = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
-        // Pending provider work is progress for the deletion loop to wait on, not a failure.
-        assert!(!protect_retained_storage(
-            &state,
-            &["data".into()],
-            &config,
-            &provider,
-            &ExternalBindings::default(),
-            &[ResourceLifecycle::Live],
-        )
-        .await
-        .expect("a pending rule removal is not an error"));
-        assert!(!*remaining.lock().unwrap());
         assert!(protect_retained_storage(
             &state,
             &["data".into()],
-            &config,
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
             &provider,
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],

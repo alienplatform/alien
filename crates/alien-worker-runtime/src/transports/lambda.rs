@@ -1043,39 +1043,58 @@ fn s3_record_to_task(
     })
 }
 
-/// Build the QueueMessage task for one SQS record via the canonical
-/// `events::sqs_message_to_queue_message` conversion, which extracts
-/// timestamp, attempt_count, source, and attributes. Both buffered and
-/// streaming modes route through this, so buffered tasks carry the full
-/// field set.
-fn sqs_record_to_task(
+/// Build the QueueMessage tasks for one SQS record via the canonical
+/// `events::sqs_message_to_queue_messages` conversion, which extracts
+/// timestamp, attempt_count, source, and attributes, and normalizes S3 event
+/// notifications. Both buffered and streaming modes route through this, so
+/// buffered tasks carry the full field set.
+///
+/// An S3 notification yields one task per object-created record, all sharing
+/// the SQS message ID and receipt; an `s3:TestEvent` yields no task and the
+/// SQS message counts as processed.
+fn sqs_record_to_tasks(
     request_id: &str,
     record: aws_lambda_events::sqs::SqsMessage,
-) -> Result<Task> {
-    let queue_msg = crate::events::sqs_message_to_queue_message(record)?;
+) -> Result<Vec<Task>> {
+    let queue_messages = crate::events::sqs_message_to_queue_messages(record)?;
+    queue_messages
+        .into_iter()
+        .map(|queue_msg| {
+            let timestamp = Some(prost_types::Timestamp {
+                seconds: queue_msg.timestamp.timestamp(),
+                nanos: queue_msg.timestamp.timestamp_subsec_nanos() as i32,
+            });
 
-    let timestamp = Some(prost_types::Timestamp {
-        seconds: queue_msg.timestamp.timestamp(),
-        nanos: queue_msg.timestamp.timestamp_subsec_nanos() as i32,
-    });
+            let payload_bytes = match &queue_msg.payload {
+                alien_core::MessagePayload::Json(v) => serde_json::to_vec(v).unwrap_or_default(),
+                alien_core::MessagePayload::Text(s) => s.as_bytes().to_vec(),
+            };
 
-    let payload_bytes = match &queue_msg.payload {
-        alien_core::MessagePayload::Json(v) => serde_json::to_vec(v).unwrap_or_default(),
-        alien_core::MessagePayload::Text(s) => s.as_bytes().to_vec(),
-    };
+            Ok(Task {
+                task_id: format!("{}-{}", request_id, uuid::Uuid::new_v4()),
+                payload: Some(Payload::QueueMessage(QueueMessage {
+                    id: queue_msg.id,
+                    payload: payload_bytes,
+                    receipt_handle: queue_msg.receipt_handle,
+                    source: queue_msg.source,
+                    attempt_count: queue_msg.attempt_count.unwrap_or(1),
+                    timestamp,
+                    attributes: queue_msg.attributes,
+                })),
+            })
+        })
+        .collect()
+}
 
-    Ok(Task {
-        task_id: format!("{}-{}", request_id, uuid::Uuid::new_v4()),
-        payload: Some(Payload::QueueMessage(QueueMessage {
-            id: queue_msg.id,
-            payload: payload_bytes,
-            receipt_handle: queue_msg.receipt_handle,
-            source: queue_msg.source,
-            attempt_count: queue_msg.attempt_count.unwrap_or(1),
-            timestamp,
-            attributes: queue_msg.attributes,
-        })),
-    })
+/// One SQS delivery in a Lambda event: its message ID and receipt handle.
+type SqsDelivery = (String, String);
+
+/// Report an SQS delivery as failed once, however many of its events failed.
+fn record_sqs_failure(failures: &mut Vec<SqsDelivery>, message_id: &str, receipt: &str) {
+    let delivery = (message_id.to_string(), receipt.to_string());
+    if !failures.contains(&delivery) {
+        failures.push(delivery);
+    }
 }
 
 /// Send an event task with the configured Worker timeout, logging an error on
@@ -1144,10 +1163,13 @@ async fn handle_native_sqs_request(
             deadline.saturating_duration_since(tokio::time::Instant::now()),
         )
         .await?;
-        let mut failures = Vec::new();
+        // SQS deliveries to retry. One SQS message can carry several events (an
+        // S3 notification with several records), so successes are tracked per
+        // event and a delivery completes only when none of its events failed.
+        let mut failures: Vec<SqsDelivery> = Vec::new();
         let mut deliveries = Vec::new();
-        let mut successful_receipts: std::collections::BTreeMap<String, Vec<String>> =
-            Default::default();
+        // (logical source, SQS delivery) of each successful event.
+        let mut succeeded: Vec<(String, SqsDelivery)> = Vec::new();
         for record in event.records {
             let source = record
                 .event_source_arn
@@ -1173,44 +1195,45 @@ async fn handle_native_sqs_request(
                 .filter(|envelope| envelope.protocol == alien_commands::PROTOCOL_VERSION)
             {
                 if handle_command(state, &envelope).await.is_err() {
-                    failures.push(serde_json::json!({"itemIdentifier": id}));
+                    record_sqs_failure(&mut failures, &id, &receipt);
                 } else {
-                    successful_receipts
-                        .entry(logical_source)
-                        .or_default()
-                        .push(receipt);
+                    succeeded.push((logical_source, (id, receipt)));
                 }
                 continue;
             }
-            let task = sqs_record_to_task(request_id, record)
+            let tasks = sqs_record_to_tasks(request_id, record)
                 .map_err(|error| invocation_failure(error.to_string()))?;
-            let Some(Payload::QueueMessage(mut message)) = task.payload else {
-                return Err(invocation_failure("Invalid queue task conversion"));
-            };
-            if batch_configured {
-                message.source = logical_source.clone();
-                deliveries.push(alien_worker_protocol::control::QueueDelivery {
-                    delivery_id: task.task_id,
-                    message: Some(message),
-                });
-            } else {
-                message.source = super::shared::single_queue_source(
-                    &state.control_server,
-                    &message.source,
-                    &logical_source,
-                )
-                .await;
-                let task = Task {
-                    task_id: task.task_id,
-                    payload: Some(Payload::QueueMessage(message)),
+            if tasks.is_empty() {
+                // An S3 test event: there is nothing to handle, so it is processed.
+                succeeded.push((logical_source, (id, receipt)));
+                continue;
+            }
+            for task in tasks {
+                let Some(Payload::QueueMessage(mut message)) = task.payload else {
+                    return Err(invocation_failure("Invalid queue task conversion"));
                 };
-                if send_event_task(state, task, "queue message").await.is_err() {
-                    failures.push(serde_json::json!({"itemIdentifier": id}));
+                if batch_configured {
+                    message.source = logical_source.clone();
+                    deliveries.push(alien_worker_protocol::control::QueueDelivery {
+                        delivery_id: task.task_id,
+                        message: Some(message),
+                    });
                 } else {
-                    successful_receipts
-                        .entry(logical_source)
-                        .or_default()
-                        .push(receipt);
+                    message.source = super::shared::single_queue_source(
+                        &state.control_server,
+                        &message.source,
+                        &logical_source,
+                    )
+                    .await;
+                    let task = Task {
+                        task_id: task.task_id,
+                        payload: Some(Payload::QueueMessage(message)),
+                    };
+                    if send_event_task(state, task, "queue message").await.is_err() {
+                        record_sqs_failure(&mut failures, &id, &receipt);
+                    } else {
+                        succeeded.push((logical_source.clone(), (id.clone(), receipt.clone())));
+                    }
                 }
             }
         }
@@ -1249,7 +1272,7 @@ async fn handle_native_sqs_request(
                             let message = delivery
                                 .message
                                 .ok_or_else(|| invocation_failure("Missing oversized message"))?;
-                            failures.push(serde_json::json!({"itemIdentifier": message.id}));
+                            record_sqs_failure(&mut failures, &message.id, &message.receipt_handle);
                         }
                         break;
                     }
@@ -1281,19 +1304,19 @@ async fn handle_native_sqs_request(
                             alien_worker_protocol::batch::validate_outcomes(&batch, &result)
                         });
                 for (index, delivery) in batch.deliveries.iter().enumerate() {
-                    let succeeded = dispositions.as_ref().is_some_and(|outcomes|
+                    let delivered = dispositions.as_ref().is_some_and(|outcomes|
                         outcomes[index] == alien_worker_protocol::control::queue_delivery_outcome::Disposition::Success);
                     let message = delivery
                         .message
                         .as_ref()
                         .ok_or_else(|| invocation_failure("Missing result message"))?;
-                    if succeeded {
-                        successful_receipts
-                            .entry(source.clone())
-                            .or_default()
-                            .push(message.receipt_handle.clone());
+                    if delivered {
+                        succeeded.push((
+                            source.clone(),
+                            (message.id.clone(), message.receipt_handle.clone()),
+                        ));
                     } else {
-                        failures.push(serde_json::json!({"itemIdentifier": message.id}));
+                        record_sqs_failure(&mut failures, &message.id, &message.receipt_handle);
                     }
                 }
             }
@@ -1303,6 +1326,19 @@ async fn handle_native_sqs_request(
         // delivery receipts, then fail the invocation. Failed/uncertain receipts
         // remain retryable regardless of the mapping's response mode.
         if !failures.is_empty() {
+            // Deleting an SQS message for one successful event would lose its
+            // failed siblings, so only messages without failures are deleted.
+            let mut successful_receipts: std::collections::BTreeMap<String, Vec<String>> =
+                Default::default();
+            let mut completed = std::collections::HashSet::new();
+            for (source, delivery) in succeeded {
+                if !failures.contains(&delivery) && completed.insert(delivery.clone()) {
+                    successful_receipts
+                        .entry(source)
+                        .or_default()
+                        .push(delivery.1);
+                }
+            }
             for (source, receipts) in successful_receipts {
                 if receipts.iter().any(String::is_empty) {
                     return Err(invocation_failure("Successful SQS delivery has no receipt"));
@@ -1335,7 +1371,8 @@ async fn handle_native_sqs_request(
                 "SQS delivery failed; retry remaining receipts",
             ));
         }
-        Ok(serde_json::json!({"batchItemFailures": failures}))
+        // Every failure returned above, so no SQS message is reported as failed.
+        Ok(serde_json::json!({"batchItemFailures": []}))
     };
     Some(match tokio::time::timeout_at(deadline, operation).await {
         Ok(result) => result,
@@ -1368,9 +1405,9 @@ async fn handle_sqs_event(
             }
         }
 
-        let task = sqs_record_to_task(request_id, record)?;
-
-        send_event_task(state, task, "queue message").await?;
+        for task in sqs_record_to_tasks(request_id, record)? {
+            send_event_task(state, task, "queue message").await?;
+        }
     }
     Ok(())
 }
@@ -1897,9 +1934,14 @@ mod tests {
             serde_json::from_value(sqs_event_json()).expect("parse SQS event");
         let record = sqs_event.records.into_iter().next().expect("one record");
 
-        let task =
-            sqs_record_to_task("req-1", record.clone()).expect("task conversion should succeed");
-        let redelivery = sqs_record_to_task("req-1", record).expect("repeat conversion");
+        let [task]: [Task; 1] = sqs_record_to_tasks("req-1", record.clone())
+            .expect("task conversion should succeed")
+            .try_into()
+            .expect("an ordinary message is one task");
+        let [redelivery]: [Task; 1] = sqs_record_to_tasks("req-1", record)
+            .expect("repeat conversion")
+            .try_into()
+            .expect("an ordinary message is one task");
         assert_ne!(
             task.task_id, redelivery.task_id,
             "each delivery needs distinct correlation"
@@ -2276,6 +2318,265 @@ mod tests {
                 );
                 server.abort();
                 assert!(server.await.expect_err("fixture stopped").is_cancelled());
+            }
+        }
+    }
+
+    /// One S3 record as S3 delivered it to SQS, captured from a real bucket.
+    fn s3_record(encoded_key: &str) -> serde_json::Value {
+        serde_json::json!({
+            "eventVersion": "2.6",
+            "eventSource": "aws:s3",
+            "awsRegion": "us-east-2",
+            "eventTime": "2026-10-30T18:28:41.358Z",
+            "eventName": "ObjectCreated:Put",
+            "userIdentity": {"principalId": "AWS:AIDATLKJAW4BZIY5MKZTX"},
+            "requestParameters": {"sourceIPAddress": "18.212.70.151"},
+            "responseElements": {"x-amz-request-id": "X1E9MRMH58NVARK1", "x-amz-id-2": "s4fAzHTIcUxF5js4fKVOE3yftUageoO"},
+            "s3": {
+                "s3SchemaVersion": "1.0",
+                "configurationId": "rule-0",
+                "bucket": {"name": "n2081-s3d-78f48e", "ownerIdentity": {"principalId": "A5OBGC8W2F4L2"}, "arn": "arn:aws:s3:::n2081-s3d-78f48e"},
+                "object": {"key": encoded_key, "size": 7, "eTag": "321c3cf486ed509164edec1e1981fec8", "sequencer": "006AE4E1D955757FA5"}
+            }
+        })
+    }
+
+    /// An SQS batch holding an S3 test event, an S3 notification with two records,
+    /// and an ordinary message must hand the app exactly the two StorageEvents and
+    /// the ordinary message, on both single and batched routes. The test event is
+    /// processed without reaching the app; the two StorageEvents share their SQS
+    /// message, so when one fails the other's success must not delete it.
+    #[tokio::test]
+    async fn sqs_s3_notifications_reach_the_app_as_storage_events() {
+        let test_event = serde_json::json!({
+            "Service": "Amazon S3", "Event": "s3:TestEvent", "Time": "2026-10-30T18:28:30.022Z",
+            "Bucket": "n2081-s3d-78f48e", "RequestId": "5582815E1AEA5ADF", "HostId": "8cLeGAmw098X5cv4Zkwcmo8vvZa3eH3eKxsPzbB9wrR"
+        });
+        let notification = serde_json::json!({
+            "Records": [s3_record("in/with+space.json"), s3_record("in/plus%2Bsign.json")]
+        });
+        let records: Vec<_> = [
+            ("test-event", test_event.to_string()),
+            ("s3-put", notification.to_string()),
+            ("ordinary", r#"{"hello":"world"}"#.to_string()),
+        ]
+        .into_iter()
+        .map(|(id, body)| {
+            serde_json::json!({
+                "messageId": id,
+                "receiptHandle": format!("rh-{id}"),
+                "body": body,
+                "attributes": {"ApproximateReceiveCount": "1", "SentTimestamp": "1704110400000"},
+                "messageAttributes": {},
+                "eventSourceARN": "arn:aws:sqs:us-east-1:123456789012:run-a7d9-imported-jobs",
+                "eventSource": "aws:sqs",
+                "awsRegion": "us-east-1"
+            })
+        })
+        .collect();
+        let event = serde_json::json!({ "Records": records });
+
+        for streaming in [false, true] {
+            for batched in [false, true] {
+                for fail_sibling in [false, true] {
+                    let deleted = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+                    let calls = deleted.clone();
+                    let sqs = axum::Router::new().fallback(axum::routing::post(move |body: String| {
+                        let calls = calls.clone();
+                        async move {
+                            let form: std::collections::HashMap<String, String> = url::form_urlencoded::parse(body.as_bytes()).into_owned().collect();
+                            assert_eq!(form["Action"], "DeleteMessageBatch");
+                            let mut entries = String::new();
+                            for index in 0.. {
+                                let Some(receipt) = form.get(&format!("DeleteMessageBatchRequestEntry.{}.ReceiptHandle", index + 1)) else {
+                                    break;
+                                };
+                                calls.lock().expect("deleted").push(receipt.clone());
+                                entries.push_str(&format!("<DeleteMessageBatchResultEntry><Id>{index}</Id></DeleteMessageBatchResultEntry>"));
+                            }
+                            format!("<DeleteMessageBatchResponse><DeleteMessageBatchResult>{entries}</DeleteMessageBatchResult></DeleteMessageBatchResponse>")
+                        }
+                    }));
+                    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                        .await
+                        .expect("listen");
+                    let endpoint = format!("http://{}", listener.local_addr().expect("address"));
+                    let server = tokio::spawn(async move {
+                        axum::serve(listener, sqs).await.expect("SQS fixture");
+                    });
+                    let environment = std::collections::HashMap::from([
+                        ("ALIEN_DEPLOYMENT_TYPE".into(), "aws".into()),
+                        ("AWS_ACCOUNT_ID".into(), "123456789012".into()),
+                        ("AWS_REGION".into(), "us-east-1".into()),
+                        ("AWS_ACCESS_KEY_ID".into(), "test-access-key".into()),
+                        ("AWS_SECRET_ACCESS_KEY".into(), "test-secret-key".into()),
+                        ("AWS_SERVICE_OVERRIDES_ENDPOINTS".into(), serde_json::json!({"sqs": endpoint}).to_string()),
+                        ("ALIEN_JOBS_BINDING".into(), serde_json::json!({"service":"sqs","queueUrl": format!("{endpoint}/123456789012/run-a7d9-imported-jobs")}).to_string()),
+                        ("ALIEN_QUEUE_BATCH_CONFIG".into(), if batched {
+                            r#"{"jobs":{"maxMessages":10,"maxWindowSeconds":0}}"#
+                        } else {
+                            r#"{"jobs":null}"#
+                        }.into()),
+                    ]);
+                    let (queue_batches, queue_sources) =
+                        super::super::queue_batch::batch_routing(&environment)
+                            .expect("source mapping");
+                    let control = Arc::new(ControlGrpcServer::new());
+                    if !batched {
+                        control
+                            .register_event_handler(tonic::Request::new(
+                                alien_worker_protocol::control::RegisterEventHandlerRequest {
+                                    handler_type: "queue".into(),
+                                    resource_name: "jobs".into(),
+                                },
+                            ))
+                            .await
+                            .expect("register");
+                    }
+                    let mut tasks = control
+                        .wait_for_tasks(tonic::Request::new(
+                            alien_worker_protocol::control::WaitForTasksRequest {
+                                application_id: "test".into(),
+                            },
+                        ))
+                        .await
+                        .expect("subscribe")
+                        .into_inner();
+                    let app_control = control.clone();
+                    let application = tokio::spawn(async move {
+                        let mut seen = Vec::new();
+                        while seen.len() < 3 {
+                            let task = tokio_stream::StreamExt::next(&mut tasks)
+                                .await
+                                .expect("task")
+                                .expect("delivery");
+                            let result = match task.payload {
+                                Some(Payload::QueueBatch(batch)) => {
+                                    assert!(batched, "single routes receive single messages");
+                                    assert_eq!(batch.source, "jobs");
+                                    let outcomes = batch
+                                        .deliveries
+                                        .into_iter()
+                                        .map(|delivery| {
+                                            let fail = fail_sibling && seen.len() == 1;
+                                            seen.push(delivery.message.expect("message"));
+                                            alien_worker_protocol::control::QueueDeliveryOutcome {
+                                                delivery_id: delivery.delivery_id,
+                                                disposition: if fail { 2 } else { 1 },
+                                            }
+                                        })
+                                        .collect();
+                                    send_task_result_request::Result::QueueBatch(
+                                        alien_worker_protocol::control::QueueBatchResult {
+                                            outcomes,
+                                        },
+                                    )
+                                }
+                                Some(Payload::QueueMessage(message)) => {
+                                    assert!(!batched, "batched routes receive batches");
+                                    let fail = fail_sibling && seen.len() == 1;
+                                    seen.push(message);
+                                    if fail {
+                                        send_task_result_request::Result::Error(TaskError {
+                                            code: "RETRY".into(),
+                                            message: "Processing failed".into(),
+                                        })
+                                    } else {
+                                        send_task_result_request::Result::Success(TaskSuccess {
+                                            response_data: Vec::new(),
+                                        })
+                                    }
+                                }
+                                other => panic!("unexpected task {other:?}"),
+                            };
+                            app_control
+                                .send_task_result(tonic::Request::new(SendTaskResultRequest {
+                                    task_id: task.task_id,
+                                    result: Some(result),
+                                }))
+                                .await
+                                .expect("result");
+                        }
+                        seen
+                    });
+                    let state = Arc::new(LambdaState {
+                        queue_bindings: Some(
+                            alien_bindings::Bindings::from_env_map(environment).expect("bindings"),
+                        ),
+                        queue_batches,
+                        queue_sources,
+                        command_timeout: Duration::from_secs(30),
+                        control_server: control,
+                        http_client: forward_client_builder().build().expect("client"),
+                    });
+                    let (sender, _receiver) = unbounded_channel();
+                    let mut context = lambda_runtime::Context::default();
+                    context.deadline = (SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("clock")
+                        .as_millis()
+                        + 30_000) as u64;
+                    let request = event_to_request(LambdaEvent::new(event.clone(), context));
+                    let response = if streaming {
+                        StreamingAdapter {
+                            state,
+                            request_done_sender: sender,
+                        }
+                        .call(request)
+                        .await
+                        .map(|response| match response {
+                            lambda_runtime::FunctionResponse::BufferedResponse(value) => value,
+                            _ => panic!("SQS must return raw buffered JSON"),
+                        })
+                    } else {
+                        BufferedAdapter {
+                            state,
+                            request_done_sender: sender,
+                        }
+                        .call(request)
+                        .await
+                    };
+
+                    let seen = application.await.expect("application");
+                    let mut keys = Vec::new();
+                    for message in &seen[..2] {
+                        assert_eq!(message.id, "s3-put");
+                        assert_eq!(message.receipt_handle, "rh-s3-put");
+                        assert_eq!(message.source, "jobs");
+                        let event: alien_core::StorageEvent =
+                            serde_json::from_slice(&message.payload).expect("StorageEvent");
+                        assert_eq!(event.event_type, alien_core::StorageEventType::Created);
+                        assert_eq!(event.bucket_name, "n2081-s3d-78f48e");
+                        assert_eq!(event.size, Some(7));
+                        keys.push(event.object_key);
+                    }
+                    assert_eq!(keys, ["in/with space.json", "in/plus+sign.json"]);
+                    assert_eq!(seen[2].id, "ordinary");
+                    assert_eq!(seen[2].receipt_handle, "rh-ordinary");
+                    assert_eq!(
+                        serde_json::from_slice::<serde_json::Value>(&seen[2].payload)
+                            .expect("ordinary JSON"),
+                        serde_json::json!({"hello": "world"})
+                    );
+                    if fail_sibling {
+                        assert!(response.is_err(), "the failed S3 event must be retried");
+                        // The test event and the ordinary message are done; the S3
+                        // message keeps its receipt so both of its events are retried.
+                        assert_eq!(
+                            *deleted.lock().expect("deleted"),
+                            ["rh-test-event", "rh-ordinary"]
+                        );
+                    } else {
+                        assert_eq!(
+                            response.expect("every SQS message processed"),
+                            serde_json::json!({"batchItemFailures": []})
+                        );
+                        assert!(deleted.lock().expect("deleted").is_empty());
+                    }
+                    server.abort();
+                    assert!(server.await.expect_err("fixture stopped").is_cancelled());
+                }
             }
         }
     }
