@@ -1,8 +1,8 @@
 # Storage notifications into queues
 
-Storage notification declarations, validation, GCP Terraform setup, and GCP/Azure
-queue payload normalization are available in this branch. AWS provisioning, Azure
-setup, Live controllers, and local delivery are still under development.
+Storage notification declarations, validation, GCP Terraform setup and controllers,
+and GCP/Azure queue payload normalization are available in this branch. AWS
+provisioning, Azure setup/controllers, and local delivery are still under development.
 
 Declare a queue destination on a Storage resource:
 
@@ -58,8 +58,10 @@ suffixes can be rejected by AWS even when the pattern fits the size limit.
 The intended delivery paths are S3 → EventBridge → SQS, Cloud Storage → Pub/Sub,
 and Blob Storage → Event Grid → Service Bus. GCP suffix filtering happens in the
 consumer: nonmatching messages are acknowledged without invoking the handler.
-GCP setup creates independent notification configurations and a single publisher
-grant per destination queue for the project's Cloud Storage service agent. Rule
+GCP setup and Live controllers create independent notification configurations and
+a single publisher grant per destination queue for the project's Cloud Storage
+service agent. The queue updates its grant when the first rule starts targeting it
+or the last rule stops; unchanged deployments do not rewrite the policy. Rule
 updates and teardown leave independently managed notification configurations
 alone. The bucket follows the existing setup data-retention policy; removing
 notifications does not delete stored objects. Existing out-of-band configurations
