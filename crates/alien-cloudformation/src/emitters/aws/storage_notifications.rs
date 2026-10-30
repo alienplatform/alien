@@ -9,7 +9,7 @@ use alien_core::{
     import::EmitContext,
     storage_notifications::{
         AWS_NOTIFICATION_INPUT_TEMPLATE, aws_eventbridge_pattern, aws_notification_input_paths,
-        aws_notification_rule_name,
+        aws_notification_rule_name, aws_notification_rule_name_pattern,
     },
 };
 use serde_json::json;
@@ -106,7 +106,7 @@ pub(super) fn queue_policy(queue_id: &str) -> CfResource {
             ("Resource", CfExpression::get_att(queue_id, "Arn")),
             ("Condition", CfExpression::object([
                 ("StringEquals", CfExpression::object([("aws:SourceAccount", CfExpression::ref_("AWS::AccountId"))])),
-                ("ArnLike", CfExpression::object([("aws:SourceArn", CfExpression::sub("arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-sn-*"))])),
+                ("ArnLike", CfExpression::object([("aws:SourceArn", CfExpression::sub(format!("arn:${{AWS::Partition}}:events:${{AWS::Region}}:${{AWS::AccountId}}:rule/{}", aws_notification_rule_name_pattern("${AWS::StackName}"))))])),
             ])),
         ])])),
     ]));

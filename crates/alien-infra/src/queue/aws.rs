@@ -8,7 +8,9 @@ use alien_aws_clients::sqs::{GetQueueAttributesResponse, SetQueueAttributesReque
 use alien_core::{
     bindings::{BindingValue, QueueBinding},
     standard_resource_tags,
-    storage_notifications::queue_receives_storage_notifications,
+    storage_notifications::{
+        aws_notification_rule_name_pattern, queue_receives_storage_notifications,
+    },
     AwsSqsQueueHeartbeatData, HeartbeatBackend, InitialSetupAuthority, ObservedHealth, Platform,
     ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
     ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus,
@@ -470,7 +472,7 @@ impl AwsQueueController {
                 "Resource": format!("arn:aws:sqs:{}:{}:{name}", cfg.region, cfg.account_id),
                 "Condition": {
                     "StringEquals": {"aws:SourceAccount": cfg.account_id},
-                    "ArnLike": {"aws:SourceArn": format!("arn:aws:events:{}:{}:rule/{}-*", cfg.region, cfg.account_id, ctx.resource_prefix)}
+                    "ArnLike": {"aws:SourceArn": format!("arn:aws:events:{}:{}:rule/{}", cfg.region, cfg.account_id, aws_notification_rule_name_pattern(&ctx.resource_prefix))}
                 }
             }));
         }

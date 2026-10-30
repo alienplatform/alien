@@ -100,7 +100,7 @@ async fn ingress_reconciles_only_on_change_and_preserves_foreign_policy() {
                 grant["Condition"],
                 json!({
                     "StringEquals":{"aws:SourceAccount":"123456789012"},
-                    "ArnLike":{"aws:SourceArn":"arn:aws:events:us-east-1:123456789012:rule/test-*"}
+                    "ArnLike":{"aws:SourceArn":"arn:aws:events:us-east-1:123456789012:rule/test-sn-*"}
                 })
             );
         }
