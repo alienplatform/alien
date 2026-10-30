@@ -1,21 +1,25 @@
 //! Opt-in qualification with generated restricted management permissions.
 //! The fixture owner seeds an account, container, namespace, queue and independent
 //! subscription, installs export_permissions on a fresh identity, then runs
-//! reconcile_fixture for create/update/remove/retain. Independently verify the
+//! reconcile_fixture for create/update/remove/retain. The provision phase also
+//! creates the Queue and Storage on seeded shared account/namespace parents.
+//! Set AZURE_QUEUE_NOTIFICATIONS_LIFECYCLE=frozen for direct setup authority.
+//! Independently verify the
 //! matching delivery cohorts and foreign subscription after each phase, then
 //! delete every fixture resource. Reconciliation uses only the restricted identity.
 
 use crate::{
     controller_test::SingleControllerExecutor,
     queue::azure::{AzureQueueController, AzureQueueState},
-    AzureResourceGroupController, AzureStorageAccountController, AzureStorageController,
-    AzureStorageState, DefaultPlatformServiceProvider,
+    AzureResourceGroupController, AzureServiceBusNamespaceController,
+    AzureStorageAccountController, AzureStorageController, AzureStorageState,
+    DefaultPlatformServiceProvider,
 };
 use alien_bindings::{providers::queue::AzureServiceBusQueue, traits::Queue as QueueBinding};
 use alien_core::{
-    AzureClientConfig, AzureResourceGroup, AzureStorageAccount, ClientConfig, ExternalBindings,
-    InitialSetupAuthority, Platform, Queue, ResourceLifecycle, ResourceStatus, Storage,
-    StorageEvent, StorageEventType, StorageNotification,
+    AzureClientConfig, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount,
+    ClientConfig, ExternalBindings, InitialSetupAuthority, Platform, Queue, ResourceLifecycle,
+    ResourceStatus, Storage, StorageEvent, StorageEventType, StorageNotification,
 };
 use alien_permissions::{
     generators::AzureRuntimePermissionsGenerator, get_permission_set, BindingTarget,
@@ -63,6 +67,9 @@ fn export_permissions() {
         "storage/provision",
         "queue/provision",
         "storage/trigger-management",
+        // Default management profiles also observe shared lifecycle policy before
+        // retaining a container. This Reader grant carries no data-plane access.
+        "storage/heartbeat",
     ]
     .into_iter()
     .map(|id| {
@@ -87,8 +94,8 @@ fn export_permissions() {
 async fn reconcile_fixture() {
     let f = fixture();
     let phase = std::env::var("AZURE_QUEUE_NOTIFICATIONS_PHASE")
-        .expect("create, update, remove or retain phase required");
-    assert!(["create", "update", "remove", "retain"].contains(&phase.as_str()));
+        .expect("provision, create, update, remove or retain phase required");
+    assert!(["provision", "create", "update", "remove", "retain"].contains(&phase.as_str()));
     let lifecycle = match std::env::var("AZURE_QUEUE_NOTIFICATIONS_LIFECYCLE").as_deref() {
         Ok("frozen") => ResourceLifecycle::Frozen,
         Ok("live") | Err(_) => ResourceLifecycle::Live,
@@ -99,7 +106,14 @@ async fn reconcile_fixture() {
         .notifications(vec![
             StorageNotification::builder()
                 .queue((&queue).into())
-                .prefix(if phase == "create" { "in/" } else { "changed/" }.into())
+                .prefix(
+                    if matches!(phase.as_str(), "create" | "provision") {
+                        "in/"
+                    } else {
+                        "changed/"
+                    }
+                    .into(),
+                )
                 .suffix(".json".into())
                 .build(),
             StorageNotification::builder()
@@ -124,10 +138,56 @@ async fn reconcile_fixture() {
     ));
     let config = ClientConfig::Azure(Box::new(f.config));
     let provider = Arc::new(DefaultPlatformServiceProvider::default());
+    let queue_controller = AzureQueueController {
+        state: AzureQueueState::Ready,
+        namespace_name: Some(f.namespace.clone()),
+        queue_name: Some(f.queue.clone()),
+        ..Default::default()
+    };
+    let mut namespace = AzureServiceBusNamespaceController::mock_ready(&f.namespace);
+    namespace.resource_group_name = Some(f.group.clone());
+    namespace.resource_id = Some(format!(
+        "{}/providers/Microsoft.ServiceBus/namespaces/{}",
+        group.resource_id.as_ref().unwrap(),
+        f.namespace,
+    ));
+    let mut queue_run = SingleControllerExecutor::builder()
+        .resource(queue.clone())
+        .controller(if phase == "provision" {
+            AzureQueueController::default()
+        } else {
+            queue_controller
+        })
+        .platform(Platform::Azure)
+        .resource_prefix(&f.prefix)
+        .resource_lifecycle(lifecycle)
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .client_config(config.clone())
+        .service_provider(provider.clone())
+        .real_delays()
+        .with_stack_resource(storage.clone(), lifecycle)
+        .with_dependency(
+            AzureResourceGroup::new("default-resource-group".into()).build(),
+            group.clone(),
+        )
+        .with_dependency(
+            AzureServiceBusNamespace::new("default-service-bus-namespace".into()).build(),
+            namespace,
+        )
+        .build()
+        .await
+        .unwrap();
+    if phase == "provision" {
+        queue_run.run_until_terminal().await.unwrap();
+        assert_eq!(queue_run.status(), ResourceStatus::Running);
+    }
+    assert!(!queue_run.needs_update().unwrap());
     let mut run = SingleControllerExecutor::builder()
         .resource(storage)
         .controller(AzureStorageController {
-            state: if phase == "create" {
+            state: if phase == "provision" {
+                AzureStorageState::CreateStart
+            } else if phase == "create" {
                 AzureStorageState::CreatingNotifications
             } else {
                 AzureStorageState::UpdatingNotifications
@@ -154,12 +214,10 @@ async fn reconcile_fixture() {
         )
         .with_dependency(
             queue,
-            AzureQueueController {
-                state: AzureQueueState::Ready,
-                namespace_name: Some(f.namespace),
-                queue_name: Some(f.queue),
-                ..Default::default()
-            },
+            queue_run
+                .internal_state::<AzureQueueController>()
+                .unwrap()
+                .clone(),
         )
         .dependency_lifecycle("work", lifecycle)
         .build()
@@ -194,6 +252,9 @@ async fn reconcile_fixture() {
         run.delete().unwrap();
         run.run_until_terminal().await.unwrap();
         assert_eq!(run.status(), ResourceStatus::Deleted);
+        queue_run.delete().unwrap();
+        queue_run.run_until_terminal().await.unwrap();
+        assert_eq!(queue_run.status(), ResourceStatus::Deleted);
     } else {
         run.run_until_terminal().await.unwrap();
         assert_eq!(run.status(), ResourceStatus::Running);

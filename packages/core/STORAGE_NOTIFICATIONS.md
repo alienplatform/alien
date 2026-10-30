@@ -73,10 +73,13 @@ alone. The bucket follows the existing setup data-retention policy; removing
 notifications does not delete stored objects. Existing out-of-band configurations
 also count toward provider notification quotas.
 Azure setup and controllers create account-scoped Event Grid subscriptions,
-reusing the storage account's shared system topic. Each Storage owns only its
+reusing the storage account's shared system topic. Azure creates that topic
+automatically if it is absent; the controller does not need a system-topic write
+grant and does not own or delete the shared topic. Each Storage owns only its
 subscriptions; updates and deletion preserve subscriptions managed elsewhere.
-Default Event Grid destination authentication requires no extra queue-side grant,
-so adding notifications does not update the Queue's IAM. Live Storage adds the
+Default Event Grid destination authentication requires no extra queue-side grant
+or delivery identity. Existing queue provisioning grants suffice for destination
+validation, so adding notifications does not update the Queue's IAM. Live Storage adds the
 existing `storage/trigger-management` permission set to management permissions;
 Frozen rules keep those writes in setup. Retained-storage cleanup waits until
 Azure confirms its subscriptions are gone and preserves the shared topic.
