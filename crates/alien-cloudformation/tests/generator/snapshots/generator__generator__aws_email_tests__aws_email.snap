@@ -169,28 +169,6 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
           - Fn::Sub: arn:${AWS::Partition}:bedrock:*::foundation-model/*
         - Action:
-          - aoss:AddCollectionToCollectionGroup
-          - aoss:BatchGetCollection
-          - aoss:BatchGetCollectionGroup
-          - aoss:CreateAccessPolicy
-          - aoss:CreateCollection
-          - aoss:CreateCollectionGroup
-          - aoss:CreateSecurityPolicy
-          - aoss:DeleteAccessPolicy
-          - aoss:DeleteCollection
-          - aoss:DeleteCollectionGroup
-          - aoss:DeleteSecurityPolicy
-          - aoss:GetAccessPolicy
-          - aoss:GetSecurityPolicy
-          - aoss:ListAccessPolicies
-          - aoss:ListCollectionGroups
-          - aoss:ListCollections
-          - aoss:ListSecurityPolicies
-          - aoss:ListTagsForResource
-          - aoss:UpdateAccessPolicy
-          - aoss:UpdateCollection
-          - aoss:UpdateCollectionGroup
-          - aoss:UpdateSecurityPolicy
           - ec2:AssignPrivateIpAddresses
           - ec2:CreateNetworkInterface
           - ec2:DeleteNetworkInterface
@@ -254,12 +232,6 @@ Resources:
           Effect: Allow
           Resource:
             Fn::Sub: arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
-        - Action: iam:CreateServiceLinkedRole
-          Condition:
-            StringEquals:
-              iam:AWSServiceName: observability.aoss.amazonaws.com
-          Effect: Allow
-          Resource: '*'
         - Action: lambda:PassNetworkConnector
           Effect: Allow
           Resource:
@@ -727,7 +699,7 @@ Outputs:
         - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
         - '","'
         - Fn::Sub: arn:${AWS::Partition}:bedrock:*::foundation-model/*
-        - '"]},{"Action":["aoss:AddCollectionToCollectionGroup","aoss:BatchGetCollection","aoss:BatchGetCollectionGroup","aoss:CreateAccessPolicy","aoss:CreateCollection","aoss:CreateCollectionGroup","aoss:CreateSecurityPolicy","aoss:DeleteAccessPolicy","aoss:DeleteCollection","aoss:DeleteCollectionGroup","aoss:DeleteSecurityPolicy","aoss:GetAccessPolicy","aoss:GetSecurityPolicy","aoss:ListAccessPolicies","aoss:ListCollectionGroups","aoss:ListCollections","aoss:ListSecurityPolicies","aoss:ListTagsForResource","aoss:UpdateAccessPolicy","aoss:UpdateCollection","aoss:UpdateCollectionGroup","aoss:UpdateSecurityPolicy","ec2:AssignPrivateIpAddresses","ec2:CreateNetworkInterface","ec2:DeleteNetworkInterface","ec2:DescribeInstances","ec2:DescribeNetworkInterfaces","ec2:DescribeSnapshots","ec2:DescribeTags","ec2:DescribeVolumes","ec2:UnassignPrivateIpAddresses","ecr:GetAuthorizationToken","elasticloadbalancing:DescribeTargetHealth","ses:ListEmailIdentities"],"Effect":"Allow","Resource":"*"},{"Action":["ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"],"Effect":"Allow","Resource":"'
+        - '"]},{"Action":["ec2:AssignPrivateIpAddresses","ec2:CreateNetworkInterface","ec2:DeleteNetworkInterface","ec2:DescribeInstances","ec2:DescribeNetworkInterfaces","ec2:DescribeSnapshots","ec2:DescribeTags","ec2:DescribeVolumes","ec2:UnassignPrivateIpAddresses","ecr:GetAuthorizationToken","elasticloadbalancing:DescribeTargetHealth","ses:ListEmailIdentities"],"Effect":"Allow","Resource":"*"},{"Action":["ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"],"Effect":"Allow","Resource":"'
         - Fn::Sub:
           - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
           - ManagingAccountId:
@@ -748,7 +720,7 @@ Outputs:
         - Fn::Sub: arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*
         - '"},{"Action":"aoss:APIAccessAll","Effect":"Allow","Resource":"'
         - Fn::Sub: arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
-        - '"},{"Action":"iam:CreateServiceLinkedRole","Condition":{"StringEquals":{"iam:AWSServiceName":"observability.aoss.amazonaws.com"}},"Effect":"Allow","Resource":"*"},{"Action":"lambda:PassNetworkConnector","Effect":"Allow","Resource":"'
+        - '"},{"Action":"lambda:PassNetworkConnector","Effect":"Allow","Resource":"'
         - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:*
         - '"}],"Version":"2012-10-17"}}}]'
     Description: Deployment registration resources JSON chunk. Reassemble chunks in numeric suffix order.

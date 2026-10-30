@@ -519,7 +519,7 @@ fn size_budget_keeps_distinct_physical_keys_distinct() {
         ResourceLifecycle::Frozen,
     );
     let mut profile = PermissionProfile::new();
-    for index in 0..24 {
+    for index in 0..40 {
         let id = format!("key-{index}");
         profile = profile.resource(&id, ["key/remote-cryptography"]);
         builder = builder.add(Key::new(id).build(), ResourceLifecycle::Frozen);
