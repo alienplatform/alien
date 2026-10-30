@@ -43,41 +43,63 @@ fn resolve_policy(expression: &Expression) -> Value {
 }
 
 #[test]
-fn chunks_fit_after_prefix_expansion_and_preserve_every_statement() {
-    let statements: Vec<_> = (0..5).map(|index| statement(index, 17)).collect();
-    assert!(policy_document_json(&statements).unwrap().to_string().len() < 5_500);
-    let expected = resolve_policy(&policy_document_expr(statements.clone()).unwrap());
-    assert!(expected.to_string().len() > 6_144);
-    let chunks = chunk_iam_statements(statements, 5_500).unwrap();
-    assert!(chunks.len() > 1);
-    let mut actual = Vec::new();
-    for chunk in chunks {
-        let policy = resolve_policy(&policy_document_expr(chunk).unwrap());
-        assert!(policy.to_string().len() <= 6_144);
-        actual.extend(policy["Statement"].as_array().unwrap().iter().cloned());
-    }
-    assert_eq!(actual, *expected["Statement"].as_array().unwrap());
-}
-
-#[test]
-fn rejects_oversized_statements_even_after_a_valid_chunk() {
-    let oversized = statement(1, 90);
-    assert!(
-        policy_document_json(std::slice::from_ref(&oversized))
-            .unwrap()
-            .to_string()
-            .len()
-            < 5_500
-    );
-    assert!(
-        resolve_policy(&policy_document_expr(vec![oversized.clone()]).unwrap())
-            .to_string()
-            .len()
-            > 6_144
-    );
-    for statements in [vec![oversized.clone()], vec![statement(0, 1), oversized]] {
-        let error = chunk_iam_statements(statements, 5_500).unwrap_err();
-        assert!(error.to_string().contains("too large for a managed policy"));
+fn chunking_preserves_expanded_policies_and_rejects_unsplittable_statements() {
+    for (name, resource_counts, expected_chunks) in [
+        ("empty", vec![], Some(0)),
+        ("single", vec![1], Some(1)),
+        ("expanded", vec![17; 5], Some(2)),
+        ("oversized first", vec![90, 1], None),
+        ("oversized alone", vec![90], None),
+        ("oversized last", vec![1, 90], None),
+        (
+            "oversized after flushed chunk",
+            vec![17, 17, 17, 17, 90],
+            None,
+        ),
+    ] {
+        let statements: Vec<_> = resource_counts
+            .into_iter()
+            .enumerate()
+            .map(|(index, resources)| statement(index, resources))
+            .collect();
+        let expected = resolve_policy(&policy_document_expr(statements.clone()).unwrap());
+        if name == "expanded" {
+            assert!(policy_document_json(&statements).unwrap().to_string().len() < 5_500);
+            assert!(expected.to_string().len() > 6_144);
+        }
+        let result = chunk_iam_statements(statements.clone(), 5_500);
+        let Some(expected_chunks) = expected_chunks else {
+            let oversized = statements.iter().find(|s| s.resource.len() == 90).unwrap();
+            assert!(
+                policy_document_json(std::slice::from_ref(oversized))
+                    .unwrap()
+                    .to_string()
+                    .len()
+                    < 5_500
+            );
+            assert!(
+                resolve_policy(&policy_document_expr(vec![oversized.clone()]).unwrap())
+                    .to_string()
+                    .len()
+                    > 6_144
+            );
+            let error = result.expect_err(name).to_string();
+            assert!(
+                error.contains("too large for a managed policy"),
+                "{name}: {error}"
+            );
+            assert!(error.contains(&oversized.sid), "{name}: {error}");
+            continue;
+        };
+        let chunks = result.unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(chunks.len(), expected_chunks, "{name}");
+        let mut actual = Vec::new();
+        for chunk in chunks {
+            let policy = resolve_policy(&policy_document_expr(chunk).unwrap());
+            assert!(policy.to_string().len() <= 6_144, "{name}: {policy}");
+            actual.extend(policy["Statement"].as_array().unwrap().iter().cloned());
+        }
+        assert_eq!(actual, *expected["Statement"].as_array().unwrap(), "{name}");
     }
 }
 
