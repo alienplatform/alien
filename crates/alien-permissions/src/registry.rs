@@ -194,7 +194,7 @@ pub fn permission_set_uses_aws_object_data(
 }
 
 /// IAM action wildcard matching: `*` matches any run of characters, `?` any one character.
-fn iam_action_pattern_matches(pattern: &[u8], action: &[u8]) -> bool {
+pub(crate) fn iam_action_pattern_matches(pattern: &[u8], action: &[u8]) -> bool {
     match (pattern.first(), action.first()) {
         (None, None) => true,
         (Some(b'*'), _) => {

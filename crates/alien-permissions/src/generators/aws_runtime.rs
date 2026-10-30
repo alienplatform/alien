@@ -151,6 +151,15 @@ impl AwsRuntimePermissionsGenerator {
                     })?,
             };
 
+            if context.aws_permissions_boundary_arn.is_some() {
+                super::aws_role_passing::validate_pass_role_service(
+                    &permission_set.id,
+                    platform_permission.effect.as_str(),
+                    actions,
+                    binding_spec.condition.as_ref(),
+                )?;
+            }
+
             let (binding_spec, actions) =
                 super::aws_boundary::role_write_binding(binding_spec, actions, context);
 

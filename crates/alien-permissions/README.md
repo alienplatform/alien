@@ -66,6 +66,15 @@ The document limits identity-policy permissions for roles management writes:
 - Custom inline AWS permissions in workload profiles retain their actions,
   resources and conditions, compiled with their actual resource context.
   Management profiles do not contribute to the ceiling.
+  On bounded setups, every Allow that includes `iam:PassRole` (including wildcard
+  actions) must use `StringEquals` on `iam:PassedToService` with one or more literal
+  AWS service principals, such as `lambda.amazonaws.com`. This also applies to
+  custom management grants. Generation rejects missing, wildcard, variable, and
+  optional service constraints; it does not rewrite custom grants. Split PassRole
+  into its own statement when other actions do not supply that condition key.
+  The author must name the service that consumes the role. Legacy setups without
+  a boundary retain their previous grants; adopting a boundary requires correcting
+  custom PassRole grants before setup can be generated.
 
 Provision, management, heartbeat, telemetry, observation, remote-management and
 protection permission sets are excluded from the runtime catalog ceiling. A
