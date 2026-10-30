@@ -93,3 +93,19 @@ that mode uses installer credentials. Report each mode separately; template
 validation, policy simulation, and an automatic setup test do not establish
 fresh-install or runtime-update success in another mode. Keep credentials,
 registration tokens, and raw deployment evidence out of version control.
+
+For CloudFormation, qualify permissions against the physical resources it
+creates. An unnamed `AWS::IAM::ManagedPolicy` gets a generated name containing
+the stack name, logical resource ID, and a suffix. Grants for explicitly named
+management policies do not cover an execution role's generated managed policy.
+Scope any additional policy lifecycle grants to that fixture's logical-resource
+prefix, and scope role attachment grants to the role itself.
+
+Bucket creation also includes the template's encryption, versioning,
+public-access-block, and bucket-policy configuration. Diagnose the denied action
+from the resource event even when `CreateBucket` has already succeeded. A retry
+after failed creation may first delete a partially created resource: record
+those cleanup permissions separately. If stack deletion fails without a useful
+reason, inspect the remaining physical resources and use the same restricted
+installer for any direct cleanup needed before retrying stack deletion. Preserve
+that evidence; it does not establish normal successful-stack teardown.
