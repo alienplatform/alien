@@ -18,7 +18,6 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
-use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, Email, ErrorData, PermissionProfile,
     PermissionSetReference, RemoteStackManagement, Result, ServiceAccount, Storage,
@@ -171,7 +170,11 @@ impl CfEmitter for AwsStorageEmitter {
         }
 
         bucket.properties.insert("Tags".to_string(), tags(ctx));
-        bucket.retain_data();
+        // Sandbox bundles are build inputs the controller renders again and deletes with each
+        // sandbox, so their bucket goes with the stack instead of outliving it.
+        if storage.id() != SANDBOX_BUNDLE_STORAGE_ID {
+            bucket.retain_data();
+        }
 
         let mut policy = CfResource::new(
             format!("{bucket_id}BucketPolicy"),
@@ -478,6 +481,80 @@ fn storage_iam_policies(
     Ok(resources)
 }
 
+/// `storage/data-read` on the deployment's sandbox bundle Storage, for the build role `role_id`
+/// of a sandbox that renders its bundle there. The sandbox emits it, because it owns the role and
+/// depends on the Storage; emitted with the Storage it would close a dependency cycle.
+pub(crate) fn sandbox_bundle_read_policy(
+    ctx: &EmitContext<'_>,
+    role_id: &str,
+) -> Result<CfResource> {
+    let bucket_id = ctx.name_for(SANDBOX_BUNDLE_STORAGE_ID).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "missing CloudFormation logical id for resource '{SANDBOX_BUNDLE_STORAGE_ID}'"
+            ),
+        })
+    })?;
+    let read = alien_permissions::get_permission_set("storage/data-read").ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: "permission set 'storage/data-read' is not defined".to_string(),
+        })
+    })?;
+    let context = permission_context()
+        .with_resource_name(format!("${{AWS::StackName}}-{SANDBOX_BUNDLE_STORAGE_ID}"));
+    let policy = AwsCloudFormationPermissionsGenerator::new()
+        .generate_policy(read, BindingTarget::Resource, &context)
+        .context(ErrorData::GenericError {
+            message: "failed to generate the sandbox bundle read policy".to_string(),
+        })?;
+    let policy_value = serde_json::to_value(policy).into_alien_error().context(
+        ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: "Failed to serialize IAM policy".to_string(),
+        },
+    )?;
+    let CfExpression::Object(mut policy_object) = cf_from_json(policy_value)? else {
+        return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: "policy did not serialize to a JSON object".to_string(),
+        }));
+    };
+    let statements = match policy_object.shift_remove("Statement") {
+        Some(CfExpression::List(statements)) => statements,
+        _ => Vec::new(),
+    };
+    let statements = statements
+        .into_iter()
+        .map(|statement| storage_policy_statement_for_bucket(statement, bucket_id))
+        .collect::<Vec<_>>();
+
+    let mut policy_resource = CfResource::new(
+        format!("{role_id}BundleRead"),
+        "AWS::IAM::Policy".to_string(),
+    );
+    policy_resource.properties.insert(
+        "PolicyName".to_string(),
+        CfExpression::from("sandbox-bundle-read"),
+    );
+    policy_resource.properties.insert(
+        "PolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list(uniquify_iam_statement_sids(statements)),
+            ),
+        ]),
+    );
+    policy_resource.properties.insert(
+        "Roles".to_string(),
+        CfExpression::list([CfExpression::ref_(role_id)]),
+    );
+    policy_resource.depends_on.push(bucket_id.to_string());
+    policy_resource.depends_on.push(role_id.to_string());
+    Ok(policy_resource)
+}
+
 fn storage_policy_statement_for_bucket(statement: CfExpression, bucket_id: &str) -> CfExpression {
     let CfExpression::Object(mut statement_object) = statement else {
         return statement;
@@ -552,22 +629,6 @@ fn storage_permission_owners(
                 role_id,
                 vec![PermissionSetReference::from_name(definition.permission_set)],
             ));
-        }
-    }
-
-    // The image builds of the sandboxes that render their bundles here. The sandbox emitter names
-    // each build role after its sandbox's logical id.
-    if ctx.resource_id == SANDBOX_BUNDLE_STORAGE_ID {
-        for (id, _) in ctx.stack.resources() {
-            if let Some(logical_id) = ctx
-                .name_for(id)
-                .filter(|_| aws_sandbox_renders_bundle(ctx.stack, id))
-            {
-                owners.push((
-                    format!("{logical_id}BuildRole"),
-                    vec![PermissionSetReference::from_name("storage/data-read")],
-                ));
-            }
         }
     }
 
