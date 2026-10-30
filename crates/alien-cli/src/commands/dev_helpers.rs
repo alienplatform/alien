@@ -6,6 +6,7 @@
 //! Dev mode is local-only — it always uses `Platform::Local`.
 
 use crate::{
+    commands::destroy::DestroyArgs,
     config::load_configuration,
     error::{ErrorData, Result},
     get_current_dir,
@@ -1013,7 +1014,8 @@ pub async fn prepare_dev_session_deployment(
 
 /// `alien dev destroy`: delete a local deployment by name and wait until it's gone. Dev
 /// deployments live only in the dev manager, never in the tracker `alien destroy` reads.
-pub async fn destroy_local_deployment(port: u16, deployment_name: &str, force: bool) -> Result<()> {
+pub async fn destroy_local_deployment(port: u16, args: &DestroyArgs) -> Result<()> {
+    let deployment_name = &args.name;
     let client = local_dev_client(port);
     let existing = find_named_local_deployment(&client, deployment_name)
         .await?
@@ -1027,8 +1029,8 @@ pub async fn destroy_local_deployment(port: u16, deployment_name: &str, force: b
             })
         })?;
 
-    if !force {
-        return super::destroy::destroy_local_target(port, existing).await;
+    if !args.force {
+        return super::destroy::destroy_local_target(port, existing, args).await;
     }
 
     let action = alien_manager_api::types::DeleteDeploymentAction::Forget;
@@ -1530,6 +1532,62 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn local_destroy_forwards_erase_intent_to_the_manager() {
+        async fn deployment(
+            State(manager): State<SharedDestroyManager>,
+        ) -> Json<serde_json::Value> {
+            let page = destroy_manager_list(State(manager)).await.0;
+            Json(page["items"][1].clone())
+        }
+        async fn reject_after_recording(
+            State(manager): State<SharedDestroyManager>,
+            AxumPath(id): AxumPath<String>,
+            Json(body): Json<serde_json::Value>,
+        ) -> StatusCode {
+            manager.lock().unwrap().deleted.push((id, body));
+            // Stop at the mutation boundary; this test must not execute local teardown.
+            StatusCode::BAD_REQUEST
+        }
+        for erase_data in [false, true] {
+            let manager: SharedDestroyManager = Arc::default();
+            let app = Router::new()
+                .route("/v1/deployment-groups", get(destroy_manager_groups))
+                .route("/v1/deployments", get(destroy_manager_list))
+                .route("/v1/deployments/{id}", get(deployment))
+                .route("/v1/deployments/{id}/delete", post(reject_after_recording))
+                .with_state(manager.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let args = DestroyArgs {
+                name: "api".into(),
+                force: false,
+                erase_data,
+                platform: None,
+                token: None,
+                yes: true,
+            };
+            let error = destroy_local_deployment(port, &args)
+                .await
+                .expect_err("manager rejects the mutation");
+            assert!(
+                error
+                    .message
+                    .contains("Failed to request deployment deletion"),
+                "{error:?}"
+            );
+            assert_eq!(
+                manager.lock().unwrap().deleted,
+                vec![(
+                    "dep_1".into(),
+                    serde_json::json!({"action": if erase_data { "erase" } else { "retain" }})
+                )]
+            );
+            server.abort();
+        }
+    }
+
     /// Forced local deletion forgets the named record and waits until it is absent.
     /// An unknown deployment name is an error.
     #[tokio::test]
@@ -1544,7 +1602,15 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        destroy_local_deployment(port, "api", true)
+        let args = DestroyArgs {
+            name: "api".into(),
+            force: true,
+            erase_data: false,
+            platform: None,
+            token: None,
+            yes: true,
+        };
+        destroy_local_deployment(port, &args)
             .await
             .expect("the named deployment is deleted");
         {
@@ -1562,12 +1628,17 @@ mod tests {
         }
 
         assert!(
-            destroy_local_deployment(port, "api", true).await.is_err(),
+            destroy_local_deployment(port, &args).await.is_err(),
             "the remaining same-name deployment outside local-dev must never be deleted"
         );
         assert_eq!(manager.lock().unwrap().deleted.len(), 1);
 
-        let error = destroy_local_deployment(port, "missing", false)
+        let missing = DestroyArgs {
+            name: "missing".into(),
+            force: false,
+            ..args
+        };
+        let error = destroy_local_deployment(port, &missing)
             .await
             .expect_err("an unknown name is refused");
         assert!(

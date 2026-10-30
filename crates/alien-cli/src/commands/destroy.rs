@@ -467,6 +467,7 @@ async fn resolve_untracked_name(
 pub(crate) async fn destroy_local_target(
     port: u16,
     deployment: alien_manager_api::types::DeploymentResponse,
+    args: &DestroyArgs,
 ) -> Result<()> {
     let manager = ExecutionMode::Dev { port }
         .resolve_manager_metadata_only(&deployment.project_id, "local")
@@ -478,16 +479,8 @@ pub(crate) async fn destroy_local_target(
         workspace_id: deployment.workspace_id,
         api_key: String::new(),
     };
-    let args = DestroyArgs {
-        name: tracked.name.clone(),
-        platform: Some("local".to_string()),
-        token: None,
-        force: false,
-        erase_data: false,
-        yes: true,
-    };
     let steps = FixedSteps::new(&["Resolve deployment", "Resolve manager", "Delete resources"]);
-    destroy_tracked_deployment(&args, Platform::Local, &tracked, manager, steps).await
+    destroy_tracked_deployment(args, Platform::Local, &tracked, manager, steps).await
 }
 
 /// Delete a tracked deployment through its resolved manager.
