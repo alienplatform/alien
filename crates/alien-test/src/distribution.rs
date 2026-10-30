@@ -21,18 +21,20 @@ use alien_core::{
     },
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
-    ExternalBinding, ExternalBindings, GcpClientConfig, GcpCredentials, GcpImpersonationConfig,
-    GcpManagementConfig, KubernetesCertificateMode, KubernetesClusterOwnership,
-    KubernetesClusterSettings, KubernetesExposureSettings, KubernetesIngressRouteProfile,
-    KubernetesRouteProfile, KubernetesRouteProviderOptions, KubernetesSettings, ManagementConfig,
-    Platform, RuntimeMetadata, SetupConfigurationProfile, SetupManagement, Stack, StackSettings,
-    StackState, Worker, WorkerCode,
+    ExternalBinding, ExternalBindings, GcpClientConfig, GcpCredentials, GcpFederationAccess,
+    GcpFederationScope, GcpFederationSource, GcpManagementConfig, KubernetesCertificateMode,
+    KubernetesClusterOwnership, KubernetesClusterSettings, KubernetesExposureSettings,
+    KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
+    KubernetesSettings, ManagementConfig, Platform, RemoteBindings, RemoteStackManagement,
+    RuntimeMetadata, SetupConfigurationProfile, SetupManagement, Stack, StackSettings, StackState,
+    Worker, WorkerCode,
 };
 #[cfg(test)]
 use alien_core::{Container, ContainerCode, Kv, Queue, ResourceSpec, Storage, Vault};
-use alien_gcp_clients::{CloudKmsApi, GcpClientConfigExt, ModelGardenApi, ResourceManagerApi};
+use alien_gcp_clients::{CloudKmsApi, ModelGardenApi, ResourceManagerApi};
 use alien_manager::{auth::Subject, traits::CreateImportedDeploymentParams};
 use anyhow::Context;
+use hcl::{expr::Expression, structure::Structure};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::{fs, process::Command};
@@ -269,15 +271,12 @@ impl DistributionArtifactCleanup {
                     workdir = %workdir.path().display(),
                     "destroying Terraform setup artifacts"
                 );
-                let detach_script = workdir.path().join("detach-retained-keys.sh");
-                if detach_script.exists() {
-                    let mut detach = Command::new("sh");
-                    detach
-                        .current_dir(workdir.path())
-                        .arg("./detach-retained-keys.sh")
-                        .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes");
-                    apply_env(&mut detach, &env);
-                    run_command(detach, "detach retained Terraform keys").await?;
+                if let Err(error) = prepare_terraform_erasure(workdir.path(), &env).await {
+                    let workdir = workdir.keep();
+                    anyhow::bail!(
+                        "preparing Terraform setup artifacts for erasure failed: {error:#}. Terraform state retained at {}",
+                        workdir.display()
+                    );
                 }
                 for attempt in 1..=3 {
                     let mut cmd = Command::new("terraform");
@@ -729,9 +728,8 @@ async fn prepare_distribution(
     .await?;
 
     if registry_platform == Platform::Aws && config.aws_target.is_some() {
-        let tags = e2e::extract_ecr_image_tags(&pushed_stack);
-        if !tags.is_empty() {
-            crate::build_push::wait_for_ecr_replication(&config, &tags).await?;
+        for (repository, tags) in e2e::ecr_images_by_repository(&pushed_stack)? {
+            crate::build_push::wait_for_ecr_replication(&config, &repository, &tags).await?;
         }
     }
 
@@ -1385,7 +1383,7 @@ async fn run_cloudformation_aws(
             cloudformation_import_request(&stack_name, &target.region, &env, &prepared.dg_token)
                 .await?;
         let retained_resources = request.resources.clone();
-        let imported = import_stack(prepared, request).await?;
+        let imported = import_stack(prepared, request, None).await?;
         Ok((imported.deployment, retained_resources))
     }
     .await;
@@ -1519,7 +1517,7 @@ async fn run_cloudformation_k8s(
         let retained_resources = request.resources.clone();
         let base_platform = request.base_platform;
         let region = request.region.clone();
-        let imported = import_stack(prepared, request).await?;
+        let imported = import_stack(prepared, request, None).await?;
 
         let mut kubeconfig = Command::new("aws");
         kubeconfig.args([
@@ -1939,6 +1937,145 @@ fn stop_before_helm_for_terraform_handoff_debug(
     )
 }
 
+/// Everything before `terraform destroy`: detach retained keys, then let the setup data
+/// be erased. The caller keeps the Terraform state if this fails.
+async fn prepare_terraform_erasure(workdir: &Path, env: &[(String, String)]) -> anyhow::Result<()> {
+    let detach_script = workdir.join("detach-retained-keys.sh");
+    if detach_script.exists() {
+        let mut detach = Command::new("sh");
+        detach
+            .current_dir(workdir)
+            .arg("./detach-retained-keys.sh")
+            .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes");
+        apply_env(&mut detach, env);
+        run_command(detach, "detach retained Terraform keys").await?;
+    }
+    let erasable = lift_terraform_destroy_guards(workdir).await?;
+    if !erasable.is_empty() {
+        // `force_destroy` lives in state. Apply only the resources that need it:
+        // after a failed setup, a full apply would create what setup never did.
+        let mut list = Command::new("terraform");
+        list.current_dir(workdir).args(["state", "list"]);
+        apply_env(&mut list, env);
+        let output = list
+            .output()
+            .await
+            .context("Failed to run terraform state list")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "terraform state list failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let state = String::from_utf8(output.stdout)
+            .context("terraform state list printed invalid UTF-8")?;
+        let targets = erasable
+            .iter()
+            .filter(|address| state.lines().any(|line| line == address.as_str()))
+            .map(|address| format!("-target={address}"))
+            .collect::<Vec<_>>();
+        if !targets.is_empty() {
+            let mut apply = Command::new("terraform");
+            apply
+                .current_dir(workdir)
+                .args(["apply", "-auto-approve", "-input=false", "-lock-timeout=5m"])
+                .args(&targets);
+            apply_env(&mut apply, env);
+            run_command(apply, "terraform apply to allow erasing setup data").await?;
+        }
+    }
+    Ok(())
+}
+
+/// Setup protects the data resources it owns: they carry `prevent_destroy`, and buckets
+/// refuse to delete their objects. Runtime deletion hands them back to setup teardown, so
+/// a plain `terraform destroy` of a module that still holds them always fails. The e2e
+/// run created every one of them and must erase them, so it lifts both guards in its own
+/// copy of the module. Returns the addresses whose `force_destroy` was lifted: that one is
+/// recorded in state, so the caller applies those before destroying.
+async fn lift_terraform_destroy_guards(workdir: &Path) -> anyhow::Result<Vec<String>> {
+    let mut force_destroyed = Vec::new();
+    let mut entries = fs::read_dir(workdir)
+        .await
+        .context("Failed to list Terraform module")?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("tf") {
+            continue;
+        }
+        let module = fs::read_to_string(&path)
+            .await
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        if let Some(erasable) = without_destroy_guards(&module)
+            .with_context(|| format!("Failed to parse {}", path.display()))?
+        {
+            fs::write(&path, erasable.module)
+                .await
+                .with_context(|| format!("Failed to write {}", path.display()))?;
+            force_destroyed.extend(erasable.force_destroyed);
+        }
+    }
+    Ok(force_destroyed)
+}
+
+struct ErasableModule {
+    module: String,
+    /// `type.label` of resources whose `force_destroy` was lifted.
+    force_destroyed: Vec<String>,
+}
+
+/// `None` when the file has nothing to lift.
+fn without_destroy_guards(module: &str) -> anyhow::Result<Option<ErasableModule>> {
+    let mut body = hcl::parse(module)?;
+    let mut lifted = false;
+    let mut force_destroyed = Vec::new();
+    for structure in body.0.iter_mut() {
+        let Structure::Block(resource) = structure else {
+            continue;
+        };
+        if resource.identifier.as_str() != "resource" {
+            continue;
+        }
+        let address = resource
+            .labels
+            .iter()
+            .map(|label| label.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        for structure in resource.body.0.iter_mut() {
+            match structure {
+                Structure::Attribute(attribute)
+                    if attribute.key.as_str() == "force_destroy"
+                        && attribute.expr == Expression::Bool(false) =>
+                {
+                    attribute.expr = Expression::Bool(true);
+                    force_destroyed.push(address.clone());
+                    lifted = true;
+                }
+                Structure::Block(lifecycle) if lifecycle.identifier.as_str() == "lifecycle" => {
+                    for structure in lifecycle.body.0.iter_mut() {
+                        if let Structure::Attribute(attribute) = structure {
+                            if attribute.key.as_str() == "prevent_destroy"
+                                && attribute.expr == Expression::Bool(true)
+                            {
+                                attribute.expr = Expression::Bool(false);
+                                lifted = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if !lifted {
+        return Ok(None);
+    }
+    Ok(Some(ErasableModule {
+        module: hcl::to_string(&body)?,
+        force_destroyed,
+    }))
+}
+
 fn shell_quote_path(path: &Path) -> String {
     shell_quote(&path.to_string_lossy())
 }
@@ -1968,6 +2105,17 @@ async fn apply_terraform_and_import(
     let terraform_stack = terraform_stack_for_target(prepared, target, &stack_settings).await?;
     let has_remote_management =
         stack_contains_resource_type(&terraform_stack, "remote-stack-management");
+    let identity = TerraformDeploymentIdentity {
+        name: format!("e2e-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+        resource_prefix: crate::config::e2e_resource_prefix()?,
+    };
+    // GCP remote access is scoped to a deployment the manager allocated before
+    // setup. Reserve it with the same identity the module is applied with.
+    let reservation = if terraform_needs_gcp_federation(target, &terraform_stack) {
+        Some(reserve_terraform_deployment(prepared, target, &identity, &stack_settings).await?)
+    } else {
+        None
+    };
     let profile = if prepared.app == TestApp::AutomaticSetup {
         SetupConfigurationProfile::Standard
     } else {
@@ -1998,7 +2146,13 @@ async fn apply_terraform_and_import(
     }
 
     let env = terraform_env(&prepared.config, target.cloud_platform())?;
-    let tfvars = terraform_tfvars(prepared, target, kubernetes_namespace)?;
+    let tfvars = terraform_tfvars(
+        prepared,
+        target,
+        kubernetes_namespace,
+        &identity,
+        reservation.as_ref(),
+    )?;
     fs::write(
         workdir.path().join("terraform.tfvars.json"),
         serde_json::to_vec_pretty(&tfvars)?,
@@ -2026,8 +2180,13 @@ async fn apply_terraform_and_import(
             grant_terraform_shared_env_join_permission(&prepared.config, &outputs).await?;
         }
         if target.cloud_platform() == Platform::Gcp {
-            wait_for_gcp_management_permissions(&prepared.config, &outputs, has_remote_management)
-                .await?;
+            wait_for_gcp_management_permissions(
+                &prepared.config,
+                &outputs,
+                has_remote_management,
+                reservation.as_ref(),
+            )
+            .await?;
         }
         if target.cloud_platform() == Platform::Azure
             && has_remote_management
@@ -2039,10 +2198,21 @@ async fn apply_terraform_and_import(
                 "Skipping Azure management OIDC permission probe; local AKS run will validate the same management identity through in-cluster workload identity"
             );
         }
-        let request = terraform_import_request_from_outputs(&outputs, &prepared.dg_token)?;
+        let request = terraform_import_request_from_outputs(
+            &outputs,
+            &prepared.dg_token,
+            reservation.as_ref(),
+        )?;
         let base_platform = request.base_platform;
         let region = request.region.clone();
-        let imported = import_stack(prepared, request).await?;
+        let imported = import_stack(
+            prepared,
+            request,
+            reservation
+                .as_ref()
+                .map(|reservation| reservation.deployment_id.as_str()),
+        )
+        .await?;
         Ok::<_, anyhow::Error>((imported, outputs, base_platform, region))
     }
     .await;
@@ -2063,6 +2233,123 @@ async fn apply_terraform_and_import(
         }),
         Err(error) => Err(cleanup_after_setup_error(cleanup, error).await),
     }
+}
+
+/// Name and physical prefix a Terraform setup run is applied with.
+struct TerraformDeploymentIdentity {
+    name: String,
+    resource_prefix: String,
+}
+
+/// Deployment the manager reserved before Terraform setup created resources.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerraformReservation {
+    deployment_id: String,
+    deployment_name: String,
+    /// Setup lane the manager recorded; registration must report the same lane.
+    setup_target: String,
+    setup_fingerprint_version: u32,
+}
+
+/// Mirrors when the Terraform generator requires the GCP federation inputs:
+/// remote management or remote bindings on a GCP-backed target.
+fn terraform_needs_gcp_federation(target: alien_terraform::TerraformTarget, stack: &Stack) -> bool {
+    target.cloud_platform() == Platform::Gcp
+        && stack.resources().any(|(_, entry)| {
+            let resource_type = entry.config.resource_type();
+            resource_type == RemoteStackManagement::RESOURCE_TYPE
+                || resource_type == RemoteBindings::RESOURCE_TYPE
+        })
+}
+
+/// Reserve the deployment the same way an installer does before handing a
+/// setup package to the customer. The manager rejects GCP federation scoped
+/// to a deployment ID it did not allocate.
+async fn reserve_terraform_deployment(
+    prepared: &DistributionPrepared,
+    target: alien_terraform::TerraformTarget,
+    identity: &TerraformDeploymentIdentity,
+    stack_settings: &StackSettings,
+) -> anyhow::Result<TerraformReservation> {
+    let body = alien_manager_api::types::CreateDeploymentRequest {
+        name: identity.name.clone(),
+        platform: e2e::to_api_platform(target.deployment_platform()),
+        base_platform: target.base_platform().map(e2e::to_api_platform),
+        deployment_group_id: Some(prepared.group_id.clone()),
+        setup_handoff: Some(alien_manager_api::types::SetupHandoff::AwaitRegistration),
+        setup_method: Some("terraform".to_string()),
+        pinned_release_id: None,
+        stack_settings: Some(
+            serde_json::from_value(serde_json::to_value(stack_settings)?)
+                .context("Failed to convert Terraform stack settings for the API")?,
+        ),
+        environment_variables: None,
+        resource_prefix: Some(identity.resource_prefix.clone()),
+        input_values: Default::default(),
+    };
+    let response = prepared
+        .manager
+        .client()
+        .create_deployment()
+        .body(body)
+        .send()
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to reserve Terraform deployment: {error}"))?
+        .into_inner();
+    let deployment_id = response.deployment.id;
+
+    let record = prepared
+        .manager
+        .deployment_store()
+        .get_deployment(&Subject::system(), &deployment_id)
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to read reserved deployment: {error}"))?
+        .with_context(|| format!("Reserved deployment {deployment_id} not found"))?;
+    let setup_target = record
+        .setup_target
+        .with_context(|| format!("Reserved deployment {deployment_id} has no setup target"))?;
+    let setup_fingerprint_version = record.setup_fingerprint_version.with_context(|| {
+        format!("Reserved deployment {deployment_id} has no setup fingerprint version")
+    })?;
+    info!(%deployment_id, name = %identity.name, "Reserved Terraform deployment");
+
+    Ok(TerraformReservation {
+        deployment_id,
+        deployment_name: identity.name.clone(),
+        setup_target,
+        setup_fingerprint_version,
+    })
+}
+
+/// Deployment-scoped federation inputs. The module trusts exactly the
+/// management identity the manager will assert with; there is no fallback.
+fn insert_gcp_federation_tfvars(
+    vars: &mut serde_json::Map<String, Value>,
+    deployment_id: &str,
+    management_config: Option<ManagementConfig>,
+) -> anyhow::Result<()> {
+    let trust = match management_config {
+        Some(ManagementConfig::Gcp(config)) => config.federation_trust.context(
+            "GCP Terraform federation requires the manager's federation trust; set GOOGLE_MANAGEMENT_IDENTITY_EMAIL and GOOGLE_MANAGEMENT_IDENTITY_UNIQUE_ID",
+        )?,
+        Some(other) => anyhow::bail!("expected GCP management config, got {other:?}"),
+        None => anyhow::bail!(
+            "GCP Terraform federation requires a manager GCP management config; set GOOGLE_MANAGEMENT_IDENTITY_EMAIL and GOOGLE_MANAGEMENT_IDENTITY_UNIQUE_ID"
+        ),
+    };
+    vars.insert(
+        "deployment_id".to_string(),
+        Value::String(deployment_id.to_string()),
+    );
+    vars.insert(
+        "managing_oidc_issuer".to_string(),
+        Value::String(trust.issuer),
+    );
+    vars.insert(
+        "managing_oidc_subject".to_string(),
+        Value::String(trust.subject),
+    );
+    Ok(())
 }
 
 async fn terraform_stack_for_target(
@@ -2530,11 +2817,14 @@ fn sanitize_kubernetes_dns_label(value: &str) -> String {
     }
 }
 
+/// `reserved_deployment_id` names a deployment reserved before setup ran;
+/// registration must activate it rather than create another one.
 async fn import_stack(
     prepared: &DistributionPrepared,
     request: StackImportRequest,
+    reserved_deployment_id: Option<&str>,
 ) -> anyhow::Result<ImportedTestDeployment> {
-    if prepared.app == TestApp::AutomaticSetup {
+    if prepared.app == TestApp::AutomaticSetup && reserved_deployment_id.is_none() {
         // The dashboard creates this reservation before launching the package. The OSS test
         // fixture records the same approved intent immediately before the real artifact calls
         // the manager, so registration cannot accidentally pass by creating its own authority.
@@ -2588,6 +2878,13 @@ async fn import_stack(
 
     let response: StackImportResponse =
         serde_json::from_str(&body).context("Failed to parse StackImportResponse")?;
+    if let Some(reserved_deployment_id) = reserved_deployment_id {
+        anyhow::ensure!(
+            response.deployment_id == reserved_deployment_id,
+            "stack import registered deployment {} instead of reserved deployment {reserved_deployment_id}",
+            response.deployment_id,
+        );
+    }
     let dep = prepared
         .manager
         .client()
@@ -2920,6 +3217,7 @@ async fn grant_terraform_shared_env_join_permission(
 fn terraform_import_request_from_outputs(
     output: &Value,
     token: &str,
+    reservation: Option<&TerraformReservation>,
 ) -> anyhow::Result<StackImportRequest> {
     let platform: Platform = terraform_output_string(output, "deployment_platform")?
         .parse()
@@ -2950,10 +3248,34 @@ fn terraform_import_request_from_outputs(
     )?)?;
     let resources: Vec<ImportedResource> =
         serde_json::from_str(&terraform_output_string(output, "deployment_resources")?)?;
-    let setup_target = terraform_output_string(output, "deployment_setup_target")?;
+    let mut setup_target = terraform_output_string(output, "deployment_setup_target")?;
     let setup_fingerprint = terraform_output_string(output, "deployment_setup_fingerprint")?;
-    let setup_fingerprint_version =
+    let mut setup_fingerprint_version =
         terraform_output_u32(output, "deployment_setup_fingerprint_version")?;
+    // Registration activates a reservation by name, so a reserved run must
+    // register under the reserved name. Without a reservation the import
+    // creates its own deployment.
+    let deployment_name = match reservation {
+        Some(reservation) => {
+            // The harness renders without a registration provider, so the module
+            // emits an empty setup lane. A product package carries the lane of the
+            // reservation it was generated for; carry the reserved lane the same way.
+            let unregistered = setup_target.is_empty() && setup_fingerprint_version == 0;
+            let reserved_lane = setup_target == reservation.setup_target
+                && setup_fingerprint_version == reservation.setup_fingerprint_version;
+            anyhow::ensure!(
+                unregistered || reserved_lane,
+                "Terraform setup lane {setup_target:?} v{setup_fingerprint_version} does not match reservation {} lane {:?} v{}",
+                reservation.deployment_id,
+                reservation.setup_target,
+                reservation.setup_fingerprint_version,
+            );
+            setup_target = reservation.setup_target.clone();
+            setup_fingerprint_version = reservation.setup_fingerprint_version;
+            reservation.deployment_name.clone()
+        }
+        None => format!("terraform-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+    };
     // Emitted only when the stack declares deployer inputs; without it a live
     // `.enabled(input)` answer would fall back to the input's default at
     // import. Only true absence defaults — a present-but-malformed output
@@ -2966,9 +3288,12 @@ fn terraform_import_request_from_outputs(
     };
 
     Ok(StackImportRequest {
-        setup_import_format_version: 1,
+        setup_import_format_version: terraform_output_u32(
+            output,
+            "deployment_setup_import_format_version",
+        )?,
         deployment_group_token: token.to_string(),
-        deployment_name: format!("terraform-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+        deployment_name,
         resource_prefix,
         source_kind: Some(ImportSourceKind::Terraform),
         setup_metadata: None,
@@ -2994,13 +3319,15 @@ async fn terraform_output_json(workdir: &Path, env: &[(String, String)]) -> anyh
     serde_json::from_slice(&output.stdout).context("Failed to parse terraform output JSON")
 }
 
-/// Terraform can finish before GCP IAM bindings are visible.
-/// Probe the same two-hop chain the manager uses before deployment starts:
-/// management credentials -> configured manager SA -> imported stack management SA.
+/// Terraform can finish before GCP IAM bindings and the deployment's identity
+/// pool are visible. Probe through the same federation the manager uses before
+/// deployment starts: management identity assertion -> deployment-owned pool
+/// -> imported stack management service account.
 async fn wait_for_gcp_management_permissions(
     config: &TestConfig,
     outputs: &Value,
     has_remote_management: bool,
+    reservation: Option<&TerraformReservation>,
 ) -> anyhow::Result<()> {
     if !has_remote_management {
         info!(
@@ -3008,57 +3335,30 @@ async fn wait_for_gcp_management_permissions(
         );
         return Ok(());
     }
-
-    let management_config: Option<ManagementConfig> = serde_json::from_str(
-        &terraform_output_string(outputs, "deployment_management_config")?,
-    )?;
-    let Some(management_config) = management_config else {
-        info!(
-            "Skipping GCP management permission probe because Terraform output has no management config"
-        );
-        return Ok(());
-    };
-    let management_service_account_email = match management_config {
-        ManagementConfig::Gcp(config) => config.service_account_email,
-        other => {
-            anyhow::bail!("expected GCP management config, got {other:?}");
-        }
-    };
+    let reservation =
+        reservation.context("GCP remote management requires a reserved deployment")?;
     let target = config.gcp_target.as_ref().context("GCP target missing")?;
-    let management_source = config.gcp_mgmt.as_ref();
-    if management_service_account_email.is_empty() {
-        warn!(
-            "Skipping GCP management permission probe because no management service account is configured"
-        );
-        return Ok(());
-    }
     let resources: Vec<ImportedResource> =
         serde_json::from_str(&terraform_output_string(outputs, "deployment_resources")?)?;
     let remote_management = terraform_import_data::<GcpRemoteStackManagementImportData>(
         &resources,
         "remote-stack-management",
     )?;
-
-    let Some(management_source) = management_source else {
-        warn!("Skipping GCP management permission probe because GCP management config is missing");
-        return Ok(());
-    };
-    let Some(credentials_json) = management_source.credentials_json.clone() else {
-        warn!(
-            "Skipping GCP management permission probe because GCP management credentials are missing"
-        );
-        return Ok(());
-    };
-
-    let base_config = GcpClientConfig {
-        project_id: management_source.project_id.clone(),
-        region: management_source.region.clone(),
-        credentials: GcpCredentials::ServiceAccountKey {
-            json: credentials_json,
-        },
-        service_overrides: None,
-        project_number: None,
-    };
+    GcpFederationScope {
+        deployment_id: reservation.deployment_id.clone(),
+    }
+    .validate_access(
+        &remote_management.federation,
+        &RemoteStackManagement::RESOURCE_TYPE,
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "Terraform federation is not scoped to reserved deployment {}: {error}",
+            reservation.deployment_id
+        )
+    })?;
+    let probe_config = gcp_federated_management_config(config, &remote_management.federation)?;
+    let service_account_email = &remote_management.federation.service_account_email;
     let http = reqwest::Client::new();
 
     let timeout = Duration::from_secs(300);
@@ -3066,86 +3366,23 @@ async fn wait_for_gcp_management_permissions(
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let management_config = match base_config
-            .impersonate(GcpImpersonationConfig {
-                service_account_email: management_service_account_email.clone(),
-                target_project_id: Some(target.project_id.clone()),
-                target_region: Some(target.region.clone()),
-                ..GcpImpersonationConfig::default()
-            })
-            .await
-        {
-            Ok(config) => config,
-            Err(error) if gcp_management_permission_probe_should_retry(&error) => {
-                if started.elapsed() >= timeout {
-                    anyhow::bail!(
-                        "GCP management service account impersonation did not propagate for {management_service_account_email} within {timeout:?}: {error}"
-                    );
-                }
-                warn!(
-                    service_account_email = %management_service_account_email,
-                    attempt,
-                    %error,
-                    "GCP management service account impersonation is not ready yet"
-                );
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                continue;
-            }
-            Err(error) => {
-                anyhow::bail!("GCP management service account impersonation probe failed: {error}");
-            }
-        };
-        let impersonated_config = match management_config
-            .impersonate(GcpImpersonationConfig {
-                service_account_email: remote_management.service_account_email.clone(),
-                target_project_id: Some(target.project_id.clone()),
-                target_region: Some(target.region.clone()),
-                ..GcpImpersonationConfig::default()
-            })
-            .await
-        {
-            Ok(config) => config,
-            Err(error) if gcp_management_permission_probe_should_retry(&error) => {
-                if started.elapsed() >= timeout {
-                    anyhow::bail!(
-                        "GCP remote stack management service account impersonation did not propagate for {} within {timeout:?}: {error}",
-                        remote_management.service_account_email
-                    );
-                }
-                warn!(
-                    service_account_email = %remote_management.service_account_email,
-                    management_service_account_email = %management_service_account_email,
-                    attempt,
-                    %error,
-                    "GCP remote stack management service account impersonation is not ready yet"
-                );
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                continue;
-            }
-            Err(error) => {
-                anyhow::bail!(
-                    "GCP remote stack management service account impersonation probe failed: {error}"
-                );
-            }
-        };
-
         // Probe the narrowest concrete permission this package requested.
         // A Key-only management identity intentionally has no project-wide
         // Resource Manager read access.
         let result = if let Some(key) =
             optional_terraform_import_data::<GcpKeyImportData>(&resources, "key")?
         {
-            alien_gcp_clients::CloudKmsClient::new(http.clone(), impersonated_config.clone())
+            alien_gcp_clients::CloudKmsClient::new(http.clone(), probe_config.clone())
                 .get_crypto_key(&key.crypto_key_name)
                 .await
                 .map(|_| ())
         } else if optional_terraform_import_data::<GcpAiImportData>(&resources, "ai")?.is_some() {
-            alien_gcp_clients::ModelGardenClient::new(http.clone(), impersonated_config.clone())
+            alien_gcp_clients::ModelGardenClient::new(http.clone(), probe_config.clone())
                 .list_publisher_models("google")
                 .await
                 .map(|_| ())
         } else {
-            alien_gcp_clients::ResourceManagerClient::new(http.clone(), impersonated_config.clone())
+            alien_gcp_clients::ResourceManagerClient::new(http.clone(), probe_config.clone())
                 .get_project_metadata(target.project_id.clone())
                 .await
                 .map(|_| ())
@@ -3154,38 +3391,92 @@ async fn wait_for_gcp_management_permissions(
         match result {
             Ok(_) => {
                 info!(
-                    service_account_email = %remote_management.service_account_email,
+                    %service_account_email,
                     attempts = attempt,
-                    "GCP management IAM permissions are ready"
+                    "GCP management federation and IAM permissions are ready"
                 );
                 return Ok(());
             }
             Err(error) if gcp_management_permission_probe_should_retry(&error) => {
                 if started.elapsed() >= timeout {
                     anyhow::bail!(
-                        "GCP management IAM permissions did not propagate for {} within {timeout:?}: {error}",
-                        remote_management.service_account_email
+                        "GCP management federation or IAM permissions did not propagate for {service_account_email} within {timeout:?}: {error}"
                     );
                 }
                 warn!(
-                    service_account_email = %remote_management.service_account_email,
+                    %service_account_email,
                     attempt,
                     %error,
-                    "GCP management IAM permissions are not ready yet"
+                    "GCP management federation or IAM permissions are not ready yet"
                 );
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
             Err(error) => {
-                anyhow::bail!("GCP management IAM permission probe failed: {error}");
+                anyhow::bail!("GCP management permission probe failed: {error}");
             }
         }
     }
 }
 
+/// Credentials the manager derives for a federated GCP deployment: the
+/// management key asserts as the linked management identity, and the
+/// deployment-owned pool exchanges that assertion for the setup-created
+/// service account. Every identity input is required.
+fn gcp_federated_management_config(
+    config: &TestConfig,
+    access: &GcpFederationAccess,
+) -> anyhow::Result<GcpClientConfig> {
+    let target = config.gcp_target.as_ref().context("GCP target missing")?;
+    let management = config
+        .gcp_mgmt
+        .as_ref()
+        .context("GCP management config is required to probe deployment federation")?;
+    let credentials_json = management.credentials_json.clone().context(
+        "GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY is required to probe deployment federation",
+    )?;
+    let service_account_email = management
+        .management_identity_email
+        .clone()
+        .context("GOOGLE_MANAGEMENT_IDENTITY_EMAIL is required to probe deployment federation")?;
+    let service_account_unique_id = management.management_identity_unique_id.clone().context(
+        "GOOGLE_MANAGEMENT_IDENTITY_UNIQUE_ID is required to probe deployment federation",
+    )?;
+
+    Ok(GcpClientConfig {
+        project_id: target.project_id.clone(),
+        region: target.region.clone(),
+        project_number: Some(access.project_number.clone()),
+        service_overrides: None,
+        credentials: GcpCredentials::Federated {
+            access: Box::new(access.clone()),
+            source: Box::new(GcpFederationSource::GoogleServiceAccount {
+                source: Box::new(GcpClientConfig {
+                    project_id: management.project_id.clone(),
+                    region: management.region.clone(),
+                    credentials: GcpCredentials::ServiceAccountKey {
+                        json: credentials_json,
+                    },
+                    service_overrides: None,
+                    project_number: None,
+                }),
+                service_account_email,
+                service_account_unique_id,
+            }),
+            lifetime_seconds: None,
+        },
+    })
+}
+
 fn gcp_management_permission_probe_should_retry(error: &alien_gcp_clients::Error) -> bool {
+    // Google STS rejects assertions with HTTP_RESPONSE_ERROR until a newly
+    // created identity pool and provider propagate. The wait stays bounded.
     matches!(
         error.code.as_str(),
-        "REMOTE_ACCESS_DENIED" | "RATE_LIMIT_EXCEEDED" | "REMOTE_SERVICE_UNAVAILABLE" | "TIMEOUT"
+        "REMOTE_ACCESS_DENIED"
+            | "HTTP_RESPONSE_ERROR"
+            | "RATE_LIMIT_EXCEEDED"
+            | "REMOTE_SERVICE_UNAVAILABLE"
+            | "TIMEOUT"
     )
 }
 
@@ -3523,13 +3814,12 @@ fn terraform_tfvars(
     prepared: &DistributionPrepared,
     target: alien_terraform::TerraformTarget,
     kubernetes_namespace: Option<&str>,
+    identity: &TerraformDeploymentIdentity,
+    reservation: Option<&TerraformReservation>,
 ) -> anyhow::Result<Value> {
     let mut vars = serde_json::Map::new();
-    let resource_prefix = crate::config::e2e_resource_prefix()?;
-    vars.insert(
-        "name".to_string(),
-        Value::String(format!("e2e-{}", &uuid::Uuid::new_v4().to_string()[..8])),
-    );
+    let resource_prefix = &identity.resource_prefix;
+    vars.insert("name".to_string(), Value::String(identity.name.clone()));
     vars.insert(
         "resource_prefix".to_string(),
         Value::String(resource_prefix.clone()),
@@ -3600,6 +3890,13 @@ fn terraform_tfvars(
                     "managing_service_account_email".to_string(),
                     Value::String(email),
                 );
+            }
+            if let Some(reservation) = reservation {
+                insert_gcp_federation_tfvars(
+                    &mut vars,
+                    &reservation.deployment_id,
+                    prepared.manager.management_config(),
+                )?;
             }
         }
         Platform::Azure => {
@@ -3965,6 +4262,108 @@ mod tests {
     use alien_core::permissions::{ManagementPermissions, PermissionProfile};
     use alien_core::ResourceLifecycle;
 
+    /// Normalizes the guards back, so the comparison shows that lifting them changed
+    /// nothing else in the module.
+    fn guards_restored(module: &str) -> hcl::Body {
+        let mut body = hcl::parse(module).expect("module should parse");
+        for structure in body.0.iter_mut() {
+            let Structure::Block(resource) = structure else {
+                continue;
+            };
+            for structure in resource.body.0.iter_mut() {
+                match structure {
+                    Structure::Attribute(attribute)
+                        if attribute.key.as_str() == "force_destroy" =>
+                    {
+                        attribute.expr = Expression::Bool(false);
+                    }
+                    Structure::Block(lifecycle) if lifecycle.identifier.as_str() == "lifecycle" => {
+                        for structure in lifecycle.body.0.iter_mut() {
+                            if let Structure::Attribute(attribute) = structure {
+                                if attribute.key.as_str() == "prevent_destroy" {
+                                    attribute.expr = Expression::Bool(true);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        body
+    }
+
+    #[test]
+    fn e2e_teardown_lifts_only_the_destroy_guards_of_setup_data() {
+        let stack = Stack::new("erasable".to_string())
+            .add(
+                Storage::new("objects".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Kv::new("state".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        for target in [
+            alien_terraform::TerraformTarget::Aws,
+            alien_terraform::TerraformTarget::Gcp,
+        ] {
+            let registry = alien_terraform::TfRegistry::built_in();
+            let module = alien_terraform::generate_terraform_module(
+                &stack,
+                target,
+                alien_terraform::TerraformOptions {
+                    display_name: None,
+                    registry: &registry,
+                    stack_settings: StackSettings::default(),
+                    registration: None,
+                    helm_install: None,
+                    supported_aws_regions: Vec::new(),
+                },
+            )
+            .expect("Terraform generation should succeed");
+            let mut lifted_buckets = Vec::new();
+            for (path, contents) in module.iter().filter(|(path, _)| path.ends_with(".tf")) {
+                let protected = contents.contains("prevent_destroy = true")
+                    || contents.contains("force_destroy = false");
+                let Some(ErasableModule {
+                    module: erasable,
+                    force_destroyed,
+                }) = without_destroy_guards(contents).expect("module parses")
+                else {
+                    assert!(!protected, "{target:?} {path} kept a destroy guard");
+                    continue;
+                };
+                assert!(
+                    !erasable.contains("prevent_destroy = true")
+                        && !erasable.contains("force_destroy = false"),
+                    "{target:?} {path} still refuses destroy:\n{erasable}"
+                );
+                assert_eq!(
+                    force_destroyed.len(),
+                    erasable.matches("force_destroy = true").count(),
+                    "{target:?} {path}"
+                );
+                lifted_buckets.extend(force_destroyed);
+                assert_eq!(
+                    guards_restored(&erasable),
+                    hcl::parse(contents).expect("module parses"),
+                    "{target:?} {path}: only the guards may change"
+                );
+            }
+            let bucket = match target {
+                alien_terraform::TerraformTarget::Aws => "aws_s3_bucket.objects",
+                _ => "google_storage_bucket.objects",
+            };
+            assert_eq!(
+                lifted_buckets,
+                vec![bucket.to_string()],
+                "{target:?}: only the bucket needs an apply before destroy"
+            );
+        }
+    }
+
     fn empty_test_config() -> TestConfig {
         TestConfig {
             aws_mgmt: None,
@@ -4328,24 +4727,120 @@ mod tests {
                 }
             }),
             false,
+            None,
         )
         .await
         .expect("direct-target GCP setup should not require management config");
     }
 
+    fn gcp_reservation() -> TerraformReservation {
+        TerraformReservation {
+            deployment_id: "dep_reserved".to_string(),
+            deployment_name: "e2e-reserved".to_string(),
+            setup_target: "gcp".to_string(),
+            setup_fingerprint_version: 1,
+        }
+    }
+
+    fn unregistered_gcp_terraform_outputs() -> Value {
+        let output = |value: Value| serde_json::json!({ "value": value });
+        serde_json::json!({
+            "deployment_platform": output("gcp".into()),
+            "deployment_resource_prefix": output("e2e-01".into()),
+            "deployment_region": output("us-central1".into()),
+            "deployment_management_config": output("null".into()),
+            "deployment_stack_settings": output(
+                serde_json::to_string(&StackSettings::default()).unwrap().into()
+            ),
+            "deployment_resources": output("[]".into()),
+            "deployment_setup_target": output("".into()),
+            "deployment_setup_fingerprint": output("".into()),
+            "deployment_setup_fingerprint_version": output(0.into()),
+            "deployment_setup_import_format_version": output(2.into()),
+        })
+    }
+
+    #[test]
+    fn reserved_terraform_import_registers_the_reserved_deployment() {
+        let reservation = gcp_reservation();
+        let request = terraform_import_request_from_outputs(
+            &unregistered_gcp_terraform_outputs(),
+            "dg-token",
+            Some(&reservation),
+        )
+        .expect("reserved import request should build");
+        assert_eq!(request.setup_import_format_version, 2);
+        assert_eq!(request.deployment_name, "e2e-reserved");
+        assert_eq!(request.setup_target, "gcp");
+        assert_eq!(request.setup_fingerprint_version, 1);
+        assert_eq!(request.platform, Platform::Gcp);
+        assert_eq!(request.resource_prefix, "e2e-01");
+
+        let unreserved = terraform_import_request_from_outputs(
+            &unregistered_gcp_terraform_outputs(),
+            "dg-token",
+            None,
+        )
+        .expect("unreserved import request should build");
+        assert!(unreserved.deployment_name.starts_with("terraform-"));
+        assert_eq!(unreserved.setup_target, "");
+        assert_eq!(unreserved.setup_fingerprint_version, 0);
+
+        let mut other_lane = unregistered_gcp_terraform_outputs();
+        other_lane["deployment_setup_target"]["value"] = "gke".into();
+        other_lane["deployment_setup_fingerprint_version"]["value"] = 1.into();
+        let error =
+            terraform_import_request_from_outputs(&other_lane, "dg-token", Some(&reservation))
+                .expect_err("a different registered lane must not activate the reservation");
+        assert!(error.to_string().contains("dep_reserved"), "{error}");
+    }
+
+    #[test]
+    fn gcp_federation_tfvars_use_the_reservation_and_manager_trust() {
+        let management = |federation_trust| {
+            Some(ManagementConfig::Gcp(GcpManagementConfig {
+                service_account_email: "manager@mgmt.iam.gserviceaccount.com".to_string(),
+                federation_trust,
+            }))
+        };
+        let mut vars = serde_json::Map::new();
+        insert_gcp_federation_tfvars(
+            &mut vars,
+            "dep_reserved",
+            management(Some(alien_core::GcpFederationTrust {
+                issuer: "https://accounts.google.com".to_string(),
+                subject: "123456789012345678901".to_string(),
+            })),
+        )
+        .expect("federation inputs should come from the manager trust");
+        assert_eq!(
+            Value::Object(vars),
+            serde_json::json!({
+                "deployment_id": "dep_reserved",
+                "managing_oidc_issuer": "https://accounts.google.com",
+                "managing_oidc_subject": "123456789012345678901",
+            })
+        );
+
+        for missing in [management(None), None] {
+            let mut vars = serde_json::Map::new();
+            insert_gcp_federation_tfvars(&mut vars, "dep_reserved", missing)
+                .expect_err("missing federation trust must fail instead of using dummy inputs");
+            assert!(vars.is_empty());
+        }
+    }
+
     #[tokio::test]
-    async fn gcp_management_probe_skips_null_management_output() {
-        wait_for_gcp_management_permissions(
-            &empty_test_config(),
-            &serde_json::json!({
-                "deployment_management_config": {
-                    "value": "null"
-                }
-            }),
+    async fn gcp_management_probe_requires_reserved_deployment() {
+        let error = wait_for_gcp_management_permissions(
+            &test_config_with_platform(Platform::Gcp),
+            &serde_json::json!({}),
             true,
+            None,
         )
         .await
-        .expect("null Terraform management config should not require a GCP management probe");
+        .expect_err("remote management without a reservation must fail");
+        assert!(error.to_string().contains("reserved deployment"), "{error}");
     }
 
     #[tokio::test]

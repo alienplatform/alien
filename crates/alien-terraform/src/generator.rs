@@ -439,6 +439,9 @@ fn generate_terraform_module_internal(
     if matches!(platform, alien_core::Platform::Gcp) {
         dedupe_gcp_support_resources(&mut per_resource)?;
     }
+    if matches!(platform, alien_core::Platform::Azure) {
+        dedupe_azure_role_assignments(&mut per_resource)?;
+    }
     apply_resource_dependencies(stack, &mut per_resource);
     // EKS uses IAM roles for the cluster and IRSA, not Lambda execution.
     // Making its subnets depend on those roles creates a Terraform cycle.
@@ -1112,6 +1115,78 @@ fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>)
     Ok(())
 }
 
+/// Azure accepts one role assignment per scope, role and principal, whatever it is named:
+/// a second one fails the apply with `RoleAssignmentExists`. Resources render their grants
+/// independently, so grants at a shared scope (for example `storage/heartbeat`'s Reader on
+/// the storage account, requested by every Storage) repeat with different names. Keep the
+/// first, which keeps the address it has always had, and let it exist while any of the
+/// resources that requested it is enabled.
+fn dedupe_azure_role_assignments(per_resource: &mut IndexMap<String, TfFragment>) -> Result<()> {
+    let mut counts_by_grant: IndexMap<String, Option<Vec<Expression>>> = IndexMap::new();
+    for resource in per_resource
+        .values()
+        .flat_map(|fragment| &fragment.resource_blocks)
+    {
+        let Some(grant_key) = azure_role_assignment_grant_key(resource) else {
+            continue;
+        };
+        let count = resource_count(resource);
+        let counts = counts_by_grant
+            .entry(grant_key)
+            .or_insert_with(|| count.clone().map(|count| vec![count]));
+        match (count, counts.as_mut()) {
+            (None, _) => *counts = None,
+            (Some(count), Some(existing)) if !existing.contains(&count) => existing.push(count),
+            _ => {}
+        }
+    }
+
+    let mut emitted = HashSet::new();
+    for fragment in per_resource.values_mut() {
+        let mut retained = Vec::with_capacity(fragment.resource_blocks.len());
+        for mut resource in std::mem::take(&mut fragment.resource_blocks) {
+            if let Some(grant_key) = azure_role_assignment_grant_key(&resource) {
+                if !emitted.insert(grant_key.clone()) {
+                    continue;
+                }
+                let counts = counts_by_grant.get(&grant_key).ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "missing collected count expressions for Azure role assignment '{grant_key}'"
+                        ),
+                    })
+                })?;
+                set_resource_count(&mut resource, combined_count_expression(counts)?);
+            }
+            retained.push(resource);
+        }
+        fragment.resource_blocks = retained;
+    }
+    Ok(())
+}
+
+/// Everything that makes two assignments the same grant: the whole body except the
+/// assignment's own name and its count and dependencies.
+fn azure_role_assignment_grant_key(resource: &Block) -> Option<String> {
+    if resource.identifier.as_str() != "resource"
+        || resource.labels.first()?.as_str() != "azurerm_role_assignment"
+    {
+        return None;
+    }
+    let grant_body = resource
+        .body
+        .iter()
+        .filter(|structure| {
+            !matches!(
+                structure,
+                Structure::Attribute(attribute)
+                    if matches!(attribute.key.as_str(), "name" | "count" | "depends_on")
+            )
+        })
+        .collect::<Vec<_>>();
+    Some(format!("{grant_body:?}"))
+}
+
 fn merge_gcp_custom_role_permissions(existing: &mut Block, incoming: &Block) -> Result<()> {
     // Several permission sets can share a cloud role ID. Their human labels may differ,
     // while the role identity and creation settings must agree. Keep the first label and
@@ -1238,7 +1313,7 @@ fn combined_count_expression(counts: &Option<Vec<Expression>>) -> Result<Option<
     };
     if counts.is_empty() {
         return Err(AlienError::new(ErrorData::GenericError {
-            message: "cannot combine an empty set of GCP IAM count expressions".to_string(),
+            message: "cannot combine an empty set of count expressions".to_string(),
         }));
     }
     if counts.len() == 1 {

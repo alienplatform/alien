@@ -20,6 +20,7 @@ alien-build = { workspace = true }
 alien-preflights = { workspace = true }
 alien-cloudformation = { workspace = true }
 alien-terraform = { workspace = true }
+hcl-rs = { workspace = true }
 alien-helm = { workspace = true }
 alien-permissions = { workspace = true }
 alien-aws-clients = { workspace = true }

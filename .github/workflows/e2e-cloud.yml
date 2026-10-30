@@ -2198,3 +2198,31 @@ jobs:
             --scope "$SUBSCRIPTION_SCOPE" \
             --query "[?description!=null].[id,description]" \
             -o tsv 2>/dev/null || true)
+
+          # Custom roles are subscription-level objects: deleting a slot's resource
+          # groups leaves the roles setup created for them, and the next run in the
+          # slot then fails to create them again. Only the slot's own names match.
+          echo "Deleting E2E slot custom role definitions..."
+          while IFS=$'\t' read -r role_id role_name; do
+            [ -n "$role_id" ] || continue
+            case "$role_name" in
+              "e2e-${ALIEN_E2E_SLOT}-"*) ;;
+              *) continue ;;
+            esac
+            echo "Deleting custom role: $role_name ($role_id)"
+            while IFS= read -r assignment_id; do
+              [ -n "$assignment_id" ] || continue
+              az role assignment delete --ids "$assignment_id" || true
+            done < <(az role assignment list --all \
+              --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" \
+              --role "$role_id" \
+              --query "[].id" \
+              -o tsv 2>/dev/null || true)
+            az role definition delete \
+              --name "$role_id" \
+              --scope "$SUBSCRIPTION_SCOPE" || true
+          done < <(az role definition list \
+            --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" \
+            --custom-role-only true \
+            --query "[].[name,roleName]" \
+            -o tsv 2>/dev/null || true)
