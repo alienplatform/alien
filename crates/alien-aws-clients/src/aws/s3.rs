@@ -1913,16 +1913,66 @@ pub struct HeadObjectOutput {
 // -------------------------------------------------------------------------
 
 /// S3 bucket notification configuration for event-driven triggers.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct NotificationConfiguration {
     /// Lambda function configurations for S3 event notifications
     #[serde(default, rename = "CloudFunctionConfiguration")]
     pub lambda_function_configurations: Vec<LambdaFunctionConfiguration>,
+    /// SQS destinations, including configurations owned by other tools.
+    #[serde(default, rename = "QueueConfiguration")]
+    pub queue_configurations: Vec<QueueConfiguration>,
+    /// SNS destinations, including configurations owned by other tools.
+    #[serde(default, rename = "TopicConfiguration")]
+    pub topic_configurations: Vec<TopicConfiguration>,
+    /// Presence enables EventBridge; absence leaves it disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_bridge_configuration: Option<EventBridgeConfiguration>,
+}
+
+/// Enables S3 event delivery to EventBridge when present in the document.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct EventBridgeConfiguration {}
+
+/// An SQS destination and its event/key filters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct QueueConfiguration {
+    /// Optional configuration identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Destination queue ARN.
+    #[serde(rename = "Queue")]
+    pub queue_arn: String,
+    /// S3 event names.
+    #[serde(rename = "Event")]
+    pub events: Vec<String>,
+    /// Optional literal prefix/suffix filter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<NotificationFilter>,
+}
+
+/// An SNS destination and its event/key filters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TopicConfiguration {
+    /// Optional configuration identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Destination topic ARN.
+    #[serde(rename = "Topic")]
+    pub topic_arn: String,
+    /// S3 event names.
+    #[serde(rename = "Event")]
+    pub events: Vec<String>,
+    /// Optional literal prefix/suffix filter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<NotificationFilter>,
 }
 
 /// Configuration for invoking a Lambda function on S3 events.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct LambdaFunctionConfiguration {
     /// Optional identifier for this configuration
@@ -1940,15 +1990,16 @@ pub struct LambdaFunctionConfiguration {
 }
 
 /// Filter for S3 notification events based on object key.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct NotificationFilter {
     /// Key filter with prefix/suffix rules
+    #[serde(rename = "S3Key")]
     pub key: S3KeyFilter,
 }
 
 /// S3 key-based notification filter rules.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct S3KeyFilter {
     /// Filter rules (prefix, suffix)
@@ -1957,7 +2008,7 @@ pub struct S3KeyFilter {
 }
 
 /// A single filter rule for S3 key matching.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct FilterRule {
     /// Filter name: "prefix" or "suffix"
