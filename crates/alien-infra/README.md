@@ -74,6 +74,18 @@ cargo test -p alien-infra --all-features --lib core::executor_tests::deletion_te
 cargo test -p alien-infra --all-features --lib service_account::aws::tests
 ```
 
+For a live AWS check, install an automatic-setup Terraform package with a worker
+and a Live storage resource. Keep the original restricted installer session
+available for both apply and destroy. Verify the worker can use its storage and
+record the execution role's ownership tags before requesting runtime erase.
+After runtime cleanup completes, require `GetRole` to return `NoSuchEntity` for
+the execution role **before** running `terraform destroy`. Then require destroy
+to succeed in the original installer session, Terraform state to be empty, and
+an independent inventory to find no resources with that deployment prefix.
+Successful destroy or empty Terraform state alone does not prove runtime cleanup:
+Terraform does not track roles created by the runtime controller. Record any
+privileged repair separately; a repaired run does not pass this check.
+
 ## Azure storage lifecycle in direct setup
 
 The shared storage-account controller writes one aggregate policy during explicit
