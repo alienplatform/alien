@@ -43,6 +43,37 @@ Use `SingleControllerExecutor` for controller tests. Every controller needs: cre
 
 The executor triggers updates by comparing resource configs via `resource_eq()`. Values owned by management after setup should live in management config or controller state, not in Frozen resource config.
 
+## AWS service-account teardown
+
+With automatic setup, runtime cleanup removes service-account roles created by
+the controller after their dependent workloads have stopped. A retained data
+resource's permission grant does not keep its grantee role alive by itself;
+actual resource dependencies still control deletion order. Setup-owned resources
+remain for package teardown.
+
+The controller records role creation in `runtimeCreated`. For older checkpoints
+without that marker, it reads the role and requires all three creation tags:
+`managed-by=runtime`, `deployment=<resource prefix>`, and `resource=<resource ID>`.
+A matching role name alone is insufficient. Roles without this ownership proof
+are preserved with their identifiers, and runtime cleanup completes. Older
+untagged roles can therefore remain after cleanup; this compatibility path does
+not adopt or retag them. Explicit privileged setup teardown is unchanged.
+
+Cleanup detaches managed policies and deletes inline policies before deleting
+the role. Unexpected IAM errors retain the role identifiers and use the
+executor's normal failure and retry path. When a failed cleanup is resumed from
+an older checkpoint, the controller checks live ownership again before further
+IAM writes. Already-missing roles or policies do not block cleanup.
+
+Run the executor deletion tests and service-account controller tests to verify
+workload ordering, setup-owned role preservation, older checkpoints, and retries
+after partial policy cleanup:
+
+```sh
+cargo test -p alien-infra --all-features --lib core::executor_tests::deletion_tests
+cargo test -p alien-infra --all-features --lib service_account::aws::tests
+```
+
 ## Azure storage lifecycle in direct setup
 
 The shared storage-account controller writes one aggregate policy during explicit
