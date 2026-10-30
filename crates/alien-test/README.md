@@ -54,3 +54,42 @@ Tests use `TestContext` with two roles:
 ## Core Principle
 
 E2E tests simulate real user flows. If a test needs manual cloud infrastructure setup, that signals the product is missing functionality.
+
+## AWS setup permission comparisons
+
+Use a restricted installer to compare setup permissions before and after a
+change. An installer that can rerun an existing stack has not necessarily been
+qualified for a fresh install: resource creation, tagging, policy attachment,
+and deletion can require additional grants.
+
+1. Generate an unchanged baseline package from the base revision. Record the
+   revision, binary hashes, template or package, installer policy, target
+   account, region, and resource prefix. Use a small application with a Frozen
+   bucket and a Live Worker that reads and writes that bucket.
+2. Install the baseline with the restricted identity. For each access denial,
+   save the full cloud error and add only the required action on the fixture's
+   resources. Inspect the underlying denied action: CloudFormation's
+   `UnauthorizedTaggingOperation` can wrap either `iam:CreateRole` or
+   `iam:TagRole`. Record action and resource-scope additions separately.
+3. After qualifying the policy, repeat from an absent stack and require
+   `CREATE_COMPLETE`. A successful update after a failed create is useful
+   diagnostic evidence, but does not complete the fresh-install check.
+4. Rerun setup with the same baseline template, then publish a new application
+   release. Require the deployment to reach Running and exercise a bucket write
+   and read through the Worker. Preserve the registration identity during the
+   rerun. Record any runtime failure separately from setup permission failures.
+5. Install the changed package using the same qualified policy, changing only
+   fixture names where necessary. Record every additional action or wider
+   resource scope it requires. For permissions-boundary changes, inspect the
+   installed boundary and management policies and test management restrictions
+   using the installed management identity.
+6. Delete each fixture through its setup tool with the same restricted
+   installer. Record any cleanup grants separately and verify the roles,
+   managed policies (including the boundary), and application resources are
+   gone. Keep shared test infrastructure intact.
+
+Repeat the comparison for CloudFormation, Terraform, and CLI setup wherever
+that mode uses installer credentials. Report each mode separately; template
+validation, policy simulation, and an automatic setup test do not establish
+fresh-install or runtime-update success in another mode. Keep credentials,
+registration tokens, and raw deployment evidence out of version control.
