@@ -85,6 +85,7 @@ fn stack_state_with_resource(
                 versioning: false,
                 lifecycle_rules: Vec::new(),
                 cors_allowed_origins: Vec::new(),
+                notifications: Vec::new(),
                 encryption_key: None,
             }))
             .maybe_lifecycle(lifecycle)
@@ -161,6 +162,7 @@ fn storage() -> Storage {
         versioning: false,
         lifecycle_rules: Vec::new(),
         cors_allowed_origins: Vec::new(),
+        notifications: Vec::new(),
         encryption_key: None,
     }
 }

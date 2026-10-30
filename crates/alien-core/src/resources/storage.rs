@@ -1,11 +1,12 @@
-use crate::error::{ErrorData, Result};
-use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
-use crate::ResourceType;
+use crate::{
+    error::{ErrorData, Result},
+    resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef},
+    ResourceType,
+};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
-use std::any::Any;
-use std::fmt::Debug;
+use std::{any::Any, fmt::Debug};
 
 /// Defines a rule for managing the lifecycle of objects within a storage bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,6 +18,52 @@ pub struct LifecycleRule {
     /// Optional prefix to filter objects the rule applies to. If None, applies to all objects.
     #[serde(default)]
     pub prefix: Option<String>,
+}
+
+/// Object events that can be delivered to a queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum StorageNotificationEvent {
+    /// An object was created or overwritten, including a completed multipart upload.
+    Created,
+}
+
+fn default_notification_events() -> Vec<StorageNotificationEvent> {
+    vec![StorageNotificationEvent::Created]
+}
+
+/// Delivers matching object events to a queue in the same stack.
+/// Overlapping rules each deliver a message; consumers must tolerate duplicates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StorageNotification {
+    /// Target Queue. It must have the same lifecycle as the Storage.
+    pub queue: ResourceRef,
+    /// Events to deliver. Defaults to object creation; v1 supports only `created`.
+    #[serde(default = "default_notification_events")]
+    #[builder(default = default_notification_events())]
+    pub events: Vec<StorageNotificationEvent>,
+    /// Literal object key prefix, non-empty and at most 512 UTF-8 bytes when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    /// Literal object key suffix, non-empty and at most 512 UTF-8 bytes when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suffix: Option<String>,
+}
+
+impl StorageNotification {
+    /// Match literal prefixes and suffixes; wildcard characters have no special meaning.
+    pub fn matches_key(&self, key: &str) -> bool {
+        self.prefix
+            .as_ref()
+            .is_none_or(|prefix| key.starts_with(prefix))
+            && self
+                .suffix
+                .as_ref()
+                .is_none_or(|suffix| key.ends_with(suffix))
+    }
 }
 
 /// Represents an object storage bucket.
@@ -57,6 +104,13 @@ pub struct Storage {
     #[serde(default)]
     #[builder(default)]
     pub cors_allowed_origins: Vec<String>,
+
+    /// Object notification rules delivered into queues (at most 10).
+    /// Omitted when empty to preserve existing serialized configurations and setup digests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    #[cfg_attr(feature = "openapi", schema(max_items = 10))]
+    pub notifications: Vec<StorageNotification>,
 
     /// Customer-managed Key used by the provider's native storage encryption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -121,7 +175,13 @@ impl ResourceDefinition for Storage {
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {
-        self.encryption_key.iter().cloned().collect()
+        let mut dependencies: Vec<_> = self.encryption_key.iter().cloned().collect();
+        for notification in &self.notifications {
+            if !dependencies.contains(&notification.queue) {
+                dependencies.push(notification.queue.clone());
+            }
+        }
+        dependencies
     }
 
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {
@@ -186,5 +246,80 @@ mod tests {
             .build();
 
         assert_eq!(storage.get_dependencies(), vec![key]);
+    }
+
+    #[test]
+    fn notifications_preserve_existing_serialization_and_deduplicate_dependencies() {
+        let original: Storage = serde_json::from_value(serde_json::json!({
+            "id": "objects", "publicRead": false, "versioning": false,
+            "lifecycleRules": [], "corsAllowedOrigins": []
+        }))
+        .unwrap();
+        assert!(original.notifications.is_empty());
+        assert_eq!(
+            serde_json::to_value(&original).unwrap(),
+            serde_json::json!({
+                "id": "objects", "publicRead": false, "versioning": false,
+                "lifecycleRules": [], "corsAllowedOrigins": []
+            })
+        );
+        let key = ResourceRef::new(crate::Key::RESOURCE_TYPE, "key");
+        let queue = ResourceRef::new(crate::Queue::RESOURCE_TYPE, "work");
+        let rule = StorageNotification::builder().queue(queue.clone()).build();
+        let storage = Storage::new("objects".to_string())
+            .encryption_key(key.clone())
+            .notifications(vec![rule.clone(), rule])
+            .build();
+        assert_eq!(storage.get_dependencies(), vec![key, queue]);
+        let encoded = serde_json::to_value(&storage).unwrap();
+        assert_eq!(
+            encoded["notifications"][0]["events"],
+            serde_json::json!(["created"])
+        );
+        assert_eq!(serde_json::from_value::<Storage>(encoded).unwrap(), storage);
+    }
+
+    #[test]
+    fn notification_filters_are_literal_case_sensitive_and_combined() {
+        let rule = StorageNotification::builder()
+            .queue(ResourceRef::new(crate::Queue::RESOURCE_TYPE, "work"))
+            .prefix("in/*/é/".to_string())
+            .suffix(".json".to_string())
+            .build();
+        assert!(rule.matches_key("in/*/é/object.json"));
+        for key in [
+            "in/a/é/object.json",
+            "in/*/e/object.json",
+            "in/*/é/object.JSON",
+            "other/object.json",
+            "in/*/é/object.json.tmp",
+        ] {
+            assert!(!rule.matches_key(key), "{key}");
+        }
+        let mut unfiltered = rule.clone();
+        unfiltered.prefix = None;
+        unfiltered.suffix = None;
+        assert!(unfiltered.matches_key("anything"));
+        unfiltered.suffix = Some(".json".to_string());
+        assert!(unfiltered.matches_key("any/path.json"));
+        assert!(!unfiltered.matches_key("any/path.txt"));
+        unfiltered.prefix = Some("same".to_string());
+        unfiltered.suffix = Some("same".to_string());
+        assert!(unfiltered.matches_key("same"));
+    }
+
+    #[test]
+    fn notification_events_default_to_created_and_reject_unknown_events() {
+        let rule: StorageNotification = serde_json::from_value(serde_json::json!({
+            "queue": { "type": "queue", "id": "work" }
+        }))
+        .unwrap();
+        assert_eq!(rule.events, vec![StorageNotificationEvent::Created]);
+        assert!(
+            serde_json::from_value::<StorageNotification>(serde_json::json!({
+                "queue": { "type": "queue", "id": "work" }, "events": ["deleted"]
+            }))
+            .is_err()
+        );
     }
 }
