@@ -544,7 +544,6 @@ impl AwsRemoteStackManagementController {
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(role_arn), Some(_role_name)) = (&self.role_arn, &self.role_name) {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
-                aws_permissions_boundary_arn: self.permissions_boundary_arn.clone(),
                 management_resource_id: role_arn.clone(),
                 access_configuration: role_arn.clone(),
                 legacy_remote_bindings_access: None,

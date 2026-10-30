@@ -47,7 +47,6 @@ fn stack_state(role_arn: &str) -> StackState {
             .status(ResourceStatus::Running)
             .config(Resource::new(config))
             .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
-                aws_permissions_boundary_arn: None,
                 management_resource_id: role_arn.to_string(),
                 access_configuration: role_arn.to_string(),
                 legacy_remote_bindings_access: None,

@@ -190,7 +190,6 @@ impl TestRemoteStackManagementController {
         match (&self.management_resource_id, &self.access_configuration) {
             (Some(management_resource_id), Some(access_configuration)) => {
                 Some(ResourceOutputs::new(RemoteStackManagementOutputs {
-                    aws_permissions_boundary_arn: None,
                     management_resource_id: management_resource_id.clone(),
                     access_configuration: access_configuration.clone(),
                     legacy_remote_bindings_access: None,

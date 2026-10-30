@@ -760,7 +760,6 @@ mod tests {
                 .status(ResourceStatus::Running)
                 .config(Resource::new(remote_management))
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
-                    aws_permissions_boundary_arn: None,
                     management_resource_id: "deployment@target-project.iam.gserviceaccount.com"
                         .to_string(),
                     access_configuration: serde_json::to_string(&access).unwrap(),
@@ -1113,7 +1112,6 @@ mod tests {
                 .status(ResourceStatus::Running)
                 .config(Resource::new(remote_management))
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
-                    aws_permissions_boundary_arn: None,
                     management_resource_id: AWS_TARGET_ROLE.to_string(),
                     access_configuration: AWS_TARGET_ROLE.to_string(),
                     legacy_remote_bindings_access: None,

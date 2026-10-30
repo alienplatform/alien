@@ -12177,7 +12177,6 @@ logCollector:
             .with_updates(|state| {
                 state.status = ResourceStatus::Running;
                 state.outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
-                    aws_permissions_boundary_arn: None,
                     management_resource_id: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/manager".to_string(),
                     access_configuration: serde_json::json!({
                         "uamiClientId": "11111111-2222-3333-4444-555555555555",

@@ -57,10 +57,6 @@ pub struct RemoteStackManagementOutputs {
     /// For Azure: JSON containing the target managed identity client ID and tenant ID
     pub access_configuration: String,
 
-    /// Setup-owned AWS permissions boundary. Absent for older setups and other providers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub aws_permissions_boundary_arn: Option<String>,
-
     /// Read-only compatibility for deployments imported before Remote Bindings became a
     /// first-class resource. New controllers never serialize this field.
     #[serde(default, rename = "remoteBindingsAccess", skip_serializing)]
@@ -165,10 +161,11 @@ mod tests {
     use super::RemoteStackManagementOutputs;
 
     #[test]
-    fn legacy_remote_bindings_output_remains_readable_but_is_not_reemitted() {
+    fn retired_outputs_remain_readable_but_are_not_reemitted() {
         let outputs: RemoteStackManagementOutputs = serde_json::from_value(serde_json::json!({
             "managementResourceId": "management",
             "accessConfiguration": "management-access",
+            "awsPermissionsBoundaryArn": "arn:aws:iam::123456789012:policy/test-boundary",
             "remoteBindingsAccess": {
                 "resourceId": "legacy-bindings",
                 "accessConfiguration": "legacy-access"
@@ -182,12 +179,13 @@ mod tests {
                 .map(|access| access.resource_id.as_str()),
             Some("legacy-bindings")
         );
-        assert!(
-            serde_json::to_value(outputs)
-                .expect("serialize")
-                .get("remoteBindingsAccess")
-                .is_none(),
-            "new state must not keep writing the legacy ownership slot"
+        assert_eq!(
+            serde_json::to_value(outputs).expect("serialize"),
+            serde_json::json!({
+                "managementResourceId": "management",
+                "accessConfiguration": "management-access"
+            }),
+            "new state must not keep writing retired output fields"
         );
     }
 }

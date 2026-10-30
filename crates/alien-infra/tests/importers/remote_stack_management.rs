@@ -100,7 +100,6 @@ fn aws_boundary_survives_import_and_controller_restore() {
             .unwrap()
             .downcast_ref::<RemoteStackManagementOutputs>()
             .unwrap();
-        assert_eq!(outputs.aws_permissions_boundary_arn.as_deref(), boundary);
         let controller =
             alien_infra::deserialize_controller(internal_state(&state).clone()).unwrap();
         let restored = controller.get_outputs().unwrap();
@@ -115,6 +114,7 @@ fn aws_boundary_survives_import_and_controller_restore() {
             json!(boundary)
         );
         let restored_state = alien_infra::serialize_controller(controller.as_ref()).unwrap();
+        assert_eq!(restored_state["permissionsBoundaryArn"], json!(boundary));
         assert_eq!(
             restored_state["permissionsBoundaryDocument"],
             boundary
