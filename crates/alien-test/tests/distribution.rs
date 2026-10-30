@@ -877,10 +877,12 @@ macro_rules! distribution_test_context {
             }
 
             async fn teardown(self) {
-                self.ctx
-                    .cleanup()
-                    .await
-                    .expect("distribution cleanup must reach a safe setup handoff");
+                let cleanup = if self.ctx.app == TestApp::StorageNotifications {
+                    common::notification_cleanup::cleanup(self.ctx).await
+                } else {
+                    self.ctx.cleanup().await
+                };
+                cleanup.expect("distribution cleanup must reach a safe setup handoff");
             }
         }
     };

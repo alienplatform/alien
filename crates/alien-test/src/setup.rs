@@ -563,7 +563,8 @@ pub async fn teardown_target(
 
 /// Build target config with direct credentials (no scoping).
 /// Used for teardown where we need full permissions.
-fn build_direct_target_config(
+/// Build target-account credentials for setup, teardown, and independent E2E observations.
+pub fn build_direct_target_config(
     config: &TestConfig,
     platform: Platform,
 ) -> anyhow::Result<ClientConfig> {

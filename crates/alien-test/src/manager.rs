@@ -154,16 +154,11 @@ impl TestManager {
             .is_some();
         let ngrok_tunnel = if has_ngrok_token {
             info!(%port, "Starting ephemeral ngrok tunnel for command callbacks");
-            match crate::ngrok::start_tunnel(port).await {
-                Ok(tunnel) => {
-                    info!(tunnel_url = %tunnel.url, "Ngrok tunnel ready");
-                    Some(tunnel)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to start ngrok tunnel; command callbacks will use localhost");
-                    None
-                }
-            }
+            let tunnel = crate::ngrok::start_tunnel(port)
+                .await
+                .map_err(|error| format!("Required callback tunnel failed: {error:#}"))?;
+            info!(tunnel_url = %tunnel.url, "Ngrok tunnel ready");
+            Some(tunnel)
         } else {
             None
         };
