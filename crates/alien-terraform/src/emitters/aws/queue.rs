@@ -44,8 +44,13 @@ impl TfEmitter for AwsQueueEmitter {
         );
 
         let mut fragment = TfFragment::default().with_resource(q);
-        if alien_core::storage_notifications::queue_receives_storage_notifications(ctx.stack, ctx.resource_id) {
-            fragment.resource_blocks.push(super::storage_notifications::queue_policy(label));
+        if alien_core::storage_notifications::queue_receives_storage_notifications(
+            ctx.stack,
+            ctx.resource_id,
+        ) {
+            fragment
+                .resource_blocks
+                .push(super::storage_notifications::queue_policy(label));
         }
         if ctx.stack.management().profile().is_some_and(|profile| {
             profile.0.get(ctx.resource_id).is_some_and(|grants| {

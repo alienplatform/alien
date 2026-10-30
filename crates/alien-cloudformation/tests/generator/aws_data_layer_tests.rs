@@ -1070,18 +1070,32 @@ fn aws_storage_notifications_are_valid_with_shared_queue_and_literal_filters() {
         RegistrationMode::OutputsFallback,
         "Storage EventBridge delivery with native bucket configuration",
     );
-
 }
 
 #[test]
 fn aws_storage_notifications_follow_deployer_enablement() {
-    let storage = Storage::new("files".into()).notifications(vec![
-        StorageNotification::builder().queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs")).build(),
-    ]).build();
+    let storage = Storage::new("files".into())
+        .notifications(vec![StorageNotification::builder()
+            .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs"))
+            .build()])
+        .build();
     let stack = Stack::new("gated-notifications".into())
-        .inputs(vec![super::helpers::gate_input("deliveryEnabled", "Enable delivery", "Create the bucket and queue")])
-        .add_enabled_when(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen, "deliveryEnabled")
+        .inputs(vec![super::helpers::gate_input(
+            "deliveryEnabled",
+            "Enable delivery",
+            "Create the bucket and queue",
+        )])
+        .add_enabled_when(
+            Queue::new("jobs".into()).build(),
+            ResourceLifecycle::Frozen,
+            "deliveryEnabled",
+        )
         .add_enabled_when(storage, ResourceLifecycle::Frozen, "deliveryEnabled")
         .build();
-    render_built_ins(&stack, StackSettings::default(), RegistrationMode::OutputsFallback, "Gated storage notifications");
+    render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "Gated storage notifications",
+    );
 }
