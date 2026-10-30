@@ -19,6 +19,87 @@ async fn read_batches(client: &Client, url: &str) -> Vec<Value> {
     response.json().await.unwrap()
 }
 
+/// Probes written while waiting for a rule change to take effect. They are not part of
+/// any cohort and are ignored by its assertions.
+fn is_settle_probe(key: &str) -> bool {
+    key.rsplit('/')
+        .next()
+        .is_some_and(|name| name.starts_with("settle-"))
+}
+
+async fn write_objects(client: &Client, url: &str, writes: &[Value]) {
+    let response = client
+        .post(format!("{url}/objects"))
+        .json(writes)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "{}",
+        response.text().await.unwrap()
+    );
+    let result: Value = response.json().await.unwrap();
+    assert_eq!(result["written"], writes.len());
+}
+
+fn delivered(batches: &[Value], key: &str) -> bool {
+    batches.iter().any(|batch| {
+        batch["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| record["event"]["objectKey"] == key)
+    })
+}
+
+/// Providers apply notification changes asynchronously; S3 kept routing a replaced filter
+/// for several minutes in qualification. Wait until a probe under the new prefix arrives
+/// while one under the old prefix, written in the same round, does not, so the cohort
+/// that follows judges the changed rule rather than propagation.
+async fn wait_until_rule_change_applies(client: &Client, url: &str, new: &str, old: &str) {
+    let started = Instant::now();
+    for round in 0.. {
+        assert!(
+            started.elapsed() < Duration::from_secs(600),
+            "the changed notification rule did not take effect within 10 minutes"
+        );
+        let (fresh, stale) = (
+            format!("{new}settle-{round}.json"),
+            format!("{old}settle-{round}.json"),
+        );
+        write_objects(
+            client,
+            url,
+            &[
+                json!({"storage":"objects","key":fresh,"content":"payload"}),
+                json!({"storage":"objects","key":stale,"content":"payload"}),
+            ],
+        )
+        .await;
+        let probe_started = Instant::now();
+        let mut fresh_at = None;
+        while probe_started.elapsed() < Duration::from_secs(90) {
+            let batches = read_batches(client, url).await;
+            if delivered(&batches, &stale) {
+                break;
+            }
+            if delivered(&batches, &fresh) {
+                // Give the old rule's delivery the same chance before trusting the round.
+                let at = *fresh_at.get_or_insert_with(Instant::now);
+                if at.elapsed() >= Duration::from_secs(30) {
+                    info!(
+                        elapsed_seconds = started.elapsed().as_secs_f64(),
+                        round, "Changed notification rule took effect"
+                    );
+                    return;
+                }
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+    }
+}
+
 /// Verify canonical payloads, both filters, cross-bucket coexistence, and actual batching.
 /// Every invocation is recorded separately, so a wrong route or payload cannot hide behind
 /// a key-indexed projection. Cloud delivery is at least once: duplicates remain visible in
@@ -74,6 +155,9 @@ async fn check_cohort(deployment: &TestDeployment, phase: &str, prefix: &str) {
         .timeout(Duration::from_secs(60))
         .build()
         .unwrap();
+    if !phase.is_empty() {
+        wait_until_rule_change_applies(&client, url, prefix, "in/").await;
+    }
     let previous = read_batches(&client, url).await;
     assert_eq!(
         previous.is_empty(),
@@ -83,7 +167,10 @@ async fn check_cohort(deployment: &TestDeployment, phase: &str, prefix: &str) {
     let mut expected = BTreeSet::new();
     for batch in &previous {
         for record in batch["events"].as_array().unwrap() {
-            expected.insert(record["event"]["objectKey"].as_str().unwrap().to_string());
+            let key = record["event"]["objectKey"].as_str().unwrap();
+            if !is_settle_probe(key) {
+                expected.insert(key.to_string());
+            }
         }
     }
     if !phase.is_empty() {
@@ -112,19 +199,7 @@ async fn check_cohort(deployment: &TestDeployment, phase: &str, prefix: &str) {
     if !phase.is_empty() {
         writes.push(json!({"storage":"objects","key":"in/removed-rule.json","content":"excluded"}));
     }
-    let response = client
-        .post(format!("{url}/objects"))
-        .json(&writes)
-        .send()
-        .await
-        .unwrap();
-    assert!(
-        response.status().is_success(),
-        "{}",
-        response.text().await.unwrap()
-    );
-    let result: Value = response.json().await.unwrap();
-    assert_eq!(result["written"], writes.len());
+    write_objects(&client, url, &writes).await;
     let deadline = Instant::now() + Duration::from_secs(180);
     let mut complete_at = None;
     loop {
@@ -137,11 +212,16 @@ async fn check_cohort(deployment: &TestDeployment, phase: &str, prefix: &str) {
             assert!(!batch["source"].as_str().unwrap().is_empty());
             let events = batch["events"].as_array().unwrap();
             assert!(!events.is_empty() && events.len() <= 10);
-            batched |= events.len() > 1
-                && events.iter().any(|record| {
-                    !previous_keys.contains(record["event"]["objectKey"].as_str().unwrap())
-                });
+            let cohort: Vec<&str> = events
+                .iter()
+                .map(|record| record["event"]["objectKey"].as_str().unwrap())
+                .filter(|key| !is_settle_probe(key))
+                .collect();
+            batched |= cohort.len() > 1 && cohort.iter().any(|key| !previous_keys.contains(*key));
             for record in events {
+                if is_settle_probe(record["event"]["objectKey"].as_str().unwrap()) {
+                    continue;
+                }
                 assert!(!record["messageId"].as_str().unwrap().is_empty());
                 assert!(!record["deliveryId"].as_str().unwrap().is_empty());
                 let event = &record["event"];
