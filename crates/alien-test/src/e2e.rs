@@ -169,6 +169,9 @@ pub enum TestApp {
     AutomaticSetup,
     /// Two notifying buckets and a batched Worker recording every delivery.
     StorageNotifications,
+    /// A Live sandbox built from source and a Worker that opens a session in it and runs a
+    /// command (`tests/e2e/test-apps/sandbox-session`).
+    SandboxSession,
 }
 
 impl std::fmt::Display for TestApp {
@@ -185,6 +188,7 @@ impl std::fmt::Display for TestApp {
             TestApp::ByoAi => write!(f, "byo-ai"),
             TestApp::AutomaticSetup => write!(f, "automatic-setup"),
             TestApp::StorageNotifications => write!(f, "storage-notifications"),
+            TestApp::SandboxSession => write!(f, "sandbox-session"),
         }
     }
 }
@@ -411,6 +415,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::ByoAi => "test-apps/byo-ai",
         TestApp::AutomaticSetup => "test-apps/automatic-setup",
         TestApp::StorageNotifications => "test-apps/storage-notifications",
+        TestApp::SandboxSession => "test-apps/sandbox-session",
     }
 }
 
@@ -430,7 +435,8 @@ fn deployment_environment_variables(
         | TestApp::RuntimeLessMixed
         | TestApp::EnabledDemo
         | TestApp::AutomaticSetup
-        | TestApp::StorageNotifications => None,
+        | TestApp::StorageNotifications
+        | TestApp::SandboxSession => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {

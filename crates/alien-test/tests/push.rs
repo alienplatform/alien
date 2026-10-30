@@ -49,6 +49,26 @@ async fn push_aws_comprehensive_rust(ctx: &mut AwsPushRust) {
 }
 
 e2e_test_context!(
+    AwsPushSandboxSession,
+    Platform::Aws,
+    DeploymentModel::Push,
+    TestApp::SandboxSession
+);
+
+/// A source-built Live sandbox set up directly: a session runs a command, and the image-build
+/// bundle lives in the deployment's own bucket.
+#[test_context(AwsPushSandboxSession)]
+#[tokio::test]
+async fn push_aws_sandbox_session(ctx: &mut AwsPushSandboxSession) {
+    common::sandbox::check_session_runs_a_command(&ctx.ctx)
+        .await
+        .expect("a sandbox session runs a command");
+    common::sandbox::check_bundle_in_deployment_bucket(&ctx.ctx)
+        .await
+        .expect("the bundle lives in the deployment's own bucket");
+}
+
+e2e_test_context!(
     AwsPushTypeScript,
     Platform::Aws,
     DeploymentModel::Push,

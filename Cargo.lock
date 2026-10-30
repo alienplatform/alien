@@ -1444,6 +1444,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zip 2.4.2",
 ]
 
 [[package]]
