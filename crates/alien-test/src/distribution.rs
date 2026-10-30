@@ -2202,9 +2202,11 @@ async fn apply_terraform_and_import(
                 "Skipping Azure management OIDC permission probe; local AKS run will validate the same management identity through in-cluster workload identity"
             );
         }
+        let name = tfvars["name"].as_str().context("Terraform deployment name missing")?;
         let request = terraform_import_request_from_outputs(
             &outputs,
             &prepared.dg_token,
+            name,
             reservation.as_ref(),
         )?;
         let base_platform = request.base_platform;
@@ -3225,6 +3227,7 @@ async fn grant_terraform_shared_env_join_permission(
 fn terraform_import_request_from_outputs(
     output: &Value,
     token: &str,
+    name: &str,
     reservation: Option<&TerraformReservation>,
 ) -> anyhow::Result<StackImportRequest> {
     let platform: Platform = terraform_output_string(output, "deployment_platform")?
@@ -3282,7 +3285,7 @@ fn terraform_import_request_from_outputs(
             setup_fingerprint_version = reservation.setup_fingerprint_version;
             reservation.deployment_name.clone()
         }
-        None => format!("terraform-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+        None => name.to_string(),
     };
     // Emitted only when the stack declares deployer inputs; without it a live
     // `.enabled(input)` answer would fall back to the input's default at
@@ -4774,6 +4777,7 @@ mod tests {
         let request = terraform_import_request_from_outputs(
             &unregistered_gcp_terraform_outputs(),
             "dg-token",
+            "e2e-reserved",
             Some(&reservation),
         )
         .expect("reserved import request should build");
@@ -4787,19 +4791,24 @@ mod tests {
         let unreserved = terraform_import_request_from_outputs(
             &unregistered_gcp_terraform_outputs(),
             "dg-token",
+            "e2e-applied",
             None,
         )
         .expect("unreserved import request should build");
-        assert!(unreserved.deployment_name.starts_with("terraform-"));
+        assert_eq!(unreserved.deployment_name, "e2e-applied");
         assert_eq!(unreserved.setup_target, "");
         assert_eq!(unreserved.setup_fingerprint_version, 0);
 
         let mut other_lane = unregistered_gcp_terraform_outputs();
         other_lane["deployment_setup_target"]["value"] = "gke".into();
         other_lane["deployment_setup_fingerprint_version"]["value"] = 1.into();
-        let error =
-            terraform_import_request_from_outputs(&other_lane, "dg-token", Some(&reservation))
-                .expect_err("a different registered lane must not activate the reservation");
+        let error = terraform_import_request_from_outputs(
+            &other_lane,
+            "dg-token",
+            "e2e-reserved",
+            Some(&reservation),
+        )
+        .expect_err("a different registered lane must not activate the reservation");
         assert!(error.to_string().contains("dep_reserved"), "{error}");
     }
 
