@@ -473,10 +473,6 @@ mod tests {
         let context = context();
         let policy = aws_permissions_boundary(&context, &[]).unwrap();
         assert!(policy.to_string().len() <= MANAGED_POLICY_LIMIT);
-        eprintln!(
-            "Name-scoped runtime catalog boundary: {} characters",
-            policy.to_string().len()
-        );
         let context = context.with_resource_name(format!("{}-example", "s".repeat(40)));
         let generator = AwsRuntimePermissionsGenerator::new();
         for id in list_permission_set_ids()
@@ -717,10 +713,6 @@ mod tests {
         };
         let boundary = render(context()).unwrap();
         assert!(boundary.to_string().len() <= MANAGED_POLICY_LIMIT);
-        eprintln!(
-            "Combined boundary at 40-character prefix: {} characters",
-            boundary.to_string().len()
-        );
         for id in [
             "key/availability",
             "key/native-storage",
@@ -776,16 +768,20 @@ mod tests {
     }
 
     #[test]
-    fn oversized_boundary_fails_with_actionable_error() {
-        let error = aws_permissions_boundary(
-            &context(),
-            &[custom_statement(format!(
-                "arn:aws:s3:::{}/*",
-                "x".repeat(MANAGED_POLICY_LIMIT)
-            ))],
-        )
-        .unwrap_err();
-        assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
+    fn oversized_direct_and_profile_grants_fail_with_actionable_error() {
+        let resource = format!("arn:aws:s3:::{}/*", "x".repeat(MANAGED_POLICY_LIMIT));
+        let stack = Stack::new("test".to_string())
+            .permission("one", inline_profile(&resource))
+            .build();
+        for result in [
+            aws_permissions_boundary(&context(), &[custom_statement(resource)]),
+            aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context())),
+        ] {
+            let error = result.unwrap_err();
+            assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
+            assert!(!error.retryable);
+            assert!(error.to_string().contains("Reduce custom runtime permissions"));
+        }
     }
 
     fn inline_profile(resource: &str) -> alien_core::PermissionProfile {
@@ -1013,39 +1009,6 @@ mod tests {
     }
 
     #[test]
-    fn implicit_resource_context_failures_are_not_hidden_by_the_stack_binding() {
-        let mut profile = inline_profile("arn:aws:s3:::${stackPrefix}-*/*");
-        let PermissionSetReference::Inline(set) = &mut profile.0["*"][0] else {
-            unreachable!()
-        };
-        set.id = "storage/custom-read".to_string();
-        let stack = Stack::new("test".to_string())
-            .permission("reader", profile)
-            .add(
-                alien_core::Storage::new("uploads".to_string()).build(),
-                alien_core::ResourceLifecycle::Frozen,
-            )
-            .build();
-        let error = aws_stack_permissions_boundary(&stack, &context(), |_, scope| {
-            if scope == "*" {
-                Ok(context())
-            } else {
-                Err(AlienError::new(ErrorData::VariableNotFound {
-                    variable: "importedBucketName".to_string(),
-                }))
-            }
-        })
-        .unwrap_err();
-        assert_eq!(error.code, "VARIABLE_NOT_FOUND");
-        assert!(error.to_string().contains("importedBucketName"));
-        // A resolver that supplies no physical name must fail during interpolation too.
-        let error =
-            aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context())).unwrap_err();
-        assert_eq!(error.code, "VARIABLE_NOT_FOUND");
-        assert!(error.to_string().contains("resourceName"));
-    }
-
-    #[test]
     fn stack_boundary_preserves_inline_overrides_and_deduplicates_shared_grants() {
         let mut profile = inline_profile("arn:aws:s3:::custom-override/*");
         let PermissionSetReference::Inline(set) = &mut profile.0["*"][0] else {
@@ -1073,31 +1036,59 @@ mod tests {
     }
 
     #[test]
-    fn stack_boundary_propagates_resolution_compilation_and_size_failures() {
-        let stack = Stack::new("test".to_string())
-            .permission("one", inline_profile("${missingVariable}"))
-            .build();
-        let error = aws_stack_permissions_boundary(&stack, &context(), |_, _| {
-            Err(AlienError::new(ErrorData::VariableNotFound {
-                variable: "actualResourceName".to_string(),
-            }))
-        })
-        .unwrap_err();
-        assert_eq!(error.code, "VARIABLE_NOT_FOUND");
-        assert!(error.to_string().contains("actualResourceName"));
-        let error =
-            aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context())).unwrap_err();
-        assert_eq!(error.code, "VARIABLE_NOT_FOUND");
-        assert!(error.to_string().contains("missingVariable"));
-        let stack = Stack::new("test".to_string())
-            .permission("one", inline_profile(&"x".repeat(MANAGED_POLICY_LIMIT)))
-            .build();
-        assert_eq!(
-            aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context()))
-                .unwrap_err()
-                .code,
-            "PERMISSIONS_BOUNDARY_TOO_LARGE"
-        );
+    fn stack_boundary_propagates_context_failures_for_each_grant_source() {
+        for source in ["global", "explicit-resource", "implicit-resource"] {
+            let mut profile = inline_profile(if source == "global" {
+                "${missingVariable}"
+            } else {
+                "arn:aws:s3:::${stackPrefix}-*/*"
+            });
+            if source == "explicit-resource" {
+                let sets = profile.0.shift_remove("*").unwrap();
+                profile.0.insert("uploads".to_string(), sets);
+            } else if source == "implicit-resource" {
+                let PermissionSetReference::Inline(set) = &mut profile.0["*"][0] else {
+                    unreachable!()
+                };
+                set.id = "storage/custom-read".to_string();
+            }
+            let stack = Stack::new("test".to_string())
+                .permission("reader", profile)
+                .add(
+                    alien_core::Storage::new("uploads".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .build();
+            for resolver_fails in [true, false] {
+                let mut resolved = Vec::new();
+                let error = aws_stack_permissions_boundary(&stack, &context(), |_, scope| {
+                    resolved.push(scope.to_string());
+                    if resolver_fails && (source == "global" || scope == "uploads") {
+                        Err(AlienError::new(ErrorData::VariableNotFound {
+                            variable: "actualResourceName".to_string(),
+                        }))
+                    } else {
+                        Ok(context())
+                    }
+                })
+                .unwrap_err();
+                let missing = if resolver_fails {
+                    "actualResourceName"
+                } else if source == "global" {
+                    "missingVariable"
+                } else {
+                    "resourceName"
+                };
+                assert_eq!(error.code, "VARIABLE_NOT_FOUND", "{source}");
+                assert!(error.to_string().contains(missing), "{source}: {error}");
+                let expected = match source {
+                    "global" => vec!["*"],
+                    "explicit-resource" => vec!["uploads"],
+                    _ => vec!["*", "uploads"],
+                };
+                assert_eq!(resolved, expected, "{source}");
+            }
+        }
     }
 
     #[test]
