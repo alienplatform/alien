@@ -58,8 +58,8 @@ onQueueMessage("work", async message => {
 - **Only new writes.** A rule sees objects created after it takes effect. Objects
   that already exist are not replayed, in the cloud or under `alien dev`.
 - **Rule changes are not instant.** Providers apply rule changes asynchronously.
-  For a short time after setup or an update, events can still match the old
-  filter or miss the new one. If uploads can't pause during a rule change,
+  After setup or an update, events can still match the old filter or miss the new
+  one for a while; on S3 we measured three to five minutes. If uploads can't pause during a rule change,
   reconcile by listing the Storage afterwards.
 
 ## Rules
@@ -121,7 +121,9 @@ time setup runs. Add more notifications as rules instead.
 
 Live controllers instead read, modify and write the bucket's notification
 document. They recognise their own entries by Id (`<prefix>-sn-<hash>-<n>`) and
-preserve every entry they don't own.
+preserve every entry they don't own. S3 rejects a document in which two entries can match the
+same key, so a hand-made entry that overlaps one of your rules makes the update fail
+with the provider's error until one of them changes.
 
 ## How each provider delivers
 
