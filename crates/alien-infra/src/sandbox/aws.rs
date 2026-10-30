@@ -27,12 +27,13 @@ use alien_aws_clients::lambda_microvms::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::sandbox_build_role::{
-    sandbox_build_role_arn, sandbox_build_role_name, sandbox_bundle_bucket_name,
+    sandbox_build_role_arn, sandbox_build_role_name, SANDBOX_BUNDLE_STORAGE_ID,
 };
 use alien_core::sandbox_image::AWS_MICROVM;
+use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
 use alien_core::{
     parse_bundle_uri, standard_resource_tags, BundleUri, ResourceOutputs as CoreResourceOutputs,
-    ResourceStatus, Sandbox, SandboxCode, SandboxOutputs,
+    ResourceRef, ResourceStatus, Sandbox, SandboxCode, SandboxOutputs, Storage,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
@@ -128,16 +129,12 @@ pub struct AwsSandboxController {
     pub(crate) bundle_uri: Option<String>,
     /// Bundle setup last granted the build role, for a Frozen sandbox a direct setup registered:
     /// its policy names one bundle object, so a roll waits until setup has granted the new one.
-    /// For a Live sandbox it names the store the build role reads, which is the deployment's own
-    /// bundle bucket when this controller renders the bundle.
+    /// For a Live sandbox that builds from published bundles it names the store the build role
+    /// reads.
     #[serde(default)]
     pub(crate) granted_bundle_uri: Option<String>,
-    /// A `CreateBucket` for the deployment's bundle bucket was sent, so an untagged bucket found
-    /// under its name after a lost response is the one this controller asked for.
-    #[serde(default)]
-    pub(crate) bundle_bucket_requested: bool,
-    /// The rendered bundle last written to the deployment's bucket. Its key is its content's
-    /// digest, so a build whose bundle is already there skips the write.
+    /// The rendered bundle last written to the deployment's bundle Storage. Its key is its
+    /// content's digest, so a build whose bundle is already there skips the write.
     #[serde(default)]
     pub(crate) written_bundle_uri: Option<String>,
     /// Connectors every session is started with; empty is `allow`, readable only because
@@ -1048,38 +1045,31 @@ impl AwsSandboxController {
         info!(sandbox_id = %config.id, "AWS sandbox image deleted; sessions expire on their own");
 
         Ok(HandlerAction::Continue {
-            state: DeletingBundleBucket,
+            state: DeletingBundles,
             suggested_delay: None,
         })
     }
 
-    /// The bundle bucket goes after the image, the last thing that could read it.
+    /// The bundles go after the image, the last thing that could read them, and leave the
+    /// deployment's bundle Storage empty for setup to delete.
     #[handler(
-        state = DeletingBundleBucket,
+        state = DeletingBundles,
         on_failure = DeleteFailed,
         status = ResourceStatus::Deleting
     )]
-    async fn deleting_bundle_bucket(
+    async fn deleting_bundles(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-        let bucket = sandbox_bundle_bucket_name(ctx.resource_prefix, &config.id);
-        if self.granted_bucket() == Some(bucket.as_str()) || self.bundle_bucket_requested {
+        if let Some((bucket, _)) = self.written_bundle_uri.as_deref().and_then(split_s3_uri) {
             let client = ctx
                 .service_provider
                 .get_aws_s3_client(ctx.get_aws_config()?)
                 .await?;
-            super::aws_bundle::delete(
-                client.as_ref(),
-                &bucket,
-                &standard_resource_tags(ctx.resource_prefix, &config.id),
-                &config.id,
-                self.bundle_bucket_requested,
-            )
-            .await?;
-            self.bundle_bucket_requested = false;
+            super::aws_bundle::delete_all(client.as_ref(), bucket, &config.id).await?;
         }
+        self.written_bundle_uri = None;
         Ok(HandlerAction::Continue {
             state: DeletingEgressSecrets,
             suggested_delay: None,
@@ -1429,9 +1419,9 @@ fn image_build_inputs(
 impl AwsSandboxController {
     /// The bundle this sandbox builds from.
     ///
-    /// A Live sandbox whose release names a container image renders its bundle into the
-    /// deployment's own bucket, when its setup granted that bucket. A setup that granted a
-    /// publisher's store instead builds from the release's published bundle, read from that store.
+    /// A Live sandbox that depends on the deployment's bundle Storage renders its bundle there. One
+    /// whose setup predates that Storage builds from the release's published bundle, read from the
+    /// store its setup granted.
     ///
     /// A Live build role grants one store's stable prefix, and every published bundle is written to
     /// each store under the same key. A release naming another store (stores moved after this setup
@@ -1455,30 +1445,36 @@ impl AwsSandboxController {
                 image, region, &config.id,
             )?));
         }
+        if aws_sandbox_renders_bundle(ctx.desired_stack, &config.id) {
+            let storage = ctx.require_dependency::<crate::storage::AwsStorageController>(
+                &ResourceRef::new(Storage::RESOURCE_TYPE, SANDBOX_BUNDLE_STORAGE_ID),
+            )?;
+            let bucket = storage.bucket_name.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: config.id.clone(),
+                    dependency_id: SANDBOX_BUNDLE_STORAGE_ID.to_string(),
+                })
+            })?;
+            // The release stores the manager's proxy reference; the build pulls from the
+            // registry behind it.
+            let image = match ctx.deployment_config.native_image_host.as_deref() {
+                Some(host) => alien_core::image_rewrite::resolve_native_image_uri(image, host)
+                    .unwrap_or_else(|| image.clone()),
+                None => image.clone(),
+            };
+            return Ok(BundleToBuild::Rendered(super::aws_bundle::render(
+                bucket, &image, &config.id,
+            )?));
+        }
         let published = if image.starts_with("s3://") {
             image.as_str()
         } else {
-            let own = sandbox_bundle_bucket_name(ctx.resource_prefix, &config.id);
-            if self.granted_bucket() == Some(own.as_str()) {
-                // The release stores the manager's proxy reference; the build pulls from the
-                // registry behind it.
-                let image = match ctx.deployment_config.native_image_host.as_deref() {
-                    Some(host) => alien_core::image_rewrite::resolve_native_image_uri(image, host)
-                        .unwrap_or_else(|| image.clone()),
-                    None => image.clone(),
-                };
-                return Ok(BundleToBuild::Rendered(super::aws_bundle::render(
-                    &own, &image, &config.id,
-                )?));
-            }
             config.published_bundle.as_deref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!(
-                        "this sandbox's setup granted the bundle store '{}' rather than a bucket \
-                         of the deployment's own, and the release has no bundle published there; \
-                         run setup again to grant the deployment's bucket",
-                        self.granted_bucket().unwrap_or("none")
-                    ),
+                    message: "this sandbox's setup granted a published bundle store rather than \
+                              the deployment's bundle Storage, and the release has no bundle \
+                              published there; run setup again to add the Storage"
+                        .to_string(),
                     resource_id: Some(config.id.clone()),
                 })
             })?
@@ -1499,14 +1495,6 @@ impl AwsSandboxController {
         ))
     }
 
-    /// The bucket the setup granted this sandbox's build role.
-    fn granted_bucket(&self) -> Option<&str> {
-        self.granted_bundle_uri
-            .as_deref()
-            .and_then(split_s3_uri)
-            .map(|(bucket, _)| bucket)
-    }
-
     /// Whether the build needs a rendered bundle written first. A published bundle is already in
     /// its store.
     fn needs_bundle_write(&self, bundle: &BundleToBuild) -> bool {
@@ -1514,8 +1502,7 @@ impl AwsSandboxController {
             if self.written_bundle_uri.as_deref() != Some(rendered.uri().as_str()))
     }
 
-    /// Writes the desired bundle into the deployment's own bucket, creating the bucket first if
-    /// this sandbox has none yet.
+    /// Writes the desired bundle into the deployment's bundle Storage.
     async fn write_bundle(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         let aws_config = ctx.get_aws_config()?;
@@ -1528,9 +1515,8 @@ impl AwsSandboxController {
         super::aws_bundle::write(
             client.as_ref(),
             &rendered,
-            &standard_resource_tags(ctx.resource_prefix, &config.id),
+            self.bundle_uri.as_deref(),
             &config.id,
-            &mut self.bundle_bucket_requested,
         )
         .await?;
         self.written_bundle_uri = Some(rendered.uri());
@@ -1542,7 +1528,7 @@ impl AwsSandboxController {
 enum BundleToBuild {
     /// A bundle already in a store the build role can read.
     Published(String),
-    /// A bundle this controller renders into the deployment's own bucket before the build.
+    /// A bundle this controller renders into the deployment's bundle Storage before the build.
     Rendered(super::aws_bundle::RenderedBundle),
 }
 
@@ -2447,16 +2433,6 @@ mod tests {
         sandbox
     }
 
-    /// Setup registered the deployment's own bucket, `<prefix>-<id>-sbx`, for this sandbox.
-    fn own_bucket_controller() -> AwsSandboxController {
-        AwsSandboxController {
-            state: AwsSandboxState::CreatingImage,
-            granted_bundle_uri: Some("s3://test-agents-sbx/sandbox-bundle/".to_string()),
-            bundle_uri: Some("s3://test-agents-sbx/sandbox-bundle/".to_string()),
-            ..runtime_seeded_controller()
-        }
-    }
-
     fn dockerfile_in(zip: &[u8]) -> String {
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).expect("a zip");
         let mut dockerfile = String::new();
@@ -2470,53 +2446,26 @@ mod tests {
         dockerfile
     }
 
-    /// The whole own-bucket life: the first build creates and tags the bucket, writes a bundle
-    /// naming the release's image, and builds from it; deletion removes the image, then empties
-    /// and deletes the bucket.
+    /// The whole life in the deployment's bundle Storage: the first build writes a bundle naming
+    /// the release's image under this sandbox's prefix, deletes the one a failed earlier attempt
+    /// left there, and builds from the new one; deletion removes the image, then every bundle this
+    /// sandbox wrote, so setup can delete the empty bucket.
     #[tokio::test]
-    async fn a_sandbox_with_its_own_bucket_renders_its_bundle_there_and_removes_it_on_delete() {
-        use alien_aws_clients::s3::{MockS3Api, PutObjectOutput};
+    async fn a_sandbox_renders_its_bundle_into_the_bundle_storage_and_removes_it_on_delete() {
+        use alien_aws_clients::s3::{
+            DeleteObjectsOutput, ListObjectsV2Output, MockS3Api, Object, PutObjectOutput,
+        };
+        const BUCKET: &str = "test-stack-sandbox-bundles";
+        const LEFT_OVER: &str = "sandbox-bundle/agents/0000/bundle.zip";
 
-        let ours: std::collections::HashMap<String, String> =
-            standard_resource_tags("test", "agents")
-                .into_iter()
-                .collect();
-        let created = Arc::new(Mutex::new(false));
+        let stored = Arc::new(Mutex::new(vec![LEFT_OVER.to_string()]));
         let written = Arc::new(Mutex::new(None::<(String, String, Vec<u8>)>));
         let mut s3 = MockS3Api::new();
         {
-            let created = created.clone();
-            let ours = ours.clone();
-            s3.expect_get_bucket_tagging()
-                .withf(|bucket| bucket == "test-agents-sbx")
-                .returning(move |_| {
-                    if *created.lock().unwrap() {
-                        Ok(ours.clone())
-                    } else {
-                        Err(not_found())
-                    }
-                });
-        }
-        {
-            let created = created.clone();
-            s3.expect_create_bucket()
-                .withf(|bucket| bucket == "test-agents-sbx")
-                .times(1)
-                .returning(move |_| {
-                    *created.lock().unwrap() = true;
-                    Ok(())
-                });
-        }
-        {
-            let ours = ours.clone();
-            s3.expect_put_bucket_abac_tags()
-                .withf(move |bucket, tags| bucket == "test-agents-sbx" && *tags == ours)
-                .times(1)
-                .returning(|_, _| Ok(()));
-        }
-        {
+            let stored = stored.clone();
             let written = written.clone();
             s3.expect_put_object().times(1).returning(move |request| {
+                stored.lock().unwrap().push(request.key.clone());
                 *written.lock().unwrap() = Some((
                     request.bucket.clone(),
                     request.key.clone(),
@@ -2529,14 +2478,49 @@ mod tests {
                 })
             });
         }
-        s3.expect_empty_bucket()
-            .withf(|bucket| bucket == "test-agents-sbx")
-            .times(1)
-            .returning(|_| Ok(()));
-        s3.expect_delete_bucket()
-            .withf(|bucket| bucket == "test-agents-sbx")
-            .times(1)
-            .returning(|_| Ok(()));
+        {
+            let stored = stored.clone();
+            s3.expect_list_objects_v2()
+                .withf(|bucket, prefix, _| {
+                    bucket == BUCKET && prefix.as_deref() == Some("sandbox-bundle/agents/")
+                })
+                .returning(move |_, _, _| {
+                    Ok(ListObjectsV2Output {
+                        contents: stored
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .map(|key| Object {
+                                key: key.clone(),
+                                last_modified: String::new(),
+                                e_tag: String::new(),
+                                size: 0,
+                                storage_class: String::new(),
+                            })
+                            .collect(),
+                        name: BUCKET.to_string(),
+                        max_keys: 1000,
+                        key_count: 0,
+                        is_truncated: false,
+                        next_continuation_token: None,
+                    })
+                });
+        }
+        {
+            let stored = stored.clone();
+            s3.expect_delete_objects()
+                .withf(|bucket, _, _| bucket == BUCKET)
+                .returning(move |_, objects, _| {
+                    stored
+                        .lock()
+                        .unwrap()
+                        .retain(|key| !objects.iter().any(|object| object.key == *key));
+                    Ok(DeleteObjectsOutput {
+                        deleted: vec![],
+                        errors: vec![],
+                    })
+                });
+        }
 
         let built_from = Arc::new(Mutex::new(None::<String>));
         let mut client = MockLambdaMicrovmsApi::new();
@@ -2576,7 +2560,18 @@ mod tests {
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(released_sandbox(None))
-            .controller(own_bucket_controller())
+            .controller(AwsSandboxController {
+                state: AwsSandboxState::CreatingImage,
+                ..runtime_seeded_controller()
+            })
+            .with_dependency(
+                Storage::new(SANDBOX_BUNDLE_STORAGE_ID.to_string()).build(),
+                crate::storage::AwsStorageController::mock_ready(SANDBOX_BUNDLE_STORAGE_ID),
+            )
+            .dependency_lifecycle(
+                SANDBOX_BUNDLE_STORAGE_ID,
+                alien_core::ResourceLifecycle::Frozen,
+            )
             .platform(Platform::Aws)
             .service_provider(Arc::new(provider))
             .build()
@@ -2589,18 +2584,15 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
 
         let (bucket, key, zip) = written.lock().unwrap().clone().expect("a bundle written");
-        assert_eq!(bucket, "test-agents-sbx");
+        assert_eq!(bucket, BUCKET);
+        assert!(key.starts_with("sandbox-bundle/agents/"), "{key}");
         assert_eq!(dockerfile_in(&zip), format!("FROM {RELEASED_IMAGE}\n"));
         assert_eq!(
             built_from.lock().unwrap().as_deref(),
-            Some(format!("s3://test-agents-sbx/{key}").as_str()),
+            Some(format!("s3://{BUCKET}/{key}").as_str()),
             "the image is built from the bundle just written"
         );
-        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
-        assert_eq!(
-            controller.bundle_uri.as_deref(),
-            Some(format!("s3://test-agents-sbx/{key}").as_str())
-        );
+        assert_eq!(*stored.lock().unwrap(), vec![key.clone()]);
 
         executor.delete().expect("transition to delete");
         executor
@@ -2608,6 +2600,7 @@ mod tests {
             .await
             .expect("delete flow should succeed");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert!(stored.lock().unwrap().is_empty(), "every bundle deleted");
     }
 
     /// A setup that granted a publisher's store keeps building after the release moves to a
@@ -2654,7 +2647,7 @@ mod tests {
         );
     }
 
-    /// With neither its own bucket granted nor a published bundle, there is nothing the build role
+    /// With neither the bundle Storage nor a published bundle, there is nothing the build role
     /// could read; the sandbox says to run setup instead of starting a build that cannot succeed.
     #[tokio::test]
     async fn a_release_with_no_bundle_for_a_publishers_store_asks_for_setup() {

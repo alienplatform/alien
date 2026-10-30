@@ -15,10 +15,7 @@ use crate::{
     },
     expr,
 };
-use alien_core::sandbox_build_role::{
-    sandbox_build_role_name, sandbox_bundle_bucket_name, sandbox_bundle_store_uri,
-    SANDBOX_BUNDLE_KEY_PREFIX,
-};
+use alien_core::sandbox_build_role::sandbox_build_role_name;
 use alien_core::sandbox_egress::{
     sandbox_egress_name, sandbox_egress_network, sandbox_needs_connector, LOOPBACK_ONLY_CIDR,
 };
@@ -82,8 +79,9 @@ impl TfEmitter for AwsSandboxEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
-        // A sandbox whose controller renders its own bundle has no published one to grant.
-        let artifact_uri = if aws_sandbox_renders_bundle(sandbox, ctx.resource.lifecycle) {
+        // A sandbox whose controller renders its own bundle reads it through the bundle Storage's
+        // grant, and has no published one.
+        let artifact_uri = if aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
             None
         } else {
             Some(artifact_uri(sandbox)?)
@@ -125,7 +123,7 @@ impl TfEmitter for AwsSandboxEmitter {
         // and the string are both well-formed — so it only shows up at apply.
         let runtime_built = provisioned_at_runtime(ctx);
         let build_statements = match artifact_uri {
-            None => deployment_bucket_build_statements(sandbox),
+            None => image_pull_build_statements(),
             Some(artifact_uri) => {
                 published_bundle_build_statements(sandbox, artifact_uri, runtime_built)?
             }
@@ -649,39 +647,11 @@ fn published_bundle_build_statements(
     Ok(build_statements)
 }
 
-/// What the build role may do when the controller renders the bundle: read the deployment's own
-/// bundle bucket, and pull the released image from another account's registry.
+/// What the build role may do when the controller renders the bundle beyond reading it, which the
+/// bundle Storage grants: pull the released image from another account's registry.
 /// `SandboxBuildRole::policy` holds the resolved form and says why.
-fn deployment_bucket_build_statements(sandbox: &Sandbox) -> Vec<Expression> {
-    let bucket = sandbox_bundle_bucket_name("${local.resource_prefix}", sandbox.id());
+fn image_pull_build_statements() -> Vec<Expression> {
     vec![
-        Expression::from_iter([
-            (
-                "Sid",
-                Expression::String("ReadSandboxBundlePrefix".to_string()),
-            ),
-            ("Effect", Expression::String("Allow".to_string())),
-            (
-                "Action",
-                Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
-            ),
-            (
-                "Resource",
-                expr::template(format!(
-                    "arn:${{data.aws_partition.current.partition}}:s3:::{bucket}/{SANDBOX_BUNDLE_KEY_PREFIX}/*"
-                )),
-            ),
-            (
-                "Condition",
-                Expression::from_iter([(
-                    "StringEquals",
-                    Expression::from_iter([(
-                        "s3:ResourceAccount",
-                        expr::template("${data.aws_caller_identity.current.account_id}"),
-                    )]),
-                )]),
-            ),
-        ]),
         Expression::from_iter([
             (
                 "Sid",
@@ -745,7 +715,7 @@ fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
 /// controller cannot derive — the build role it passes and the bundle it builds from — plus the
 /// egress facts the module still owns.
 fn runtime_import_ref(ctx: &EmitContext<'_>, sandbox: &Sandbox, label: &str) -> Result<Expression> {
-    Ok(expr::object([
+    let mut fields = vec![
         ("previewPorts", preview_ports(sandbox)),
         (
             "egressConnectorArns",
@@ -759,18 +729,11 @@ fn runtime_import_ref(ctx: &EmitContext<'_>, sandbox: &Sandbox, label: &str) -> 
             "buildRoleArn",
             expr::traversal(["aws_iam_role", label, "arn"]),
         ),
-        (
-            "bundleUri",
-            if aws_sandbox_renders_bundle(sandbox, ctx.resource.lifecycle) {
-                expr::template(sandbox_bundle_store_uri(&sandbox_bundle_bucket_name(
-                    "${local.resource_prefix}",
-                    sandbox.id(),
-                )))
-            } else {
-                code_artifact_uri(artifact_uri(sandbox)?)
-            },
-        ),
-    ]))
+    ];
+    if !aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
+        fields.push(("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)));
+    }
+    Ok(expr::object(fields))
 }
 
 /// The build role's trust policy, conditioned on the stack's own account. See the CloudFormation

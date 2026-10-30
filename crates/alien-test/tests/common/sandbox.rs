@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use alien_aws_clients::s3::{GetObjectRequest, S3Api, S3Client};
 use alien_aws_clients::AwsCredentialProvider;
-use alien_core::{AwsClientConfig, AwsCredentials, Platform};
-use alien_test::config::{e2e_resource_prefix, TestConfig};
+use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
+use alien_core::{AwsClientConfig, AwsCredentials, Platform, StackState, StorageOutputs};
+use alien_test::config::TestConfig;
 use alien_test::TestContext;
 use anyhow::{bail, ensure, Context};
 use serde::Deserialize;
@@ -55,9 +56,9 @@ pub async fn check_session_runs_a_command(ctx: &TestContext) -> anyhow::Result<(
     Ok(())
 }
 
-/// On AWS the controller renders the bundle into `<prefix>-agents-sbx` in the deployment's own
-/// account, and the bundle builds `FROM` the release's image in the manager's registry. Reads the
-/// bucket with the target account's credentials, which is where it must be.
+/// On AWS the controller renders the bundle into the deployment's bundle Storage, in the
+/// deployment's own account, and the bundle builds `FROM` the release's image in the manager's
+/// registry. Reads the bucket with the target account's credentials, which is where it must be.
 pub async fn check_bundle_in_deployment_bucket(ctx: &TestContext) -> anyhow::Result<()> {
     if ctx.platform != Platform::Aws {
         return Ok(());
@@ -91,9 +92,29 @@ pub async fn check_bundle_in_deployment_bucket(ctx: &TestContext) -> anyhow::Res
         .map_err(|error| anyhow::anyhow!("target S3 credentials: {error}"))?,
     );
 
-    let bucket = format!("{}-agents-sbx", e2e_resource_prefix()?);
+    let response = ctx
+        .deployment
+        .manager()
+        .client()
+        .get_deployment()
+        .id(&ctx.deployment.id)
+        .send()
+        .await
+        .map_err(|error| anyhow::anyhow!("get_deployment failed: {error}"))?;
+    let state: StackState = serde_json::from_value(
+        response
+            .into_inner()
+            .stack_state
+            .context("deployment is missing stack_state")?,
+    )
+    .context("failed to parse stack_state")?;
+    let bucket = state
+        .get_resource_outputs::<StorageOutputs>(SANDBOX_BUNDLE_STORAGE_ID)
+        .context("the deployment has no sandbox bundle Storage")?
+        .bucket_name
+        .clone();
     let listed = s3
-        .list_objects_v2(&bucket, Some("sandbox-bundle/".to_string()), None)
+        .list_objects_v2(&bucket, Some("sandbox-bundle/agents/".to_string()), None)
         .await
         .map_err(|error| anyhow::anyhow!("list {bucket}: {error}"))?;
     let [object] = listed.contents.as_slice() else {
