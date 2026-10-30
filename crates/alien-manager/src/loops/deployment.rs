@@ -756,23 +756,32 @@ impl DeploymentLoop {
             None
         };
         let target_release_id = prepared_startup_release
-            .as_ref()
-            .or(deployment.desired_release_id.as_ref())
-            .or(deployment.current_release_id.as_ref())
-            .ok_or_else(|| {
-                AlienError::new(GenericError {
-                    message: format!(
-                        "Deployment {} has neither desired_release_id nor current_release_id",
-                        deployment_id
-                    ),
-                })
-            })?;
+            .as_deref()
+            .or(deployment.desired_release_id.as_deref())
+            .or(deployment.current_release_id.as_deref());
+        // Retention intentionally clears release references. A later explicit erase
+        // operates on the saved resource controllers, without needing a build release.
+        let deleting = matches!(
+            status,
+            DeploymentStatus::DeletePending
+                | DeploymentStatus::Deleting
+                | DeploymentStatus::DeleteFailed
+        );
+        if target_release_id.is_none() && !deleting {
+            return Err(AlienError::new(GenericError {
+                message: format!(
+                    "Deployment {} has neither desired_release_id nor current_release_id",
+                    deployment_id
+                ),
+            }));
+        }
 
         let system = crate::auth::Subject::system();
         let (_, supplied_current) = supplied_release_stacks(&deployment);
-        let deployment_stack =
-            target_release_stack(self.release_store.as_ref(), &deployment, target_release_id)
-                .await?;
+        let deployment_stack = match target_release_id {
+            Some(id) => target_release_stack(self.release_store.as_ref(), &deployment, id).await?,
+            None => None,
+        };
 
         // `current_release` is the release currently deployed, so its stack has
         // to come from that release. During an update it differs from the
@@ -789,7 +798,7 @@ impl DeploymentLoop {
                 description: None,
                 stack,
             }),
-            (Some(id), None) if id == target_release_id => {
+            (Some(id), None) if Some(id.as_str()) == target_release_id => {
                 deployment_stack.as_ref().map(|stack| ReleaseInfo {
                     release_id: Some(id.clone()),
                     version: None,
@@ -1052,36 +1061,18 @@ impl DeploymentLoop {
         }
         let client_config = resolved_credentials.client_config;
 
-        // 3. Extract the stack for this deployment's platform from the release.
-        let deployment_stack = deployment_stack.ok_or_else(|| {
-            AlienError::new(GenericError {
-                message: format!(
-                    "Release {} does not contain a stack for platform {}",
-                    target_release_id, deployment.platform
-                ),
-            })
-        })?;
-
-        // 4. Build deployment state from the record.
-        let target_release = ReleaseInfo {
-            release_id: Some(target_release_id.clone()),
-            version: None,
-            description: None,
-            stack: deployment_stack.clone(),
-        };
-
-        let mut state = DeploymentState {
-            status: parse_status(&deployment.status),
-            platform: deployment.platform.clone(),
-            current_release,
-            target_release: Some(target_release),
-            stack_state: deployment.stack_state.clone(),
-            error: deployment_record_error(&deployment.error),
-            environment_info: deployment.environment_info.clone(),
-            runtime_metadata: deployment.runtime_metadata.clone(),
-            retry_requested: deployment.retry_requested,
-            protocol_version: deployment.deployment_protocol_version,
-        };
+        if let Some(id) = target_release_id {
+            if deployment_stack.is_none() {
+                return Err(AlienError::new(GenericError {
+                    message: format!(
+                        "Release {} does not contain a stack for platform {}",
+                        id, deployment.platform
+                    ),
+                }));
+            }
+        }
+        let mut state = recorded_state.clone();
+        state.error = deployment_record_error(&deployment.error);
 
         // 4. Build the deployment config. External runners that acquire this
         //    deployment get the same config from the acquire route.
@@ -1091,7 +1082,7 @@ impl DeploymentLoop {
             bindings_provider: &self.server_bindings.bindings_provider,
             target_bindings_providers: &self.server_bindings.target_bindings_providers,
         }
-        .deployment_config(&deployment, Some(&deployment_stack))
+        .deployment_config(&deployment, deployment_stack.as_ref())
         .await?;
 
         // Standalone-mode bridge: inject a BYO Horizon backend from env vars
@@ -1282,7 +1273,7 @@ impl DeploymentLoop {
         session: &str,
         execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     ) -> Result<(), AlienError> {
-        let mut state = state_from_record(deployment, parse_status(&deployment.status), None, "");
+        let mut state = state_from_record(deployment, parse_status(&deployment.status), None, None);
         state.error = deployment_record_error(&deployment.error);
         if let Some(metadata) = state.runtime_metadata.as_mut() {
             metadata.credential_retry = None;
@@ -1761,7 +1752,7 @@ fn failed_state_for_credential_error(
     deployment: &DeploymentRecord,
     status: DeploymentStatus,
     deployment_stack: Option<&alien_core::Stack>,
-    target_release_id: &str,
+    target_release_id: Option<&str>,
     error: AlienError,
 ) -> DeploymentState {
     let mut state = DeploymentState {
@@ -1780,7 +1771,7 @@ fn state_from_record(
     deployment: &DeploymentRecord,
     status: DeploymentStatus,
     deployment_stack: Option<&alien_core::Stack>,
-    target_release_id: &str,
+    target_release_id: Option<&str>,
 ) -> DeploymentState {
     DeploymentState {
         status,
@@ -1797,7 +1788,7 @@ fn state_from_record(
                 })
         }),
         target_release: deployment_stack.map(|stack| ReleaseInfo {
-            release_id: Some(target_release_id.to_string()),
+            release_id: target_release_id.map(str::to_owned),
             version: None,
             description: None,
             stack: stack.clone(),
@@ -3509,6 +3500,37 @@ mod tests {
             retries_then_recovers(DeploymentStatus::UpdatePending).await;
         }
         #[tokio::test]
+        async fn erase_after_retention_does_not_require_a_release_reference() {
+            for status in [
+                DeploymentStatus::DeletePending,
+                DeploymentStatus::Deleting,
+                DeploymentStatus::DeleteFailed,
+            ] {
+                let fixture = Fixture::new(status, transient_error()).await;
+                fixture
+                    .credentials
+                    .unavailable
+                    .store(false, Ordering::SeqCst);
+                fixture.db.execute("UPDATE deployments SET current_release_id = NULL, desired_release_id = NULL, retry_requested = 1, runtime_metadata = json_set(runtime_metadata, '$.deletionPolicy', 'erase')").await.unwrap();
+                let runner = fixture.runner();
+                for _ in 0..4 {
+                    runner.tick().await;
+                }
+                assert!(
+                    fixture
+                        .manager
+                        .deployment_store
+                        .get_deployment(&Subject::system(), &fixture.id)
+                        .await
+                        .unwrap()
+                        .is_none(),
+                    "saved deletion must finish even after retention cleared releases ({status:?})"
+                );
+                assert!(fixture.credentials.visits.load(Ordering::SeqCst) > 0);
+            }
+        }
+
+        #[tokio::test]
         async fn delete_pending_retries_then_recovers() {
             retries_then_recovers(DeploymentStatus::DeletePending).await;
         }
@@ -4120,7 +4142,7 @@ mod tests {
             &deployment,
             DeploymentStatus::Provisioning,
             None,
-            "release",
+            Some("release"),
             error,
         );
         assert_eq!(failed.status, DeploymentStatus::ProvisioningFailed);
