@@ -755,7 +755,9 @@ fn held_for_setup_teardown(
         {
             continue;
         }
-        if !is_runtime_cleanup_resource(dependent, management, stack_state.platform)? {
+        if !is_runtime_cleanup_resource(dependent, management, stack_state.platform)?
+            && !StackExecutor::permission_only_dependency(dependent, resource_id, stack_state)
+        {
             return Ok(true);
         }
     }
@@ -806,13 +808,19 @@ fn has_remaining_setup_resources(stack_state: &StackState, management: SetupMana
 mod tests {
     use std::sync::Arc;
 
+    use alien_aws_clients::{iam::MockIamApi, AwsClientConfig, AwsClientConfigExt};
     use alien_core::{
         ClientConfig, ComputeCluster, Daemon, DaemonCode, DeploymentConfig, DeploymentState,
         DeploymentStatus, EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority,
-        Platform, Resource, ResourceLifecycle, ResourceStatus, RuntimeMetadata, SetupManagement,
-        Stack, StackResourceState, StackSettings, StackState, StackStatus, Storage,
+        Platform, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, RuntimeMetadata,
+        ServiceAccount, SetupManagement, Stack, StackResourceState, StackSettings, StackState,
+        StackStatus, Storage, Vault,
     };
-    use alien_infra::{state_utils::StackStateExt, DefaultPlatformServiceProvider, StackExecutor};
+    use alien_infra::{
+        state_utils::{StackResourceStateExt, StackStateExt},
+        AwsServiceAccountController, DefaultPlatformServiceProvider, MockPlatformServiceProvider,
+        StackExecutor,
+    };
 
     use super::{
         compute_runtime_cleanup_status, handle_delete_failed, handle_delete_pending,
@@ -1323,6 +1331,151 @@ mod tests {
             &stack_state,
             SetupManagement::Manual
         ));
+    }
+
+    #[tokio::test]
+    async fn automatic_cleanup_waits_for_role_deletion_before_setup_handoff() {
+        for fail_delete in [false, true] {
+            let mut stack = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+            let mut vault = resource_state(
+                Resource::new(Vault::new("secrets".to_string()).build()),
+                ResourceLifecycle::Frozen,
+                ResourceStatus::Running,
+            );
+            vault.dependencies = vec![ResourceRef::new(
+                ServiceAccount::RESOURCE_TYPE,
+                "execution-sa",
+            )];
+            let vault_before = serde_json::to_value(&vault).unwrap();
+            stack.resources.insert("secrets".to_string(), vault);
+            let mut role = resource_state(
+                Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
+                ResourceLifecycle::Frozen,
+                ResourceStatus::Deleting,
+            );
+            role.set_internal_controller(Some(Box::new(
+                serde_json::from_value::<AwsServiceAccountController>(serde_json::json!({
+                    "state": "deleteStart",
+                    "roleName": "test-execution-sa",
+                    "roleArn": "arn:aws:iam::123456789012:role/test-execution-sa",
+                    "runtimeCreated": true,
+                    "stackPermissionsApplied": true
+                }))
+                .unwrap(),
+            )))
+            .unwrap();
+            stack.resources.insert("execution-sa".to_string(), role);
+            let mut iam = MockIamApi::new();
+            iam.expect_list_attached_role_policies()
+                .times(1)
+                .returning(|_| {
+                    Ok(serde_json::from_value(serde_json::json!({
+                        "ListAttachedRolePoliciesResult": {"IsTruncated": false}
+                    }))
+                    .unwrap())
+                });
+            iam.expect_list_role_policies().times(1).returning(|_| {
+                Ok(serde_json::from_value(serde_json::json!({
+                    "ListRolePoliciesResult": {"IsTruncated": false}
+                }))
+                .unwrap())
+            });
+            iam.expect_delete_role()
+                .withf(|name| name == "test-execution-sa")
+                .times(1)
+                .returning(move |_| {
+                    if fail_delete {
+                        Err(alien_error::AlienError::new(
+                            alien_client_core::ErrorData::RemoteAccessDenied {
+                                resource_type: "IAM role".to_string(),
+                                resource_name: "test-execution-sa".to_string(),
+                            },
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                });
+            let iam = Arc::new(iam);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_runtime_setup_authority()
+                .returning(|_| None);
+            provider
+                .expect_get_aws_iam_client()
+                .returning(move |_| Ok(iam.clone()));
+            let provider = Arc::new(provider);
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings {
+                    setup_management: SetupManagement::Automatic,
+                    ..Default::default()
+                })
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build();
+            let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+            let current = DeploymentState {
+                status: DeploymentStatus::Deleting,
+                platform: Platform::Aws,
+                current_release: None,
+                target_release: None,
+                stack_state: Some(stack),
+                error: None,
+                environment_info: None,
+                runtime_metadata: Some(RuntimeMetadata {
+                    deletion_policy: alien_core::DeletionPolicy::Erase,
+                    ..Default::default()
+                }),
+                retry_requested: false,
+                protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
+            let mut pending =
+                handle_deleting(current, config.clone(), client.clone(), provider.clone())
+                    .await
+                    .expect("policy cleanup step")
+                    .state;
+            assert_eq!(pending.status, DeploymentStatus::Deleting);
+            assert_eq!(
+                pending.stack_state.as_ref().unwrap().resources["execution-sa"].status,
+                ResourceStatus::Deleting
+            );
+            // Exercise the final retry on failure without waiting through backoff.
+            pending
+                .stack_state
+                .as_mut()
+                .unwrap()
+                .resources
+                .get_mut("execution-sa")
+                .unwrap()
+                .retry_attempt = 9;
+            let finished = handle_deleting(pending, config, client, provider)
+                .await
+                .expect("role deletion step")
+                .state;
+            let stack = finished.stack_state.unwrap();
+            assert_eq!(
+                serde_json::to_value(&stack.resources["secrets"]).unwrap(),
+                vault_before
+            );
+            if fail_delete {
+                assert_eq!(finished.status, DeploymentStatus::DeleteFailed);
+                assert_eq!(
+                    stack.resources["execution-sa"].status,
+                    ResourceStatus::DeleteFailed
+                );
+                assert!(stack.resources["execution-sa"].error.is_some());
+            } else {
+                assert_eq!(finished.status, DeploymentStatus::TeardownRequired);
+                assert_eq!(
+                    stack.resources["execution-sa"].status,
+                    ResourceStatus::Deleted
+                );
+            }
+        }
     }
 
     async fn runtime_cleanup_of_an_empty_stack(

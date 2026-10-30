@@ -821,10 +821,10 @@ impl StackExecutor {
         Ok(self)
     }
 
-    // Preflights order resource-scoped grants after access-identity creation.
-    // Data does not need that grantee to continue existing. Config dependencies
-    // (including an interrupted update's old config) still describe actual use.
-    fn permission_only_dependency(
+    /// Whether a dependency only orders permission grants after identity creation.
+    /// Config dependencies, including an interrupted update's old config, still
+    /// describe actual use and must preserve deletion order.
+    pub fn permission_only_dependency(
         resource: &StackResourceState,
         dependency_id: &str,
         state: &StackState,
