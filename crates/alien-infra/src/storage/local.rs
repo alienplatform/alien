@@ -226,9 +226,9 @@ async fn ensure_notifications(
             })
         })?;
     if storage.notifications.is_empty() {
-        return manager.stop_notifications(&storage.id).await.context(
+        return manager.remove_notifications(&storage.id).await.context(
             ErrorData::CloudPlatformError {
-                message: "Stop local storage notifications".into(),
+                message: "Remove local storage notifications".into(),
                 resource_id: Some(storage.id.clone()),
             },
         );
@@ -409,7 +409,7 @@ mod tests {
         })
         .await
         .unwrap();
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             run.stack_state(),
             &["objects".into()],
             &ClientConfig::Local {
@@ -420,7 +420,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         std::fs::write(root.join("retained.json"), b"retained").unwrap();
         assert_eq!(binding.stats().await.unwrap().total, 1);
         assert!(root.join("first.json").exists());

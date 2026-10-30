@@ -29,6 +29,7 @@ impl ResourceImporter for GcpQueueImporter {
             topic_name: Some(data.topic_id),
             subscription_name: Some(data.subscription_id),
             storage_publisher_member: None,
+            storage_publisher_pending: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

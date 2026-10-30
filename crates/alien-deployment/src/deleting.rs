@@ -356,7 +356,7 @@ async fn ensure_data_protection(
         })
     {
         return Err(AlienError::new(ErrorData::StackExecutionFailed {
-            message: "Retained data expiry controls did not finish disabling within two hours. Inspect DynamoDB TTL status and retry deletion; data and access checkpoints are preserved.".into(),
+            message: "Retained data protection did not finish within two hours. Inspect DynamoDB TTL status and the retained storage's notification rules or subscriptions, then retry deletion; data and access checkpoints are preserved.".into(),
         }));
     }
     if !alien_infra::protect_retained_kv(
@@ -378,7 +378,7 @@ async fn ensure_data_protection(
             .get_or_insert_with(chrono::Utc::now);
         return Ok(ProtectionProgress::Pending);
     }
-    alien_infra::protect_retained_storage(
+    if !alien_infra::protect_retained_storage(
         state,
         &retained,
         client_config,
@@ -389,7 +389,14 @@ async fn ensure_data_protection(
     .await
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to protect retained storage before runtime cleanup".into(),
-    })?;
+    })? {
+        current
+            .runtime_metadata
+            .get_or_insert_default()
+            .retained_data_protection_started_at
+            .get_or_insert_with(chrono::Utc::now);
+        return Ok(ProtectionProgress::Pending);
+    }
     let metadata = current.runtime_metadata.get_or_insert_default();
     metadata.retained_data_protection_started_at = None;
     metadata.retained_storage_protection_hash = Some(digest);
@@ -399,8 +406,9 @@ async fn ensure_data_protection(
 
 /// Stops expiry and public reads on every retained store before the setup authority removes the
 /// remaining access, including setup-owned (Frozen) stores that runtime cleanup leaves alone.
-/// Every call re-reads provider state. Returns false while DynamoDB TTL is still transitioning;
-/// the caller waits and calls again before deleting anything.
+/// Every call re-reads provider state. Returns false while DynamoDB TTL is still transitioning
+/// or a provider is still removing retained storage's notifications; the caller waits and calls
+/// again before deleting anything.
 pub(crate) async fn protect_retained_data_for_handoff(
     current: &DeploymentState,
     state: &StackState,
@@ -435,8 +443,7 @@ pub(crate) async fn protect_retained_data_for_handoff(
     .await
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to protect retained storage before removing access".into(),
-    })?;
-    Ok(true)
+    })
 }
 
 /// Where a destroy goes when the runtime never started, or `None` when runtime cleanup has work.

@@ -212,13 +212,14 @@ async fn reconcile_subscriptions(
 
 /// Retention runs outside the controller scheduler. Repeat through its caller
 /// until all owned subscriptions are gone; never delete the shared system topic.
+/// Returns false while Azure is still deleting owned subscriptions.
 pub(super) async fn remove_owned(
     client: &dyn EventGridApi,
     source: &str,
     container: &str,
     storage: &str,
-) -> Result<()> {
-    if !reconcile_subscriptions()
+) -> Result<bool> {
+    reconcile_subscriptions()
         .client(client)
         .source(source)
         .container(container)
@@ -226,14 +227,7 @@ pub(super) async fn remove_owned(
         .desired(BTreeMap::new())
         .deleting(true)
         .call()
-        .await?
-    {
-        return Err(AlienError::new(ErrorData::StorageNotificationCleanupPending {
-            resource_id: storage.into(),
-            message: "Event Grid subscription removal is still in progress; retry retained storage protection".into(),
-        }));
-    }
-    Ok(())
+        .await
 }
 
 #[cfg(test)]

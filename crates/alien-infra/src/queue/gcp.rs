@@ -28,9 +28,13 @@ fn get_topic_name(prefix: &str, name: &str) -> String {
 pub struct GcpQueueController {
     pub(crate) topic_name: Option<String>,
     pub(crate) subscription_name: Option<String>,
-    /// Service-agent membership managed by this queue for storage ingress.
+    /// Service-agent membership managed by this queue for storage ingress, recorded before
+    /// the grant is written.
     #[serde(default)]
     pub(crate) storage_publisher_member: Option<String>,
+    /// Persist intent before a policy write, including recovery after a lost response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) storage_publisher_pending: Option<bool>,
 }
 
 #[controller]
@@ -180,6 +184,18 @@ impl GcpQueueController {
         info!(resource_id = %config.id(), "Successfully applied resource-scoped permissions");
 
         Ok(HandlerAction::Continue {
+            state: PreparingStoragePublisher,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = PreparingStoragePublisher, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn preparing_storage_publisher(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.prepare_storage_publisher(ctx).await?;
+        Ok(HandlerAction::Continue {
             state: ApplyingStoragePublisher,
             suggested_delay: None,
         })
@@ -212,8 +228,9 @@ impl GcpQueueController {
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let queue = ctx.desired_resource_config::<Queue>()?;
         Ok(may_manage_storage_publisher(ctx, &queue.id)
-            && queue_receives_storage_notifications(ctx.desired_stack, &queue.id)
-                != self.storage_publisher_member.is_some())
+            && (self.storage_publisher_pending.is_some()
+                || queue_receives_storage_notifications(ctx.desired_stack, &queue.id)
+                    != self.storage_publisher_member.is_some()))
     }
 
     #[handler(
@@ -278,6 +295,7 @@ impl GcpQueueController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Queue>()?;
         info!(id=%config.id, "Reconciling GCP Queue storage ingress");
+        self.prepare_storage_publisher(ctx).await?;
         Ok(HandlerAction::Continue {
             state: UpdatingStoragePublisher,
             suggested_delay: None,
@@ -336,6 +354,7 @@ impl GcpQueueController {
         self.topic_name = None;
         self.subscription_name = None;
         self.storage_publisher_member = None;
+        self.storage_publisher_pending = None;
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -723,6 +742,100 @@ mod tests {
         );
     }
 
+    /// The grant reaches Google but its response is lost, and the Storage stops notifying
+    /// before the retry. The recorded intent still lets removal revoke the grant.
+    #[tokio::test]
+    async fn grant_with_lost_response_is_revoked_when_notifications_are_removed() {
+        let queue = Queue::new("work".into()).build();
+        let storage = alien_core::Storage::new("uploads".into())
+            .notifications(vec![alien_core::StorageNotification::builder()
+                .queue((&queue).into())
+                .build()])
+            .build();
+        let original = IamPolicy {
+            version: Some(3),
+            etag: Some("etag".into()),
+            bindings: Vec::new(),
+            ..Default::default()
+        };
+        let policy = Arc::new(std::sync::Mutex::new(original.clone()));
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut pubsub = MockPubSubApi::new();
+        let reads = policy.clone();
+        pubsub
+            .expect_get_topic_iam_policy()
+            .returning(move |_| Ok(reads.lock().unwrap().clone()));
+        let (stored, attempts) = (policy.clone(), writes.clone());
+        pubsub
+            .expect_set_topic_iam_policy()
+            .returning(move |_, value| {
+                *stored.lock().unwrap() = value.clone();
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteServiceUnavailable {
+                            message: "response lost after the write".into(),
+                        },
+                    ));
+                }
+                Ok(value)
+            });
+        let mut gcs = alien_gcp_clients::gcs::MockGcsApi::new();
+        gcs.expect_get_project_service_account()
+            .times(1)
+            .returning(|| {
+                Ok(alien_gcp_clients::gcs::ProjectServiceAccount {
+                    email_address: "service-123@gs-project-accounts.iam.gserviceaccount.com".into(),
+                    kind: None,
+                })
+            });
+        let (gcs, pubsub) = (Arc::new(gcs), Arc::new(pubsub));
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_gcs_client()
+            .returning(move |_| Ok(gcs.clone()));
+        let mut run = SingleControllerExecutor::builder()
+            .resource(queue.clone())
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some("test-work".into()),
+                subscription_name: Some("test-work-sub".into()),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(storage, ResourceLifecycle::Live)
+            .build()
+            .await
+            .unwrap();
+        run.update(queue.clone()).unwrap();
+        while writes.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            let _ = run.step().await;
+        }
+        assert_eq!(
+            policy.lock().unwrap().bindings.len(),
+            1,
+            "the lost write still granted the service agent"
+        );
+
+        *run.desired_resource_config_mut("uploads").unwrap() =
+            alien_core::Resource::new(alien_core::Storage::new("uploads".into()).build());
+        run.run_until_terminal().await.unwrap();
+        if run.needs_update().unwrap() {
+            run.update(queue).unwrap();
+            run.run_until_terminal().await.unwrap();
+        }
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert!(!run.needs_update().unwrap());
+        assert_eq!(
+            serde_json::to_value(&*policy.lock().unwrap()).unwrap(),
+            serde_json::to_value(original).unwrap(),
+            "no service-agent grant may outlive the last notification"
+        );
+    }
+
     #[tokio::test]
     async fn ordinary_queue_and_frozen_import_never_request_ingress_updates() {
         for (notifying, lifecycle) in [
@@ -817,7 +930,10 @@ mod tests {
 }
 
 impl GcpQueueController {
-    async fn reconcile_storage_publisher(
+    /// Record the intended membership, and for a grant the member itself, before the
+    /// policy write. A grant whose response is lost is then still reconciled, including
+    /// when notifications are removed before the retry.
+    async fn prepare_storage_publisher(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<()> {
@@ -826,36 +942,50 @@ impl GcpQueueController {
             return Ok(());
         }
         let desired = queue_receives_storage_notifications(ctx.desired_stack, &queue.id);
-        if !desired && self.storage_publisher_member.is_none() {
+        if self.storage_publisher_pending.is_none()
+            && desired == self.storage_publisher_member.is_some()
+        {
             return Ok(());
         }
-        let cfg = ctx.get_gcp_config()?;
-        let topic = self.topic_name.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                resource_id: Some(queue.id.clone()),
-                message: "Topic name missing during storage ingress reconciliation".into(),
-            })
-        })?;
-        let member = if desired {
+        if desired && self.storage_publisher_member.is_none() {
             let account = ctx
                 .service_provider
-                .get_gcp_gcs_client(cfg)?
+                .get_gcp_gcs_client(ctx.get_gcp_config()?)?
                 .get_project_service_account()
                 .await
                 .context(ErrorData::CloudPlatformError {
                     resource_id: Some(queue.id.clone()),
                     message: "Read the Cloud Storage service agent for queue ingress".into(),
                 })?;
-            format!("serviceAccount:{}", account.email_address)
-        } else {
-            self.storage_publisher_member.clone().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    resource_id: Some(queue.id.clone()),
-                    message: "Storage publisher membership missing during removal".into(),
-                })
-            })?
+            self.storage_publisher_member =
+                Some(format!("serviceAccount:{}", account.email_address));
+        }
+        self.storage_publisher_pending = Some(desired);
+        Ok(())
+    }
+
+    async fn reconcile_storage_publisher(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        let Some(desired) = self.storage_publisher_pending else {
+            return Ok(());
         };
-        let client = ctx.service_provider.get_gcp_pubsub_client(cfg)?;
+        let Some(member) = self.storage_publisher_member.clone() else {
+            // Nothing was ever recorded, so there is no grant to remove.
+            self.storage_publisher_pending = None;
+            return Ok(());
+        };
+        let topic = self.topic_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(queue.id.clone()),
+                message: "Topic name missing during storage ingress reconciliation".into(),
+            })
+        })?;
+        let client = ctx
+            .service_provider
+            .get_gcp_pubsub_client(ctx.get_gcp_config()?)?;
         let mut policy = client.get_topic_iam_policy(topic.clone()).await.context(
             ErrorData::CloudPlatformError {
                 resource_id: Some(queue.id.clone()),
@@ -872,6 +1002,7 @@ impl GcpQueueController {
                 })?;
         }
         self.storage_publisher_member = desired.then_some(member);
+        self.storage_publisher_pending = None;
         Ok(())
     }
 }
