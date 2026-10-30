@@ -3,13 +3,14 @@
 //! Provides the high-level `setup()` entry point that each E2E test calls,
 //! plus the support matrix, deployment helpers, and stack evaluation logic.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alien_core::{ClientConfig, Platform, Stack};
+use alien_core::{ClientConfig, Platform, Stack, Worker, WorkerCode};
 use anyhow::Context;
 use tracing::info;
 
@@ -816,24 +817,38 @@ pub(crate) fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
 // Deploy orchestration
 // ---------------------------------------------------------------------------
 
-/// Deploy a test app to the given platform with the specified model and app.
-///
-/// Extract ECR image tags from a pushed stack's worker resources.
-pub(crate) fn extract_ecr_image_tags(stack: &Stack) -> Vec<String> {
-    use alien_core::Worker;
-
-    stack
-        .resources()
-        .filter_map(|(_, entry)| {
-            let func = entry.config.downcast_ref::<Worker>()?;
-            if let alien_core::WorkerCode::Image { ref image } = func.code {
-                // Image URI: "123.dkr.ecr.us-east-1.amazonaws.com/repo:tag"
-                image.split(':').last().map(|t| t.to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
+/// Group pushed Worker image tags by their actual repository path.
+/// The manager provisions project repositories; the shared base-image repository
+/// is not where application images are published.
+pub(crate) fn ecr_images_by_repository(
+    stack: &Stack,
+) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+    let mut repositories = BTreeMap::<String, Vec<String>>::new();
+    for (_, entry) in stack.resources() {
+        let Some(worker) = entry.config.downcast_ref::<Worker>() else {
+            continue;
+        };
+        let WorkerCode::Image { image } = &worker.code else {
+            continue;
+        };
+        let (_, path) = image
+            .split_once('/')
+            .context("Pushed image has no repository path")?;
+        let (repository, tag) = path.rsplit_once(':').context("Pushed image has no tag")?;
+        anyhow::ensure!(
+            !repository.is_empty() && !tag.is_empty() && !path.contains('@'),
+            "Expected a tagged pushed image: {image}"
+        );
+        repositories
+            .entry(repository.to_string())
+            .or_default()
+            .push(tag.to_string());
+    }
+    for tags in repositories.values_mut() {
+        tags.sort();
+        tags.dedup();
+    }
+    Ok(repositories)
 }
 
 /// Mirrors the production `alien build` + `alien release` + `alien deploy` flow:
@@ -895,9 +910,8 @@ pub async fn deploy_test_app(
     // different region, images are replicated asynchronously and may not be
     // available immediately after push.
     if platform == Platform::Aws && config.aws_target.is_some() {
-        let ecr_tags: Vec<String> = extract_ecr_image_tags(&pushed_stack);
-        if !ecr_tags.is_empty() {
-            crate::build_push::wait_for_ecr_replication(&config, &ecr_tags).await?;
+        for (repository, tags) in ecr_images_by_repository(&pushed_stack)? {
+            crate::build_push::wait_for_ecr_replication(&config, &repository, &tags).await?;
         }
     }
 
@@ -1088,9 +1102,8 @@ pub async fn developer_setup(
 
     // AWS cross-region: wait for ECR replication
     if platform == Platform::Aws && config.aws_target.is_some() {
-        let ecr_tags: Vec<String> = extract_ecr_image_tags(&pushed_stack);
-        if !ecr_tags.is_empty() {
-            crate::build_push::wait_for_ecr_replication(&config, &ecr_tags).await?;
+        for (repository, tags) in ecr_images_by_repository(&pushed_stack)? {
+            crate::build_push::wait_for_ecr_replication(&config, &repository, &tags).await?;
         }
     }
 
@@ -1513,6 +1526,63 @@ fn deployment_running_timeout(platform: Platform) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::ResourceLifecycle;
+
+    #[test]
+    fn replication_checks_the_pushed_project_repositories() {
+        let stack = Stack::new("replication".to_string())
+            .add(
+                Worker::new("first".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "manager.example:8080/project-default:one".into(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Worker::new("second".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "manager.example:8080/project-default:two".into(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Worker::new("third".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "manager.example:8080/nested/project:one".into(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        assert_eq!(
+            ecr_images_by_repository(&stack).expect("pushed references should parse"),
+            BTreeMap::from([
+                ("project-default".into(), vec!["one".into(), "two".into()]),
+                ("nested/project".into(), vec!["one".into()]),
+            ])
+        );
+        let invalid = Stack::new("invalid".into())
+            .add(
+                Worker::new("worker".into())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "manager.example/project@sha256:1234".into(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        assert!(
+            ecr_images_by_repository(&invalid).is_err(),
+            "digest references must not become tags"
+        );
+    }
+
     #[test]
     fn azure_readiness_budget_accounts_for_slow_control_plane_propagation() {
         assert_eq!(

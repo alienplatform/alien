@@ -729,9 +729,8 @@ async fn prepare_distribution(
     .await?;
 
     if registry_platform == Platform::Aws && config.aws_target.is_some() {
-        let tags = e2e::extract_ecr_image_tags(&pushed_stack);
-        if !tags.is_empty() {
-            crate::build_push::wait_for_ecr_replication(&config, &tags).await?;
+        for (repository, tags) in e2e::ecr_images_by_repository(&pushed_stack)? {
+            crate::build_push::wait_for_ecr_replication(&config, &repository, &tags).await?;
         }
     }
 

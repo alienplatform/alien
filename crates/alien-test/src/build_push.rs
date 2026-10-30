@@ -9,8 +9,15 @@
 
 use std::path::Path;
 
+use alien_aws_clients::{
+    aws::ecr::{BatchGetImageRequest, ImageIdentifier},
+    EcrApi, EcrClient,
+};
 use alien_build::settings::{BuildSettings, PlatformBuildSettings, PushSettings};
-use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Platform, Worker, WorkerCode};
+use alien_core::{
+    AwsClientConfig, AwsCredentials, Container, ContainerCode, Daemon, DaemonCode, Platform,
+    Worker, WorkerCode,
+};
 use anyhow::Context;
 use dockdash::{ClientProtocol, PushOptions, RegistryAuth};
 use tracing::info;
@@ -233,12 +240,9 @@ fn extract_ecr_region(ecr_url: &str) -> anyhow::Result<String> {
 /// worker polls the target-region ECR until the image tag is available.
 pub async fn wait_for_ecr_replication(
     config: &TestConfig,
+    repo_name: &str,
     image_tags: &[String],
 ) -> anyhow::Result<()> {
-    use alien_aws_clients::aws::ecr::{BatchGetImageRequest, ImageIdentifier};
-    use alien_aws_clients::{EcrApi, EcrClient};
-    use alien_core::{AwsClientConfig, AwsCredentials};
-
     let mgmt = config
         .aws_mgmt
         .as_ref()
@@ -247,8 +251,6 @@ pub async fn wait_for_ecr_replication(
         .aws_target
         .as_ref()
         .context("AWS target credentials required")?;
-    // Use the E2E repo name — same one that create_aws_push_settings pushes to.
-    let repo_name = "alien-e2e";
     let ecr_region = mgmt.region.clone();
 
     // If Lambda deploys in the same region as ECR, no replication needed.
