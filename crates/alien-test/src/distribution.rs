@@ -34,6 +34,7 @@ use alien_core::{Container, ContainerCode, Kv, Queue, ResourceSpec, Storage, Vau
 use alien_gcp_clients::{CloudKmsApi, ModelGardenApi, ResourceManagerApi};
 use alien_manager::{auth::Subject, traits::CreateImportedDeploymentParams};
 use anyhow::Context;
+use hcl::{expr::Expression, structure::Structure};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::{fs, process::Command};
@@ -279,6 +280,39 @@ impl DistributionArtifactCleanup {
                         .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes");
                     apply_env(&mut detach, &env);
                     run_command(detach, "detach retained Terraform keys").await?;
+                }
+                let erasable = lift_terraform_destroy_guards(workdir.path()).await?;
+                if !erasable.is_empty() {
+                    // `force_destroy` lives in state. Apply only the resources that need it:
+                    // after a failed setup, a full apply would create what setup never did.
+                    let mut list = Command::new("terraform");
+                    list.current_dir(workdir.path()).args(["state", "list"]);
+                    apply_env(&mut list, &env);
+                    let output = list
+                        .output()
+                        .await
+                        .context("Failed to run terraform state list")?;
+                    anyhow::ensure!(
+                        output.status.success(),
+                        "terraform state list failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    let state = String::from_utf8(output.stdout)
+                        .context("terraform state list printed invalid UTF-8")?;
+                    let targets = erasable
+                        .iter()
+                        .filter(|address| state.lines().any(|line| line == address.as_str()))
+                        .map(|address| format!("-target={address}"))
+                        .collect::<Vec<_>>();
+                    if !targets.is_empty() {
+                        let mut apply = Command::new("terraform");
+                        apply
+                            .current_dir(workdir.path())
+                            .args(["apply", "-auto-approve", "-input=false", "-lock-timeout=5m"])
+                            .args(&targets);
+                        apply_env(&mut apply, &env);
+                        run_command(apply, "terraform apply to allow erasing setup data").await?;
+                    }
                 }
                 for attempt in 1..=3 {
                     let mut cmd = Command::new("terraform");
@@ -1937,6 +1971,96 @@ fn stop_before_helm_for_terraform_handoff_debug(
         helm_target.namespace,
         commands.join("\n")
     )
+}
+
+/// Setup protects the data resources it owns: they carry `prevent_destroy`, and buckets
+/// refuse to delete their objects. Runtime deletion hands them back to setup teardown, so
+/// a plain `terraform destroy` of a module that still holds them always fails. The e2e
+/// run created every one of them and must erase them, so it lifts both guards in its own
+/// copy of the module. Returns the addresses whose `force_destroy` was lifted: that one is
+/// recorded in state, so the caller applies those before destroying.
+async fn lift_terraform_destroy_guards(workdir: &Path) -> anyhow::Result<Vec<String>> {
+    let mut force_destroyed = Vec::new();
+    let mut entries = fs::read_dir(workdir)
+        .await
+        .context("Failed to list Terraform module")?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("tf") {
+            continue;
+        }
+        let module = fs::read_to_string(&path)
+            .await
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        if let Some(erasable) = without_destroy_guards(&module)
+            .with_context(|| format!("Failed to parse {}", path.display()))?
+        {
+            fs::write(&path, erasable.module)
+                .await
+                .with_context(|| format!("Failed to write {}", path.display()))?;
+            force_destroyed.extend(erasable.force_destroyed);
+        }
+    }
+    Ok(force_destroyed)
+}
+
+struct ErasableModule {
+    module: String,
+    /// `type.label` of resources whose `force_destroy` was lifted.
+    force_destroyed: Vec<String>,
+}
+
+/// `None` when the file has nothing to lift.
+fn without_destroy_guards(module: &str) -> anyhow::Result<Option<ErasableModule>> {
+    let mut body = hcl::parse(module)?;
+    let mut lifted = false;
+    let mut force_destroyed = Vec::new();
+    for structure in body.0.iter_mut() {
+        let Structure::Block(resource) = structure else {
+            continue;
+        };
+        if resource.identifier.as_str() != "resource" {
+            continue;
+        }
+        let address = resource
+            .labels
+            .iter()
+            .map(|label| label.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        for structure in resource.body.0.iter_mut() {
+            match structure {
+                Structure::Attribute(attribute)
+                    if attribute.key.as_str() == "force_destroy"
+                        && attribute.expr == Expression::Bool(false) =>
+                {
+                    attribute.expr = Expression::Bool(true);
+                    force_destroyed.push(address.clone());
+                    lifted = true;
+                }
+                Structure::Block(lifecycle) if lifecycle.identifier.as_str() == "lifecycle" => {
+                    for structure in lifecycle.body.0.iter_mut() {
+                        if let Structure::Attribute(attribute) = structure {
+                            if attribute.key.as_str() == "prevent_destroy"
+                                && attribute.expr == Expression::Bool(true)
+                            {
+                                attribute.expr = Expression::Bool(false);
+                                lifted = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if !lifted {
+        return Ok(None);
+    }
+    Ok(Some(ErasableModule {
+        module: hcl::to_string(&body)?,
+        force_destroyed,
+    }))
 }
 
 fn shell_quote_path(path: &Path) -> String {
@@ -4124,6 +4248,108 @@ mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionProfile};
     use alien_core::ResourceLifecycle;
+
+    /// Normalizes the guards back, so the comparison shows that lifting them changed
+    /// nothing else in the module.
+    fn guards_restored(module: &str) -> hcl::Body {
+        let mut body = hcl::parse(module).expect("module should parse");
+        for structure in body.0.iter_mut() {
+            let Structure::Block(resource) = structure else {
+                continue;
+            };
+            for structure in resource.body.0.iter_mut() {
+                match structure {
+                    Structure::Attribute(attribute)
+                        if attribute.key.as_str() == "force_destroy" =>
+                    {
+                        attribute.expr = Expression::Bool(false);
+                    }
+                    Structure::Block(lifecycle) if lifecycle.identifier.as_str() == "lifecycle" => {
+                        for structure in lifecycle.body.0.iter_mut() {
+                            if let Structure::Attribute(attribute) = structure {
+                                if attribute.key.as_str() == "prevent_destroy" {
+                                    attribute.expr = Expression::Bool(true);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        body
+    }
+
+    #[test]
+    fn e2e_teardown_lifts_only_the_destroy_guards_of_setup_data() {
+        let stack = Stack::new("erasable".to_string())
+            .add(
+                Storage::new("objects".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Kv::new("state".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        for target in [
+            alien_terraform::TerraformTarget::Aws,
+            alien_terraform::TerraformTarget::Gcp,
+        ] {
+            let registry = alien_terraform::TfRegistry::built_in();
+            let module = alien_terraform::generate_terraform_module(
+                &stack,
+                target,
+                alien_terraform::TerraformOptions {
+                    display_name: None,
+                    registry: &registry,
+                    stack_settings: StackSettings::default(),
+                    registration: None,
+                    helm_install: None,
+                    supported_aws_regions: Vec::new(),
+                },
+            )
+            .expect("Terraform generation should succeed");
+            let mut lifted_buckets = Vec::new();
+            for (path, contents) in module.iter().filter(|(path, _)| path.ends_with(".tf")) {
+                let protected = contents.contains("prevent_destroy = true")
+                    || contents.contains("force_destroy = false");
+                let Some(ErasableModule {
+                    module: erasable,
+                    force_destroyed,
+                }) = without_destroy_guards(contents).expect("module parses")
+                else {
+                    assert!(!protected, "{target:?} {path} kept a destroy guard");
+                    continue;
+                };
+                assert!(
+                    !erasable.contains("prevent_destroy = true")
+                        && !erasable.contains("force_destroy = false"),
+                    "{target:?} {path} still refuses destroy:\n{erasable}"
+                );
+                assert_eq!(
+                    force_destroyed.len(),
+                    erasable.matches("force_destroy = true").count(),
+                    "{target:?} {path}"
+                );
+                lifted_buckets.extend(force_destroyed);
+                assert_eq!(
+                    guards_restored(&erasable),
+                    hcl::parse(contents).expect("module parses"),
+                    "{target:?} {path}: only the guards may change"
+                );
+            }
+            let bucket = match target {
+                alien_terraform::TerraformTarget::Aws => "aws_s3_bucket.objects",
+                _ => "google_storage_bucket.objects",
+            };
+            assert_eq!(
+                lifted_buckets,
+                vec![bucket.to_string()],
+                "{target:?}: only the bucket needs an apply before destroy"
+            );
+        }
+    }
 
     fn empty_test_config() -> TestConfig {
         TestConfig {
