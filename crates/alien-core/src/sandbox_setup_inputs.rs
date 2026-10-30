@@ -10,8 +10,8 @@ use crate::remote_bindings::{
 use crate::sandbox_build_role::{SandboxBuildRole, SANDBOX_BUNDLE_STORAGE_ID};
 use crate::sandbox_egress::{sandbox_egress_network, sandbox_needs_connector};
 use crate::{
-    parse_ecr_image_repository, ErrorData, ResourceLifecycle, Result, Sandbox, SandboxCode, Stack,
-    Storage, BUNDLE_REGION_TOKEN,
+    parse_ecr_image_repository, ErrorData, ResourceEntry, ResourceLifecycle, Result, Sandbox,
+    SandboxCode, Stack, Storage, BUNDLE_REGION_TOKEN,
 };
 
 /// The account a sandbox's scaffolding is rendered into.
@@ -58,11 +58,17 @@ pub fn aws_sandbox_egress_network_id<'a>(
 /// sandbox released as a container image; a deployment set up before it existed builds from the
 /// bundle a publisher wrote into the store its setup granted.
 pub fn aws_sandbox_renders_bundle(stack: &Stack, sandbox_id: &str) -> bool {
-    stack.resources.get(sandbox_id).is_some_and(|entry| {
-        entry.dependencies.iter().any(|dependency| {
-            dependency.resource_type == Storage::RESOURCE_TYPE
-                && dependency.id == SANDBOX_BUNDLE_STORAGE_ID
-        })
+    stack
+        .resources
+        .get(sandbox_id)
+        .is_some_and(aws_sandbox_entry_renders_bundle)
+}
+
+/// [`aws_sandbox_renders_bundle`] for the sandbox's own entry.
+pub fn aws_sandbox_entry_renders_bundle(entry: &ResourceEntry) -> bool {
+    entry.dependencies.iter().any(|dependency| {
+        dependency.resource_type == Storage::RESOURCE_TYPE
+            && dependency.id == SANDBOX_BUNDLE_STORAGE_ID
     })
 }
 
