@@ -45,3 +45,6 @@ mod gcp_notifications_live;
 
 #[cfg(test)]
 mod aws_notifications_live;
+
+#[cfg(test)]
+mod azure_notifications_live;
