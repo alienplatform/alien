@@ -1,6 +1,7 @@
 use crate::error::{Error, ErrorData};
+use alien_bindings::providers::queue::storage_notifications::azure_queue_payload;
 use alien_core::{MessagePayload, QueueMessage, StorageEvent, StorageEventType, StorageEvents};
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use base64::{engine::general_purpose, Engine};
 use cloudevents::AttributesReader;
 use cloudevents::{event::ExtensionValue, Data, Event};
@@ -181,6 +182,11 @@ pub fn dapr_cloudevent_to_queue_messages(event: Event) -> Result<Vec<QueueMessag
             }
         }
     };
+
+    let payload = azure_queue_payload(payload).context(ErrorData::EventProcessingFailed {
+        event_type: event_type_str.to_string(),
+        reason: "Failed to normalize Service Bus queue payload".to_string(),
+    })?;
 
     // Use Azure Service Bus MessageId if available, otherwise fall back to CloudEvent ID
     let message_id =
