@@ -333,23 +333,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_or_malformed_recorded_names_never_fall_back_to_the_prefix() {
-        let stack = stack(ResourceLifecycle::Frozen, false);
-        for controller in [
-            serde_json::to_value(AwsStorageController::default()).unwrap(),
-            serde_json::to_value(AwsStorageController {
-                bucket_name: Some(String::new()),
-                ..Default::default()
-            })
-            .unwrap(),
-            json!({"state": "UnknownState", "bucketName": "external-bucket"}),
-        ] {
-            let state = saved_resource(&stack, "objects", controller);
-            assert!(aws_permissions_boundary_for_stack(&stack, &state, &context()).is_err());
-        }
-    }
-
-    #[test]
     fn imported_key_boundary_uses_exact_arn_ceiling() {
         let key_arn = "arn:aws:kms:us-east-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab";
         for set in [
@@ -433,46 +416,6 @@ mod tests {
             error.to_string().contains("resource state is missing"),
             "{error}"
         );
-        for arn in [None, Some(String::new())] {
-            let controller = AwsKeyController {
-                key_arn: arn,
-                ..Default::default()
-            };
-            let state = saved_resource(
-                &stack,
-                "encryption",
-                serde_json::to_value(controller).unwrap(),
-            );
-            let error = aws_permissions_boundary_for_stack(&stack, &state, &context()).unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("has not recorded its physical name"),
-                "{error}"
-            );
-        }
-    }
-
-    #[test]
-    fn vault_context_uses_the_recorded_parameter_prefix() {
-        let stack = Stack::new("boundary".to_string())
-            .add(
-                Vault::new("secrets".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-        let controller = AwsVaultController {
-            vault_prefix: Some("external-parameters".to_string()),
-            ..Default::default()
-        };
-        let state = saved_resource(&stack, "secrets", serde_json::to_value(controller).unwrap());
-        assert_eq!(
-            boundary_grant_context(&stack, &state, &context(), "secrets")
-                .unwrap()
-                .resource_name
-                .as_deref(),
-            Some("external-parameters")
-        );
     }
 
     #[test]
@@ -490,8 +433,20 @@ mod tests {
         assert_eq!(actual, expected);
     }
     #[test]
-    fn every_named_writer_uses_its_durable_name() {
+    fn named_writers_require_valid_durable_names() {
         let stack = Stack::new("boundary".to_string())
+            .add(
+                Storage::new("objects".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Key::new("encryption".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Vault::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
             .add(
                 Queue::new("queue".to_string()).build(),
                 ResourceLifecycle::Frozen,
@@ -516,75 +471,93 @@ mod tests {
                 ResourceLifecycle::Live,
             )
             .build();
-        for (id, controller, name) in [
+        for (id, controller, field, name) in [
+            (
+                "objects",
+                serde_json::to_value(AwsStorageController::default()).unwrap(),
+                "bucketName",
+                "external-approved-bucket",
+            ),
+            (
+                "encryption",
+                serde_json::to_value(AwsKeyController::default()).unwrap(),
+                "keyArn",
+                "arn:aws:kms:us-east-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+            ),
+            (
+                "secrets",
+                serde_json::to_value(AwsVaultController::default()).unwrap(),
+                "vaultPrefix",
+                "external-parameters",
+            ),
             (
                 "queue",
-                serde_json::to_value(AwsQueueController {
-                    queue_name: Some("imported-queue".to_string()),
-                    ..Default::default()
-                })
-                .unwrap(),
+                serde_json::to_value(AwsQueueController::default()).unwrap(),
+                "queueName",
                 "imported-queue",
             ),
             (
                 "table",
-                serde_json::to_value(AwsKvController {
-                    table_name: Some("imported-table".to_string()),
-                    ..Default::default()
-                })
-                .unwrap(),
+                serde_json::to_value(AwsKvController::default()).unwrap(),
+                "tableName",
                 "imported-table",
             ),
             (
                 "build",
-                serde_json::to_value(AwsBuildController {
-                    project_name: Some("imported-build".to_string()),
-                    ..Default::default()
-                })
-                .unwrap(),
+                serde_json::to_value(AwsBuildController::default()).unwrap(),
+                "projectName",
                 "imported-build",
             ),
             (
                 "worker",
-                serde_json::to_value(AwsWorkerController {
-                    worker_name: Some("imported-worker".to_string()),
-                    ..Default::default()
-                })
-                .unwrap(),
+                serde_json::to_value(AwsWorkerController::default()).unwrap(),
+                "workerName",
                 "imported-worker",
             ),
         ] {
-            let state = saved_resource(&stack, id, controller);
+            let mut controller = controller;
+            controller[field] = json!(name);
+            let state = saved_resource(&stack, id, controller.clone());
             let resolved = boundary_grant_context(&stack, &state, &context(), id).unwrap();
             assert_eq!(resolved.resource_name.as_deref(), Some(name));
             assert_eq!(resolved.resource_id.as_deref(), Some(id));
+            for mismatch in ["type", "platform"] {
+                let mut state = state.clone();
+                let saved = state.resources.get_mut(id).unwrap();
+                if mismatch == "type" {
+                    saved.resource_type = "service-account".to_string();
+                } else {
+                    saved.controller_platform = Some(Platform::Gcp);
+                }
+                let error = boundary_grant_context(&stack, &state, &context(), id).unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("recorded resource type or platform does not match"),
+                    "{id}/{mismatch}: {error}"
+                );
+            }
+            for invalid in [Value::Null, json!("")] {
+                controller[field] = invalid;
+                let state = saved_resource(&stack, id, controller.clone());
+                let error = boundary_grant_context(&stack, &state, &context(), id).unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("has not recorded its physical name"),
+                    "{id}: {error}"
+                );
+            }
+            controller[field] = json!(name);
+            controller["state"] = json!("UnknownState");
+            let state = saved_resource(&stack, id, controller);
+            assert!(
+                boundary_grant_context(&stack, &state, &context(), id).is_err(),
+                "{id}"
+            );
         }
     }
 
-    #[test]
-    fn recorded_platform_and_type_must_match_before_resolving_a_name() {
-        let stack = stack(ResourceLifecycle::Frozen, false);
-        let controller = AwsStorageController {
-            bucket_name: Some("imported-bucket".to_string()),
-            ..Default::default()
-        };
-        let state = saved_resource(&stack, "objects", serde_json::to_value(controller).unwrap());
-        let mut wrong_type = state.clone();
-        wrong_type
-            .resources
-            .get_mut("objects")
-            .unwrap()
-            .resource_type = "queue".to_string();
-        let mut wrong_platform = state;
-        wrong_platform
-            .resources
-            .get_mut("objects")
-            .unwrap()
-            .controller_platform = Some(Platform::Gcp);
-        for state in [wrong_type, wrong_platform] {
-            assert!(aws_permissions_boundary_for_stack(&stack, &state, &context()).is_err());
-        }
-    }
     #[test]
     fn cluster_context_preserves_boundary_and_uses_the_referenced_cloud() {
         let cluster = KubernetesCluster::new("cluster".to_string())
