@@ -2,9 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use alien_aws_clients::iam::{
     AttachedPolicies, AttachedPolicy, CreatePolicyResponse, CreatePolicyResult,
-    CreatePolicyVersionResponse, CreatePolicyVersionResult, ListAttachedRolePoliciesResponse,
-    ListAttachedRolePoliciesResult, ListPolicyVersionsResponse, ListPolicyVersionsResult,
-    MockIamApi, Policy, PolicyVersion, PolicyVersions,
+    CreatePolicyVersionResponse, CreatePolicyVersionResult, GetPolicyResponse, GetPolicyResult,
+    ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, ListPolicyVersionsResponse,
+    ListPolicyVersionsResult, MockIamApi, Policy, PolicyVersion, PolicyVersions,
 };
 use alien_client_core::ErrorData as ClientError;
 use futures::executor::block_on;
@@ -16,6 +16,49 @@ use crate::core::{
 };
 
 const ARN: &str = "arn:aws:iam::123456789012:policy/test-prefix-deployment-management-boundary";
+const DESCRIPTION: &str = "Permissions boundary for the roles that deployment test-prefix manages";
+
+fn policy(description: Option<&str>) -> Policy {
+    Policy {
+        policy_name: None,
+        policy_id: None,
+        arn: ARN.to_string(),
+        path: None,
+        description: description.map(str::to_string),
+        default_version_id: None,
+        attachment_count: None,
+        is_attachable: None,
+        create_date: None,
+        update_date: None,
+    }
+}
+
+/// `GetPolicy` for the boundary name, answered with `description`.
+fn expect_boundary(
+    iam: &mut MockIamApi,
+    sequence: &mut Sequence,
+    description: Option<&'static str>,
+) {
+    iam.expect_get_policy()
+        .withf(|arn| arn == ARN)
+        .times(1)
+        .in_sequence(sequence)
+        .returning(move |_| {
+            Ok(GetPolicyResponse {
+                get_policy_result: GetPolicyResult {
+                    policy: policy(description),
+                },
+            })
+        });
+}
+
+fn conflict() -> AlienError<ClientError> {
+    AlienError::new(ClientError::RemoteResourceConflict {
+        resource_type: "policy".to_string(),
+        resource_name: ARN.to_string(),
+        message: "exists".to_string(),
+    })
+}
 
 async fn executor(iam: MockIamApi) -> SingleControllerExecutor {
     let iam = Arc::new(iam);
@@ -69,7 +112,7 @@ async fn installation_records_exact_document_and_retries_without_reinstalling() 
     iam.expect_create_policy()
         .times(1)
         .in_sequence(&mut sequence)
-        .returning(|_, _, _| {
+        .returning(|_, _, _, _| {
             Err(AlienError::new(ClientError::Timeout {
                 message: "write failed".to_string(),
             }))
@@ -77,23 +120,14 @@ async fn installation_records_exact_document_and_retries_without_reinstalling() 
     iam.expect_create_policy()
         .times(1)
         .in_sequence(&mut sequence)
-        .returning(move |name, document, _| {
+        .returning(move |name, document, _, description| {
             assert_eq!(name, "test-prefix-deployment-management-boundary");
+            assert_eq!(description.as_deref(), Some(DESCRIPTION));
             *captured.lock().unwrap() =
                 Some(serde_json::from_str::<serde_json::Value>(document).unwrap());
             Ok(CreatePolicyResponse {
                 create_policy_result: CreatePolicyResult {
-                    policy: Policy {
-                        policy_name: Some(name.to_string()),
-                        policy_id: None,
-                        arn: ARN.to_string(),
-                        path: None,
-                        default_version_id: None,
-                        attachment_count: None,
-                        is_attachable: None,
-                        create_date: None,
-                        update_date: None,
-                    },
+                    policy: policy(Some(DESCRIPTION)),
                 },
             })
         });
@@ -163,13 +197,8 @@ async fn existing_policy_prunes_nondefault_version_before_installing_and_records
         iam.expect_create_policy()
             .times(1)
             .in_sequence(&mut sequence)
-            .returning(|_, _, _| {
-                Err(AlienError::new(ClientError::RemoteResourceConflict {
-                    resource_type: "policy".to_string(),
-                    resource_name: ARN.to_string(),
-                    message: "exists".to_string(),
-                }))
-            });
+            .returning(|_, _, _, _| Err(conflict()));
+        expect_boundary(&mut iam, &mut sequence, Some(DESCRIPTION));
         iam.expect_list_policy_versions()
             .withf(|arn| arn == ARN)
             .times(1)
@@ -222,11 +251,14 @@ async fn a_boundary_created_without_a_response_is_replaced_by_the_next_attempt()
     // IAM created the policy but the response was lost. The client does not resend the
     // create, so the error reaches setup with the ARN already recorded.
     let mut iam = MockIamApi::new();
-    iam.expect_create_policy().times(1).returning(|_, _, _| {
-        Err(AlienError::new(ClientError::Timeout {
-            message: "response lost".to_string(),
-        }))
-    });
+    iam.expect_create_policy()
+        .withf(|_, _, _, description| description.as_deref() == Some(DESCRIPTION))
+        .times(1)
+        .returning(|_, _, _, _| {
+            Err(AlienError::new(ClientError::Timeout {
+                message: "response lost".to_string(),
+            }))
+        });
     let first = executor(iam).await;
     let mut controller = AwsRemoteStackManagementController::default();
     first
@@ -241,13 +273,8 @@ async fn a_boundary_created_without_a_response_is_replaced_by_the_next_attempt()
     iam.expect_create_policy()
         .times(1)
         .in_sequence(&mut sequence)
-        .returning(|_, _, _| {
-            Err(AlienError::new(ClientError::RemoteResourceConflict {
-                resource_type: "policy".to_string(),
-                resource_name: ARN.to_string(),
-                message: "exists".to_string(),
-            }))
-        });
+        .returning(|_, _, _, _| Err(conflict()));
+    expect_boundary(&mut iam, &mut sequence, Some(DESCRIPTION));
     iam.expect_list_policy_versions()
         .withf(|arn| arn == ARN)
         .times(1)
@@ -285,13 +312,10 @@ async fn a_boundary_created_without_a_response_is_replaced_by_the_next_attempt()
 #[tokio::test]
 async fn setup_never_replaces_a_same_named_policy_it_did_not_record() {
     let mut iam = MockIamApi::new();
-    iam.expect_create_policy().times(1).returning(|_, _, _| {
-        Err(AlienError::new(ClientError::RemoteResourceConflict {
-            resource_type: "policy".to_string(),
-            resource_name: ARN.to_string(),
-            message: "exists".to_string(),
-        }))
-    });
+    iam.expect_create_policy()
+        .times(1)
+        .returning(|_, _, _, _| Err(conflict()));
+    iam.expect_get_policy().never();
     iam.expect_list_policy_versions().never();
     iam.expect_create_policy_version().never();
     let executor = executor(iam).await;
@@ -306,6 +330,47 @@ async fn setup_never_replaces_a_same_named_policy_it_did_not_record() {
     // Deletion removes only a recorded boundary, so the existing policy is not adopted.
     assert_eq!(controller.permissions_boundary_arn, None);
     assert_eq!(controller.permissions_boundary_document, None);
+}
+
+#[tokio::test]
+async fn a_name_taken_after_a_failed_create_is_never_replaced() {
+    // The first create failed without creating anything, and another policy then took the
+    // name. The recorded ARN does not make that policy ours.
+    let mut sequence = Sequence::new();
+    let mut iam = MockIamApi::new();
+    iam.expect_create_policy()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _, _, _| Err(conflict()));
+    expect_boundary(&mut iam, &mut sequence, Some("created by someone else"));
+    iam.expect_list_policy_versions().never();
+    iam.expect_create_policy_version().never();
+    iam.expect_delete_policy().never();
+    let install = executor(iam).await;
+    let mut controller = AwsRemoteStackManagementController::default();
+    controller.permissions_boundary_arn = Some(ARN.to_string());
+    let error = install
+        .with_context(|ctx| block_on(controller.install_permissions_boundary(ctx)))
+        .unwrap_err();
+    assert!(matches!(
+        error.error,
+        Some(ErrorData::ExistingCloudResourceNotOwned { .. })
+    ));
+    assert_eq!(controller.permissions_boundary_arn, None);
+
+    // A boundary that is recorded but held by another policy is left in place on deletion.
+    let mut sequence = Sequence::new();
+    let mut iam = MockIamApi::new();
+    expect_boundary(&mut iam, &mut sequence, None);
+    iam.expect_list_policy_versions().never();
+    iam.expect_delete_policy().never();
+    let delete = executor(iam).await;
+    let mut controller = AwsRemoteStackManagementController::default();
+    controller.permissions_boundary_arn = Some(ARN.to_string());
+    delete
+        .with_context(|ctx| block_on(controller.deleting_permissions_boundary(ctx)))
+        .unwrap();
+    assert_eq!(controller.permissions_boundary_arn, None);
 }
 
 #[tokio::test]
@@ -359,7 +424,7 @@ async fn deletion_orders_role_versions_and_boundary_and_preserves_failed_cleanup
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Ok(()));
-        iam.expect_list_policy_versions()
+        iam.expect_get_policy()
             .withf(|arn| arn == ARN)
             .times(1)
             .in_sequence(&mut sequence)
@@ -370,10 +435,19 @@ async fn deletion_orders_role_versions_and_boundary_and_preserves_failed_cleanup
                         resource_name: ARN.to_string(),
                     }))
                 } else {
-                    Ok(versions())
+                    Ok(GetPolicyResponse {
+                        get_policy_result: GetPolicyResult {
+                            policy: policy(Some(DESCRIPTION)),
+                        },
+                    })
                 }
             });
         if !missing {
+            iam.expect_list_policy_versions()
+                .withf(|arn| arn == ARN)
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Ok(versions()));
             for i in 2..=5 {
                 iam.expect_delete_policy_version()
                     .withf(move |arn, id| arn == ARN && id == format!("v{i}"))

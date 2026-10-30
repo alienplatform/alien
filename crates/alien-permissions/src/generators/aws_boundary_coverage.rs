@@ -267,7 +267,7 @@ fn deny_may_match(deny: &Value, allow: &Value) -> bool {
 }
 
 /// Whether some action matches both patterns. IAM action names are case-insensitive.
-fn action_patterns_overlap(left: &str, right: &str) -> bool {
+pub(super) fn action_patterns_overlap(left: &str, right: &str) -> bool {
     let (left, right) = (left.as_bytes(), right.as_bytes());
     // overlap[i][j]: some string matches both left[i..] and right[j..].
     let mut overlap = vec![vec![false; right.len() + 1]; left.len() + 1];

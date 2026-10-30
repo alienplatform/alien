@@ -308,7 +308,7 @@ async fn create_policy_is_not_resent_after_a_server_error() {
         })
         .await;
     let error = client(&server)
-        .create_policy("test-boundary", "{}", None)
+        .create_policy("test-boundary", "{}", None, None)
         .await
         .unwrap_err();
     assert!(!matches!(
@@ -316,6 +316,73 @@ async fn create_policy_is_not_resent_after_a_server_error() {
         Some(ErrorData::RemoteResourceConflict { .. })
     ));
     assert_eq!(mock.hits_async().await, 1);
+}
+
+#[tokio::test]
+async fn a_policy_description_is_written_on_create_and_read_back() {
+    let server = MockServer::start_async().await;
+    let description = "Permissions boundary for the roles that deployment test manages";
+    let encoded = form_urlencoded::byte_serialize(description.as_bytes()).collect::<String>();
+    let create = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .body_contains("Action=CreatePolicy")
+                .body_contains(format!("Description={encoded}"));
+            then.status(200).body(
+                "<CreatePolicyResponse><CreatePolicyResult><Policy>\
+                 <Arn>arn:aws:iam::123456789012:policy/test-boundary</Arn>\
+                 </Policy></CreatePolicyResult></CreatePolicyResponse>",
+            );
+        })
+        .await;
+    // GetPolicy as IAM answers it, with the account and IDs replaced.
+    let get = server
+        .mock_async(|when, then| {
+            when.method(POST).body_contains("Action=GetPolicy");
+            then.status(200).body(
+                r#"<GetPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetPolicyResult>
+    <Policy>
+      <PermissionsBoundaryUsageCount>1</PermissionsBoundaryUsageCount>
+      <Path>/</Path>
+      <UpdateDate>2026-10-30T21:07:09Z</UpdateDate>
+      <DefaultVersionId>v1</DefaultVersionId>
+      <PolicyId>ANPAEXAMPLEPOLICYID00</PolicyId>
+      <IsAttachable>true</IsAttachable>
+      <PolicyName>test-boundary</PolicyName>
+      <Description>Permissions boundary for the roles that deployment test manages</Description>
+      <AttachmentCount>0</AttachmentCount>
+      <Arn>arn:aws:iam::123456789012:policy/test-boundary</Arn>
+      <Tags>
+        <member>
+          <Value>example</Value>
+          <Key>purpose</Key>
+        </member>
+      </Tags>
+      <CreateDate>2026-10-30T21:07:09Z</CreateDate>
+    </Policy>
+  </GetPolicyResult>
+  <ResponseMetadata>
+    <RequestId>00000000-0000-0000-0000-000000000000</RequestId>
+  </ResponseMetadata>
+</GetPolicyResponse>"#,
+            );
+        })
+        .await;
+    let client = client(&server);
+    client
+        .create_policy("test-boundary", "{}", None, Some(description.to_string()))
+        .await
+        .unwrap();
+    let policy = client
+        .get_policy("arn:aws:iam::123456789012:policy/test-boundary")
+        .await
+        .unwrap()
+        .get_policy_result
+        .policy;
+    assert_eq!(policy.description.as_deref(), Some(description));
+    assert_eq!(create.hits_async().await, 1);
+    assert_eq!(get.hits_async().await, 1);
 }
 
 #[tokio::test]

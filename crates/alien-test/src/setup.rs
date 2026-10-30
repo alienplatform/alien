@@ -317,7 +317,12 @@ async fn attach_policy_chunks(
         );
 
         let create_response = iam_client
-            .create_policy(&chunk_name, &policy_json, Some("/alien-e2e/".to_string()))
+            .create_policy(
+                &chunk_name,
+                &policy_json,
+                Some("/alien-e2e/".to_string()),
+                None,
+            )
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create scoped managed policy: {}", e))?;
         let policy_arn = create_response.create_policy_result.policy.arn;

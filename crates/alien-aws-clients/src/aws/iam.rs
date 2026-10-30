@@ -59,7 +59,9 @@ pub trait IamApi: Send + Sync + Debug {
         policy_name: &str,
         policy_document: &str,
         path: Option<String>,
+        description: Option<String>,
     ) -> Result<CreatePolicyResponse>;
+    async fn get_policy(&self, policy_arn: &str) -> Result<GetPolicyResponse>;
     async fn delete_policy(&self, policy_arn: &str) -> Result<()>;
     async fn create_policy_version(
         &self,
@@ -627,6 +629,7 @@ impl IamApi for IamClient {
         policy_name: &str,
         policy_document: &str,
         path: Option<String>,
+        description: Option<String>,
     ) -> Result<CreatePolicyResponse> {
         let mut params = vec![
             ("PolicyName".to_string(), policy_name.to_string()),
@@ -635,9 +638,18 @@ impl IamApi for IamClient {
         if let Some(path) = path {
             params.push(("Path".to_string(), path));
         }
+        if let Some(description) = description {
+            params.push(("Description".to_string(), description));
+        }
         let body = Self::build_form_body("CreatePolicy", "2010-05-08", params);
         self.post_xml_retrying_throttling(body, "CreatePolicy", policy_name)
             .await
+    }
+
+    async fn get_policy(&self, policy_arn: &str) -> Result<GetPolicyResponse> {
+        let params = vec![("PolicyArn".to_string(), policy_arn.to_string())];
+        let body = Self::build_form_body("GetPolicy", "2010-05-08", params);
+        self.post_xml(body, "GetPolicy", policy_arn).await
     }
 
     async fn delete_policy(&self, policy_arn: &str) -> Result<()> {
@@ -1007,11 +1019,24 @@ pub struct Policy {
     pub policy_id: Option<String>,
     pub arn: String,
     pub path: Option<String>,
+    pub description: Option<String>,
     pub default_version_id: Option<String>,
     pub attachment_count: Option<i32>,
     pub is_attachable: Option<bool>,
     pub create_date: Option<String>,
     pub update_date: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct GetPolicyResponse {
+    pub get_policy_result: GetPolicyResult,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct GetPolicyResult {
+    pub policy: Policy,
 }
 
 #[derive(Deserialize, Debug)]

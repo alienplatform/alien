@@ -500,7 +500,15 @@ impl AwsRemoteStackManagementController {
                 .service_provider
                 .get_aws_iam_client(ctx.get_aws_config()?)
                 .await?;
-            self.delete_owned_policy(client.as_ref(), arn).await?;
+            let description = permissions_boundary_description(ctx.resource_prefix);
+            match created_by_setup(client.as_ref(), arn, &description).await? {
+                Some(true) => self.delete_owned_policy(client.as_ref(), arn).await?,
+                Some(false) => warn!(
+                    policy_arn = %arn,
+                    "Not deleting permissions boundary: the policy with its name was not created by this setup"
+                ),
+                None => {}
+            }
             self.permissions_boundary_arn = None;
             self.permissions_boundary_document = None;
         }
@@ -692,6 +700,7 @@ impl AwsRemoteStackManagementController {
             &name,
             &arn,
             &serialized,
+            &permissions_boundary_description(ctx.resource_prefix),
             ctx.desired_config.id(),
         )
         .await?;
@@ -706,23 +715,46 @@ impl AwsRemoteStackManagementController {
         name: &str,
         arn: &str,
         document: &str,
+        description: &str,
         resource_id: &str,
     ) -> Result<()> {
+        let not_owned = || {
+            AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
+                resource_id: resource_id.to_string(),
+                object: format!("IAM policy '{arn}'"),
+            })
+        };
         // Keep the cleanup target even if AWS accepts the request but its response is lost.
         let recorded = self.permissions_boundary_arn.replace(arn.to_string());
-        match client.create_policy(name, document, None).await {
+        match client
+            .create_policy(name, document, None, Some(description.to_string()))
+            .await
+        {
             Ok(_) => Ok(()),
-            // Only a policy this deployment recorded is replaced, never one it did not create.
+            // Only a policy this deployment recorded and created is replaced. The recorded ARN
+            // alone does not show that the create landed: another policy may have taken the
+            // name after a failed attempt.
             Err(error) if is_remote_conflict(&error) && recorded.as_deref() == Some(arn) => {
-                self.create_default_policy_version(client, arn, document)
-                    .await
+                match created_by_setup(client, arn, description).await? {
+                    Some(true) => {
+                        self.create_default_policy_version(client, arn, document)
+                            .await
+                    }
+                    Some(false) => {
+                        self.permissions_boundary_arn = None;
+                        Err(not_owned())
+                    }
+                    None => Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Permissions boundary '{arn}' was deleted while it was being installed"
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    })),
+                }
             }
             Err(error) if is_remote_conflict(&error) => {
                 self.permissions_boundary_arn = recorded;
-                Err(AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
-                    resource_id: resource_id.to_string(),
-                    object: format!("IAM policy '{arn}'"),
-                }))
+                Err(not_owned())
             }
             Err(error) => Err(error
                 .context(ErrorData::CloudPlatformError {
@@ -1012,7 +1044,7 @@ impl AwsRemoteStackManagementController {
             let policy_arn = self.management_policy_arn(&aws_config.account_id, &policy_name);
 
             match client
-                .create_policy(&policy_name, policy_document, None)
+                .create_policy(&policy_name, policy_document, None, None)
                 .await
             {
                 Ok(response) => {
@@ -1286,6 +1318,33 @@ fn is_remote_conflict(error: &alien_error::AlienError<alien_client_core::ErrorDa
     )
 }
 
+/// Written on the permissions boundary when setup creates it. IAM keeps a policy's description
+/// for its lifetime, so a policy with the boundary's name and another description was not
+/// created by this setup.
+fn permissions_boundary_description(resource_prefix: &str) -> String {
+    format!("Permissions boundary for the roles that deployment {resource_prefix} manages")
+}
+
+/// Whether the policy at `arn` carries `description`, or `None` when it does not exist.
+async fn created_by_setup(
+    client: &dyn IamApi,
+    arn: &str,
+    description: &str,
+) -> Result<Option<bool>> {
+    match client.get_policy(arn).await {
+        Ok(response) => Ok(Some(
+            response.get_policy_result.policy.description.as_deref() == Some(description),
+        )),
+        Err(error) if is_remote_not_found(&error) => Ok(None),
+        Err(error) => Err(error
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read permissions boundary '{arn}'"),
+                resource_id: Some("remote-stack-management".to_string()),
+            })
+            .into()),
+    }
+}
+
 fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorData>) -> bool {
     matches!(
         error.error,
@@ -1352,7 +1411,7 @@ mod tests {
         });
         let captured = documents.clone();
         iam.expect_create_policy()
-            .returning(move |name, document, _| {
+            .returning(move |name, document, _, _| {
                 captured.lock().unwrap().push(document.to_string());
                 Ok(CreatePolicyResponse {
                     create_policy_result: CreatePolicyResult {
@@ -1361,6 +1420,7 @@ mod tests {
                             policy_id: None,
                             arn: format!("arn:aws:iam::123456789012:policy/{name}"),
                             path: None,
+                            description: None,
                             default_version_id: None,
                             attachment_count: None,
                             is_attachable: None,
@@ -1420,7 +1480,23 @@ mod tests {
                 ),
             )
             .management_permissions(alien_core::permissions::ManagementPermissions::extend(
-                alien_core::PermissionProfile::new().global(["ai/provision"]),
+                alien_core::PermissionProfile::new().global([
+                    alien_core::PermissionSetReference::from("ai/provision"),
+                    // A custom set in `extend` keeps its own Deny.
+                    serde_json::from_value::<alien_core::PermissionSet>(serde_json::json!({
+                        "id": "custom/deny-parameters",
+                        "description": "Keeps management away from these parameters",
+                        "platforms": {"aws": [{
+                            "effect": "Deny",
+                            "grant": {"actions": ["ssm:GetParameter", "ssm:GetParameters"]},
+                            "binding": {"stack": {"resources": [
+                                "arn:aws:ssm:*:*:parameter/private/*"
+                            ]}}
+                        }]}
+                    }))
+                    .unwrap()
+                    .into(),
+                ]),
             ));
         builder = builder.permission_profile(
             "key-user",
@@ -1531,6 +1607,16 @@ mod tests {
         assert!(
             !denies[0].to_string().contains("iam:PassRole"),
             "the build role must stay passable"
+        );
+        assert!(
+            statements.iter().any(|statement| {
+                statement["Effect"] == "Deny"
+                    && statement["Action"]
+                        == serde_json::json!(["ssm:GetParameter", "ssm:GetParameters"])
+                    && statement["Resource"]
+                        == serde_json::json!(["arn:aws:ssm:*:*:parameter/private/*"])
+            }),
+            "{statements:#?}"
         );
     }
 }
