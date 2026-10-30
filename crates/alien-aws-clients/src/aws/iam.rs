@@ -24,8 +24,6 @@ pub trait IamApi: Send + Sync + Debug {
     // Role Operations
     async fn create_role(&self, request: CreateRoleRequest) -> Result<CreateRoleResponse>;
     async fn get_role(&self, role_name: &str) -> Result<GetRoleResponse>;
-    /// Adds tags to an existing role, replacing values for matching keys.
-    async fn tag_role(&self, role_name: &str, tags: &[CreateRoleTag]) -> Result<()>;
     async fn put_role_permissions_boundary(
         &self,
         role_name: &str,
@@ -195,6 +193,50 @@ impl IamClient {
                     }
                 } else {
                     Err(e)
+                }
+            }
+        }
+    }
+
+    // Return only complete inventories: adoption and cleanup must not act on a partial list.
+    async fn list_role_policy_pages<T: DeserializeOwned + Send + 'static, Item>(
+        &self,
+        action: &str,
+        role_name: &str,
+        page: impl Fn(T) -> (Vec<Item>, Option<bool>, Option<String>),
+    ) -> Result<Vec<Item>> {
+        let mut marker = None;
+        let mut seen_markers = HashSet::new();
+        let mut items = Vec::new();
+        loop {
+            let mut params = vec![("RoleName".to_string(), role_name.to_string())];
+            if let Some(marker) = marker.take() {
+                params.push(("Marker".to_string(), marker));
+            }
+            let body = Self::build_form_body(action, "2010-05-08", params);
+            let (members, is_truncated, next) = page(self.post_xml(body, action, role_name).await?);
+            items.extend(members);
+            match is_truncated {
+                Some(false) => return Ok(items),
+                Some(true) => {
+                    let next = next.filter(|value| !value.is_empty()).ok_or_else(|| {
+                        AlienError::new(ErrorData::GenericError {
+                            message: format!("{action} for '{role_name}' returned a truncated page without a continuation marker"),
+                        })
+                    })?;
+                    if !seen_markers.insert(next.clone()) {
+                        return Err(AlienError::new(ErrorData::GenericError {
+                            message: format!(
+                                "{action} for '{role_name}' repeated a continuation marker"
+                            ),
+                        }));
+                    }
+                    marker = Some(next);
+                }
+                None => {
+                    return Err(AlienError::new(ErrorData::GenericError {
+                        message: format!("{action} for '{role_name}' omitted IsTruncated; cannot verify the policy list is complete"),
+                    }));
                 }
             }
         }
@@ -401,16 +443,6 @@ impl IamApi for IamClient {
         self.post_xml(body, "GetRole", role_name).await
     }
 
-    async fn tag_role(&self, role_name: &str, tags: &[CreateRoleTag]) -> Result<()> {
-        let mut params = vec![("RoleName".to_string(), role_name.to_string())];
-        for (i, tag) in tags.iter().enumerate() {
-            params.push((format!("Tags.member.{}.Key", i + 1), tag.key.clone()));
-            params.push((format!("Tags.member.{}.Value", i + 1), tag.value.clone()));
-        }
-        let body = Self::build_form_body("TagRole", "2010-05-08", params);
-        self.post_no_response(body, "TagRole", role_name).await
-    }
-
     async fn put_role_permissions_boundary(
         &self,
         role_name: &str,
@@ -534,56 +566,30 @@ impl IamApi for IamClient {
         &self,
         role_name: &str,
     ) -> Result<ListAttachedRolePoliciesResponse> {
-        let mut marker = None;
-        let mut seen_markers = HashSet::new();
-        let mut attached_policies = Vec::new();
-        loop {
-            let mut params = vec![("RoleName".to_string(), role_name.to_string())];
-            if let Some(marker) = marker.take() {
-                params.push(("Marker".to_string(), marker));
-            }
-            let body = Self::build_form_body("ListAttachedRolePolicies", "2010-05-08", params);
-            let response: ListAttachedRolePoliciesResponse = self
-                .post_xml(body, "ListAttachedRolePolicies", role_name)
-                .await?;
-            let result = response.list_attached_role_policies_result;
-            if let Some(names) = result.attached_policies {
-                attached_policies.extend(names.member);
-            }
-            match result.is_truncated {
-                Some(false) => {
-                    return Ok(ListAttachedRolePoliciesResponse {
-                        list_attached_role_policies_result: ListAttachedRolePoliciesResult {
-                            attached_policies: Some(AttachedPolicies {
-                                member: attached_policies,
-                            }),
-                            is_truncated: Some(false),
-                            marker: None,
-                        },
-                    });
-                }
-                Some(true) => {
-                    let next = result.marker.filter(|value| !value.is_empty()).ok_or_else(|| {
-                        AlienError::new(ErrorData::GenericError {
-                            message: format!("ListAttachedRolePolicies for '{role_name}' returned a truncated page without a continuation marker"),
-                        })
-                    })?;
-                    if !seen_markers.insert(next.clone()) {
-                        return Err(AlienError::new(ErrorData::GenericError {
-                            message: format!(
-                                "ListAttachedRolePolicies for '{role_name}' repeated a continuation marker"
-                            ),
-                        }));
-                    }
-                    marker = Some(next);
-                }
-                None => {
-                    return Err(AlienError::new(ErrorData::GenericError {
-                        message: format!("ListAttachedRolePolicies for '{role_name}' omitted IsTruncated; cannot verify the policy list is complete"),
-                    }));
-                }
-            }
-        }
+        let member = self
+            .list_role_policy_pages(
+                "ListAttachedRolePolicies",
+                role_name,
+                |response: ListAttachedRolePoliciesResponse| {
+                    let result = response.list_attached_role_policies_result;
+                    (
+                        result
+                            .attached_policies
+                            .map(|policies| policies.member)
+                            .unwrap_or_default(),
+                        result.is_truncated,
+                        result.marker,
+                    )
+                },
+            )
+            .await?;
+        Ok(ListAttachedRolePoliciesResponse {
+            list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                attached_policies: Some(AttachedPolicies { member }),
+                is_truncated: Some(false),
+                marker: None,
+            },
+        })
     }
 
     async fn create_policy(
@@ -654,55 +660,30 @@ impl IamApi for IamClient {
     }
 
     async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse> {
-        let mut marker = None;
-        let mut seen_markers = HashSet::new();
-        let mut policy_names = Vec::new();
-        loop {
-            let mut params = vec![("RoleName".to_string(), role_name.to_string())];
-            if let Some(marker) = marker.take() {
-                params.push(("Marker".to_string(), marker));
-            }
-            let body = Self::build_form_body("ListRolePolicies", "2010-05-08", params);
-            let response: ListRolePoliciesResponse =
-                self.post_xml(body, "ListRolePolicies", role_name).await?;
-            let result = response.list_role_policies_result;
-            if let Some(names) = result.policy_names {
-                policy_names.extend(names.member);
-            }
-            match result.is_truncated {
-                Some(false) => {
-                    return Ok(ListRolePoliciesResponse {
-                        list_role_policies_result: ListRolePoliciesResult {
-                            policy_names: Some(PolicyNames {
-                                member: policy_names,
-                            }),
-                            is_truncated: Some(false),
-                            marker: None,
-                        },
-                    });
-                }
-                Some(true) => {
-                    let next = result.marker.filter(|value| !value.is_empty()).ok_or_else(|| {
-                        AlienError::new(ErrorData::GenericError {
-                            message: format!("ListRolePolicies for '{role_name}' returned a truncated page without a continuation marker"),
-                        })
-                    })?;
-                    if !seen_markers.insert(next.clone()) {
-                        return Err(AlienError::new(ErrorData::GenericError {
-                            message: format!(
-                                "ListRolePolicies for '{role_name}' repeated a continuation marker"
-                            ),
-                        }));
-                    }
-                    marker = Some(next);
-                }
-                None => {
-                    return Err(AlienError::new(ErrorData::GenericError {
-                        message: format!("ListRolePolicies for '{role_name}' omitted IsTruncated; cannot verify the policy list is complete"),
-                    }));
-                }
-            }
-        }
+        let member = self
+            .list_role_policy_pages(
+                "ListRolePolicies",
+                role_name,
+                |response: ListRolePoliciesResponse| {
+                    let result = response.list_role_policies_result;
+                    (
+                        result
+                            .policy_names
+                            .map(|names| names.member)
+                            .unwrap_or_default(),
+                        result.is_truncated,
+                        result.marker,
+                    )
+                },
+            )
+            .await?;
+        Ok(ListRolePoliciesResponse {
+            list_role_policies_result: ListRolePoliciesResult {
+                policy_names: Some(PolicyNames { member }),
+                is_truncated: Some(false),
+                marker: None,
+            },
+        })
     }
 
     async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()> {

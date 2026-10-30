@@ -118,41 +118,12 @@ The restrictions above cover direct value access. Infrastructure management
 can still deploy code using a workload identity; the available IAM changes
 depend on the cloud and the installed setup:
 
-- AWS setup creates a permissions boundary for roles management creates or
-  modifies. Direct setup, CloudFormation and Terraform record the installed
-  policy ARN and document. Management's role-creation, policy and trust writes
-  require that boundary; management has no grant to remove it or edit the
-  boundary policy. Existing runtime-owned roles receive it before their first
-  write. Setup-owned roles retain their approved permissions and are not adopted.
-  The default ceiling permits non-IAM actions on the runtime catalog's
-  stack-prefixed resource patterns, plus specific runtime grants for resources
-  that cannot use that prefix. Setup also includes custom inline workload
-  permissions and grants selecting physical resource ARNs, such as KMS keys.
-  These explicit grants can extend the ceiling and need setup review.
-  A boundary limits identity-policy grants; it does not grant access by itself
-  or isolate workloads within one deployment. Same-account resource policies
-  can grant access beyond its implicit limits directly to role sessions, or
-  through a wildcard principal with an `aws:PrincipalArn` condition. Applicable
-  explicit denies still apply. Resource-policy grants need separate review;
-  the boundary does not guarantee denial of all access outside the prefix.
-  Prefix patterns can overlap when one deployment prefix begins with another
-  followed by a hyphen.
-  Management can still create/update compute using permitted stack roles and
-  `iam:PassRole`, so it can run code with those roles' effective access.
-  Management is explicitly denied `sts:AssumeRole` on stack roles.
-  Automatic setup keeps data access to ordinary Live vaults added later, while
-  the explicit reserved-vault deny overrides its stack-wide Allow.
-  That deny applies to management itself; it does not follow a workload role.
-  Older setups with no recorded boundary ARN keep their existing behavior until
-  setup is rerun. For bounded deployments, a release needing permissions beyond
-  the recorded document stops before mutation and asks for setup again.
-  See [AWS role permissions boundaries](../alien-permissions/README.md#aws-role-permissions-boundaries)
-  for adoption rules and generation limits.
-  CloudTrail records role changes and compute API calls such as `CreateRole`,
-  `PutRolePolicy`, `UpdateAssumeRolePolicy`, `CreateFunction`,
-  `UpdateFunctionCode`, `UpdateFunctionConfiguration`, and `RunInstances`.
-  `PassRole` is a permission check, not a separate CloudTrail event; inspect the
-  role in the compute API event. KMS decrypt alone does not authorize SSM reads.
+- AWS setup installs a permissions boundary on roles management creates or changes;
+  setup-owned roles remain setup-owned. Older setups retain their behavior until
+  setup runs again. Management can still deploy code with permitted workload roles,
+  and its own data-access denials do not follow those roles. See
+  [AWS role permissions boundaries](../alien-permissions/README.md#aws-role-permissions-boundaries)
+  for the ceiling, adoption rules, resource-policy limits and installer requirements.
 - GCP management, after a Terraform setup, holds no permission that changes
   IAM in a way that reaches the secrets vaults: no project, service-account or
   secret `setIamPolicy`, and no custom-role edits. It cannot grant itself a
