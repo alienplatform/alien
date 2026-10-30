@@ -20,8 +20,8 @@ struct RunResponse {
     stderr: String,
 }
 
-/// Runs a command through the app's `/run` endpoint, which opens a sandbox session, runs it and
-/// ends the session, and checks that it ran in the image built from `sandbox/Dockerfile`.
+/// Calls the app's `/run` endpoint, which opens a sandbox session, reads the image's marker file
+/// and ends the session, and checks that it ran in the image built from `sandbox/Dockerfile`.
 pub async fn check_session_runs_a_command(ctx: &TestContext) -> anyhow::Result<()> {
     let url = ctx
         .deployment
@@ -30,7 +30,6 @@ pub async fn check_session_runs_a_command(ctx: &TestContext) -> anyhow::Result<(
         .context("the deployment has no public URL")?;
     let response = reqwest::Client::new()
         .post(format!("{}/run", url.trim_end_matches('/')))
-        .json(&serde_json::json!({ "command": "cat /etc/sandbox-session-version" }))
         // A cold MicroVM restore is seconds; the Lambda itself allows five minutes.
         .timeout(Duration::from_secs(300))
         .send()

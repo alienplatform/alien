@@ -3033,10 +3033,10 @@ mod tests {
         let mut stack = Stack::new("cache-test".to_string())
             .add(sandbox_with_image(&local_path), ResourceLifecycle::Live)
             .build();
-        let cache = HashMap::from([(
-            "sandbox:sbx-9f8e7d6c".to_string(),
-            "registry.example.com/base:tag".to_string(),
-        )]);
+        // Keyed by the artifact and the agent layered onto it, so another agent misses.
+        let key = push_cache_key("sandbox", &local_path, Platform::Aws).expect("a key");
+        assert_ne!(key, "sandbox:sbx-9f8e7d6c");
+        let cache = HashMap::from([(key.clone(), "registry.example.com/base:tag".to_string())]);
         let hits = apply_push_cache(
             &mut stack,
             &cache,
@@ -3067,7 +3067,7 @@ mod tests {
         let mut collected = HashMap::new();
         collect_push_cache_entries(&pushed, &pre_push, &mut collected, Platform::Aws);
         assert_eq!(
-            collected.get("sandbox:sbx-9f8e7d6c").map(String::as_str),
+            collected.get(&key).map(String::as_str),
             Some("registry.example.com/base:pushed")
         );
 

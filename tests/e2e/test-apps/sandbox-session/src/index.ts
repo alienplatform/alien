@@ -10,18 +10,18 @@ app.onError((error, c) =>
   c.json({ error: error instanceof Error ? (error.stack ?? error.message) : String(error) }, 500),
 )
 
-// Opens a session, runs one shell command in it, and ends the session.
+// Opens a session, reads the marker the image was built with, and ends the session. The command
+// is fixed: the endpoint is public, and the test needs nothing a caller could choose.
 app.post("/run", async c => {
-  const { command } = (await c.req.json()) as { command: string }
   const agents = sandbox("agents")
   const session = await agents.create({ timeoutMs: 300_000 })
   let stdout = ""
   let stderr = ""
   let exitCode: number | null = null
   try {
-    for await (const frame of agents.runCommand(session.sandboxId, "/bin/sh", {
+    for await (const frame of agents.runCommand(session.sandboxId, "cat", {
       timeoutMs: 60_000,
-      args: ["-c", command],
+      args: ["/etc/sandbox-session-version"],
     })) {
       if (frame.kind === "exit") exitCode = frame.exitCode
       else if (frame.kind === "stdout") stdout += frame.data.toString()
