@@ -126,6 +126,12 @@ to that policy's versions and tags, policy deletion, and removal of boundaries
 from stack roles. Setup installer permissions are separate, so setup can update
 and eventually delete the policy.
 
+A restricted setup identity must include
+`policy/${stackPrefix}-deployment-management-boundary` in its managed-policy
+lifecycle permissions. An allowlist containing only the existing management
+policy names will not cover this additional policy. This also applies to
+`setupManagement: manual`; the boundary is not limited to automatic management.
+
 IAM's managed-policy limit is 6,144 characters excluding whitespace. Generation
 fails explicitly when the boundary exceeds it. CloudFormation and Terraform
 budget maximum resolved input lengths, so a package can be rejected even when a
@@ -140,3 +146,5 @@ installed or recorded boundary.
 Teardown must remove runtime roles before setup deletes the boundary policy.
 The setup registration dependencies preserve that ordering for generated
 packages; the direct setup resource graph also orders roles before the policy.
+Keep setup credentials available through privileged teardown; the management
+identity cannot delete the boundary policy on the installer's behalf.
