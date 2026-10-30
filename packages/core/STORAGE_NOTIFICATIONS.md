@@ -98,6 +98,21 @@ It throws a structured `INVALID_STORAGE_EVENT_MESSAGE` error for invalid payload
 and does not acknowledge messages. When using a queue binding, acknowledge only
 after processing succeeds.
 
+Rust exposes the same parser for binding messages, Worker single messages, and
+messages inside Worker batches:
+
+```rust
+use alien_sdk::storage_event_from_message;
+
+// `message` is from queue.receive(), a single handler, or a batch delivery.
+let event = storage_event_from_message(&message)?;
+println!("{} {}", event.bucket_name, event.object_key);
+```
+
+It returns the portable `alien_sdk::StorageEvent`, including its timestamp and
+optional metadata. Direct binding applications can use it without the `worker`
+feature. Existing direct storage-handler event types remain compatible.
+
 Delivery is at least once and unordered. Overwrites produce another event, and
 redelivery or overlapping rules can produce duplicates. The object is the record;
 the notification is a hint to read it. Make processing idempotent, for example by
