@@ -584,16 +584,6 @@ fn generate_auto_management_profile(
             permission_set_ids.insert("queue/storage-notifications".to_string());
         }
 
-        if platform == Platform::Aws
-            && resource_entry.lifecycle == ResourceLifecycle::Live
-            && resource_entry
-                .config
-                .downcast_ref::<Storage>()
-                .is_some_and(|storage| !storage.notifications.is_empty())
-        {
-            permission_set_ids.insert("storage/queue-notifications".to_string());
-        }
-
         if platform == Platform::Azure
             && resource_entry.lifecycle == ResourceLifecycle::Live
             && resource_entry
@@ -1866,7 +1856,6 @@ mod tests {
     async fn storage_notification_ingress_permissions_are_only_for_notified_live_resources() {
         for (platform, permission_id) in [
             (Platform::Gcp, "queue/storage-notifications"),
-            (Platform::Aws, "storage/queue-notifications"),
             (Platform::Azure, "storage/trigger-management"),
         ] {
             for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {

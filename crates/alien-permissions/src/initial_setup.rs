@@ -38,16 +38,6 @@ pub fn initial_setup_permission_set_ids(stack: &Stack) -> Vec<String> {
             continue;
         }
 
-        if resource_entry
-            .config
-            .downcast_ref::<alien_core::Storage>()
-            .is_some_and(|storage| !storage.notifications.is_empty())
-            && !set_ids.iter().any(|id| id == "storage/trigger-management")
-        {
-            set_ids.push("storage/trigger-management".to_string());
-            set_ids.push("storage/queue-notifications".to_string());
-        }
-
         let resource_type = normalize_resource_type(raw_resource_type);
         let provision_id = format!("{resource_type}/provision");
 
@@ -86,7 +76,7 @@ pub fn generate_aws_initial_setup_policy(
             let Some((resource_type, operation)) = id.split_once('/') else {
                 return false;
             };
-            if operation != "provision" && *id != "storage/queue-notifications" {
+            if operation != "provision" {
                 return false;
             }
             ownership_policy_for_resource_type(resource_type)
@@ -230,39 +220,6 @@ mod tests {
             actions.iter().any(|action| action.starts_with("s3:")),
             "setup policy should still include frozen-capable resource actions"
         );
-    }
-
-    #[test]
-    fn complete_setup_policy_authorizes_only_stack_notification_rules() {
-        let context = PermissionContext::new()
-            .with_aws_region("us-east-1")
-            .with_aws_account_id("123456789012")
-            .with_stack_prefix("test-stack")
-            .with_resource_name("test");
-        let policy = generate_aws_initial_setup_policy(&context).unwrap();
-        for action in [
-            "events:PutRule",
-            "events:DescribeRule",
-            "events:DeleteRule",
-            "events:PutTargets",
-            "events:ListTargetsByRule",
-            "events:RemoveTargets",
-        ] {
-            let statements: Vec<_> = policy
-                .statement
-                .iter()
-                .filter(|statement| statement.action.iter().any(|value| value == action))
-                .collect();
-            assert!(!statements.is_empty(), "missing {action}");
-            assert!(
-                statements
-                    .iter()
-                    .any(|statement| statement.resource
-                        == vec!["arn:aws:events:us-east-1:123456789012:rule/test-stack-sn-*"
-                            .to_string()]),
-                "missing scoped notification grant for {action}"
-            );
-        }
     }
 
     #[test]

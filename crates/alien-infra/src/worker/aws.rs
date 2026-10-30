@@ -2677,8 +2677,7 @@ impl AwsWorkerController {
                 let rule_response = eventbridge_client
                     .put_rule(PutRuleRequest {
                         name: rule_name.clone(),
-                        schedule_expression: Some(schedule_expression),
-                        event_pattern: None,
+                        schedule_expression,
                         state: Some("ENABLED".to_string()),
                         description: Some(format!("Schedule trigger for worker '{}'", config.id)),
                         tags: Some(eventbridge_tags(ctx.resource_prefix, &config.id)),
@@ -2734,7 +2733,6 @@ impl AwsWorkerController {
                     .put_targets(PutTargetsRequest {
                         rule: rule_name.clone(),
                         targets: vec![EventBridgeTarget {
-                            input_transformer: None,
                             id: "1".to_string(),
                             arn: function_arn.to_string(),
                         }],
@@ -4302,8 +4300,7 @@ impl AwsWorkerController {
                     let rule_response = eventbridge_client
                         .put_rule(PutRuleRequest {
                             name: rule_name.clone(),
-                            schedule_expression: Some(schedule_expression),
-                            event_pattern: None,
+                            schedule_expression,
                             state: Some("ENABLED".to_string()),
                             description: Some(format!(
                                 "Schedule trigger for worker '{}'",
@@ -4359,7 +4356,6 @@ impl AwsWorkerController {
                         .put_targets(PutTargetsRequest {
                             rule: rule_name.clone(),
                             targets: vec![EventBridgeTarget {
-                                input_transformer: None,
                                 id: "1".to_string(),
                                 arn: function_arn.to_string(),
                             }],

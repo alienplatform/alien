@@ -58,7 +58,7 @@ impl CfEmitter for AwsQueueEmitter {
             ctx.stack,
             ctx.resource_id,
         ) {
-            resources.push(super::storage_notifications::queue_policy(queue_id));
+            resources.push(super::storage_notifications::queue_policy(ctx, queue_id));
         }
         Ok(resources)
     }

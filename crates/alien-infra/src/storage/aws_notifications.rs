@@ -1,37 +1,30 @@
-//! Queue notification rules have deterministic identities, so a lost provider
-//! response can be recovered by observation. Each step performs one mutation.
+//! A Storage's S3 queue configurations live in the bucket's notification document, next
+//! to entries other tools own. The controller recognises its own entries by their Id
+//! prefix and replaces only those, in one read-modify-write.
 
 use crate::{
     core::ResourceControllerContext,
     error::{ErrorData, Result},
     queue::aws::AwsQueueController,
 };
-use alien_aws_clients::{
-    eventbridge::{
-        EventBridgeApi, EventBridgeRule, EventBridgeTarget, InputTransformer, PutRuleRequest,
-        PutTargetsRequest,
-    },
-    s3::EventBridgeConfiguration,
+use alien_aws_clients::s3::{
+    FilterRule, NotificationConfiguration, NotificationFilter, QueueConfiguration, S3Api,
+    S3KeyFilter,
 };
 use alien_client_core::ErrorData as ClientError;
 use alien_core::{
-    storage_notifications::{
-        aws_eventbridge_pattern, aws_notification_input_paths, aws_notification_rule_name,
-        AWS_NOTIFICATION_INPUT_TEMPLATE,
-    },
+    storage_notifications::{aws_notification_id, aws_notification_id_prefix},
     Storage,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, ContextError};
 
-fn cloud_error(id: &str, action: &str, name: &str) -> ErrorData {
+const CREATED: &str = "s3:ObjectCreated:*";
+
+fn cloud_error(id: &str, action: &str, bucket: &str) -> ErrorData {
     ErrorData::CloudPlatformError {
         resource_id: Some(id.into()),
-        message: format!("{action} storage notification '{name}'"),
+        message: format!("{action} notification configuration of bucket '{bucket}'"),
     }
-}
-
-fn description(bucket: &str) -> String {
-    format!("Storage queue notifications for {bucket}")
 }
 
 fn missing(error: &AlienError<ClientError>) -> bool {
@@ -41,102 +34,14 @@ fn missing(error: &AlienError<ClientError>) -> bool {
     )
 }
 
-async fn read_rule(
-    client: &dyn EventBridgeApi,
-    name: &str,
-    bucket: &str,
-    id: &str,
-) -> Result<Option<EventBridgeRule>> {
-    match client.describe_rule(name).await {
-        Ok(rule) => {
-            if rule.description.as_deref() != Some(description(bucket).as_str())
-                || rule.managed_by.is_some()
-            {
-                return Err(AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
-                    resource_id: id.into(),
-                    object: format!("EventBridge rule '{name}'"),
-                }));
-            }
-            Ok(Some(rule))
-        }
-        Err(error) if missing(&error) => Ok(None),
-        Err(error) => Err(error.context(cloud_error(id, "Describe", name))),
-    }
-}
-
-/// Return true only after every rule and target has been observed in desired state.
-pub(super) async fn reconcile(
+/// The configurations this Storage should own, in rule order.
+fn desired_configurations(
     ctx: &ResourceControllerContext<'_>,
-    bucket: &str,
     storage: &Storage,
-    deleting: bool,
-) -> Result<bool> {
+) -> Result<Vec<QueueConfiguration>> {
     let cfg = ctx.get_aws_config()?;
-    if !deleting && !storage.notifications.is_empty() {
-        let s3 = ctx.service_provider.get_aws_s3_client(cfg).await?;
-        let mut configuration = s3
-            .get_bucket_notification_configuration(bucket)
-            .await
-            .context(cloud_error(
-                &storage.id,
-                "Read bucket delivery configuration",
-                bucket,
-            ))?;
-        if configuration.event_bridge_configuration.is_none() {
-            configuration.event_bridge_configuration = Some(EventBridgeConfiguration {});
-            s3.put_bucket_notification_configuration(bucket, &configuration)
-                .await
-                .context(cloud_error(
-                    &storage.id,
-                    "Enable EventBridge delivery",
-                    bucket,
-                ))?;
-            return Ok(false);
-        }
-    }
-    let client = ctx.service_provider.get_aws_eventbridge_client(cfg).await?;
-    let count = if deleting {
-        0
-    } else {
-        storage.notifications.len()
-    };
-    // The portable maximum bounds discovery, including rules created before a lost
-    // checkpoint. No account-wide ListRules permission is needed.
-    for index in 0..10 {
-        let name = aws_notification_rule_name(ctx.resource_prefix, &storage.id, index);
-        let observed = read_rule(client.as_ref(), &name, bucket, &storage.id).await?;
-        if index >= count {
-            if observed.is_some() && !remove_rule_step(client.as_ref(), &name, &storage.id).await? {
-                return Ok(false);
-            }
-            continue;
-        }
-        let notification = &storage.notifications[index];
-        let pattern = aws_eventbridge_pattern(notification, bucket);
-        let observed_pattern = observed
-            .as_ref()
-            .and_then(|rule| rule.event_pattern.as_deref())
-            .map(serde_json::from_str::<serde_json::Value>)
-            .transpose()
-            .into_alien_error()
-            .context(cloud_error(&storage.id, "Parse event pattern", &name))?;
-        if observed.as_ref().is_none_or(|rule| {
-            rule.state.as_deref() != Some("ENABLED") || rule.schedule_expression.is_some()
-        }) || observed_pattern.as_ref() != Some(&pattern)
-        {
-            client
-                .put_rule(
-                    PutRuleRequest::builder()
-                        .name(name.clone())
-                        .event_pattern(pattern.to_string())
-                        .state("ENABLED".into())
-                        .description(description(bucket))
-                        .build(),
-                )
-                .await
-                .context(cloud_error(&storage.id, "Write rule", &name))?;
-            return Ok(false);
-        }
+    let mut configurations = Vec::new();
+    for (index, notification) in storage.notifications.iter().enumerate() {
         let queue = ctx.require_dependency::<AwsQueueController>(&notification.queue)?;
         let queue_name = queue.queue_name.as_deref().ok_or_else(|| {
             AlienError::new(ErrorData::DependencyNotReady {
@@ -144,73 +49,152 @@ pub(super) async fn reconcile(
                 dependency_id: notification.queue.id.clone(),
             })
         })?;
-        let target = EventBridgeTarget {
-            id: "queue".into(),
-            arn: format!("arn:aws:sqs:{}:{}:{queue_name}", cfg.region, cfg.account_id),
-            input_transformer: Some(InputTransformer {
-                input_paths_map: aws_notification_input_paths(),
-                input_template: AWS_NOTIFICATION_INPUT_TEMPLATE.into(),
+        let filter_rules: Vec<FilterRule> = [
+            ("prefix", &notification.prefix),
+            ("suffix", &notification.suffix),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| {
+            value.as_ref().map(|value| FilterRule {
+                name: name.into(),
+                value: value.clone(),
+            })
+        })
+        .collect();
+        configurations.push(QueueConfiguration {
+            id: Some(aws_notification_id(ctx.resource_prefix, &storage.id, index)),
+            queue_arn: format!("arn:aws:sqs:{}:{}:{queue_name}", cfg.region, cfg.account_id),
+            events: vec![CREATED.into()],
+            filter: (!filter_rules.is_empty()).then(|| NotificationFilter {
+                key: S3KeyFilter { filter_rules },
             }),
-        };
-        let targets = client
-            .list_targets_by_rule(&name)
-            .await
-            .context(cloud_error(&storage.id, "Read targets", &name))?;
-        if !targets.iter().any(|observed| observed == &target) {
-            client
-                .put_targets(PutTargetsRequest {
-                    rule: name.clone(),
-                    targets: vec![target],
-                })
-                .await
-                .context(cloud_error(&storage.id, "Write queue target", &name))?;
-            return Ok(false);
-        }
+        });
     }
-    // EventBridge is a shared bucket switch: keep it enabled for independent rules.
-    // Erasing the bucket removes it; retaining data removes only our owned rules.
-    Ok(true)
+    Ok(configurations)
 }
 
-async fn remove_rule_step(client: &dyn EventBridgeApi, name: &str, id: &str) -> Result<bool> {
-    let targets = match client.list_targets_by_rule(name).await {
-        Ok(targets) => targets,
-        Err(error) if missing(&error) => return Ok(true),
-        Err(error) => return Err(error.context(cloud_error(id, "Read targets", name))),
+/// S3 returns filter names as `Prefix`/`Suffix` and may reorder rules and events.
+fn normalized(configuration: &QueueConfiguration) -> impl PartialEq + std::fmt::Debug {
+    let mut events = configuration.events.clone();
+    events.sort();
+    let mut filters: Vec<(String, String)> = configuration
+        .filter
+        .iter()
+        .flat_map(|filter| &filter.key.filter_rules)
+        .map(|rule| (rule.name.to_ascii_lowercase(), rule.value.clone()))
+        .collect();
+    filters.sort();
+    (
+        configuration.id.clone(),
+        configuration.queue_arn.clone(),
+        events,
+        filters,
+    )
+}
+
+/// Replace exactly the entries whose Id starts with `owner`; returns whether anything
+/// changed. Every other Lambda, queue, topic and EventBridge entry is kept as observed.
+fn replace_owned(
+    document: &mut NotificationConfiguration,
+    owner: &str,
+    desired: Vec<QueueConfiguration>,
+) -> bool {
+    let owned = |configuration: &QueueConfiguration| {
+        configuration
+            .id
+            .as_deref()
+            .is_some_and(|id| id.starts_with(owner))
     };
-    if targets.iter().any(|target| target.id != "queue") {
-        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-            resource_id:Some(id.into()), message:format!("EventBridge rule '{name}' has an independently managed target; remove that target before removing the storage notification"),
-        }));
+    let mut observed: Vec<_> = document
+        .queue_configurations
+        .iter()
+        .filter(|configuration| owned(configuration))
+        .map(normalized)
+        .collect();
+    let mut wanted: Vec<_> = desired.iter().map(normalized).collect();
+    let sort = |values: &mut Vec<_>| values.sort_by_key(|value| format!("{value:?}"));
+    sort(&mut observed);
+    sort(&mut wanted);
+    if observed == wanted {
+        return false;
     }
-    let result = if targets.is_empty() {
-        client.delete_rule(name).await
+    document
+        .queue_configurations
+        .retain(|configuration| !owned(configuration));
+    document.queue_configurations.extend(desired);
+    true
+}
+
+/// Make the bucket's owned entries match the declaration (none while deleting).
+pub(super) async fn reconcile(
+    ctx: &ResourceControllerContext<'_>,
+    bucket: &str,
+    storage: &Storage,
+    deleting: bool,
+) -> Result<()> {
+    let desired = if deleting {
+        Vec::new()
     } else {
-        client.remove_targets(name, vec!["queue".into()]).await
+        desired_configurations(ctx, storage)?
     };
-    match result {
-        Ok(()) => Ok(false),
-        Err(error) if missing(&error) => Ok(true),
-        Err(error) => Err(error.context(cloud_error(id, "Remove rule or target", name))),
-    }
+    let s3 = ctx
+        .service_provider
+        .get_aws_s3_client(ctx.get_aws_config()?)
+        .await?;
+    write_owned(
+        s3.as_ref(),
+        &aws_notification_id_prefix(ctx.resource_prefix, &storage.id),
+        bucket,
+        &storage.id,
+        desired,
+        deleting,
+    )
+    .await
 }
 
-/// Retention cleanup uses the same bounded discovery and one-mutation boundary.
-pub(super) async fn remove_owned_step(
-    client: &dyn EventBridgeApi,
+/// Retention keeps the bucket and its data but removes this Storage's entries.
+pub(super) async fn remove_owned(
+    client: &dyn S3Api,
     prefix: &str,
     bucket: &str,
     id: &str,
-) -> Result<bool> {
-    for index in 0..10 {
-        let name = aws_notification_rule_name(prefix, id, index);
-        if read_rule(client, &name, bucket, id).await?.is_some()
-            && !remove_rule_step(client, &name, id).await?
-        {
-            return Ok(false);
-        }
+) -> Result<()> {
+    write_owned(
+        client,
+        &aws_notification_id_prefix(prefix, id),
+        bucket,
+        id,
+        Vec::new(),
+        true,
+    )
+    .await
+}
+
+async fn write_owned(
+    client: &dyn S3Api,
+    owner: &str,
+    bucket: &str,
+    id: &str,
+    desired: Vec<QueueConfiguration>,
+    removing: bool,
+) -> Result<()> {
+    let mut document = match client.get_bucket_notification_configuration(bucket).await {
+        Ok(document) => document,
+        // A bucket that is already gone has no entries left to remove.
+        Err(error) if removing && missing(&error) => return Ok(()),
+        Err(error) => return Err(error.context(cloud_error(id, "Read", bucket))),
+    };
+    if !replace_owned(&mut document, owner, desired) {
+        return Ok(());
     }
-    Ok(true)
+    match client
+        .put_bucket_notification_configuration(bucket, &document)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if removing && missing(&error) => Ok(()),
+        Err(error) => Err(error.context(cloud_error(id, "Write", bucket))),
+    }
 }
 
 #[cfg(test)]

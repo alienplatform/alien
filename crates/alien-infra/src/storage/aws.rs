@@ -1017,9 +1017,9 @@ impl AwsStorageController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let done = self.reconcile_queue_notifications(ctx, false).await?;
+        self.reconcile_queue_notifications(ctx, false).await?;
         Ok(HandlerAction::Continue {
-            state: if done { Ready } else { CreatingNotifications },
+            state: Ready,
             suggested_delay: None,
         })
     }
@@ -1029,9 +1029,9 @@ impl AwsStorageController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let done = self.reconcile_queue_notifications(ctx, false).await?;
+        self.reconcile_queue_notifications(ctx, false).await?;
         Ok(HandlerAction::Continue {
-            state: if done { Ready } else { UpdatingNotifications },
+            state: Ready,
             suggested_delay: None,
         })
     }
@@ -1042,13 +1042,9 @@ impl AwsStorageController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let done = self.reconcile_queue_notifications(ctx, true).await?;
+        self.reconcile_queue_notifications(ctx, true).await?;
         Ok(HandlerAction::Continue {
-            state: if done {
-                DeleteStart
-            } else {
-                DeletingNotifications
-            },
+            state: DeleteStart,
             suggested_delay: None,
         })
     }
@@ -1411,10 +1407,10 @@ impl AwsStorageController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
         deleting: bool,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let config = ctx.desired_resource_config::<Storage>()?;
         if !may_manage_notifications(ctx, &config.id) {
-            return Ok(true);
+            return Ok(());
         }
         let previously_notifying = ctx
             .state
@@ -1424,22 +1420,20 @@ impl AwsStorageController {
             .and_then(|resource| resource.downcast_ref::<Storage>())
             .is_some_and(|storage| !storage.notifications.is_empty());
         if !self.notifications_managed && config.notifications.is_empty() && !previously_notifying {
-            return Ok(true);
+            return Ok(());
         }
         let Some(bucket) = self.bucket_name.as_deref() else {
             if deleting {
-                return Ok(true);
+                return Ok(());
             }
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 resource_id: Some(config.id.clone()),
                 message: "Bucket identity missing during notification reconciliation".into(),
             }));
         };
-        let done = super::aws_notifications::reconcile(ctx, bucket, &config, deleting).await?;
-        if done {
-            self.notifications_managed = !deleting && !config.notifications.is_empty();
-        }
-        Ok(done)
+        super::aws_notifications::reconcile(ctx, bucket, &config, deleting).await?;
+        self.notifications_managed = !deleting && !config.notifications.is_empty();
+        Ok(())
     }
 
     fn require_cors_authority(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {

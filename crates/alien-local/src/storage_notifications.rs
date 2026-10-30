@@ -83,14 +83,11 @@ impl NotificationServices {
         // Cursors are keyed by rule content: a reordered rule keeps its cursor, and a new
         // or edited rule starts from the objects that exist now, as it would in the cloud.
         // Removing every rule removes the cursors too (see `remove_notifications`).
-        // Identical rules are separate destinations, so each occurrence keeps its own cursor.
-        let mut cursor_files: Vec<String> = Vec::new();
-        for (index, rule) in storage.notifications.iter().enumerate() {
-            let occurrence = storage.notifications[..index]
-                .iter()
-                .filter(|earlier| *earlier == rule)
-                .count();
-            cursor_files.push(rule_cursor_file(rule, occurrence)?);
+        // Rules on one Storage never overlap (compile-time check), so the rule's content
+        // identifies its cursor.
+        let mut cursor_files = Vec::new();
+        for rule in &storage.notifications {
+            cursor_files.push(rule_cursor_file(rule)?);
         }
         remove_stale_cursors(state, &cursor_files).await?;
         let mut deliveries = Vec::new();
@@ -182,7 +179,7 @@ impl NotificationServices {
     }
 }
 
-fn rule_cursor_file(rule: &StorageNotification, occurrence: usize) -> Result<String> {
+fn rule_cursor_file(rule: &StorageNotification) -> Result<String> {
     let rule = serde_json::to_vec(rule)
         .into_alien_error()
         .context(notification_error("Serialize storage notification rule"))?;
@@ -191,7 +188,7 @@ fn rule_cursor_file(rule: &StorageNotification, occurrence: usize) -> Result<Str
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    Ok(format!("rule-{name}-{occurrence}.json"))
+    Ok(format!("rule-{name}.json"))
 }
 
 /// Cursors of removed or edited rules would otherwise accumulate forever.
@@ -392,7 +389,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identical_rules_keep_their_own_cursor_and_removed_rules_start_over() {
+    async fn removed_rules_forget_their_cursor_and_start_over_when_added_again() {
         let directory = tempfile::tempdir().unwrap();
         let manager = LocalStorageManager::new(directory.path().to_owned());
         let queues = LocalQueueManager::new(directory.path().to_owned());
@@ -401,45 +398,19 @@ mod tests {
         let store = LocalStorage::new_from_url(&format!("file://{}/", root.display())).unwrap();
         let rule = storage().notifications[0].clone();
         let mut config = Storage::new("objects".into())
-            .notifications(vec![rule.clone(), rule.clone()])
+            .notifications(vec![rule.clone()])
             .build();
         manager
             .ensure_notifications(&config, &queues)
             .await
             .unwrap();
         put(&store, "in/a.json", "payload").await;
-
-        // Each identical rule is its own destination: two deliveries, two durable cursors.
-        let queue = queues.load_queue("jobs").await.unwrap();
-        let mut deliveries = Vec::new();
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while deliveries.len() < 2 {
-                for message in queue.receive("jobs", 10).await.unwrap() {
-                    let MessagePayload::Json(payload) = message.payload else {
-                        panic!("storage events are JSON");
-                    };
-                    let event: StorageEvent = serde_json::from_value(payload).unwrap();
-                    deliveries.push(event.object_key);
-                    queue.ack("jobs", &message.receipt_handle).await.unwrap();
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("one delivery per identical rule");
-        assert_eq!(deliveries, ["in/a.json", "in/a.json"]);
-        let cursors = directory.path().join("storage-notifications/objects");
-        let mut names: Vec<_> = std::fs::read_dir(&cursors)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .collect();
-        names.sort();
         assert_eq!(
-            names.len(),
-            2,
-            "each identical rule checkpoints separately: {names:?}"
+            collect(&queues, 1).await,
+            BTreeMap::from([("in/a.json".into(), 7)])
         );
-        assert_ne!(names[0], names[1]);
+        let cursors = directory.path().join("storage-notifications/objects");
+        assert!(cursors.exists());
 
         // Removing every rule forgets the cursors, so a rule added later only sees later
         // writes, as a new cloud rule does.

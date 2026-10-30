@@ -1,7 +1,8 @@
 use crate::error::{Error, ErrorData};
-use alien_core::{
-    MessagePayload, QueueMessage, ScheduledEvent, StorageEvent, StorageEventType, StorageEvents,
+use alien_bindings::providers::queue::storage_notifications::{
+    aws_queue_payload, AwsQueueDelivery,
 };
+use alien_core::{QueueMessage, ScheduledEvent, StorageEvent, StorageEventType, StorageEvents};
 use alien_error::AlienError;
 use std::collections::HashMap;
 
@@ -10,16 +11,21 @@ use aws_lambda_events::sqs::{SqsEvent, SqsMessage};
 
 /// Convert AWS SQS event to standardized queue messages
 pub fn sqs_event_to_queue_messages(event: SqsEvent) -> Result<Vec<QueueMessage>, Error> {
-    let messages = event
-        .records
-        .into_iter()
-        .map(sqs_message_to_queue_message)
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut messages = Vec::with_capacity(event.records.len());
+    for record in event.records {
+        messages.extend(sqs_message_to_queue_messages(record)?);
+    }
     Ok(messages)
 }
 
-/// Convert AWS SQS message to standardized queue message
-pub fn sqs_message_to_queue_message(message: SqsMessage) -> Result<QueueMessage, Error> {
+/// Convert one AWS SQS message to the queue messages a handler receives.
+///
+/// An ordinary message yields exactly one queue message. An S3 event notification yields
+/// one `StorageEvent` message per object-created record; S3 normally sends one record
+/// per message, and when it sends several they all share the SQS message ID and receipt
+/// handle, so a failure of any one retries the whole SQS message. An `s3:TestEvent`
+/// yields none: there is nothing to handle, and the SQS message counts as processed.
+pub fn sqs_message_to_queue_messages(message: SqsMessage) -> Result<Vec<QueueMessage>, Error> {
     let body = message.body.ok_or_else(|| {
         AlienError::new(ErrorData::EventProcessingFailed {
             event_type: "AWS SQS Message".to_string(),
@@ -27,10 +33,9 @@ pub fn sqs_message_to_queue_message(message: SqsMessage) -> Result<QueueMessage,
         })
     })?;
 
-    // Try to parse body as JSON, fall back to text
-    let payload = match serde_json::from_str::<serde_json::Value>(&body) {
-        Ok(json) => MessagePayload::Json(json),
-        Err(_) => MessagePayload::Text(body),
+    let payloads = match aws_queue_payload(&body) {
+        AwsQueueDelivery::Deliver(payloads) => payloads,
+        AwsQueueDelivery::Discard => Vec::new(),
     };
 
     let receipt_handle = message.receipt_handle.ok_or_else(|| {
@@ -77,15 +82,18 @@ pub fn sqs_message_to_queue_message(message: SqsMessage) -> Result<QueueMessage,
         .get("ApproximateReceiveCount")
         .and_then(|count| count.parse::<u32>().ok());
 
-    Ok(QueueMessage {
-        id: message_id,
-        payload,
-        receipt_handle,
-        timestamp,
-        source,
-        attributes,
-        attempt_count,
-    })
+    Ok(payloads
+        .into_iter()
+        .map(|payload| QueueMessage {
+            id: message_id.clone(),
+            payload,
+            receipt_handle: receipt_handle.clone(),
+            timestamp,
+            source: source.clone(),
+            attributes: attributes.clone(),
+            attempt_count,
+        })
+        .collect())
 }
 
 /// Convert AWS CloudWatch event to scheduled event
@@ -153,6 +161,7 @@ pub fn s3_event_to_storage_events(event: S3Event) -> Result<StorageEvents, Error
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::MessagePayload;
     use aws_lambda_events::cloudwatch_events::CloudWatchEvent;
     use aws_lambda_events::s3::{S3Event, S3EventRecord};
     use aws_lambda_events::sqs::{SqsEvent, SqsMessage, SqsMessageAttribute};
@@ -190,7 +199,10 @@ mod tests {
             ..Default::default()
         };
 
-        let queue_message: QueueMessage = sqs_message_to_queue_message(sqs_message).unwrap();
+        let [queue_message]: [QueueMessage; 1] = sqs_message_to_queue_messages(sqs_message)
+            .unwrap()
+            .try_into()
+            .expect("an ordinary message is one queue message");
 
         assert_eq!(queue_message.id, "msg-12345");
         assert_eq!(queue_message.receipt_handle, "receipt-handle-123");
@@ -224,7 +236,10 @@ mod tests {
             ..Default::default()
         };
 
-        let queue_message: QueueMessage = sqs_message_to_queue_message(sqs_message).unwrap();
+        let [queue_message]: [QueueMessage; 1] = sqs_message_to_queue_messages(sqs_message)
+            .unwrap()
+            .try_into()
+            .expect("an ordinary message is one queue message");
 
         assert_eq!(queue_message.id, "msg-text-123");
         assert_eq!(queue_message.source, "text-queue");

@@ -1,7 +1,7 @@
 use crate::{error::Result, CheckResult, CompileTimeCheck};
 use alien_core::{
-    storage_notifications::{aws_eventbridge_pattern, AWS_EVENTBRIDGE_MAX_PATTERN_CHARACTERS},
-    Platform, Queue, Stack, Storage, StorageNotificationEvent, Worker, WorkerTrigger,
+    storage_notifications::notifications_overlap, Platform, Queue, Stack, Storage,
+    StorageNotification, StorageNotificationEvent, Worker, WorkerTrigger,
 };
 
 /// Checks notification limits, destination ownership and platform support before deployment.
@@ -56,14 +56,12 @@ impl CompileTimeCheck for StorageNotificationsCheck {
                 if notification.events != [StorageNotificationEvent::Created] {
                     result.add_error(format!("{label}.events must contain exactly ['created']"));
                 }
-                let mut filters_valid = true;
                 for (field, value, max_bytes) in [
                     ("prefix", &notification.prefix, 512),
                     ("suffix", &notification.suffix, 128),
                 ] {
                     if let Some(value) = value {
                         if value.is_empty() || value.len() > max_bytes {
-                            filters_valid = false;
                             result.add_error(format!(
                                 "{label}.{field} must contain 1–{max_bytes} UTF-8 bytes; got {}",
                                 value.len()
@@ -72,23 +70,11 @@ impl CompileTimeCheck for StorageNotificationsCheck {
                         if let Some(character) =
                             value.chars().find(|character| character.is_ascii_control())
                         {
-                            filters_valid = false;
                             result.add_error(format!(
                                 "{label}.{field} contains control character U+{:04X}; control characters are not supported",
                                 u32::from(character)
                             ));
                         }
-                    }
-                }
-                if platform == Platform::Aws && filters_valid {
-                    // The deployment prefix is unknown at compile time. Reserving a full
-                    // S3 bucket name guarantees the actual generated pattern will fit.
-                    let pattern = aws_eventbridge_pattern(notification, &"b".repeat(63));
-                    if pattern.to_string().chars().count() > AWS_EVENTBRIDGE_MAX_PATTERN_CHARACTERS
-                    {
-                        result.add_error(format!(
-                            "{label}: prefix and suffix overlap in too many ways; the AWS EventBridge pattern exceeds 4096 characters with space reserved for the bucket name. Shorten the filters or reduce their overlap"
-                        ));
                     }
                 }
                 if notification.queue.resource_type != Queue::RESOURCE_TYPE {
@@ -111,6 +97,17 @@ impl CompileTimeCheck for StorageNotificationsCheck {
                     result.add_error(format!("{label}.queue '{}': Storage and Queue must have the same lifecycle (both Frozen or both Live)", notification.queue.id));
                 }
             }
+            for (later, rule) in storage.notifications.iter().enumerate() {
+                for (earlier, other) in storage.notifications[..later].iter().enumerate() {
+                    if notifications_overlap(other, rule) {
+                        result.add_error(format!(
+                            "Storage '{id}': notifications[{earlier}] ({}) and notifications[{later}] ({}) overlap: an object key can match both. Give them prefixes where neither starts with the other, or suffixes where neither ends with the other",
+                            describe(other),
+                            describe(rule)
+                        ));
+                    }
+                }
+            }
             for (worker_id, worker_entry) in &stack.resources {
                 let Some(worker) = worker_entry.config.downcast_ref::<Worker>() else {
                     continue;
@@ -125,6 +122,18 @@ impl CompileTimeCheck for StorageNotificationsCheck {
         }
         Ok(result)
     }
+}
+
+fn describe(rule: &StorageNotification) -> String {
+    let filter = |name: &str, value: &Option<String>| match value {
+        Some(value) => format!("{name} {value:?}"),
+        None => format!("any {name}"),
+    };
+    format!(
+        "{}, {}",
+        filter("prefix", &rule.prefix),
+        filter("suffix", &rule.suffix)
+    )
 }
 
 #[cfg(test)]
@@ -143,6 +152,17 @@ mod tests {
             .prefix("in/".to_string())
             .suffix(".json".to_string())
             .build()
+    }
+
+    /// `count` rules that can never match the same key.
+    fn distinct(count: usize) -> Vec<StorageNotification> {
+        (0..count)
+            .map(|index| {
+                let mut rule = notification();
+                rule.prefix = Some(format!("in{index}/"));
+                rule
+            })
+            .collect()
     }
 
     fn stack(rules: Vec<StorageNotification>, lifecycle: ResourceLifecycle) -> Stack {
@@ -165,9 +185,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepts_overlapping_rules_for_frozen_and_live_resources() {
+    async fn accepts_ten_distinct_rules_for_frozen_and_live_resources() {
         for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
-            let stack = stack(vec![notification(); 10], lifecycle);
+            let stack = stack(distinct(10), lifecycle);
             for platform in [
                 Platform::Aws,
                 Platform::Gcp,
@@ -215,7 +235,7 @@ mod tests {
         );
         assert_eq!(
             check(
-                &stack(vec![notification(); 11], ResourceLifecycle::Live),
+                &stack(distinct(11), ResourceLifecycle::Live),
                 Platform::Azure
             )
             .await
@@ -328,7 +348,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_and_template_entry_points_enforce_notification_validation() {
-        let stack = stack(vec![notification(); 11], ResourceLifecycle::Frozen);
+        let stack = stack(distinct(11), ResourceLifecycle::Frozen);
         let runner = PreflightRunner::new();
         for outcome in [
             runner
@@ -410,26 +430,80 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn excessive_overlap_fails_aws_build_and_setup_but_not_other_providers() {
-        let mut rule = notification();
-        rule.prefix = Some("a".repeat(512));
-        rule.suffix = Some("a".repeat(128));
-        let stack = stack(vec![rule], ResourceLifecycle::Frozen);
-        assert_eq!(check(&stack, Platform::Aws).await.errors, vec![
-            "Storage 'objects': notifications[0]: prefix and suffix overlap in too many ways; the AWS EventBridge pattern exceeds 4096 characters with space reserved for the bucket name. Shorten the filters or reduce their overlap"
-        ]);
+    async fn overlapping_rules_fail_on_every_platform_and_in_build_and_setup() {
+        let rule = |prefix: Option<&str>, suffix: Option<&str>| {
+            let mut rule = notification();
+            rule.prefix = prefix.map(str::to_string);
+            rule.suffix = suffix.map(str::to_string);
+            rule
+        };
+        // The same cases real S3 rejected and accepted.
+        for (rules, expected) in [
+            (vec![rule(Some("a/"), None), rule(Some("a/b/"), None)], true),
+            (
+                vec![
+                    rule(Some("a/"), Some("json")),
+                    rule(Some("a/"), Some(".json")),
+                ],
+                true,
+            ),
+            (vec![rule(Some("a"), None), rule(Some("ab"), None)], true),
+            (vec![notification(), notification()], true),
+            (vec![rule(None, None), rule(Some("a/"), None)], true),
+            (
+                vec![
+                    rule(Some("a/"), Some(".json")),
+                    rule(Some("a/"), Some(".csv")),
+                ],
+                false,
+            ),
+            (
+                vec![
+                    rule(Some("a/"), Some(".json")),
+                    rule(Some("b/"), Some(".json")),
+                ],
+                false,
+            ),
+            (
+                vec![rule(None, Some(".json")), rule(Some("a/"), Some(".csv"))],
+                false,
+            ),
+            (vec![rule(Some("A/"), None), rule(Some("a/"), None)], false),
+        ] {
+            let stack = stack(rules.clone(), ResourceLifecycle::Frozen);
+            for platform in [
+                Platform::Aws,
+                Platform::Gcp,
+                Platform::Azure,
+                Platform::Local,
+            ] {
+                let errors = check(&stack, platform).await.errors;
+                assert_eq!(
+                    errors.len(),
+                    usize::from(expected),
+                    "{rules:?} on {platform}: {errors:?}"
+                );
+            }
+        }
+        let overlapping = stack(
+            vec![notification(), rule(Some("in/sub/"), None)],
+            ResourceLifecycle::Frozen,
+        );
+        assert_eq!(
+            check(&overlapping, Platform::Gcp).await.errors,
+            vec![
+                "Storage 'objects': notifications[0] (prefix \"in/\", suffix \".json\") and notifications[1] (prefix \"in/sub/\", any suffix) overlap: an object key can match both. Give them prefixes where neither starts with the other, or suffixes where neither ends with the other"
+            ]
+        );
         let runner = PreflightRunner::new();
         assert!(runner
-            .run_build_time_preflights(&stack, Platform::Aws)
+            .run_build_time_preflights(&overlapping, Platform::Aws)
             .await
             .is_err());
         assert!(runner
-            .run_template_preflights(&stack, Platform::Aws)
+            .run_template_preflights(&overlapping, Platform::Aws)
             .await
             .is_err());
-        for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
-            assert!(check(&stack, platform).await.success);
-        }
     }
 
     #[tokio::test]
