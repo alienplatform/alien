@@ -5,16 +5,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
-    /// A bounded setup must name the services allowed to receive a role.
-    #[error(
-        code = "PASS_ROLE_SERVICE_REQUIRED",
-        message = "AWS permission '{permission}' allows iam:PassRole without an explicit consuming service. Add StringEquals iam:PassedToService with literal service principals (for example lambda.amazonaws.com), splitting PassRole from other actions if needed, before rerunning setup.",
-        retryable = "false",
-        internal = "false",
-        http_status_code = 400
-    )]
-    PassRoleServiceRequired { permission: String },
-
     /// The generated boundary exceeds the AWS managed-policy size limit.
     #[error(
         code = "PERMISSIONS_BOUNDARY_TOO_LARGE",

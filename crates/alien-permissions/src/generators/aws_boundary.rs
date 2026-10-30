@@ -281,12 +281,6 @@ fn render_boundary(
         }
     }
     for statement in custom_statements {
-        super::aws_role_passing::validate_pass_role_service(
-            &statement.sid,
-            &statement.effect,
-            &statement.action,
-            statement.condition.as_ref(),
-        )?;
         merge_statement(&mut statements, statement.clone());
     }
     // A trailing wildcard also covers longer catalog patterns such as log streams and objects.

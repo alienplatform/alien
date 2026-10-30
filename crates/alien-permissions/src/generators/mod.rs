@@ -2,7 +2,6 @@ pub mod aws_boundary;
 mod aws_boundary_coverage;
 mod aws_boundary_scope;
 pub mod aws_cloudformation;
-mod aws_role_passing;
 pub mod aws_runtime;
 pub mod azure_runtime;
 pub mod azure_setup_owned;
