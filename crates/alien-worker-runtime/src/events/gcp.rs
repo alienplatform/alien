@@ -1,5 +1,7 @@
 use crate::error::{Error, ErrorData};
-use alien_bindings::providers::queue::storage_notifications::gcp_queue_payload;
+use alien_bindings::providers::queue::storage_notifications::{
+    gcp_queue_payload, GcpQueueDelivery,
+};
 use alien_core::{QueueMessage, StorageEvent, StorageEventType, StorageEvents};
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose, Engine};
@@ -368,11 +370,8 @@ pub(crate) fn pubsub_cloudevent_to_queue_messages_with_source(
             reason: "Failed to decode base64 message data".to_string(),
         })?;
 
-    let Some(payload) = gcp_queue_payload(&message_bytes, &pubsub_data.message.attributes)
-        .context(ErrorData::EventProcessingFailed {
-            event_type: event_type_str.to_string(),
-            reason: "Failed to normalize Pub/Sub queue payload".to_string(),
-        })?
+    let GcpQueueDelivery::Deliver(payload) =
+        gcp_queue_payload(&message_bytes, &pubsub_data.message.attributes)
     else {
         return Ok(Vec::new());
     };

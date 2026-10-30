@@ -10,7 +10,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alien_bindings::providers::queue::storage_notifications::gcp_queue_payload;
+use alien_bindings::providers::queue::storage_notifications::{
+    gcp_queue_payload, GcpQueueDelivery,
+};
 use alien_worker_protocol::ControlGrpcServer;
 use axum::{
     body::Body,
@@ -467,12 +469,8 @@ async fn handle_pubsub_push_message(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let payload = match gcp_queue_payload(&data, &attributes) {
-        Ok(Some(payload)) => payload,
-        Ok(None) => return StatusCode::OK.into_response(),
-        Err(error) => {
-            error!(%error, "Failed to normalize Pub/Sub queue payload");
-            return (StatusCode::BAD_REQUEST, "Invalid queue payload").into_response();
-        }
+        GcpQueueDelivery::Deliver(payload) => payload,
+        GcpQueueDelivery::Filtered => return StatusCode::OK.into_response(),
     };
 
     let original_source = push_msg.subscription.unwrap_or_default();
@@ -798,7 +796,7 @@ mod queue_routing_tests {
                 let object =
                     serde_json::json!({"bucket":"source","name":key,"size":"7","etag":"etag"});
                 let body = serde_json::json!({"message": {"messageId":key,"data":general_purpose::STANDARD.encode(object.to_string()), "attributes": {
-                    "notificationConfig":"projects/_/buckets/source/notificationConfigs/1", "eventType":"OBJECT_FINALIZE", "payloadFormat":"JSON_API_V1", "eventTime":"2026-10-30T08:00:00Z", "storageEventSuffix":".json"
+                    "notificationConfig":"projects/_/buckets/source/notificationConfigs/1", "storageNotificationRule":"source/0", "eventType":"OBJECT_FINALIZE", "payloadFormat":"JSON_API_V1", "eventTime":"2026-10-30T08:00:00Z", "storageEventSuffix":".json"
                 }}, "subscription":"projects/example/subscriptions/jobs-sub"});
                 let mut builder = Request::builder()
                     .method("POST")

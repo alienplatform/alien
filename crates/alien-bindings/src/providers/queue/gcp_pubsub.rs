@@ -1,4 +1,7 @@
-use super::{batch_end, encode_batch, storage_notifications::gcp_queue_payload};
+use super::{
+    batch_end, encode_batch,
+    storage_notifications::{gcp_queue_payload, GcpQueueDelivery},
+};
 use crate::error::{ErrorData, Result};
 use crate::traits::{
     Binding, MessagePayload, Queue, QueueAckResult, QueueMessage, QueueSendResult, MAX_BATCH_SIZE,
@@ -200,8 +203,8 @@ impl Queue for GcpPubSubQueue {
                     reason: "Pub/Sub message data is not valid base64".to_string(),
                 })?;
             let attributes = message.attributes.unwrap_or_default();
-            match gcp_queue_payload(&data, &attributes)? {
-                Some(payload) => messages.push(QueueMessage {
+            match gcp_queue_payload(&data, &attributes) {
+                GcpQueueDelivery::Deliver(payload) => messages.push(QueueMessage {
                     payload: match payload {
                         alien_core::MessagePayload::Json(value) => MessagePayload::Json(value),
                         alien_core::MessagePayload::Text(text) => MessagePayload::Text(text),
@@ -210,7 +213,7 @@ impl Queue for GcpPubSubQueue {
                     // Pub/Sub only populates delivery attempts with a dead-letter policy.
                     attempt: 1,
                 }),
-                None => filtered_receipts.push(received.ack_id),
+                GcpQueueDelivery::Filtered => filtered_receipts.push(received.ack_id),
             }
         }
         if !filtered_receipts.is_empty() {
@@ -358,7 +361,7 @@ mod notification_tests {
                 "ackId":format!("receipt-{i}"), "message": {
                     "messageId": format!("id-{i}"),
                     "data":BASE64_STANDARD.encode(json!({"bucket":"source","name":key,"size":"7"}).to_string()),
-                    "attributes":{"notificationConfig":"config-1","eventType":"OBJECT_FINALIZE","payloadFormat":"JSON_API_V1","eventTime":"2026-10-30T08:00:00Z","storageEventSuffix":".json"}
+                    "attributes":{"notificationConfig":"config-1","storageNotificationRule":"source/0","eventType":"OBJECT_FINALIZE","payloadFormat":"JSON_API_V1","eventTime":"2026-10-30T08:00:00Z","storageEventSuffix":".json"}
                 }
             })).collect::<Vec<_>>();
             let pull = server

@@ -7,7 +7,8 @@ use std::sync::Arc;
 use alien_bindings::traits::{MessagePayload, Queue};
 use alien_core::{Storage, StorageEvent, StorageEventType, StorageNotification};
 use alien_error::{AlienError, Context, IntoAlienError};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -79,11 +80,17 @@ impl NotificationServices {
 
         // Resolve every queue and load every cursor before spawning any delivery.
         // Missing dependencies or invalid checkpoints fail the controller immediately.
+        // Cursors are keyed by rule content: a reordered rule keeps its cursor, and a new
+        // or edited rule starts from the objects that exist now, as it would in the cloud.
+        let mut cursor_files = Vec::new();
+        for rule in &storage.notifications {
+            cursor_files.push(rule_cursor_file(rule)?);
+        }
+        remove_stale_cursors(state, &cursor_files).await?;
         let mut deliveries = Vec::new();
-        for (index, rule) in storage.notifications.iter().enumerate() {
+        for (rule, cursor_file) in storage.notifications.iter().zip(&cursor_files) {
             let queue = queues.load_queue(&rule.queue.id).await?;
-            let watcher =
-                StorageWatcher::open(root, &state.join(format!("rule-{index}.json"))).await?;
+            let watcher = StorageWatcher::open(root, &state.join(cursor_file)).await?;
             deliveries.push((rule.clone(), queue, watcher));
         }
         let stop = CancellationToken::new();
@@ -99,15 +106,17 @@ impl NotificationServices {
                         let queue = Arc::clone(&queue);
                         let queue_id = rule.queue.id.clone();
                         let bucket = bucket.clone();
-                        let matches = change.version.is_some() && rule.matches_key(&change.key);
+                        let version = change.version.filter(|_| rule.matches_key(&change.key));
                         async move {
-                            if !matches { return Ok(true); }
+                            let Some(version) = version else {
+                                return Ok(true);
+                            };
                             let event = StorageEvent {
                                 event_type: StorageEventType::Created,
                                 bucket_name: bucket,
                                 object_key: change.key,
-                                timestamp: Utc::now(),
-                                size: change.version.map(|version| version.size),
+                                timestamp: DateTime::<Utc>::from(version.modified),
+                                size: Some(version.size),
                                 etag: None, content_type: None, metadata: HashMap::new(),
                                 copy_source: None, previous_tier: None, current_tier: None,
                                 region: None, version_id: None,
@@ -165,6 +174,48 @@ impl NotificationServices {
             None => Ok(()),
         }
     }
+}
+
+fn rule_cursor_file(rule: &StorageNotification) -> Result<String> {
+    let rule = serde_json::to_vec(rule)
+        .into_alien_error()
+        .context(notification_error("Serialize storage notification rule"))?;
+    let digest = Sha256::digest(&rule);
+    let name: String = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok(format!("rule-{name}.json"))
+}
+
+/// Cursors of removed or edited rules would otherwise accumulate forever.
+async fn remove_stale_cursors(state: &Path, keep: &[String]) -> Result<()> {
+    let mut entries = match tokio::fs::read_dir(state).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .into_alien_error()
+                .context(notification_error("Read storage notification cursors"))
+        }
+    };
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .into_alien_error()
+        .context(notification_error("Read storage notification cursors"))?
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("rule-") && name.ends_with(".json") && !keep.contains(&name) {
+            tokio::fs::remove_file(entry.path())
+                .await
+                .into_alien_error()
+                .context(notification_error(
+                    "Remove stale storage notification cursor",
+                ))?;
+        }
+    }
+    Ok(())
 }
 
 fn notification_error(reason: &str) -> ErrorData {
