@@ -65,8 +65,18 @@ async fn installation_records_exact_document_and_retries_without_reinstalling() 
     let installed = Arc::new(Mutex::new(None));
     let captured = installed.clone();
     let mut iam = MockIamApi::new();
+    let mut sequence = Sequence::new();
     iam.expect_create_policy()
         .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _, _| {
+            Err(AlienError::new(ClientError::Timeout {
+                message: "write failed".to_string(),
+            }))
+        });
+    iam.expect_create_policy()
+        .times(1)
+        .in_sequence(&mut sequence)
         .returning(move |name, document, _| {
             assert_eq!(name, "test-prefix-deployment-management-boundary");
             *captured.lock().unwrap() =
@@ -91,6 +101,11 @@ async fn installation_records_exact_document_and_retries_without_reinstalling() 
     let mut controller = AwsRemoteStackManagementController::default();
     executor
         .with_context(|ctx| block_on(controller.install_permissions_boundary(ctx)))
+        .unwrap_err();
+    assert_eq!(controller.permissions_boundary_arn.as_deref(), Some(ARN));
+    assert!(controller.permissions_boundary_document.is_none());
+    executor
+        .with_context(|ctx| block_on(controller.install_permissions_boundary(ctx)))
         .unwrap();
     assert_eq!(controller.permissions_boundary_arn.as_deref(), Some(ARN));
     assert_eq!(
@@ -109,19 +124,11 @@ async fn installation_records_exact_document_and_retries_without_reinstalling() 
     let policies = executor
         .with_context(|ctx| controller.generate_management_policy_documents(ctx))
         .unwrap();
-    let statements: Vec<serde_json::Value> = policies
-        .iter()
-        .flat_map(|policy| {
-            serde_json::from_str::<serde_json::Value>(policy).unwrap()["Statement"]
-                .as_array()
-                .unwrap()
-                .clone()
-        })
-        .collect();
-    let role_writes: Vec<_> = statements
-        .iter()
-        .filter(|statement| {
-            statement["Effect"] == "Allow"
+    let mut writes = 0;
+    for policy in policies {
+        let policy: serde_json::Value = serde_json::from_str(&policy).unwrap();
+        for statement in policy["Statement"].as_array().unwrap() {
+            if statement["Effect"] == "Allow"
                 && statement["Action"].as_array().is_some_and(|actions| {
                     actions.iter().any(|action| {
                         matches!(
@@ -136,19 +143,16 @@ async fn installation_records_exact_document_and_retries_without_reinstalling() 
                         )
                     })
                 })
-        })
-        .collect();
-    assert!(!role_writes.is_empty());
-    for statement in role_writes {
-        assert_eq!(
-            statement["Condition"]["StringEquals"]["iam:PermissionsBoundary"], ARN,
-            "{statement}"
-        );
+            {
+                writes += 1;
+                assert_eq!(
+                    statement["Condition"]["StringEquals"]["iam:PermissionsBoundary"],
+                    ARN
+                );
+            }
+        }
     }
-    assert_eq!(
-        controller.permissions_boundary_document.as_ref().unwrap()["Version"],
-        "2012-10-17"
-    );
+    assert!(writes > 0);
 }
 
 #[tokio::test]
@@ -214,67 +218,6 @@ async fn existing_policy_prunes_nondefault_version_before_installing_and_records
 }
 
 #[tokio::test]
-async fn failed_creation_keeps_cleanup_target_without_claiming_document_is_installed() {
-    let mut iam = MockIamApi::new();
-    iam.expect_create_policy().times(1).returning(|_, _, _| {
-        Err(AlienError::new(ClientError::Timeout {
-            message: "write failed".to_string(),
-        }))
-    });
-    let executor = executor(iam).await;
-    let mut controller = AwsRemoteStackManagementController::default();
-    executor
-        .with_context(|ctx| block_on(controller.install_permissions_boundary(ctx)))
-        .unwrap_err();
-    assert_eq!(controller.permissions_boundary_arn.as_deref(), Some(ARN));
-    assert!(controller.permissions_boundary_document.is_none());
-}
-
-#[tokio::test]
-async fn deletion_retains_boundary_on_failure_and_removes_nondefault_versions_first() {
-    for fail in [true, false] {
-        let mut sequence = Sequence::new();
-        let mut iam = MockIamApi::new();
-        iam.expect_list_policy_versions()
-            .withf(|arn| arn == ARN)
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(|_| Ok(versions()));
-        for i in 2..=5 {
-            iam.expect_delete_policy_version()
-                .withf(move |arn, id| arn == ARN && id == format!("v{i}"))
-                .times(1)
-                .in_sequence(&mut sequence)
-                .returning(|_, _| Ok(()));
-        }
-        iam.expect_delete_policy()
-            .withf(|arn| arn == ARN)
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(move |_| {
-                if fail {
-                    Err(AlienError::new(ClientError::RemoteResourceConflict {
-                        resource_type: "policy".to_string(),
-                        resource_name: ARN.to_string(),
-                        message: "still in use".to_string(),
-                    }))
-                } else {
-                    Ok(())
-                }
-            });
-        let executor = executor(iam).await;
-        let mut controller = AwsRemoteStackManagementController::default();
-        controller.permissions_boundary_arn = Some(ARN.to_string());
-        controller.permissions_boundary_document = Some(serde_json::json!({"Statement": []}));
-        let result =
-            executor.with_context(|ctx| block_on(controller.deleting_permissions_boundary(ctx)));
-        assert_eq!(result.is_err(), fail);
-        assert_eq!(controller.permissions_boundary_arn.is_some(), fail);
-        assert_eq!(controller.permissions_boundary_document.is_some(), fail);
-    }
-}
-
-#[tokio::test]
 async fn setup_refreshes_legacy_and_stale_boundaries_but_runtime_never_does() {
     let executor = executor(MockIamApi::new()).await;
     let mut controller = AwsRemoteStackManagementController::mock_ready("test-prefix");
@@ -316,55 +259,93 @@ async fn setup_refreshes_legacy_and_stale_boundaries_but_runtime_never_does() {
 }
 
 #[tokio::test]
-async fn deletion_removes_management_role_before_boundary_and_tolerates_missing_policy() {
-    let mut sequence = Sequence::new();
-    let mut iam = MockIamApi::new();
-    iam.expect_delete_role()
-        .withf(|role| role == "test-prefix-management")
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_| Ok(()));
-    iam.expect_list_policy_versions()
-        .withf(|arn| arn == ARN)
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_| {
-            Err(AlienError::new(ClientError::RemoteResourceNotFound {
-                resource_type: "policy".to_string(),
-                resource_name: ARN.to_string(),
-            }))
-        });
-    let executor = executor(iam).await;
-    let mut controller = AwsRemoteStackManagementController::mock_ready("test-prefix-management");
-    controller.permissions_boundary_arn = Some(ARN.to_string());
-    controller.permissions_boundary_document = Some(serde_json::json!({"Statement": []}));
-    let action = executor
-        .with_context(|ctx| block_on(controller.deleting_role(ctx)))
-        .unwrap();
-    assert!(matches!(
-        action,
-        AwsRemoteStackManagementHandlerAction::Continue {
-            state: AwsRemoteStackManagementState::DeletingPermissionsBoundary,
-            ..
+async fn deletion_orders_role_versions_and_boundary_and_preserves_failed_cleanup() {
+    for (missing, fail) in [(false, false), (false, true), (true, false)] {
+        let mut sequence = Sequence::new();
+        let mut iam = MockIamApi::new();
+        iam.expect_delete_role()
+            .withf(|role| role == "test-prefix-management")
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Ok(()));
+        iam.expect_list_policy_versions()
+            .withf(|arn| arn == ARN)
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |_| {
+                if missing {
+                    Err(AlienError::new(ClientError::RemoteResourceNotFound {
+                        resource_type: "policy".to_string(),
+                        resource_name: ARN.to_string(),
+                    }))
+                } else {
+                    Ok(versions())
+                }
+            });
+        if !missing {
+            for i in 2..=5 {
+                iam.expect_delete_policy_version()
+                    .withf(move |arn, id| arn == ARN && id == format!("v{i}"))
+                    .times(1)
+                    .in_sequence(&mut sequence)
+                    .returning(|_, _| Ok(()));
+            }
+            iam.expect_delete_policy()
+                .withf(|arn| arn == ARN)
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(move |_| {
+                    if fail {
+                        Err(AlienError::new(ClientError::RemoteResourceConflict {
+                            resource_type: "policy".to_string(),
+                            resource_name: ARN.to_string(),
+                            message: "still in use".to_string(),
+                        }))
+                    } else {
+                        Ok(())
+                    }
+                });
         }
-    ));
-    assert!(controller.role_name.is_none());
-    assert_eq!(controller.permissions_boundary_arn.as_deref(), Some(ARN));
-    let action = executor
-        .with_context(|ctx| block_on(controller.delete_start(ctx)))
-        .unwrap();
-    assert!(matches!(
-        action,
-        AwsRemoteStackManagementHandlerAction::Continue {
-            state: AwsRemoteStackManagementState::DeletingPermissionsBoundary,
-            ..
-        }
-    ));
-    executor
-        .with_context(|ctx| block_on(controller.deleting_permissions_boundary(ctx)))
-        .unwrap();
-    assert!(controller.permissions_boundary_arn.is_none());
-    assert!(controller.permissions_boundary_document.is_none());
+        let executor = executor(iam).await;
+        let mut controller =
+            AwsRemoteStackManagementController::mock_ready("test-prefix-management");
+        controller.permissions_boundary_arn = Some(ARN.to_string());
+        let document = serde_json::json!({"Statement": []});
+        controller.permissions_boundary_document = Some(document.clone());
+        let action = executor
+            .with_context(|ctx| block_on(controller.deleting_role(ctx)))
+            .unwrap();
+        assert!(matches!(
+            action,
+            AwsRemoteStackManagementHandlerAction::Continue {
+                state: AwsRemoteStackManagementState::DeletingPermissionsBoundary,
+                ..
+            }
+        ));
+        assert!(controller.role_name.is_none());
+        assert_eq!(controller.permissions_boundary_arn.as_deref(), Some(ARN));
+        let action = executor
+            .with_context(|ctx| block_on(controller.delete_start(ctx)))
+            .unwrap();
+        assert!(matches!(
+            action,
+            AwsRemoteStackManagementHandlerAction::Continue {
+                state: AwsRemoteStackManagementState::DeletingPermissionsBoundary,
+                ..
+            }
+        ));
+        let result =
+            executor.with_context(|ctx| block_on(controller.deleting_permissions_boundary(ctx)));
+        assert_eq!(result.is_err(), fail, "missing={missing}, fail={fail}");
+        assert_eq!(
+            controller.permissions_boundary_arn.as_deref(),
+            fail.then_some(ARN)
+        );
+        assert_eq!(
+            controller.permissions_boundary_document,
+            fail.then_some(document)
+        );
+    }
 }
 
 #[tokio::test]
