@@ -233,7 +233,11 @@ pub async fn verify_rule_update(ctx: &mut TestContext) -> anyhow::Result<()> {
             )
             .await?;
             let outputs = terraform_output_json(workdir.path(), env).await?;
-            terraform_import_request_from_outputs(&outputs, &prepared.dg_token)?
+            terraform_import_request_from_outputs(
+                &outputs,
+                &prepared.dg_token,
+                &ctx.deployment.name,
+            )?
         }
         _ => anyhow::bail!("Exactly one cloud setup artifact is required"),
     };
