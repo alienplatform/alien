@@ -1,6 +1,7 @@
-//! The GCP sandbox image: a base with the sandbox agent, the exec identity and the agent's
-//! contract layered on. Agent Platform runs the image as pushed, so all three have to be in it.
-//! Nothing runs inside the base, so a base with no shell or no `/etc/passwd` layers the same way.
+//! The sandbox image: a base with the sandbox agent, the exec identity and the agent's contract
+//! layered on. GCP Agent Platform and Azure run the image as pushed, and an AWS MicroVM image is
+//! built `FROM` it, so all three have to be in it. Nothing runs inside the base, so a base with no
+//! shell or no `/etc/passwd` layers the same way.
 
 use crate::error::{ErrorData, Result};
 use crate::registry::{registry_failure, RegistryFailure};
@@ -38,7 +39,7 @@ pub fn sandbox_agent_image() -> String {
 #[derive(Debug)]
 pub struct SandboxAgentImage {
     pub image: Image,
-    /// Manifest digest the agent reference resolved to for linux/amd64.
+    /// Manifest digest the agent reference resolved to for the layered architecture.
     pub agent_digest: String,
 }
 
@@ -74,7 +75,11 @@ pub async fn build_gcp_sandbox_image(
         protocol,
         base_auth,
         cache,
-        GCP_AGENT_PLATFORM,
+        AgentLayering {
+            arch: Arch::Amd64,
+            contract: GCP_AGENT_PLATFORM,
+            image_command_env: true,
+        },
     )
     .await
 }
@@ -98,9 +103,24 @@ pub async fn build_azure_sandbox_image(
         protocol,
         base_auth,
         cache,
-        AZURE_SANDBOX,
+        AgentLayering {
+            arch: Arch::Amd64,
+            contract: AZURE_SANDBOX,
+            image_command_env: true,
+        },
     )
     .await
+}
+
+/// What one backend needs layered onto a base besides the agent itself.
+pub(crate) struct AgentLayering {
+    /// The architecture the backend boots, which both the base and the agent are pulled for.
+    pub(crate) arch: Arch,
+    /// The backend's default contract, before the base image's USER is applied.
+    pub(crate) contract: SandboxImage,
+    /// Whether the image itself turns on supervised startup of the base command. AWS turns it on
+    /// when it builds the MicroVM image instead, together with the capability grant it needs.
+    pub(crate) image_command_env: bool,
 }
 
 pub(crate) async fn build_sandbox_agent_image(
@@ -111,7 +131,7 @@ pub(crate) async fn build_sandbox_agent_image(
     protocol: ClientProtocol,
     base_auth: RegistryAuth,
     cache: BlobCache,
-    default_contract: SandboxImage,
+    layering: AgentLayering,
 ) -> Result<SandboxAgentImage> {
     let failed = |reason: String| ErrorData::ImageBuildFailed {
         resource_name: resource_name.to_string(),
@@ -123,7 +143,7 @@ pub(crate) async fn build_sandbox_agent_image(
         reason,
     };
     let identity = BaseIdentity::read(&base, resource_name).await?;
-    let contract = identity.contract(default_contract, None)?;
+    let contract = identity.contract(layering.contract, None)?;
     let original_command = image_command(&base).await?;
     let command = serde_json::to_vec(&original_command)
         .into_alien_error()
@@ -142,7 +162,7 @@ pub(crate) async fn build_sandbox_agent_image(
         || async {
             Ok(Image::builder()
                 .from(agent_image)
-                .platform("linux", &Arch::Amd64)
+                .platform("linux", &layering.arch)
                 .pull_policy(PullPolicy::Always)
                 .protocol(protocol.clone())
                 .auth(RegistryAuth::Anonymous)
@@ -223,7 +243,7 @@ pub(crate) async fn build_sandbox_agent_image(
                 .context(failed("Failed to build the agent layer".to_string()))?;
             let mut builder = Image::builder()
                 .from(base_image)
-                .platform("linux", &Arch::Amd64)
+                .platform("linux", &layering.arch)
                 .protocol(protocol.clone())
                 .auth(base_auth.clone())
                 .blob_cache(cache.clone())
@@ -249,7 +269,9 @@ pub(crate) async fn build_sandbox_agent_image(
             if let Some(filter) = original_command.env.get("RUST_LOG") {
                 builder = builder.env("RUST_LOG", filter);
             }
-            builder = builder.env("ALIEN_SANDBOX_IMAGE_COMMAND", "true");
+            if layering.image_command_env {
+                builder = builder.env("ALIEN_SANDBOX_IMAGE_COMMAND", "true");
+            }
             for (name, value) in contract.contract_env_vars() {
                 builder = builder.env(name, &value);
             }
