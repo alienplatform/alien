@@ -14,6 +14,11 @@ const EVENT_GRID_API_VERSION: &str = "2025-02-15";
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait EventGridApi: Send + Sync + std::fmt::Debug {
+    async fn list_event_subscriptions(
+        &self,
+        source_resource_id: String,
+    ) -> Result<Vec<EventSubscription>>;
+
     async fn create_or_update_event_subscription(
         &self,
         source_resource_id: String,
@@ -72,6 +77,42 @@ impl AzureEventGridClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl EventGridApi for AzureEventGridClient {
+    async fn list_event_subscriptions(
+        &self,
+        source_resource_id: String,
+    ) -> Result<Vec<EventSubscription>> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let mut next = Some(self.base.build_url(
+            &format!(
+                "{}/providers/Microsoft.EventGrid/eventSubscriptions",
+                source_resource_id.trim_end_matches('/')
+            ),
+            Some(vec![("api-version", EVENT_GRID_API_VERSION.to_string())]),
+        ));
+        let mut subscriptions = Vec::new();
+        while let Some(url) = next {
+            let request = AzureRequestBuilder::new(Method::GET, url)
+                .content_length("")
+                .build()?;
+            let signed = self.base.sign_request(request, &token).await?;
+            let response = self
+                .base
+                .execute_request(signed, "ListEventSubscriptions", &source_resource_id)
+                .await?;
+            let page: EventSubscriptionList = response.json().await.into_alien_error().context(
+                ErrorData::SerializationError {
+                    message: format!("Decode Event Grid subscriptions on '{source_resource_id}'"),
+                },
+            )?;
+            subscriptions.extend(page.value);
+            next = page.next_link;
+        }
+        Ok(subscriptions)
+    }
+
     async fn create_or_update_event_subscription(
         &self,
         source_resource_id: String,
@@ -237,6 +278,8 @@ pub struct ServiceBusQueueDestinationProperties {
 pub struct EventSubscriptionFilter {
     pub included_event_types: Vec<String>,
     pub subject_begins_with: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_ends_with: Option<String>,
     pub is_subject_case_sensitive: bool,
 }
 
@@ -252,6 +295,16 @@ pub struct EventSubscription {
 #[serde(rename_all = "camelCase")]
 pub struct EventSubscriptionProperties {
     pub provisioning_state: Option<String>,
+    pub destination: Option<serde_json::Value>,
+    pub filter: Option<serde_json::Value>,
+    pub event_delivery_schema: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EventSubscriptionList {
+    value: Vec<EventSubscription>,
+    next_link: Option<String>,
 }
 
 #[cfg(test)]
@@ -284,7 +337,8 @@ mod tests {
                     included_event_types: vec!["Microsoft.Storage.BlobCreated".to_string()],
                     subject_begins_with:
                         "/blobServices/default/containers/uploads/blobs/".to_string(),
-                    is_subject_case_sensitive: false,
+                    subject_ends_with: Some(".json".into()),
+                    is_subject_case_sensitive: true,
                 },
                 event_delivery_schema: "CloudEventSchemaV1_0".to_string(),
             },
@@ -306,7 +360,8 @@ mod tests {
                 "filter": {
                     "includedEventTypes": ["Microsoft.Storage.BlobCreated"],
                     "subjectBeginsWith": "/blobServices/default/containers/uploads/blobs/",
-                    "isSubjectCaseSensitive": false
+                    "subjectEndsWith": ".json",
+                    "isSubjectCaseSensitive": true
                 },
                 "eventDeliverySchema": "CloudEventSchemaV1_0"
             }
@@ -343,6 +398,33 @@ mod tests {
                 .as_deref(),
             Some("Succeeded")
         );
+    }
+
+    #[tokio::test]
+    async fn lists_every_page_without_requiring_foreign_destination_fields() {
+        let server = MockServer::start_async().await;
+        let source = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/files";
+        let first = server.mock_async(|when, then| {
+            when.method(GET).path(format!("{source}/providers/Microsoft.EventGrid/eventSubscriptions"));
+            then.status(200).json_body(json!({"value":[{
+                "name":"foreign-webhook", "properties":{
+                    "provisioningState":"Succeeded", "destination":{"endpointType":"WebHook","properties":{"endpointUrl":"https://example.com/events"}}
+                }
+            }], "nextLink":format!("{}/next-page",server.base_url())}));
+        }).await;
+        let second = server.mock_async(|when, then| {
+            when.method(GET).path("/next-page");
+            then.status(200).json_body(json!({"value":[{"name":"queue-rule","properties":{"provisioningState":"Succeeded"}}]}));
+        }).await;
+        let found = test_client(&server)
+            .list_event_subscriptions(source.into())
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].name.as_deref(), Some("foreign-webhook"));
+        assert_eq!(found[1].name.as_deref(), Some("queue-rule"));
+        first.assert_async().await;
+        second.assert_async().await;
     }
 
     #[tokio::test]

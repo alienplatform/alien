@@ -584,6 +584,18 @@ fn generate_auto_management_profile(
             permission_set_ids.insert("queue/storage-notifications".to_string());
         }
 
+        if platform == Platform::Azure
+            && resource_entry.lifecycle == ResourceLifecycle::Live
+            && resource_entry
+                .config
+                .downcast_ref::<Storage>()
+                .is_some_and(|storage| !storage.notifications.is_empty())
+        {
+            // Account-scoped subscriptions reuse Azure's system topic. Queue provision
+            // already grants the creator write access to its Service Bus destination.
+            permission_set_ids.insert("storage/trigger-management".to_string());
+        }
+
         // After a Terraform setup the manager builds and replaces a Frozen GCP sandbox's template;
         // a direct setup does it with the deployer's credentials. Resource-scoped: the GCP emitter
         // binds it on this sandbox's engine once setup has created it.
@@ -1841,40 +1853,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn storage_notification_ingress_permissions_are_only_for_notified_live_queues() {
-        for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
-            for notifying in [false, true] {
-                let queue = alien_core::Queue::new("work".into()).build();
-                let mut storage = Storage::new("uploads".into()).build();
-                if notifying {
-                    storage.notifications.push(
-                        alien_core::StorageNotification::builder()
-                            .queue((&queue).into())
-                            .build(),
-                    );
+    async fn storage_notification_ingress_permissions_are_only_for_notified_live_resources() {
+        for (platform, permission_id) in [
+            (Platform::Gcp, "queue/storage-notifications"),
+            (Platform::Azure, "storage/trigger-management"),
+        ] {
+            for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
+                for notifying in [false, true] {
+                    let queue = alien_core::Queue::new("work".into()).build();
+                    let mut storage = Storage::new("uploads".into()).build();
+                    if notifying {
+                        storage.notifications.push(
+                            alien_core::StorageNotification::builder()
+                                .queue((&queue).into())
+                                .build(),
+                        );
+                    }
+                    let stack = Stack::new("test".into())
+                        .add(queue, lifecycle)
+                        .add(storage, lifecycle)
+                        .build();
+                    let config = DeploymentConfig::builder()
+                        .stack_settings(StackSettings::default())
+                        .environment_variables(empty_env_snapshot())
+                        .allow_frozen_changes(false)
+                        .external_bindings(ExternalBindings::default())
+                        .build();
+                    let prepared = ManagementPermissionProfileMutation
+                        .mutate(stack, &StackState::new(platform), &config)
+                        .await
+                        .unwrap();
+                    let granted = prepared.management().profile().is_some_and(|profile| {
+                        profile
+                            .0
+                            .values()
+                            .flatten()
+                            .any(|permission| permission.id() == permission_id)
+                    });
+                    assert_eq!(granted, notifying && lifecycle == ResourceLifecycle::Live);
                 }
-                let stack = Stack::new("test".into())
-                    .add(queue, lifecycle)
-                    .add(storage, lifecycle)
-                    .build();
-                let config = DeploymentConfig::builder()
-                    .stack_settings(StackSettings::default())
-                    .environment_variables(empty_env_snapshot())
-                    .allow_frozen_changes(false)
-                    .external_bindings(ExternalBindings::default())
-                    .build();
-                let prepared = ManagementPermissionProfileMutation
-                    .mutate(stack, &StackState::new(Platform::Gcp), &config)
-                    .await
-                    .unwrap();
-                let granted = prepared.management().profile().is_some_and(|profile| {
-                    profile
-                        .0
-                        .values()
-                        .flatten()
-                        .any(|permission| permission.id() == "queue/storage-notifications")
-                });
-                assert_eq!(granted, notifying && lifecycle == ResourceLifecycle::Live);
             }
         }
     }

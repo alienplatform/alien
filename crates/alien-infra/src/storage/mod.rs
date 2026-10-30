@@ -12,6 +12,7 @@ mod gcp_import;
 pub use gcp_import::GcpStorageImporter;
 
 pub(crate) mod azure;
+mod azure_notifications;
 pub use azure::*;
 
 mod azure_import;

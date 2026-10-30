@@ -1,8 +1,8 @@
 # Storage notifications into queues
 
-Storage notification declarations, validation, GCP Terraform setup and controllers,
-and GCP/Azure queue payload normalization are available in this branch. AWS
-provisioning, Azure setup/controllers, and local delivery are still under development.
+Storage notification declarations, validation, GCP/Azure Terraform setup and
+controllers, and GCP/Azure queue payload normalization are available in this
+branch. AWS provisioning and local delivery are still under development.
 
 Declare a queue destination on a Storage resource:
 
@@ -66,6 +66,15 @@ updates and teardown leave independently managed notification configurations
 alone. The bucket follows the existing setup data-retention policy; removing
 notifications does not delete stored objects. Existing out-of-band configurations
 also count toward provider notification quotas.
+Azure setup and controllers create account-scoped Event Grid subscriptions,
+reusing the storage account's shared system topic. Each Storage owns only its
+subscriptions; updates and deletion preserve subscriptions managed elsewhere.
+Default Event Grid destination authentication requires no extra queue-side grant,
+so adding notifications does not update the Queue's IAM. Live Storage adds the
+existing `storage/trigger-management` permission set to management permissions;
+Frozen rules keep those writes in setup. Retained-storage cleanup waits until
+Azure confirms its subscriptions are gone and preserves the shared topic.
+
 AWS EventBridge introduces event-delivery charges beyond SQS; enabling it on a
 bucket sends supported S3 events to EventBridge even when rules filter them out.
 

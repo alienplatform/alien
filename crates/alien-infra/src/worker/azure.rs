@@ -5143,6 +5143,7 @@ impl AzureWorkerController {
                                     },
                                 },
                                 filter: EventSubscriptionFilter {
+                                    subject_ends_with: None,
                                     included_event_types,
                                     subject_begins_with: format!(
                                         "/blobServices/default/containers/{}/blobs/",

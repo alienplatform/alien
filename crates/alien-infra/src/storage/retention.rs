@@ -196,6 +196,28 @@ pub async fn protect_retained_storage(
                 let config = client_config
                     .azure_config()
                     .ok_or_else(|| invalid(id, "Azure runtime credentials are required"))?;
+                if controller.notifications_managed
+                    || !storage.notifications.is_empty()
+                    || resource
+                        .previous_config
+                        .as_ref()
+                        .and_then(|previous| previous.downcast_ref::<Storage>())
+                        .is_some_and(|previous| !previous.notifications.is_empty())
+                {
+                    let notifications = provider.get_azure_event_grid_client(config)?;
+                    let source = super::azure_notifications::source_id(
+                        &config.subscription_id,
+                        &group,
+                        account,
+                    );
+                    super::azure_notifications::remove_owned(
+                        notifications.as_ref(),
+                        &source,
+                        name,
+                        id,
+                    )
+                    .await?;
+                }
                 let client = provider.get_azure_blob_container_client(config)?;
                 let observed = match client.get_blob_container(&group, account, name).await {
                     Ok(container) => container,

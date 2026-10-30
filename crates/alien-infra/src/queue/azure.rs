@@ -395,6 +395,50 @@ mod tests {
     use alien_core::{Platform, Queue, ResourceStatus};
     use std::sync::Arc;
 
+    #[tokio::test]
+    async fn storage_notifications_never_churn_queue_ingress() {
+        for notifying in [false, true] {
+            let queue = Queue::new("work".into()).build();
+            let mut storage = alien_core::Storage::new("uploads".into()).build();
+            if notifying {
+                storage.notifications.push(
+                    alien_core::StorageNotification::builder()
+                        .queue((&queue).into())
+                        .build(),
+                );
+            }
+            let mut mgmt = MockServiceBusManagementApi::new();
+            mgmt.expect_get_queue()
+                .times(1)
+                .returning(|_, _, _| Ok(SbQueue::default()));
+            let mgmt = Arc::new(mgmt);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_azure_service_bus_management_client()
+                .returning(move |_| Ok(mgmt.clone()));
+            // Any IAM call or mutation is an unexpected mock call and fails.
+            let mut run = SingleControllerExecutor::builder()
+                .resource(queue)
+                .controller(AzureQueueController {
+                    state: AzureQueueState::Ready,
+                    namespace_name: Some("test-bus".into()),
+                    queue_name: Some("test-work".into()),
+                    ..Default::default()
+                })
+                .platform(Platform::Azure)
+                .service_provider(Arc::new(provider))
+                .with_test_dependencies()
+                .with_stack_resource(storage, alien_core::ResourceLifecycle::Live)
+                .build()
+                .await
+                .unwrap();
+            assert!(!run.needs_update().unwrap());
+            run.step().await.unwrap();
+            assert_eq!(run.status(), ResourceStatus::Running);
+            assert!(!run.needs_update().unwrap());
+        }
+    }
+
     fn setup_mock_mgmt() -> Arc<MockServiceBusManagementApi> {
         let mut mock = MockServiceBusManagementApi::new();
         mock.expect_create_or_update_namespace()

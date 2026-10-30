@@ -38,6 +38,15 @@ pub fn initial_setup_permission_set_ids(stack: &Stack) -> Vec<String> {
             continue;
         }
 
+        if resource_entry
+            .config
+            .downcast_ref::<alien_core::Storage>()
+            .is_some_and(|storage| !storage.notifications.is_empty())
+            && !set_ids.iter().any(|id| id == "storage/trigger-management")
+        {
+            set_ids.push("storage/trigger-management".to_string());
+        }
+
         let resource_type = normalize_resource_type(raw_resource_type);
         let provision_id = format!("{resource_type}/provision");
 
