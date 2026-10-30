@@ -27,17 +27,17 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, AzureStorageAccount, ErrorData, PermissionProfile, PermissionSet,
-    PermissionSetReference, Result, Storage,
+    AzureStorageAccount, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
+    Result, Storage, import::EmitContext,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
-    generators::{AzureCustomRole, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
     BindingTarget,
+    generators::{AzureCustomRole, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
 };
 use hcl::{
-    expr::{Expression, FuncCall},
     Identifier,
+    expr::{Expression, FuncCall},
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -574,7 +574,7 @@ fn sanitize_role_label(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
+    use crate::{TerraformOptions, TerraformTarget, TfRegistry, generate_terraform_module};
     use alien_core::{
         AzureResourceGroup, ManagementPermissions, RemoteBindings, RemoteStackManagement,
         ResourceLifecycle, ServiceAccount, Stack, StackSettings,

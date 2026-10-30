@@ -85,9 +85,10 @@ impl CfEmitter for AwsStorageEmitter {
         if !storage.notifications.is_empty() {
             bucket.properties.insert(
                 "NotificationConfiguration".into(),
-                CfExpression::object([("EventBridgeConfiguration", CfExpression::object([
-                    ("EventBridgeEnabled", CfExpression::from(true)),
-                ]))]),
+                CfExpression::object([(
+                    "EventBridgeConfiguration",
+                    CfExpression::object([("EventBridgeEnabled", CfExpression::from(true))]),
+                )]),
             );
         }
 
