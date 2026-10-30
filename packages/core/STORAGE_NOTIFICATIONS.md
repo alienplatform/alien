@@ -82,7 +82,9 @@ or delivery identity. Existing queue provisioning grants suffice for destination
 validation, so adding notifications does not update the Queue's IAM. Live Storage adds the
 existing `storage/trigger-management` permission set to management permissions;
 Frozen rules keep those writes in setup. Retained-storage cleanup waits until
-Azure confirms its subscriptions are gone and preserves the shared topic.
+Azure confirms its subscriptions are gone and leaves unrelated subscriptions
+and their shared topic in place. Azure can remove an automatically created topic
+after its last subscription is deleted.
 
 Once a Storage declares notifications, setup owns its S3 notification
 configuration. Add more notifications as rules, not out of band. CloudFormation
