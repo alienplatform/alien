@@ -2,7 +2,7 @@ use alien_client_core::{ErrorData, Result};
 use alien_core::standard_resource_tags;
 use alien_error::AlienError;
 
-use super::{CreateRoleRequest, CreateRoleResponse, IamApi};
+use super::{CreateRoleRequest, CreateRoleResponse, IamApi, Role};
 
 /// Prepares management-written roles for the deployment's permissions boundary.
 /// Call `prepare_existing` before changing policies, trust, or removing policies
@@ -54,6 +54,23 @@ impl<'a> IamRoleWriter<'a> {
             .await
     }
 
+    /// Verifies runtime ownership without adopting the role, before the calls that are granted
+    /// on runtime-owned roles without the boundary: detaching the AWS-managed policies that
+    /// earlier releases attached. With no deployment boundary, this performs no IAM calls.
+    pub async fn verify_owned(
+        &self,
+        role_name: &str,
+        deployment_prefix: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        if self.permissions_boundary.is_none() {
+            return Ok(());
+        }
+        self.owned_role(role_name, deployment_prefix, resource_id)
+            .await
+            .map(|_| ())
+    }
+
     async fn prepare(
         &self,
         role_name: &str,
@@ -64,21 +81,9 @@ impl<'a> IamRoleWriter<'a> {
         let Some(boundary) = self.permissions_boundary else {
             return Ok(());
         };
-        let role = self.iam.get_role(role_name).await?.get_role_result.role;
-        let expected_tags = standard_resource_tags(deployment_prefix, resource_id);
-        let owned = role.tags.as_ref().is_some_and(|tags| {
-            expected_tags.iter().all(|(key, value)| {
-                tags.member
-                    .iter()
-                    .any(|tag| &tag.key == key && &tag.value == value)
-            })
-        });
-        if !owned {
-            return Err(AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
-                resource_id: resource_id.to_owned(),
-                object: format!("IAM role '{role_name}'"),
-            }));
-        }
+        let role = self
+            .owned_role(role_name, deployment_prefix, resource_id)
+            .await?;
         if let Some(attached) = role.permissions_boundary {
             if attached.permissions_boundary_arn.as_deref() == Some(boundary) {
                 return Ok(());
@@ -95,6 +100,30 @@ impl<'a> IamRoleWriter<'a> {
         self.iam
             .put_role_permissions_boundary(role_name, boundary)
             .await
+    }
+
+    async fn owned_role(
+        &self,
+        role_name: &str,
+        deployment_prefix: &str,
+        resource_id: &str,
+    ) -> Result<Role> {
+        let role = self.iam.get_role(role_name).await?.get_role_result.role;
+        let expected_tags = standard_resource_tags(deployment_prefix, resource_id);
+        let owned = role.tags.as_ref().is_some_and(|tags| {
+            expected_tags.iter().all(|(key, value)| {
+                tags.member
+                    .iter()
+                    .any(|tag| &tag.key == key && &tag.value == value)
+            })
+        });
+        if !owned {
+            return Err(AlienError::new(ErrorData::ExistingCloudResourceNotOwned {
+                resource_id: resource_id.to_owned(),
+                object: format!("IAM role '{role_name}'"),
+            }));
+        }
+        Ok(role)
     }
 
     async fn audit_attached_policies(&self, role_name: &str) -> Result<()> {

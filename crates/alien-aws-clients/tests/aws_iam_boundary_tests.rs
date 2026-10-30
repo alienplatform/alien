@@ -133,7 +133,7 @@ async fn roles_without_current_runtime_ownership_are_never_written_or_adopted() 
             ]}),
         ] {
             // No policy audit, adoption, or write may follow a failed ownership check.
-            for removal in [false, true] {
+            for mode in ["existing", "removal", "verify"] {
                 let mut iam = MockIamApi::new();
                 let tags = tags.clone();
                 iam.expect_get_role().once().return_once(move |_| {
@@ -145,12 +145,14 @@ async fn roles_without_current_runtime_ownership_are_never_written_or_adopted() 
                     }}})).unwrap())
                 });
                 let writer = IamRoleWriter::new(&iam, Some(BOUNDARY));
-                let error = if removal {
-                    writer
-                        .prepare_for_removal("test-role", "test", "worker")
-                        .await
-                } else {
-                    writer.prepare_existing("test-role", "test", "worker").await
+                let error = match mode {
+                    "removal" => {
+                        writer
+                            .prepare_for_removal("test-role", "test", "worker")
+                            .await
+                    }
+                    "verify" => writer.verify_owned("test-role", "test", "worker").await,
+                    _ => writer.prepare_existing("test-role", "test", "worker").await,
                 }
                 .unwrap_err();
                 assert!(matches!(
@@ -186,6 +188,32 @@ async fn removal_adopts_roles_that_carry_aws_managed_policies() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("different permissions boundary"));
+}
+
+#[tokio::test]
+async fn verifying_ownership_never_adopts_the_role() {
+    // An owned role passes whether or not it has a boundary, and nothing is written to it.
+    for boundary in [
+        None,
+        Some(BOUNDARY),
+        Some("arn:aws:iam::123456789012:policy/other"),
+    ] {
+        let mut iam = MockIamApi::new();
+        expect_role(&mut iam, boundary);
+        iam.expect_list_attached_role_policies().never();
+        iam.expect_put_role_permissions_boundary().never();
+        IamRoleWriter::new(&iam, Some(BOUNDARY))
+            .verify_owned("test-role", "test", "worker")
+            .await
+            .unwrap();
+    }
+
+    // Without a deployment boundary there is nothing to check.
+    let iam = MockIamApi::new();
+    IamRoleWriter::new(&iam, None)
+        .verify_owned("test-role", "test", "worker")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
