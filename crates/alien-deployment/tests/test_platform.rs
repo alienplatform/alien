@@ -1943,10 +1943,12 @@ async fn delete_until_setup_teardown(
 async fn automatic_setup_runtime_cleanup_removes_only_what_the_runtime_created() {
     let _vault = test_vault_env().await;
     let (state, config) = running_automatic_setup_with_package_vault().await;
+    let vault = serde_json::to_value(&state.stack_state.as_ref().unwrap().resources["app-secrets"])
+        .unwrap();
     let state = delete_until_setup_teardown(state, config).await;
 
     let resources = &state.stack_state.expect("stack state").resources;
-    for runtime_created in ["data", "api"] {
+    for runtime_created in ["data", "api", "default-sa"] {
         assert_eq!(
             resources[runtime_created].status,
             alien_core::ResourceStatus::Deleted,
@@ -1958,21 +1960,20 @@ async fn automatic_setup_runtime_cleanup_removes_only_what_the_runtime_created()
         alien_core::ResourceStatus::Running,
         "the package's vault stays for setup teardown"
     );
-    // Outside Azure the package does not create service accounts. The package's secrets vault
-    // still depends on this one, so runtime cleanup keeps it rather than wait forever.
     assert_eq!(
-        resources["default-sa"].status,
-        alien_core::ResourceStatus::Running
+        serde_json::to_value(&resources["app-secrets"]).unwrap(),
+        vault
     );
 }
 
-/// Destroy preparation moves a failed runtime-created account to Deleting, but the executor
-/// cannot delete it while the package's vault still depends on it. Runtime cleanup must hand
-/// off to setup teardown instead of waiting for that delete forever.
+/// A failed runtime-created account must also be removed before setup teardown. The
+/// package vault's grant-only dependency does not require retaining the account.
 #[tokio::test]
-async fn automatic_setup_runtime_cleanup_hands_off_a_failed_account_the_package_needs() {
+async fn automatic_setup_runtime_cleanup_deletes_a_failed_account_before_handoff() {
     let _vault = test_vault_env().await;
     let (mut state, config) = running_automatic_setup_with_package_vault().await;
+    let vault = serde_json::to_value(&state.stack_state.as_ref().unwrap().resources["app-secrets"])
+        .unwrap();
     let account = state
         .stack_state
         .as_mut()
@@ -1996,8 +1997,12 @@ async fn automatic_setup_runtime_cleanup_hands_off_a_failed_account_the_package_
     );
     assert_eq!(
         resources["default-sa"].status,
-        alien_core::ResourceStatus::Deleting,
-        "the account waits for the vault, which setup teardown removes"
+        alien_core::ResourceStatus::Deleted,
+        "runtime cleanup must finish account deletion before setup teardown"
+    );
+    assert_eq!(
+        serde_json::to_value(&resources["app-secrets"]).unwrap(),
+        vault
     );
 }
 
