@@ -1,22 +1,28 @@
 //! Setup must install and register the same ceiling the runtime generates.
+#[path = "../../../alien-permissions/tests/iam_policy/mod.rs"]
+mod iam_policy;
 use super::helpers::{assert_terraform_valid, gate_input, render, try_render};
 use alien_core::{
     import::{
         data::{AwsAiImportData, AwsRemoteStackManagementImportData},
         ImportedResource,
     },
-    Ai, Key, ManagementPermissions, PermissionProfile, RemoteStackManagement, ResourceLifecycle,
-    Stack, StackSettings,
+    Ai, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Key,
+    ManagementPermissions, PermissionProfile, Platform, RemoteStackManagement, ResourceLifecycle,
+    SetupManagement, Stack, StackSettings, StackState, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_STACK_TAG_KEY,
 };
 use alien_permissions::{
-    generators::{aws_permissions_boundary_covers, aws_stack_permissions_boundary},
+    generators::{aws_permissions_boundary_covers, aws_stack_permissions_boundary, AwsIamPolicy},
     PermissionContext,
 };
+use alien_preflights::{mutations::ManagementPermissionProfileMutation, StackMutation};
 use alien_terraform::TerraformTarget;
 use hcl::{
     eval::{Context, Evaluate, FuncDef, ParamType},
     Expression,
 };
+use iam_policy::{evaluate, Decision, Request};
 use serde_json::{json, Value};
 
 fn stack() -> Stack {
@@ -568,4 +574,179 @@ fn registration_depends_on_the_boundary_for_teardown_ordering() {
     assert!(dependencies.iter().any(
         |dependency| dependency.to_string() == "aws_iam_policy.management_permissions_boundary"
     ));
+}
+
+#[tokio::test]
+async fn terraform_management_policies_require_numeric_asg_versions() {
+    // Automatic setup includes every provision set, even for absent resource
+    // types. Evaluate the complete emitted policy so no broader Allow bypasses
+    // the numeric-version conditions.
+    for automatic in [false, true] {
+        let stack = Stack::new("asg-boundary".into())
+            .management(ManagementPermissions::extend(
+                PermissionProfile::new().global(["compute-cluster/management"]),
+            ))
+            .add(
+                RemoteStackManagement::new("management".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let settings = StackSettings {
+            setup_management: if automatic {
+                SetupManagement::Automatic
+            } else {
+                SetupManagement::Manual
+            },
+            ..Default::default()
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(settings.clone())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let stack = ManagementPermissionProfileMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config)
+            .await
+            .unwrap();
+        let module = render(&stack, TerraformTarget::Aws, settings);
+        assert_terraform_valid(&module, "numeric ASG management permissions");
+        let mut context = Context::new();
+        for (name, value) in [
+            ("local", json!({"resource_prefix": "stack-a"})),
+            (
+                "var",
+                json!({"managing_account_id": "210987654321", "managing_role_arn": "arn:aws:iam::210987654321:role/manager"}),
+            ),
+            (
+                "data",
+                json!({
+                    "aws_partition": {"current": {"partition": "aws"}},
+                    "aws_region": {"current": {"region": "us-west-2"}},
+                    "aws_caller_identity": {"current": {"account_id": "123456789012"}}
+                }),
+            ),
+            (
+                "aws_iam_policy",
+                json!({"management_permissions_boundary": {
+                    "arn": "arn:aws:iam::123456789012:policy/stack-a-deployment-management-boundary"
+                }}),
+            ),
+            (
+                "aws_iam_role",
+                json!({"management": {
+                    "arn": "arn:aws:iam::123456789012:role/stack-a-management"
+                }}),
+            ),
+        ] {
+            context.declare_var(name, hcl::to_value(value).unwrap());
+        }
+        let mut statements = Vec::new();
+        for (file, contents) in module.iter().filter(|(file, _)| file.ends_with(".tf")) {
+            let body: hcl::Body = hcl::parse(contents).unwrap();
+            for block in body.blocks() {
+                let labels = block.labels();
+                if block.identifier() != "resource" || labels.len() != 2 {
+                    continue;
+                }
+                let kind = labels[0].as_str();
+                let name = labels[1].as_str();
+                if (kind == "aws_iam_policy" && name.starts_with("management_managed_policy"))
+                    || (kind == "aws_iam_role_policy" && name.starts_with("management_"))
+                {
+                    let mut policy = document(attribute(block, "policy"), &context);
+                    // IAM accepts a scalar for a single action or resource;
+                    // the evaluator's statement type stores both as lists.
+                    for statement in policy["Statement"].as_array_mut().unwrap() {
+                        for key in ["Action", "Resource"] {
+                            if statement[key].is_string() {
+                                statement[key] = json!([statement[key].take()]);
+                            }
+                        }
+                    }
+                    let policy: AwsIamPolicy = serde_json::from_value(policy)
+                        .unwrap_or_else(|error| panic!("{file}/{name}: {error}"));
+                    statements.extend(policy.statement);
+                }
+            }
+        }
+        assert!(!statements.is_empty());
+        let arn = "arn:aws:autoscaling:us-west-2:123456789012:autoScalingGroup:example:autoScalingGroupName/stack-a-compute";
+        let tags = [
+            (ALIEN_STACK_TAG_KEY, "stack-a"),
+            (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+        ];
+        for action in [
+            "autoscaling:CreateAutoScalingGroup",
+            "autoscaling:UpdateAutoScalingGroup",
+        ] {
+            for version in [Some("true"), Some("false"), None] {
+                for launch_configuration in [false, true] {
+                    let mut request = Request::new(action, arn)
+                        .resource_tags(&tags)
+                        .request_tags(&tags);
+                    if let Some(version) = version {
+                        request =
+                            request.with("autoscaling:LaunchTemplateVersionSpecified", version);
+                    }
+                    if launch_configuration {
+                        request = request.with("autoscaling:LaunchConfigurationName", "legacy");
+                    }
+                    let allowed = !launch_configuration
+                        && (version == Some("true")
+                            || (version.is_none()
+                                && action == "autoscaling:UpdateAutoScalingGroup"));
+                    assert_eq!(
+                        evaluate(&statements, &request) == Decision::Allowed,
+                        allowed,
+                        "automatic={automatic}/{action}/{version:?}/{launch_configuration}"
+                    );
+                }
+            }
+        }
+        for action in [
+            "autoscaling:DeleteAutoScalingGroup",
+            "autoscaling:SetDesiredCapacity",
+            "autoscaling:TerminateInstanceInAutoScalingGroup",
+            "autoscaling:StartInstanceRefresh",
+        ] {
+            assert_eq!(
+                evaluate(&statements, &Request::new(action, arn).resource_tags(&tags))
+                    == Decision::Allowed,
+                action != "autoscaling:StartInstanceRefresh",
+                "automatic={automatic}/{action}"
+            );
+        }
+        // Numeric templates do not waive ownership checks, including on create.
+        for action in [
+            "autoscaling:CreateAutoScalingGroup",
+            "autoscaling:UpdateAutoScalingGroup",
+        ] {
+            for tags in [
+                vec![],
+                vec![
+                    (ALIEN_STACK_TAG_KEY, "stack-b"),
+                    (ALIEN_MANAGED_BY_TAG_KEY, "runtime"),
+                ],
+                vec![
+                    (ALIEN_STACK_TAG_KEY, "stack-a"),
+                    (ALIEN_MANAGED_BY_TAG_KEY, "setup"),
+                ],
+            ] {
+                let request = Request::new(action, arn)
+                    .resource_tags(&tags)
+                    .request_tags(&tags)
+                    .with("autoscaling:LaunchTemplateVersionSpecified", "true");
+                assert_eq!(
+                    evaluate(&statements, &request),
+                    Decision::NotAllowed,
+                    "automatic={automatic}/{action}/{tags:?}"
+                );
+            }
+        }
+    }
 }
