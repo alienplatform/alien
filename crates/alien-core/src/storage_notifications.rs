@@ -151,9 +151,9 @@ mod tests {
 
     #[test]
     fn maximum_nonoverlapping_filters_fit_even_with_json_escape_expansion() {
-        // JSON control characters require six ASCII characters per input byte.
+        // Backslashes expand in both wildcard and JSON encoding; quotes expand in JSON.
         // Reserve all 63 characters allowed for an S3 bucket's physical name.
-        let rule = notification(&"\u{1}".repeat(512), &"\u{2}".repeat(128));
+        let rule = notification(&"\\".repeat(512), &"\"".repeat(128));
         let pattern = aws_eventbridge_pattern(&rule, &"b".repeat(63));
         assert_eq!(
             pattern["detail"]["object"]["key"].as_array().unwrap().len(),
