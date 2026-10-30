@@ -10,9 +10,15 @@ app.onError((error, c) =>
   c.json({ error: error instanceof Error ? (error.stack ?? error.message) : String(error) }, 500),
 )
 
-// Opens a session, reads the marker the image was built with, and ends the session. The command
-// is fixed: the endpoint is public, and the test needs nothing a caller could choose.
+// Opens a session, reads the marker the image was built with, and ends the session. The endpoint
+// is public, so the command is fixed and the caller must present the deployment's own id, which
+// the test knows and a stranger reaching the URL does not.
 app.post("/run", async c => {
+  const deploymentId = process.env.ALIEN_DEPLOYMENT_ID
+  if (!deploymentId) return c.json({ error: "ALIEN_DEPLOYMENT_ID is not set" }, 503)
+  if (c.req.header("authorization") !== `Bearer ${deploymentId}`) {
+    return c.json({ error: "unauthorized" }, 401)
+  }
   const agents = sandbox("agents")
   const session = await agents.create({ timeoutMs: 300_000 })
   let stdout = ""

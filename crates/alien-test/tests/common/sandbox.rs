@@ -30,6 +30,7 @@ pub async fn check_session_runs_a_command(ctx: &TestContext) -> anyhow::Result<(
         .context("the deployment has no public URL")?;
     let response = reqwest::Client::new()
         .post(format!("{}/run", url.trim_end_matches('/')))
+        .bearer_auth(&ctx.deployment.id)
         // A cold MicroVM restore is seconds; the Lambda itself allows five minutes.
         .timeout(Duration::from_secs(300))
         .send()
