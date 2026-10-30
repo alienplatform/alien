@@ -1073,6 +1073,7 @@ async fn automatic_cleanup_deletes_identity_after_workload_but_preserves_setup_v
             "other-deployment",
         ),
         (SetupManagement::Automatic, false, false, false, "untagged"),
+        (SetupManagement::Automatic, false, false, false, "other-resource"),
         (
             SetupManagement::Automatic,
             false,
@@ -1179,9 +1180,9 @@ async fn automatic_cleanup_deletes_identity_after_workload_but_preserves_setup_v
                     ));
                 }
                 let tags = if tag_owner == "untagged" { vec![] } else { vec![
-                    serde_json::json!({"Key": "managed-by", "Value": if tag_owner == "other-deployment" { "runtime" } else { tag_owner }}),
+                    serde_json::json!({"Key": "managed-by", "Value": if matches!(tag_owner, "other-deployment" | "other-resource") { "runtime" } else { tag_owner }}),
                     serde_json::json!({"Key": "deployment", "Value": if tag_owner == "other-deployment" { "different" } else { &prefix }}),
-                    serde_json::json!({"Key": "resource", "Value": "execution-sa"}),
+                    serde_json::json!({"Key": "resource", "Value": if tag_owner == "other-resource" { "different" } else { "execution-sa" }}),
                 ] };
                 Ok(serde_json::from_value(serde_json::json!({"GetRoleResult": {"Role": {
                     "Path": "/", "RoleName": "owned-execution-sa", "RoleId": "existing-role",
@@ -1203,11 +1204,21 @@ async fn automatic_cleanup_deletes_identity_after_workload_but_preserves_setup_v
                 }
                 Ok(ListAttachedRolePoliciesResponse {
                     list_attached_role_policies_result: ListAttachedRolePoliciesResult {
-                        attached_policies: None,
+                        attached_policies: Some(serde_json::from_value(serde_json::json!({
+                            "member": [{"PolicyName": "execution", "PolicyArn": "arn:aws:iam::123456789012:policy/execution"}]
+                        })).unwrap()),
                         is_truncated: Some(false),
                         marker: None,
                     },
                 })
+            });
+        let seen = calls.clone();
+        iam.expect_detach_role_policy()
+            .withf(|role, policy| role == "owned-execution-sa" && policy == "arn:aws:iam::123456789012:policy/execution")
+            .times(if missing { 0 } else { expected })
+            .returning(move |_, _| {
+                seen.lock().unwrap().push("detach");
+                Ok(())
             });
         iam.expect_list_role_policies()
             .withf(|role| role == "owned-execution-sa")
@@ -1328,7 +1339,7 @@ async fn automatic_cleanup_deletes_identity_after_workload_but_preserves_setup_v
                 if missing {
                     vec!["workload", "role"]
                 } else {
-                    vec!["workload", "policy", "role"]
+                    vec!["workload", "detach", "policy", "role"]
                 }
             );
         } else {
