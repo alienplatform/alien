@@ -165,7 +165,10 @@ impl Queue for AzureServiceBusQueue {
                 .peek_lock(
                     self.namespace.clone(),
                     self.queue_name.clone(),
-                    Some(30), // 30 second timeout
+                    // Long-poll only before acquiring a lock. Waiting for another
+                    // message can otherwise consume the entire queue lock duration
+                    // before receive() returns the first receipt to its caller.
+                    Some(if messages.is_empty() { 30 } else { 0 }),
                 )
                 .await
             {
@@ -309,5 +312,77 @@ impl Queue for AzureServiceBusQueue {
                         .to_string(),
             },
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{AzureClientConfig, AzureCredentials, AzureServiceOverrides};
+    use httpmock::{Method::DELETE, Method::POST, MockServer};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn partial_receive_returns_locked_messages_without_another_long_poll() {
+        let server = MockServer::start_async().await;
+        let first = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/jobs/messages/head")
+                    .query_param("timeout", "30");
+                then.status(201)
+                    .header(
+                        "BrokerProperties",
+                        r#"{"MessageId":"message-1","LockToken":"lock-1"}"#,
+                    )
+                    .json_body(json!({"value":42}));
+            })
+            .await;
+        let empty = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/jobs/messages/head")
+                    .query_param("timeout", "0");
+                then.status(204);
+            })
+            .await;
+        let ack = server
+            .mock_async(|when, then| {
+                when.method(DELETE).path("/jobs/messages/message-1/lock-1");
+                then.status(200);
+            })
+            .await;
+        let queue = AzureServiceBusQueue::new(
+            "namespace".into(),
+            "jobs".into(),
+            AzureClientConfig {
+                subscription_id: "subscription".into(),
+                tenant_id: "tenant".into(),
+                region: None,
+                credentials: AzureCredentials::AccessToken {
+                    token: "test".into(),
+                },
+                service_overrides: Some(AzureServiceOverrides {
+                    endpoints: HashMap::from([("servicebus".into(), server.base_url())]),
+                }),
+            },
+        )
+        .await
+        .unwrap();
+        let messages = queue.receive("jobs", 10).await.unwrap();
+        assert_eq!(messages.len(), 1);
+        let MessagePayload::Json(payload) = &messages[0].payload else {
+            panic!("received payload must stay JSON");
+        };
+        assert_eq!(payload, &json!({"value":42}));
+        assert_eq!(messages[0].receipt_handle, "message-1\nlock-1");
+        queue
+            .ack("jobs", &messages[0].receipt_handle)
+            .await
+            .unwrap();
+        first.assert_async().await;
+        empty.assert_async().await;
+        ack.assert_async().await;
     }
 }
