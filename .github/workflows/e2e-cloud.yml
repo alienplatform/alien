@@ -64,6 +64,7 @@ on:
           - comprehensive-rust
           - comprehensive-ts
           - automatic-setup
+          - storage-notifications
           - full-stack-microservices
           - enabled-demo
           - byo-ai
@@ -275,6 +276,9 @@ jobs:
           # Build push matrix
           PUSH_ENTRIES='[]'
           if [ "$PUSH_AWS_CLI" = "true" ]; then
+            if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-storage-notifications","test_filter":"push_aws_storage_notifications","needs_oidc":false,"resource_suffix":"awsntf","bindings_arch":"aarch64","timeout_minutes":60}]')
+            fi
             if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
               PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-automatic-setup","test_filter":"push_aws_automatic_setup","needs_oidc":false,"resource_suffix":"autoaws","timeout_minutes":60}]')
             fi
@@ -286,6 +290,9 @@ jobs:
             fi
           fi
           if [ "$PUSH_GCP_CLI" = "true" ]; then
+            if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-storage-notifications","test_filter":"push_gcp_storage_notifications","needs_oidc":false,"resource_suffix":"gcpntf","bindings_arch":"x86_64","timeout_minutes":60}]')
+            fi
             if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
               PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-automatic-setup","test_filter":"push_gcp_automatic_setup","needs_oidc":false,"resource_suffix":"autogcp","timeout_minutes":60}]')
             fi
@@ -297,6 +304,9 @@ jobs:
             fi
           fi
           if [ "$PUSH_AZURE_CLI" = "true" ]; then
+            if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-storage-notifications","test_filter":"push_azure_storage_notifications","needs_oidc":true,"resource_suffix":"azurentf","bindings_arch":"x86_64","timeout_minutes":60}]')
+            fi
             if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
               PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-automatic-setup","test_filter":"push_azure_automatic_setup","needs_oidc":true,"resource_suffix":"autoaz","timeout_minutes":60}]')
             fi
@@ -351,6 +361,17 @@ jobs:
           # Build Terraform distribution matrix. Kubernetes entries provision
           # frozen resources with Terraform and install the agent with Helm.
           TERRAFORM_ENTRIES='[]'
+          if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
+            if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-storage-notifications","test_filter":"terraform_aws_push_storage_notifications","needs_oidc":false,"resource_suffix":"tfawsntf","bindings_arch":"aarch64"}]')
+            fi
+            if [ "$PUSH_GCP_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-storage-notifications","test_filter":"terraform_gcp_push_storage_notifications","needs_oidc":false,"resource_suffix":"tfgcpntf","bindings_arch":"x86_64"}]')
+            fi
+            if [ "$PUSH_AZURE_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-storage-notifications","test_filter":"terraform_azure_push_storage_notifications","needs_oidc":true,"resource_suffix":"tfazurentf","bindings_arch":"x86_64"}]')
+            fi
+          fi
           if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
             if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
               TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-automatic-setup","test_filter":"terraform_aws_push_automatic_setup","needs_oidc":false,"resource_suffix":"tfawsauto"}]')
@@ -446,6 +467,9 @@ jobs:
           # and currently validates the push/import path.
           CLOUDFORMATION_ENTRIES='[]'
           if [ "$PUSH_AWS_CLOUDFORMATION" = "true" ]; then
+            if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
+              CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-storage-notifications","test_filter":"cloudformation_aws_push_storage_notifications","needs_oidc":false,"resource_suffix":"cfawsntf","bindings_arch":"aarch64"}]')
+            fi
             if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
               CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-automatic-setup","test_filter":"cloudformation_aws_push_automatic_setup","needs_oidc":false,"resource_suffix":"cfawsauto"}]')
             fi
@@ -462,12 +486,12 @@ jobs:
           # runner cannot cross-build the x86_64 napi cdylib (or vice versa).
           NEEDS_BINDINGS_X86_64=false
           NEEDS_BINDINGS_AARCH64=false
-          if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" \
-            'any(($push + $terraform)[]; .bindings_arch? == "aarch64")' >/dev/null; then
+          if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" --argjson cloudformation "$CLOUDFORMATION_ENTRIES" \
+            'any(($push + $terraform + $cloudformation)[]; .bindings_arch? == "aarch64")' >/dev/null; then
             NEEDS_BINDINGS_AARCH64=true
           fi
-          if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" \
-            'any(($push + $terraform)[]; .bindings_arch? == "x86_64")' >/dev/null; then
+          if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" --argjson cloudformation "$CLOUDFORMATION_ENTRIES" \
+            'any(($push + $terraform + $cloudformation)[]; .bindings_arch? == "x86_64")' >/dev/null; then
             NEEDS_BINDINGS_X86_64=true
           fi
 
@@ -1379,7 +1403,7 @@ jobs:
   # ── E2E CloudFormation distribution matrix ─────────────────────────
 
   cloudformation-test:
-    needs: [compute-matrix, setup, build-base-image]
+    needs: [compute-matrix, setup, build-aarch64, build-base-image]
     if: |
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.has_cloudformation == 'true'
@@ -1394,6 +1418,13 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v7
+
+      - name: Download TypeScript bindings addon (aarch64)
+        if: matrix.bindings_arch == 'aarch64'
+        uses: actions/download-artifact@v8
+        with:
+          name: alien-bindings-node-linux-arm64-gnu
+          path: crates/alien-bindings-node
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"

@@ -167,6 +167,8 @@ pub enum TestApp {
     /// An empty first release whose package installs management access; subsequent releases
     /// add, change, and remove frozen cloud storage through that installed identity.
     AutomaticSetup,
+    /// Two notifying buckets and a batched Worker recording every delivery.
+    StorageNotifications,
 }
 
 impl std::fmt::Display for TestApp {
@@ -182,6 +184,7 @@ impl std::fmt::Display for TestApp {
             TestApp::ByoEncryptionKey => write!(f, "byo-encryption-key"),
             TestApp::ByoAi => write!(f, "byo-ai"),
             TestApp::AutomaticSetup => write!(f, "automatic-setup"),
+            TestApp::StorageNotifications => write!(f, "storage-notifications"),
         }
     }
 }
@@ -407,6 +410,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::ByoEncryptionKey => "test-apps/byo-encryption-key",
         TestApp::ByoAi => "test-apps/byo-ai",
         TestApp::AutomaticSetup => "test-apps/automatic-setup",
+        TestApp::StorageNotifications => "test-apps/storage-notifications",
     }
 }
 
@@ -425,7 +429,8 @@ fn deployment_environment_variables(
         | TestApp::ContainerRust
         | TestApp::RuntimeLessMixed
         | TestApp::EnabledDemo
-        | TestApp::AutomaticSetup => None,
+        | TestApp::AutomaticSetup
+        | TestApp::StorageNotifications => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {

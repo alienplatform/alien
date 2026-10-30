@@ -228,3 +228,42 @@ automatic_setup_test!(
     push_azure_automatic_setup,
     Platform::Azure
 );
+
+e2e_test_context!(
+    AwsNotifications,
+    Platform::Aws,
+    DeploymentModel::Push,
+    TestApp::StorageNotifications
+);
+
+#[test_context(AwsNotifications)]
+#[tokio::test]
+async fn push_aws_storage_notifications(ctx: &mut AwsNotifications) {
+    common::storage_notifications::check_delivery(&ctx.ctx.deployment).await;
+}
+
+e2e_test_context!(
+    GcpNotifications,
+    Platform::Gcp,
+    DeploymentModel::Push,
+    TestApp::StorageNotifications
+);
+
+#[test_context(GcpNotifications)]
+#[tokio::test]
+async fn push_gcp_storage_notifications(ctx: &mut GcpNotifications) {
+    common::storage_notifications::check_delivery(&ctx.ctx.deployment).await;
+}
+
+e2e_test_context!(
+    AzureNotifications,
+    Platform::Azure,
+    DeploymentModel::Push,
+    TestApp::StorageNotifications
+);
+
+#[test_context(AzureNotifications)]
+#[tokio::test]
+async fn push_azure_storage_notifications(ctx: &mut AzureNotifications) {
+    common::storage_notifications::check_delivery(&ctx.ctx.deployment).await;
+}
