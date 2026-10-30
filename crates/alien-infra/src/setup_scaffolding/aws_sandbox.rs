@@ -8,10 +8,12 @@ use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi, Role};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::import::data::AwsSandboxImportData;
 use alien_core::sandbox_build_role::{
-    sandbox_build_role_arn, sandbox_build_role_name, SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME,
+    sandbox_build_role_arn, sandbox_build_role_name, sandbox_bundle_bucket_name, SandboxBuildRole,
+    SANDBOX_BUILD_POLICY_NAME,
 };
 use alien_core::sandbox_setup_inputs::{
-    aws_sandbox_build_role, aws_sandbox_remote_grant, aws_sandbox_setup_inputs, SetupAccount,
+    aws_sandbox_build_role, aws_sandbox_remote_grant, aws_sandbox_renders_bundle,
+    aws_sandbox_setup_inputs, SetupAccount,
 };
 use alien_core::{
     setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Platform, RemoteBindings,
@@ -51,9 +53,12 @@ pub(super) async fn reconcile(
     let SandboxCode::Image { image } = &sandbox.code else {
         return Err(not_a_bundle(sandbox));
     };
+    let bundle_bucket = aws_sandbox_renders_bundle(sandbox, lifecycle)
+        .then(|| sandbox_bundle_bucket_name(ctx.resource_prefix, &sandbox.id));
     let build_role = aws_sandbox_build_role(
         sandbox,
         image,
+        bundle_bucket.as_deref(),
         lifecycle,
         SetupAccount {
             partition,
@@ -392,6 +397,7 @@ pub(super) fn seed(
             ctx.resource_prefix,
             &sandbox.id,
         ),
+        ctx.resource_prefix,
         &aws.region,
         connector_arn,
     )

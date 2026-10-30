@@ -1,12 +1,20 @@
 //! Sandbox resource controllers.
 
-#[cfg(any(feature = "aws", feature = "azure", feature = "local", feature = "kubernetes"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "local",
+    feature = "kubernetes"
+))]
 pub(crate) mod egress;
 
 #[cfg(feature = "aws")]
 mod aws;
 #[cfg(feature = "aws")]
 pub use aws::*;
+
+#[cfg(feature = "aws")]
+mod aws_bundle;
 
 #[cfg(feature = "aws")]
 mod aws_import;
@@ -16,9 +24,9 @@ pub use aws_import::*;
 #[cfg(feature = "azure")]
 mod azure;
 #[cfg(feature = "azure")]
-mod azure_lifetime;
-#[cfg(feature = "azure")]
 mod azure_egress;
+#[cfg(feature = "azure")]
+mod azure_lifetime;
 #[cfg(feature = "azure")]
 pub use azure::*;
 

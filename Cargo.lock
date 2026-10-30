@@ -959,6 +959,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "workspace_root",
+ "zip 2.4.2",
 ]
 
 [[package]]
