@@ -37,4 +37,5 @@ mod generator {
     pub mod secrets_vault_management_tests;
     pub mod setup_management_tests;
     pub mod stack_input_tests;
+    pub mod storage_notifications_tests;
 }
