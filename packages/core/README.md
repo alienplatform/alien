@@ -108,3 +108,9 @@ CloudFormation does not evaluate Rules when creating a CREATE change set. It
 checks them during stack creation: a failed assertion rolls the stack back before
 creating resources. Validate both condition states with CreateStack, not only
 CreateChangeSet.
+
+## Storage notification declarations
+
+See [storage notifications into queues](./STORAGE_NOTIFICATIONS.md) for the
+`.notify(queue, options)` API, filter limits, lifecycle ownership and delivery
+semantics.

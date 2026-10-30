@@ -18,7 +18,7 @@ export const StorageNotificationSchema = z.object({
 get "queue"(){
                 return ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")
               },
-"suffix": z.string().describe("Literal object key suffix, non-empty and at most 512 UTF-8 bytes when set.").nullish()
+"suffix": z.string().describe("Literal object key suffix, non-empty and at most 128 UTF-8 bytes when set.").nullish()
     }).describe("Delivers matching object events to a queue in the same stack.\nOverlapping rules each deliver a message; consumers must tolerate duplicates.")
 
 export type StorageNotification = z.infer<typeof StorageNotificationSchema>
