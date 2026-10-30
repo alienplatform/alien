@@ -69,6 +69,7 @@ mod sandbox_identity;
 mod sandbox_manager;
 mod sandbox_route;
 mod storage_manager;
+mod storage_watcher;
 mod store_probe;
 pub mod trigger_service;
 mod vault_manager;
