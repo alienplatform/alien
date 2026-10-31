@@ -746,11 +746,26 @@ mod tests {
             aws_queue_payload(&aws_fixtures::test_event()),
             AwsQueueDelivery::Discard
         );
-        // Rules only subscribe to object creation: a removal, alone or next to a creation,
-        // comes from someone else's configuration and reaches its consumer unchanged.
-        let removed = aws_fixtures::s3_record("ObjectRemoved:Delete", "in/gone.json", 0, "x");
+        // Rules only subscribe to object creation: any other S3 notification, alone or next
+        // to a creation, comes from someone else's configuration and reaches its consumer
+        // unchanged. Shapes follow S3's: a removal has no size or eTag, a restore carries
+        // its glacier event data.
+        let mut removed = aws_fixtures::s3_record("ObjectRemoved:Delete", "in/gone.json", 0, "x");
+        let object = removed["s3"]["object"].as_object_mut().expect("object");
+        object.remove("size");
+        object.remove("eTag");
+        let mut restored =
+            aws_fixtures::s3_record("ObjectRestore:Completed", "archive/a.bin", 7, "etag");
+        restored["glacierEventData"] = json!({"restoreEventData": {
+            "lifecycleRestorationExpiryTime": "2026-11-06T00:00:00.000Z",
+            "lifecycleRestoreStorageClass": "GLACIER"
+        }});
+        let expired = aws_fixtures::s3_record("LifecycleExpiration:Delete", "logs/old.txt", 0, "x");
         for records in [
             vec![removed.clone()],
+            vec![restored],
+            vec![expired],
+            vec![removed.clone(), removed.clone()],
             vec![aws_fixtures::s3_put("in/plain.json"), removed],
         ] {
             let body = aws_fixtures::notification(records);
