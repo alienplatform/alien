@@ -44,14 +44,25 @@ fn cloud_error(storage: &str, action: &str) -> ErrorData {
 
 /// A successful PUT/DELETE can still be running. Never overwrite it or report
 /// convergence until the provider reports Succeeded (or deletion is absent).
-fn ready(subscription: &EventSubscription, storage: &str) -> Result<bool> {
+/// Where an owned subscription is in its provisioning.
+enum Provisioning {
+    Succeeded,
+    /// An operation is still running; wait for it.
+    InProgress,
+    /// The last create or update failed. Azure keeps the subscription, and it delivers
+    /// nothing until it is replaced.
+    Failed,
+}
+
+fn provisioning(subscription: &EventSubscription, storage: &str) -> Result<Provisioning> {
     match subscription
         .properties
         .as_ref()
         .and_then(|p| p.provisioning_state.as_deref())
     {
-        Some("Succeeded") => Ok(true),
-        Some("Creating" | "Updating" | "Deleting") => Ok(false),
+        Some("Succeeded") => Ok(Provisioning::Succeeded),
+        Some("Creating" | "Updating" | "Deleting") => Ok(Provisioning::InProgress),
+        Some("Failed") => Ok(Provisioning::Failed),
         state => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
             resource_id: Some(storage.into()),
             message: format!(
@@ -181,8 +192,28 @@ async fn reconcile_subscriptions(
         if !owned(name, container) {
             continue;
         }
-        if !ready(subscription, storage)? {
-            return Ok(false);
+        match provisioning(subscription, storage)? {
+            Provisioning::InProgress => return Ok(false),
+            // Delete a failed subscription whether or not its rule is still wanted. A
+            // wanted rule is reported as failed now and created afresh on the next attempt,
+            // so a persistent provider failure surfaces instead of being retried in a loop.
+            Provisioning::Failed => {
+                client
+                    .delete_event_subscription(source.into(), name.clone())
+                    .await
+                    .context(cloud_error(storage, "Delete failed"))?;
+                if desired.contains_key(name) {
+                    return Err(AlienError::new(ErrorData::CloudResourceFailed {
+                        resource_id: storage.into(),
+                        operation: format!("Event Grid subscription '{name}' provisioning"),
+                        reason:
+                            "Failed; the subscription was deleted and is created again on retry"
+                                .into(),
+                    }));
+                }
+                return Ok(false);
+            }
+            Provisioning::Succeeded => {}
         }
         if let Some(rule) = desired.remove(name) {
             if !matches(subscription, &rule) {
@@ -452,6 +483,77 @@ mod tests {
             assert_eq!(run.status(), ResourceStatus::Running);
             assert!(!run.needs_update().unwrap());
         }
+    }
+
+    /// Azure keeps a subscription whose create or update failed. Removal deletes it; a rule
+    /// that is still wanted is deleted and reported, then created afresh on the next pass.
+    #[tokio::test]
+    async fn failed_subscriptions_are_deleted_and_wanted_ones_are_recreated_on_retry() {
+        let name = subscription_name("test-uploads", 0);
+        let rule: EventSubscriptionRequest = serde_json::from_value(json!({"properties":{
+            "destination":{"endpointType":"ServiceBusQueue","properties":{"resourceId":"queue"}},
+            "filter":{"includedEventTypes":["Microsoft.Storage.BlobCreated"],
+                "subjectBeginsWith":"/blobServices/default/containers/test-uploads/blobs/in/",
+                "isSubjectCaseSensitive":true},
+            "eventDeliverySchema":"CloudEventSchemaV1_0"}}))
+        .unwrap();
+        let remote = Arc::new(Mutex::new(Vec::<EventSubscription>::new()));
+        let failed = |name: &str| -> EventSubscription {
+            serde_json::from_value(json!({"name":name,"properties":{"provisioningState":"Failed"}}))
+                .unwrap()
+        };
+        let mut mock = MockEventGridApi::new();
+        let read = remote.clone();
+        mock.expect_list_event_subscriptions()
+            .returning(move |_| Ok(read.lock().unwrap().clone()));
+        let deleted = remote.clone();
+        mock.expect_delete_event_subscription()
+            .returning(move |_, name| {
+                deleted
+                    .lock()
+                    .unwrap()
+                    .retain(|item| item.name.as_deref() != Some(&name));
+                Ok(())
+            });
+        let created = Arc::new(Mutex::new(Vec::new()));
+        let sink = created.clone();
+        mock.expect_create_or_update_event_subscription()
+            .returning(move |_, name, _| {
+                sink.lock().unwrap().push(name.clone());
+                Ok(serde_json::from_value(
+                    json!({"name":name,"properties":{"provisioningState":"Creating"}}),
+                )
+                .unwrap())
+            });
+        let run = |desired: BTreeMap<String, EventSubscriptionRequest>, deleting: bool| {
+            reconcile_subscriptions()
+                .client(&mock)
+                .source("source")
+                .container("test-uploads")
+                .storage("uploads")
+                .desired(desired)
+                .deleting(deleting)
+                .call()
+        };
+
+        // Removal: the failed owned subscription goes, a foreign failed one stays.
+        *remote.lock().unwrap() = vec![failed("independent"), failed(&name)];
+        assert!(!run(BTreeMap::new(), true).await.unwrap());
+        assert!(run(BTreeMap::new(), true).await.unwrap());
+        assert_eq!(*remote.lock().unwrap(), vec![failed("independent")]);
+
+        // A wanted rule: delete and report, then create on the next pass.
+        remote.lock().unwrap().push(failed(&name));
+        let wanted = BTreeMap::from([(name.clone(), rule)]);
+        let error = run(wanted.clone(), false)
+            .await
+            .expect_err("a failed subscription must be reported");
+        assert_eq!(error.code, "CLOUD_RESOURCE_FAILED");
+        assert!(!error.retryable);
+        assert_eq!(*remote.lock().unwrap(), vec![failed("independent")]);
+        assert!(created.lock().unwrap().is_empty());
+        assert!(!run(wanted, false).await.unwrap());
+        assert_eq!(*created.lock().unwrap(), vec![name]);
     }
 
     #[tokio::test]
