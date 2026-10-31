@@ -138,10 +138,9 @@ async fn template_setup_records_new_edges_of_setup_owned_resources_without_their
     assert!(replanned.updates.is_empty() && replanned.dependency_records.is_empty());
 }
 
-/// Where runtime owns the writes, an edge-only change still runs the update: direct setup, and a
-/// Frozen resource with management operations under template setup.
+/// Setup itself reconciles what it owns, so under direct setup an edge-only change still updates.
 #[test]
-fn edge_only_changes_still_update_resources_runtime_may_write() {
+fn direct_setup_still_updates_on_an_edge_only_change() {
     let (stack, state) = release_adding_an_edge(setup_owned_subjects());
     let plan = executor(&stack, InitialSetupAuthority::DirectSetup)
         .plan(&state)
@@ -150,20 +149,91 @@ fn edge_only_changes_still_update_resources_runtime_may_write() {
     let mut updated = plan.updates.keys().cloned().collect::<Vec<_>>();
     updated.sort();
     assert_eq!(updated, ["execution-sa", "objects"]);
+}
 
-    let registry = Resource::new(ArtifactRegistry::new("images".to_string()).build());
-    let (stack, state) = release_adding_an_edge(vec![(
-        registry,
+fn registry_gaining_an_edge() -> (Stack, StackState) {
+    release_adding_an_edge(vec![(
+        Resource::new(ArtifactRegistry::new("images".to_string()).build()),
         Box::new(AwsArtifactRegistryController::mock_ready(
             "123456789012",
             "us-east-1",
         )),
-    )]);
+    )])
+}
+
+/// A Frozen registry has management operations, so runtime may update it. An edge to a resource
+/// that is already there and unchanged is still only an edge: it is recorded, and the registry's
+/// setup-created roles are not rewritten.
+#[tokio::test]
+async fn a_managed_frozen_resource_records_an_edge_to_an_existing_dependency() {
+    let (stack, state) = registry_gaining_an_edge();
+    let executor = executor(&stack, InitialSetupAuthority::ImportedHandoff);
+    let plan = executor.plan(&state).unwrap();
+    assert!(plan.updates.is_empty(), "{:?}", plan.updates.keys());
+    assert_eq!(plan.dependency_records, ["images"]);
+
+    let next = executor.step(state.clone()).await.unwrap().next_state;
+    let (before, after) = (&state.resources["images"], &next.resources["images"]);
+    assert_eq!(after.dependencies, cache_edge());
+    assert_eq!(after.status, ResourceStatus::Running, "{:?}", after.error);
+    assert_eq!(after.internal_state, before.internal_state);
+    assert!(executor.is_synced(&next));
+}
+
+/// When the new edge reaches a dependency that is not settled, the registry may need to read it
+/// once it is, so the change waits for an update as before and nothing is recorded early.
+#[test]
+fn a_managed_frozen_resource_waits_to_update_for_an_unsettled_new_dependency() {
+    let (stack, mut state) = registry_gaining_an_edge();
+    state.resources.get_mut("cache").unwrap().status = ResourceStatus::Updating;
+    let executor = executor(&stack, InitialSetupAuthority::ImportedHandoff);
+    let plan = executor.plan(&state).unwrap();
+    assert!(plan.dependency_records.is_empty());
+    assert!(plan.updates.is_empty(), "deferred until cache settles");
+    assert!(!executor.is_synced(&state));
+
+    let (stack, mut state) = registry_gaining_an_edge();
+    state.resources.remove("cache");
     let plan = executor(&stack, InitialSetupAuthority::ImportedHandoff)
         .plan(&state)
         .unwrap();
+    assert_eq!(plan.creates, ["cache"]);
     assert!(plan.dependency_records.is_empty());
-    assert_eq!(plan.updates.keys().collect::<Vec<_>>(), ["images"]);
+}
+
+/// A dependency that changes in the same plan is a reason to update, not just a new edge.
+#[test]
+fn a_dependency_updated_in_the_same_plan_still_updates_a_managed_frozen_resource() {
+    let (mut stack, mut state) = registry_gaining_an_edge();
+    // A Live bucket the registry already depends on gets a real config change.
+    let uploads = Storage::new("uploads".to_string()).build();
+    state.resources.insert(
+        "uploads".to_string(),
+        installed(
+            Resource::new(uploads),
+            ResourceLifecycle::Live,
+            vec![],
+            Box::new(AwsStorageController::mock_ready("edges-test-uploads")),
+        ),
+    );
+    stack.resources.insert(
+        "uploads".to_string(),
+        ResourceEntry::new(
+            Resource::new(Storage::new("uploads".to_string()).versioning(true).build()),
+            ResourceLifecycle::Live,
+        ),
+    );
+    let uploads_edge = ResourceRef::new(Storage::RESOURCE_TYPE, "uploads");
+    state.resources.get_mut("images").unwrap().dependencies = vec![uploads_edge.clone()];
+    stack.resources.get_mut("images").unwrap().dependencies =
+        [cache_edge(), vec![uploads_edge]].concat();
+
+    let plan = executor(&stack, InitialSetupAuthority::ImportedHandoff)
+        .plan(&state)
+        .unwrap();
+    assert!(plan.updates.contains_key("uploads"), "{:?}", plan.updates.keys());
+    assert!(plan.updates.contains_key("images"), "{:?}", plan.updates.keys());
+    assert!(plan.dependency_records.is_empty());
 }
 
 /// A config change that comes with new edges is a real update, even for a setup-owned resource.

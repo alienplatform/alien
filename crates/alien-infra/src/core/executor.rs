@@ -59,7 +59,7 @@ pub struct PlanResult {
     /// credentials must not perform. They stay failed until setup is rerun.
     #[serde(default)]
     pub setup_required: Vec<String>,
-    /// Setup-owned resource IDs whose only change is their stack dependencies. The new
+    /// Setup-created Frozen resource IDs whose only change is their stack dependencies. The new
     /// dependencies are recorded in state; their controllers do not run.
     #[serde(default)]
     pub dependency_records: Vec<String>,
@@ -1334,25 +1334,40 @@ impl StackExecutor {
                                     .all(|dep_ref| self.dependency_settled(dep_ref.id(), state));
 
                                 // Ordering edges are the executor's, not the resource's: no
-                                // controller reads them. When nothing else changed on a resource
-                                // runtime may not write, recording them is the whole change, and
-                                // running its update would ask runtime to rewrite what setup owns.
-                                // The resource already exists, so a new edge has nothing to wait
-                                // for: recording it only makes deletion ordering respect it.
+                                // controller reads them. On a Frozen resource that setup created,
+                                // recording them is the whole change, and its update would run
+                                // runtime against what setup owns. Where setup owns every write,
+                                // a new edge waits for nothing: the resource exists, and the edge
+                                // only orders its deletion. A Frozen resource runtime manages
+                                // still updates when an edge reaches a dependency that is not
+                                // there yet, since it may read that dependency once it is.
                                 let edges_only = desired_config.resource
                                     == current_resource_state.config
                                     && !self.external_binding_drifted(
                                         resource_id,
                                         current_resource_state,
                                     )?;
+                                let added_edges_settled = desired_config
+                                    .dependencies
+                                    .iter()
+                                    .filter(|dependency| {
+                                        !current_resource_state.dependencies.contains(dependency)
+                                    })
+                                    .all(|dependency| {
+                                        self.dependency_settled(dependency.id(), state)
+                                    });
                                 if edges_only
+                                    && status != ResourceStatus::UpdateFailed
+                                    && self.initial_setup_authority
+                                        != InitialSetupAuthority::DirectSetup
+                                    && desired_config.lifecycle == ResourceLifecycle::Frozen
                                     && current_resource_state.lifecycle
                                         == Some(ResourceLifecycle::Frozen)
-                                    && self.setup_owns_writes(desired_config)
-                                    && status != ResourceStatus::UpdateFailed
+                                    && (self.setup_owns_writes(desired_config)
+                                        || added_edges_settled)
                                 {
                                     debug!(
-                                        "Recording new dependencies of setup-owned '{}' without an update",
+                                        "Recording new dependencies of setup-created '{}' without an update",
                                         resource_id
                                     );
                                     plan_result.dependency_records.push(resource_id.clone());
@@ -1700,6 +1715,12 @@ impl StackExecutor {
                 }
             }
         }
+
+        // A dependency that changes in this plan is a reason to update, not just a new edge.
+        // The update records the edges too.
+        plan_result
+            .dependency_records
+            .retain(|resource_id| !plan_result.updates.contains_key(resource_id));
 
         // Note: We don't need final validation of dependency readiness here.
         // The execution phase already handles dependency ordering through dependencies_met() and is_ready logic.
@@ -2242,7 +2263,7 @@ impl StackExecutor {
             }
         }
 
-        // Record the new edges of setup-owned resources whose config is unchanged. Status,
+        // Record the new edges of Frozen resources whose config is unchanged. Status,
         // config and controller stay as they are: there is nothing for the controller to do.
         for resource_id in &plan_result.dependency_records {
             if let (Some(resource_state), Some(desired)) = (
