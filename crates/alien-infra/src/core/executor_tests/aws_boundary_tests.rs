@@ -8,13 +8,14 @@ use crate::{
     },
     key::AwsKeyController,
     remote_stack_management::AwsRemoteStackManagementController,
+    service_account::AwsServiceAccountController,
 };
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt};
 use alien_core::{
     AwsManagementConfig, ClientConfig, DeploymentConfig, InitialSetupAuthority, Key,
     ManagementConfig, PermissionProfile, PermissionSetReference, Platform, RemoteStackManagement,
-    Resource, ResourceEntry, ResourceLifecycle, ResourceStatus, SetupManagement, Stack,
-    StackResourceState, StackState, Storage,
+    Resource, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus, ServiceAccount,
+    SetupManagement, Stack, StackResourceState, StackState, Storage,
 };
 use alien_permissions::PermissionContext;
 use serde_json::{json, Value};
@@ -441,4 +442,69 @@ async fn key_grants_require_the_installed_boundary_to_cover_the_imported_arn() {
         })))
         .unwrap();
     assert_setup_required(&executor, &state, "replacement key").await;
+}
+
+/// A template install made before service accounts depended on management records no such
+/// edge. Its first release only records the edge: the setup-owned role is not touched.
+#[tokio::test]
+async fn template_installed_service_accounts_take_the_management_edge_without_iam() {
+    let (mut stack, mut state, config) = fixture();
+    installed(&mut state)["permissionsBoundaryArn"] = Value::Null;
+    installed(&mut state)["permissionsBoundaryDocument"] = Value::Null;
+    let edge = vec![ResourceRef::new(
+        RemoteStackManagement::RESOURCE_TYPE,
+        "management",
+    )];
+    for id in ["execution-sa", "build-execution-sa"] {
+        let account = ServiceAccount::new(id.to_string()).build();
+        let mut entry = ResourceEntry::new(account.clone(), ResourceLifecycle::Frozen);
+        entry.dependencies = edge.clone();
+        stack.resources.insert(id.to_string(), entry);
+        let mut saved = StackResourceState::new_pending(
+            "service-account".to_string(),
+            Resource::new(account),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        saved.status = ResourceStatus::Running;
+        saved
+            .set_internal_controller(Some(Box::new(AwsServiceAccountController::mock_ready(
+                &format!("boundary-test-{id}"),
+            ))))
+            .unwrap();
+        state.resources.insert(id.to_string(), saved);
+    }
+    // The provider mock has no expectations, so any IAM client request fails the test.
+    let executor =
+        StackExecutor::builder(&stack, ClientConfig::Aws(Box::new(AwsClientConfig::mock())))
+            .deployment_config(&config)
+            .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+            .step_running_resources(false)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .build()
+            .unwrap();
+    let plan = executor.plan(&state).unwrap();
+    assert_eq!(
+        plan.updates
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        ["build-execution-sa", "execution-sa"].into(),
+    );
+    let state = super::helpers::run_steps(&executor, state, 10)
+        .await
+        .unwrap();
+    assert!(executor.is_synced(&state));
+    for id in ["execution-sa", "build-execution-sa"] {
+        let account = &state.resources[id];
+        assert_eq!(
+            account.status,
+            ResourceStatus::Running,
+            "{id}: {:?}",
+            account.error
+        );
+        assert_eq!(account.dependencies, edge, "{id}");
+        assert_eq!(account.config, stack.resources[id].config, "{id}");
+    }
+    assert!(executor.plan(&state).unwrap().updates.is_empty());
 }
