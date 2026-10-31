@@ -533,13 +533,16 @@ fn retaining_a_notifying_bucket_removes_only_setup_entries_before_detaching() {
         )
         .unwrap();
         let addresses: Vec<&str> = manifest.iter().map(String::as_str).collect();
+        let ours =
+            |index| alien_core::storage_notifications::aws_notification_id("p", "source", index);
         let state = with_inventory(
             json!({"version":4, "lineage":"test", "serial":1, "resources":[
                 {"mode":"managed", "type":"aws_s3_bucket", "name":"source",
                  "instances":[{"attributes":{"id":"bucket"}}]},
                 {"mode":"managed", "type":"aws_s3_bucket_notification", "name":"source_notifications",
                  "instances":[{"attributes":{"id":"bucket", "bucket":"bucket", "region":"us-east-2",
-                    "queue":[{"id":"p-sn-hash-0"}, {"id":"p-sn-hash-1"}]}}]}
+                    // A refresh records the whole document, hand-added entries included.
+                    "queue":[{"id":ours(0)}, {"id":ours(1)}, {"id":"hand-made"}]}}]}
             ]}),
             &addresses,
         );
@@ -550,7 +553,7 @@ fn retaining_a_notifying_bucket_removes_only_setup_entries_before_detaching() {
         .unwrap();
         let entry = |id: &str, queue: &str| json!({"Id":id, "QueueArn":format!("arn:aws:sqs:us-east-2:123456789012:{queue}"), "Events":["s3:ObjectCreated:*"]});
         let document = json!({
-            "QueueConfigurations":[entry("p-sn-hash-0","jobs"), entry("hand-made","manual"), entry("p-sn-hash-1","jobs")],
+            "QueueConfigurations":[entry(&ours(0),"jobs"), entry("hand-made","manual"), entry(&ours(1),"jobs")],
             "TopicConfigurations":[{"Id":"topic", "TopicArn":"arn:aws:sns:us-east-2:123456789012:t", "Events":["s3:ObjectCreated:*"]}],
             "ResponseMetadata":{"RequestId":"x"}
         });

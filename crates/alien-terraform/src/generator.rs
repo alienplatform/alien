@@ -37,7 +37,7 @@ use hcl::{
     Identifier,
 };
 use indexmap::IndexMap;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// Generated Terraform module \u2014 one `.tf` file per Alien stack resource
 /// plus the supporting framework (`versions.tf` / `variables.tf` /
@@ -679,7 +679,10 @@ fn generate_terraform_module_internal(
         );
         files.insert(
             "retain-data.py".into(),
-            retain_data_helper(&retained_data_addresses)?,
+            retain_data_helper(
+                &retained_data_addresses,
+                &setup_notification_markers(stack, &labels),
+            )?,
         );
     }
 
@@ -5289,9 +5292,33 @@ fn readme_kubernetes_destroy_order() -> &'static str {
     "\n\n## Destroy Order\n\nIf `helm_install_enabled = true`, `terraform destroy` uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure.\n\nIf `helm_install_enabled = false`, uninstall the Helm release yourself and confirm the cleanup job completed before running `terraform destroy`. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install."
 }
 
+/// The marker in the Ids this package gives each notifying bucket's queue configurations,
+/// by `aws_s3_bucket_notification` address: `<prefix><marker><n>`.
+fn setup_notification_markers(
+    stack: &Stack,
+    labels: &IndexMap<String, String>,
+) -> BTreeMap<String, String> {
+    stack
+        .resources()
+        .filter_map(|(id, entry)| {
+            let storage = entry.config.downcast_ref::<alien_core::Storage>()?;
+            let label = labels.get(id)?;
+            (!storage.notifications.is_empty()).then(|| {
+                (
+                    format!("aws_s3_bucket_notification.{label}_notifications"),
+                    alien_core::storage_notifications::aws_notification_id_prefix("", id),
+                )
+            })
+        })
+        .collect()
+}
+
 /// The retention helper. Packages that retain an S3 bucket notification also remove the
 /// entries setup wrote before detaching it; every other package keeps the helper unchanged.
-fn retain_data_helper(retained_data_addresses: &[String]) -> Result<String> {
+fn retain_data_helper(
+    retained_data_addresses: &[String],
+    markers: &BTreeMap<String, String>,
+) -> Result<String> {
     let helper = include_str!("templates/retain-data.py");
     if !retained_data_addresses
         .iter()
@@ -5312,7 +5339,12 @@ fn retain_data_helper(retained_data_addresses: &[String]) -> Result<String> {
         .replacen(
             definition,
             &format!(
-                "\n{}def main():\n",
+                "\nSETUP_NOTIFICATION_ID_MARKERS = {}\n\n\n{}def main():\n",
+                serde_json::to_string(markers).into_alien_error().context(
+                    ErrorData::GenericError {
+                        message: "Could not serialize notification Id markers".into(),
+                    }
+                )?,
                 include_str!("templates/retain-data-s3-notifications.py")
             ),
             1,

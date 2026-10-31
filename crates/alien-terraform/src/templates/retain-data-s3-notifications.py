@@ -2,9 +2,10 @@ def remove_setup_notification_rules(state, selected):
     """Remove the S3 queue entries this setup wrote before detaching their bucket notification.
 
     Detaching keeps the bucket's notification document, and teardown then deletes the queues
-    it delivers to. Entries are matched by the exact Ids recorded in state, so entries added
-    outside this setup stay. S3 checks every destination left in the document; if one no
-    longer exists, the write fails here and nothing is detached.
+    it delivers to. A refresh records every entry of the document in state, including ones
+    added by hand, so only Ids this package generates (<prefix><marker><n>, the marker
+    carrying the Storage's hash) are removed. S3 checks every destination left in the
+    document; if one no longer exists, the write fails here and nothing is detached.
     """
     addresses = {item['address'] for item in selected}
     for resource in state.get('resources', []):
@@ -17,9 +18,10 @@ def remove_setup_notification_rules(state, selected):
                 continue
             attributes = instance.get('attributes', {})
             bucket = attributes.get('bucket')
-            owned = [queue.get('id') for queue in attributes.get('queue') or []]
-            if not bucket or not owned or not all(owned):
+            marker = SETUP_NOTIFICATION_ID_MARKERS.get(resource['type'] + '.' + resource['name'])
+            if not bucket or not marker:
                 raise RuntimeError('Refresh the bucket notification state of ' + base + suffix + ' before retention; nothing detached')
+            owned = re.compile('.+' + re.escape(marker) + '[0-9]+')
             region = ['--region', attributes['region']] if attributes.get('region') else []
             def s3api(operation, *arguments):
                 try:
@@ -31,7 +33,7 @@ def remove_setup_notification_rules(state, selected):
             document = json.loads(s3api('get-bucket-notification-configuration') or '{}')
             document.pop('ResponseMetadata', None)
             queues = document.get('QueueConfigurations', [])
-            kept = [entry for entry in queues if entry.get('Id') not in owned]
+            kept = [entry for entry in queues if not owned.fullmatch(entry.get('Id') or '')]
             if len(kept) == len(queues):
                 continue
             if kept:
