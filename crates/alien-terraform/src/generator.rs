@@ -679,7 +679,7 @@ fn generate_terraform_module_internal(
         );
         files.insert(
             "retain-data.py".into(),
-            include_str!("templates/retain-data.py").into(),
+            retain_data_helper(&retained_data_addresses)?,
         );
     }
 
@@ -784,6 +784,14 @@ fn generate_terraform_module_internal(
                     include_str!("templates/retained-data.md")
                 },
             );
+        }
+        if retained_data_addresses
+            .iter()
+            .any(|address| address.starts_with("aws_s3_bucket_notification."))
+        {
+            if let Some(readme) = files.get_mut("README.md") {
+                readme.push_str(include_str!("templates/retained-data-s3-notifications.md"));
+            }
         }
     }
 
@@ -5279,6 +5287,41 @@ fn readme_kubernetes_operations(target: TerraformTarget) -> String {
 
 fn readme_kubernetes_destroy_order() -> &'static str {
     "\n\n## Destroy Order\n\nIf `helm_install_enabled = true`, `terraform destroy` uninstalls the Operator Helm release first. The chart's pre-delete cleanup job removes runtime Kubernetes objects, then Terraform removes the setup registration and infrastructure.\n\nIf `helm_install_enabled = false`, uninstall the Helm release yourself and confirm the cleanup job completed before running `terraform destroy`. Terraform cannot clean runtime Kubernetes objects for a Helm release it did not install."
+}
+
+/// The retention helper. Packages that retain an S3 bucket notification also remove the
+/// entries setup wrote before detaching it; every other package keeps the helper unchanged.
+fn retain_data_helper(retained_data_addresses: &[String]) -> Result<String> {
+    let helper = include_str!("templates/retain-data.py");
+    if !retained_data_addresses
+        .iter()
+        .any(|address| address.starts_with("aws_s3_bucket_notification."))
+    {
+        return Ok(helper.to_string());
+    }
+    let (definition, call) = (
+        "\ndef main():\n",
+        "    protect_dynamodb_ttl(state, selected)\n",
+    );
+    if helper.matches(definition).count() != 1 || helper.matches(call).count() != 1 {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "The retention helper template lost its notification hook points".into(),
+        }));
+    }
+    Ok(helper
+        .replacen(
+            definition,
+            &format!(
+                "\n{}def main():\n",
+                include_str!("templates/retain-data-s3-notifications.py")
+            ),
+            1,
+        )
+        .replacen(
+            call,
+            &format!("{call}    remove_setup_notification_rules(state, selected)\n"),
+            1,
+        ))
 }
 
 #[cfg(test)]
