@@ -301,13 +301,25 @@ impl AwsWorkerController {
             })
         })?;
         let statement_id = format!("{worker_name}-s3-{}", storage.id);
-        let controller = ctx.require_dependency::<crate::storage::AwsStorageController>(storage)?;
-        let bucket = controller.bucket_name.as_deref().ok_or_else(|| {
-            AlienError::new(ErrorData::DependencyNotReady {
-                resource_id: worker.id.clone(),
-                dependency_id: storage.id.clone(),
-            })
-        })?;
+        // A Storage that has left state, never got controller state, or never got a bucket
+        // holds no notification of this Worker's, so there is nothing to remove.
+        let controller =
+            match ctx.require_dependency::<crate::storage::AwsStorageController>(storage) {
+                Ok(controller) => controller,
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(ErrorData::DependencyNotFound { .. })
+                            | Some(ErrorData::DependencyNotReady { .. })
+                    ) =>
+                {
+                    return Ok(())
+                }
+                Err(error) => return Err(error),
+            };
+        let Some(bucket) = controller.bucket_name.as_deref() else {
+            return Ok(());
+        };
         let client = ctx
             .service_provider
             .get_aws_s3_client(ctx.get_aws_config()?)

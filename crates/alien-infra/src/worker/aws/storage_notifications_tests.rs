@@ -400,3 +400,58 @@ async fn storage_trigger_cleanup_before_function_creation_needs_no_cloud_calls()
         AwsWorkerState::DeletingScheduleTriggers
     );
 }
+
+/// A Worker whose storage trigger's Storage has left state, or never got a bucket, holds no
+/// notification there: deleting it or dropping the trigger must not wait on that Storage.
+#[tokio::test]
+async fn storage_trigger_cleanup_without_the_storage_or_its_bucket_needs_no_cloud_calls() {
+    for (deleting, storage_state) in [
+        (true, None),
+        (true, Some(AwsStorageController::default())),
+        (false, None),
+        (false, Some(AwsStorageController::default())),
+    ] {
+        let storage = Storage::new("objects".into()).build();
+        let mut builder = SingleControllerExecutor::builder()
+            .resource(if deleting {
+                worker(&storage, "created")
+            } else {
+                basic_function()
+            })
+            .controller(AwsWorkerController {
+                state: if deleting {
+                    AwsWorkerState::DeletingEventSourceMappings
+                } else {
+                    AwsWorkerState::UpdateEventSourceMappings
+                },
+                s3_permission_statement_ids: vec!["physical-worker-s3-objects".into()],
+                ..AwsWorkerController::mock_ready("physical-worker")
+            })
+            .platform(Platform::Aws)
+            .service_provider(provider(MockS3Api::new(), MockLambdaApi::new()))
+            .with_test_dependencies();
+        if !deleting {
+            builder = builder.previous_resource(worker(&storage, "created"));
+        }
+        if let Some(controller) = storage_state.clone() {
+            builder = builder.with_dependency(storage, controller);
+        }
+        let mut executor = builder.build().await.unwrap();
+        executor
+            .step()
+            .await
+            .unwrap_or_else(|error| panic!("deleting={deleting} {storage_state:?}: {error}"));
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            if deleting {
+                AwsWorkerState::DeletingScheduleTriggers
+            } else {
+                AwsWorkerState::UpdatingConcurrency
+            },
+            "deleting={deleting} {storage_state:?}"
+        );
+    }
+}
