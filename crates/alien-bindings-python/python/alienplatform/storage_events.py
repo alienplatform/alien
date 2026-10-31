@@ -16,7 +16,7 @@ StorageEventType = Literal[
 _EVENT_TYPES = {
     "created", "deleted", "copied", "metadataUpdated", "restored", "tierChanged", "unknown"
 }
-_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})")
+_TIMESTAMP = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})")
 
 
 @dataclass(frozen=True)
@@ -73,9 +73,17 @@ def storage_event_from_message(message: StorageEventMessage) -> StorageEvent:
         if event_type not in _EVENT_TYPES:
             raise ValueError("eventType is not a recognized storage event type")
         timestamp = _string(value, "timestamp")
-        if _TIMESTAMP.fullmatch(timestamp) is None:
+        match = _TIMESTAMP.fullmatch(timestamp)
+        if match is None:
             raise ValueError("timestamp must be RFC3339 with a timezone")
-        parsed_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        # Providers send up to nanoseconds (Azure 7 digits, local mtimes 9), but Python 3.10's
+        # fromisoformat accepts only 3 or 6. datetime holds microseconds, so use exactly 6.
+        whole, fraction, zone = match.groups()
+        parsed_time = datetime.fromisoformat(
+            whole
+            + ("." + (fraction + "000000")[:6] if fraction else "")
+            + ("+00:00" if zone == "Z" else zone)
+        )
         size = value.get("size")
         if size is not None and (type(size) is not int or not 0 <= size <= 2**64 - 1):
             raise ValueError("size must be an unsigned 64-bit integer")
