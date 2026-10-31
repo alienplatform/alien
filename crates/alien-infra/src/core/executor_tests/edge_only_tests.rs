@@ -252,7 +252,7 @@ fn a_config_change_with_new_edges_is_still_an_update() {
 }
 
 /// Deletes wait on recorded edges. When a release drops a setup-owned resource's edge along with
-/// the resource it pointed to, recording the removal is what lets that delete start.
+/// the resource it pointed to, the removal is recorded without an update, which releases the delete.
 #[tokio::test]
 async fn recording_a_removed_edge_releases_the_old_dependency_for_deletion() {
     let (stack, mut state) = release_adding_an_edge(setup_owned_subjects());
@@ -277,17 +277,29 @@ async fn recording_a_removed_edge_releases_the_old_dependency_for_deletion() {
     recorded.sort();
     assert_eq!(recorded, ["execution-sa", "objects"]);
 
-    // The first step checks the delete against the edges recorded before it, so cache waits.
+    // The step checks the delete against the edges recorded before it, so cache waits once.
     let next = executor.step(state).await.unwrap().next_state;
     for id in ["execution-sa", "objects"] {
         assert!(next.resources[id].dependencies.is_empty(), "{id}");
         assert_eq!(next.resources[id].status, ResourceStatus::Running, "{id}");
     }
-    assert_eq!(next.resources["cache"].status, ResourceStatus::Running);
+    let cache = &next.resources["cache"];
+    assert_eq!(cache.status, ResourceStatus::Running);
+    assert!(
+        cache
+            .progress
+            .as_deref()
+            .is_some_and(|progress| progress.starts_with("Waiting for ")),
+        "{:?}",
+        cache.progress
+    );
 
-    // With the removal recorded, nothing holds cache.
-    let next = executor.step(next).await.unwrap().next_state;
-    assert_eq!(next.resources["cache"].status, ResourceStatus::Deleting);
+    // Deletes wait only on recorded edges and status, and no recorded edge holds cache now.
+    assert!(next
+        .resources
+        .values()
+        .all(|resource| resource.dependencies.iter().all(|d| d.id() != "cache")));
+    assert!(executor.plan(&next).unwrap().dependency_records.is_empty());
 }
 
 /// A setup-owned resource already exists, so its new edge waits for nothing: it is recorded even
