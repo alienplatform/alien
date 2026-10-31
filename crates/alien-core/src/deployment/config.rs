@@ -5,7 +5,9 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::{is_false, ComputeBackend, DomainMetadata, EnvironmentVariablesSnapshot};
+use super::{
+    is_false, ComputeBackend, DeletionPolicy, DomainMetadata, EnvironmentVariablesSnapshot,
+};
 
 /// Deployment configuration
 ///
@@ -159,6 +161,15 @@ pub struct DeploymentConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[builder(default)]
     pub volume_restores: Vec<VolumeRestoreRequest>,
+    /// How the deletion this run performs treats data. Under `Erase`, controllers also
+    /// delete what they would otherwise keep after the resource is gone, such as a
+    /// container's final volume snapshots.
+    /// Not serialized: deletion sets it from the policy persisted in runtime metadata,
+    /// so a stored configuration cannot request an erase.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    #[builder(default)]
+    pub deletion_policy: DeletionPolicy,
 }
 
 /// Replace one replica's persistent volume with a new volume made from a snapshot.

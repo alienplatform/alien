@@ -614,14 +614,19 @@ pub async fn handle_delete_failed(
 /// Their structural dependencies are preserved by the executor. This does not
 /// certify that access has been revoked; that requires the retention handoff.
 pub(crate) fn retained_resource_ids(current: &DeploymentState, state: &StackState) -> Vec<String> {
-    if current
-        .runtime_metadata
-        .as_ref()
-        .is_some_and(|metadata| metadata.deletion_policy == DeletionPolicy::Erase)
-    {
+    if deletion_policy(current) == DeletionPolicy::Erase {
         return Vec::new();
     }
     installed_durable_resource_ids(state)
+}
+
+/// The persisted deletion policy. Records without one keep their data.
+pub(crate) fn deletion_policy(current: &DeploymentState) -> DeletionPolicy {
+    current
+        .runtime_metadata
+        .as_ref()
+        .map(|metadata| metadata.deletion_policy)
+        .unwrap_or_default()
 }
 
 /// Installed durable roots whose recovery metadata must survive deletion.
@@ -688,6 +693,10 @@ fn deletion_executor(
     client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn PlatformServiceProvider>,
 ) -> Result<StackExecutor> {
+    let config = &DeploymentConfig {
+        deletion_policy: deletion_policy(current),
+        ..config.clone()
+    };
     let executor = if owns_runtime_setup(current.platform, service_provider.as_ref()) {
         StackExecutor::for_deletion_with_service_provider(
             client_config,

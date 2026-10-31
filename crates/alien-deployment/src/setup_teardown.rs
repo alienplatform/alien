@@ -308,12 +308,9 @@ async fn run_setup_teardown_after_handoff_inner(
         })
     })?;
 
+    config.deletion_policy = crate::deleting::deletion_policy(state);
     // A later erase runs with setup credentials after runtime access was removed.
-    let lifecycles = if state
-        .runtime_metadata
-        .as_ref()
-        .is_some_and(|metadata| metadata.deletion_policy == alien_core::DeletionPolicy::Erase)
-    {
+    let lifecycles = if config.deletion_policy == alien_core::DeletionPolicy::Erase {
         vec![ResourceLifecycle::Frozen, ResourceLifecycle::Live]
     } else {
         vec![ResourceLifecycle::Frozen]
@@ -2307,6 +2304,62 @@ mod tests {
             None,
         )
         .await
+    }
+
+    /// Setup teardown runs controller deletes under the persisted policy: an erase reaches
+    /// the store's controller as `Erase`, and a retained delete leaves the store alone.
+    #[tokio::test]
+    async fn setup_teardown_runs_controller_deletes_under_the_persisted_policy() {
+        for policy in [
+            alien_core::DeletionPolicy::Erase,
+            alien_core::DeletionPolicy::Retain,
+        ] {
+            let store_id = format!("teardown-policy-store-{policy:?}").to_lowercase();
+            let stack = alien_core::Stack::new("site".to_string())
+                .add(
+                    alien_core::Storage::new(store_id.clone()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let config = deployment_config(alien_core::ExternalBindings::default());
+            let installed = StackExecutor::builder(&stack, ClientConfig::Test)
+                .deployment_config(&config)
+                .build()
+                .unwrap()
+                .run_until_synced(StackState::new(Platform::Test))
+                .await
+                .into_result()
+                .unwrap();
+            let mut state = DeploymentState {
+                status: DeploymentStatus::TeardownRequired,
+                platform: Platform::Test,
+                current_release: None,
+                target_release: None,
+                stack_state: Some(installed),
+                error: None,
+                environment_info: None,
+                retry_requested: false,
+                protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+                runtime_metadata: Some(RuntimeMetadata {
+                    deletion_policy: policy,
+                    ..Default::default()
+                }),
+            };
+
+            erase_without_site_bindings(&mut state)
+                .await
+                .expect("teardown")
+                .expect("teardown ran");
+
+            let expected = match policy {
+                alien_core::DeletionPolicy::Erase => vec![policy],
+                alien_core::DeletionPolicy::Retain => vec![],
+            };
+            assert_eq!(
+                alien_infra::test_storage_delete_policies(&store_id),
+                expected
+            );
+        }
     }
 
     /// The site's executor records the adoption, so a teardown that never saw the binding

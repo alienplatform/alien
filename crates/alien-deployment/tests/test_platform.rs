@@ -286,6 +286,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         deployment_token: None,
         native_image_host: None,
         volume_restores: Vec::new(),
+        deletion_policy: Default::default(),
     }
 }
 
@@ -1963,6 +1964,29 @@ async fn automatic_setup_runtime_cleanup_removes_only_what_the_runtime_created()
     assert_eq!(
         serde_json::to_value(&resources["app-secrets"]).unwrap(),
         vault
+    );
+}
+
+/// Controllers see the persisted deletion policy, so an erase can also remove what they
+/// keep after a retained delete.
+#[tokio::test]
+async fn runtime_erase_runs_controller_deletes_under_the_persisted_policy() {
+    let _vault = test_vault_env().await;
+    let store_id = "erase-policy-store";
+    let mut config = create_test_config("hash_v1", false);
+    config.stack_settings.setup_management = SetupManagement::Automatic;
+    let state = run_to_completion(
+        create_initial_state(create_test_stack_with_storage("erase", store_id, "api")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running, "{:?}", state.error);
+
+    delete_until_setup_teardown(state, config).await;
+
+    assert_eq!(
+        alien_infra::test_storage_delete_policies(store_id),
+        vec![alien_core::DeletionPolicy::Erase]
     );
 }
 

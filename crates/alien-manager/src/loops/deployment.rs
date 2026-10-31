@@ -1693,6 +1693,7 @@ impl RunnerConfigSources<'_> {
                 deployment_token: deployment.deployment_token.clone(),
                 native_image_host,
                 volume_restores: Vec::new(),
+                deletion_policy: Default::default(),
             }
         };
         Ok(config)
