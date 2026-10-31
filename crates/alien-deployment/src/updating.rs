@@ -70,7 +70,8 @@ pub(crate) fn compute_update_status(
     Ok(status)
 }
 
-/// Whether every resource the executor reconciles matches the config the release asks for.
+/// Whether every resource the executor reconciles matches the config and dependencies the
+/// release asks for. An edge the executor has not recorded yet is still outstanding work.
 ///
 /// Scoped to `reconciled` because a resource the executor's lifecycle filter excluded is never
 /// planned: a setup-owned resource whose recorded config differs from the declared one would
@@ -88,7 +89,10 @@ fn stack_has_converged(
             stack_state
                 .resources
                 .get(resource_id)
-                .is_some_and(|deployed| deployed.config == desired.config)
+                .is_some_and(|deployed| {
+                    deployed.config == desired.config
+                        && deployed.dependencies == desired.combined_dependencies()
+                })
         })
 }
 
@@ -824,7 +828,10 @@ fn prune_deprovisioned_resources(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Kv, Resource, ResourceLifecycle, StackResourceState, Worker, WorkerCode};
+    use alien_core::{
+        Kv, Resource, ResourceLifecycle, ResourceRef, StackResourceState, Storage, Worker,
+        WorkerCode,
+    };
 
     #[tokio::test]
     async fn local_frozen_update_preserves_existing_storage() {
@@ -1474,6 +1481,46 @@ mod tests {
             StackStatus::InProgress,
             "the worker has not reached its desired config, so the update is not complete"
         );
+    }
+
+    /// A release can add only an ordering edge. Until the executor records it, the deployed
+    /// resource does not match the release, even with every config equal and every status Running.
+    #[test]
+    fn an_update_is_not_complete_while_a_new_edge_is_unrecorded() {
+        let cache = Kv::new("cache".to_string()).build();
+        let objects = Storage::new("objects".to_string()).build();
+        let mut target_stack = Stack::new("s".to_string())
+            .add(cache.clone(), ResourceLifecycle::Frozen)
+            .add(objects.clone(), ResourceLifecycle::Frozen)
+            .build();
+        target_stack
+            .resources
+            .get_mut("objects")
+            .expect("objects is in the stack")
+            .dependencies = vec![ResourceRef::new(Kv::RESOURCE_TYPE, "cache")];
+
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resources.insert(
+            "cache".to_string(),
+            state_entry(Resource::new(cache), ResourceStatus::Running),
+        );
+        stack_state.resources.insert(
+            "objects".to_string(),
+            state_entry(Resource::new(objects), ResourceStatus::Running),
+        );
+        let reconciled = HashSet::from(["cache", "objects"]);
+        let status = |state: &StackState| {
+            compute_update_status(state, &target_stack, &reconciled, &[], &HashSet::new())
+                .expect("status should compute")
+        };
+
+        assert_eq!(status(&stack_state), StackStatus::InProgress);
+        stack_state
+            .resources
+            .get_mut("objects")
+            .expect("objects is deployed")
+            .dependencies = target_stack.resources["objects"].combined_dependencies();
+        assert_eq!(status(&stack_state), StackStatus::Running);
     }
 
     /// Declining a gate that was accepted must take the resource away, and the executor defers
