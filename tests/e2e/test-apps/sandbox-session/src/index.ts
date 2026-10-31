@@ -3,7 +3,9 @@ import { Hono } from "hono"
 
 // Bun's built-in S3 client, which the Worker runtime provides.
 declare const Bun: {
-  S3Client: new (options: Record<string, string | undefined>) => {
+  S3Client: new (
+    options: Record<string, string | undefined>,
+  ) => {
     write(key: string, body: string): Promise<number>
   }
 }
