@@ -4,7 +4,7 @@ use crate::deployment_tracking::{DeploymentTracker, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
 use alien_core::embedded_config::DeployCliConfig;
-use alien_core::{ClientConfig, Platform};
+use alien_core::{ClientConfig, Platform, ResourceStatus, StackState};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use clap::Parser;
@@ -192,6 +192,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
             })
         })?;
     let platform = validate_remote_platform(tracked_platform.as_deref(), remote_platform)?;
+    let site_bound = site_bound_resource_ids(&deployment_json)?;
 
     if let Some(source) = &import_source {
         if !args.force_delete_record {
@@ -358,8 +359,40 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     } else {
         output::success("Deployment stopped. Durable data and recovery tracking retained; use --erase-data to erase later.");
     }
+    if !site_bound.is_empty() {
+        output::info(&format!(
+            "Released, not erased: {}. These were supplied where the deployment was installed (for example Helm values or the chart's database); remove them there.",
+            site_bound.join(", ")
+        ));
+    }
 
     Ok(())
+}
+
+/// Resources the record shows as adopted from a binding supplied at the site. Teardown
+/// releases them and leaves whatever they point at in place.
+fn site_bound_resource_ids(deployment: &serde_json::Value) -> Result<Vec<String>> {
+    let Some(stack_state) = deployment
+        .get("stackState")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(Vec::new());
+    };
+    let stack_state: StackState = serde_json::from_value(stack_state.clone())
+        .into_alien_error()
+        .context(ErrorData::DeploymentFailed {
+            operation: "decode deployment stack state".to_string(),
+        })?;
+    let mut ids: Vec<String> = stack_state
+        .resources
+        .into_iter()
+        .filter(|(_, resource)| {
+            resource.external_binding && resource.status != ResourceStatus::Deleted
+        })
+        .map(|(id, _)| id)
+        .collect();
+    ids.sort();
+    Ok(ids)
 }
 
 /// Retained data still needs its original credentials and local state directory
