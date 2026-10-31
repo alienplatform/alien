@@ -73,15 +73,24 @@ output "manager_identity_id" {
 
 Terraform or OpenTofu 1.7 or later, with the `hashicorp/azurerm` (`>= 3.80, < 5.0`) and `Azure/azapi` (`>= 2.6, < 3.0`) providers.
 
+The module declares no provider blocks, so it uses the `azurerm` and `azapi` configurations of the calling module. Configure `azapi` there with the same credentials as `azurerm`. Both read the `ARM_*` environment variables and an Azure CLI login. If your `azurerm` block sets credentials explicitly, set them on `azapi` too:
+
+```hcl
+provider "azapi" {
+  subscription_id = var.subscription_id
+  tenant_id       = var.tenant_id
+}
+```
+
 ## Upgrading the commands table
 
 The commands table is created through Azure Resource Manager (`azapi_resource`). Earlier versions of this module declared it as `azurerm_storage_table`, whose table access-policy calls Azure Table storage now rejects with `415 Unsupported Media Type`, so those installations can no longer plan. To upgrade one with `enable_commands_store = true`, move the existing table, with its data, to the new address before the next apply (replace `module.alien_infra` with your module address):
 
 ```bash
 ACCOUNT_ID=$(terraform state show -no-color 'module.alien_infra.azurerm_storage_account.manager' | sed -n 's/^ *id *= *"\(.*\)"$/\1/p' | head -1)
-terraform state rm 'module.alien_infra.azurerm_storage_table.commands'
 terraform import 'module.alien_infra.azapi_resource.commands[0]' "$ACCOUNT_ID/tableServices/default/tables/commands?api-version=2024-01-01"
+terraform state rm 'module.alien_infra.azurerm_storage_table.commands'
 terraform apply
 ```
 
-`terraform state rm` deletes nothing in Azure. With OpenTofu, run the same commands with `tofu`. If you apply without these steps, the `removed` block still keeps the table: Terraform forgets it and then fails to create the new resource because the table exists, and OpenTofu fails on the 415 before changing anything. If Terraform already forgot the table that way, `terraform state rm` reports no matching objects; continue with the import.
+Import before forgetting, so a failed import (for example, an unconfigured `azapi` provider) leaves the state as it was. `terraform state rm` deletes nothing in Azure. With OpenTofu, run the same commands with `tofu`. If you apply without these steps, the `removed` block still keeps the table: Terraform forgets it and then fails to create the new resource because the table exists, and OpenTofu fails on the 415 before changing anything. If Terraform already forgot the table that way, `terraform state rm` reports no matching objects; continue with the import.
