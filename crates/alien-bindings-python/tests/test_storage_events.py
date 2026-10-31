@@ -54,20 +54,20 @@ def test_storage_notification_preserves_fields_and_receipt(worker):
 
 
 @pytest.mark.parametrize(
-    ("timestamp", "expected"),
+    ("timestamp", "microsecond"),
     [
         # Azure Event Grid sends 7 fractional digits, local mtimes 9; Python 3.10's
         # fromisoformat alone accepts only 3 or 6.
-        ("2026-10-30T09:00:00.9584103Z", datetime(2026, 10, 30, 9, 0, 0, 958410, tzinfo=timezone.utc)),
-        ("2026-10-30T09:00:00.958410300Z", datetime(2026, 10, 30, 9, 0, 0, 958410, tzinfo=timezone.utc)),
-        ("2026-10-30T11:00:00.5+02:00", datetime(2026, 10, 30, 9, 0, 0, 500000, tzinfo=timezone.utc)),
-        ("2026-10-30T09:00:00.123Z", datetime(2026, 10, 30, 9, 0, 0, 123000, tzinfo=timezone.utc)),
+        ("2026-10-30T09:00:00.9584103Z", 958410),
+        ("2026-10-30T09:00:00.958410300Z", 958410),
+        ("2026-10-30T11:00:00.5+02:00", 500000),
+        ("2026-10-30T09:00:00.123Z", 123000),
     ],
 )
-def test_provider_timestamps_parse_at_any_fraction_length(timestamp, expected):
+def test_provider_timestamps_parse_at_any_fraction_length(timestamp, microsecond):
     value = payload() | {"timestamp": timestamp}
     event = storage_event_from_message(QueueMessage("text", json.dumps(value), "receipt", 1))
-    assert event.timestamp == expected
+    assert event.timestamp == datetime(2026, 10, 30, 9, 0, 0, microsecond, tzinfo=timezone.utc)
 
 
 def test_optional_storage_metadata_can_be_absent():
