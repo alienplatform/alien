@@ -11,8 +11,11 @@ use alien_core::{
 use async_trait::async_trait;
 use tracing::info;
 
-/// The permission sets that can change a bucket's policy across the stack.
-const BUCKET_POLICY_SETS: [&str; 2] = ["storage/provision", "email/provision"];
+/// The permission sets that can change other buckets' policies: `storage/provision` granted
+/// stack-wide, and `email/provision` at any scope, since its bucket-policy grant always covers
+/// every bucket of the stack.
+const STACK_WIDE_BUCKET_POLICY_SET: &str = "storage/provision";
+const ANY_SCOPE_BUCKET_POLICY_SET: &str = "email/provision";
 
 /// Denies changing the bundle bucket's policy, for a workload holding one of those.
 const PROTECT_BUNDLE_POLICY: &str = "sandbox/protect-bundle-policy";
@@ -91,17 +94,18 @@ impl StackMutation for SandboxBundleStorageMutation {
         };
         // The bucket's policy lets only management write bundles. A workload that can manage the
         // stack's bucket policies gets a Deny on this bucket's, so it cannot lift that guard.
-        for sets in stack
-            .permissions
-            .profiles
-            .values_mut()
-            .filter_map(|profile| profile.0.get_mut("*"))
-        {
-            if sets
-                .iter()
-                .any(|set| BUCKET_POLICY_SETS.contains(&set.id()))
-                && !sets.iter().any(|set| set.id() == PROTECT_BUNDLE_POLICY)
-            {
+        for profile in stack.permissions.profiles.values_mut() {
+            let reaches_bucket_policies = profile.0.iter().any(|(scope, sets)| {
+                sets.iter().any(|set| {
+                    set.id() == ANY_SCOPE_BUCKET_POLICY_SET
+                        || (scope == "*" && set.id() == STACK_WIDE_BUCKET_POLICY_SET)
+                })
+            });
+            if !reaches_bucket_policies {
+                continue;
+            }
+            let sets = profile.0.entry("*".to_string()).or_default();
+            if !sets.iter().any(|set| set.id() == PROTECT_BUNDLE_POLICY) {
                 sets.push(PermissionSetReference::from_name(PROTECT_BUNDLE_POLICY));
             }
         }
@@ -327,15 +331,29 @@ mod tests {
             "reader".to_string(),
             PermissionProfile::new().resource("*", ["storage/data-read"]),
         );
+        // Email's bucket-policy grant covers every bucket of the stack even when granted on one
+        // Email resource.
+        stack.permissions.profiles.insert(
+            "mailer".to_string(),
+            PermissionProfile::new().resource("mail", ["email/provision"]),
+        );
+        // Storage's is bound to the one bucket it is granted on.
+        stack.permissions.profiles.insert(
+            "uploads-admin".to_string(),
+            PermissionProfile::new().resource("uploads", ["storage/provision"]),
+        );
         let setup = prepared(stack, &StackState::new(Platform::Aws)).await;
         let ids = |profile: &str| {
-            setup.permissions.profiles[profile].0["*"]
-                .iter()
-                .map(|set| set.id().to_string())
-                .collect::<Vec<_>>()
+            setup.permissions.profiles[profile]
+                .0
+                .get("*")
+                .map(|sets| sets.iter().map(|set| set.id().to_string()).collect())
+                .unwrap_or_else(Vec::new)
         };
         assert!(ids("execution").contains(&PROTECT_BUNDLE_POLICY.to_string()));
+        assert!(ids("mailer").contains(&PROTECT_BUNDLE_POLICY.to_string()));
         assert!(!ids("reader").contains(&PROTECT_BUNDLE_POLICY.to_string()));
+        assert!(!ids("uploads-admin").contains(&PROTECT_BUNDLE_POLICY.to_string()));
     }
 
     /// An install set up before the bundle bucket existed, by a release whose workload can manage
