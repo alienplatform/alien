@@ -12,6 +12,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::gcs::{Bucket, GcsApi, IamConfiguration, Lifecycle};
 use serde_json::Value;
+use tracing::warn;
 
 use super::{AwsStorageController, AzureStorageController, GcpStorageController};
 use crate::{
@@ -21,7 +22,9 @@ use crate::{
 };
 
 /// The S3 queue configurations setup wrote for a Storage's rules, now or before its last
-/// update, with queue ARNs read from the installed queue state.
+/// update, with queue ARNs read from the installed queue state. A rule whose queue is no
+/// longer in state, or never recorded a name, can't be recognised by its rule; its entries
+/// are then removed only if they carry our Id, so a retry after lost state isn't blocked.
 fn setup_written_rules(
     state: &StackState,
     resource: &StackResourceState,
@@ -34,17 +37,19 @@ fn setup_written_rules(
         .filter_map(|config| config.downcast_ref::<Storage>())
     {
         for notification in &storage.notifications {
-            let queue = state
-                .resources
-                .get(&notification.queue.id)
-                .ok_or_else(|| invalid(id, "A notified queue is missing from installed state"))?
-                .get_internal_controller_typed::<AwsQueueController>()?;
-            let name = queue.queue_name.as_deref().ok_or_else(|| {
-                invalid(
-                    id,
-                    "A notified queue has no recorded name in installed state",
-                )
-            })?;
+            let queue = match state.resources.get(&notification.queue.id) {
+                Some(queue) if queue.internal_state.is_some() => {
+                    queue.get_internal_controller_typed::<AwsQueueController>()?
+                }
+                _ => {
+                    warn!(storage = %id, queue = %notification.queue.id, "Notified queue has no installed state; removing only Id-tagged notifications");
+                    continue;
+                }
+            };
+            let Some(name) = queue.queue_name.as_deref() else {
+                warn!(storage = %id, queue = %notification.queue.id, "Notified queue has no recorded name; removing only Id-tagged notifications");
+                continue;
+            };
             rules.push(super::aws_notifications::queue_configuration(
                 notification,
                 format!("arn:aws:sqs:{}:{}:{name}", config.region, config.account_id),
@@ -600,8 +605,9 @@ mod tests {
     };
     use alien_azure_clients::{blob_containers::MockBlobContainerApi, AzureClientConfigExt};
     use alien_core::{
-        AwsClientConfig, AzureClientConfig, AzureResourceGroup, AzureResourceGroupOutputs,
-        GcpClientConfig, Queue, Resource, ResourceOutputs, StackResourceState, StorageNotification,
+        storage_notifications::aws_notification_id, AwsClientConfig, AzureClientConfig,
+        AzureResourceGroup, AzureResourceGroupOutputs, GcpClientConfig, Queue, Resource,
+        ResourceOutputs, StackResourceState, StorageNotification,
     };
     use alien_gcp_clients::{gcs::MockGcsApi, iam::IamPolicy, GcpClientConfigExt};
     use serde_json::json;
@@ -665,6 +671,74 @@ mod tests {
     /// Retaining a setup-owned bucket must still remove exactly the entries setup wrote, or
     /// they keep pointing at the deployment's deleted queue. Hand-made entries stay, even
     /// one to the same queue with another filter.
+    /// After lost state the notified queue may be missing from installed state. Retention
+    /// can't recognise setup's rule entries then, but it must not be blocked: it removes the
+    /// entries carrying our Id and keeps everything else.
+    #[tokio::test]
+    async fn s3_retention_without_the_notified_queue_falls_back_to_owned_ids() {
+        let entry = |id: String, queue: &str| QueueConfiguration {
+            id: Some(id),
+            queue_arn: format!("arn:aws:sqs:us-east-1:123456789012:{queue}"),
+            events: vec!["s3:ObjectCreated:*".into()],
+            filter: None,
+        };
+        let ours = entry(aws_notification_id("owned", "data", 0), "owned-jobs");
+        let unrecognised = entry("ZDI2MTI4NmYtM2Ex".into(), "owned-jobs");
+        let document = NotificationConfiguration {
+            queue_configurations: vec![ours, unrecognised.clone()],
+            ..Default::default()
+        };
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut api = MockS3Api::new();
+        api.expect_get_bucket_tagging()
+            .returning(|_| Ok(alien_core::standard_resource_tags("owned", "data")));
+        let current = document.clone();
+        api.expect_get_bucket_notification_configuration()
+            .returning(move |_| Ok(current.clone()));
+        let sink = written.clone();
+        api.expect_put_bucket_notification_configuration()
+            .returning(move |_, document| {
+                sink.lock().unwrap().push(document.clone());
+                Ok(())
+            });
+        api.expect_get_bucket_lifecycle_configuration()
+            .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration { rules: vec![] }));
+        let api = Arc::new(api);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_s3_client()
+            .returning(move |_| Ok(api.clone()));
+        let mut state = installed(
+            Platform::Aws,
+            Box::new(AwsStorageController {
+                bucket_name: Some("owned-data".into()),
+                ..Default::default()
+            }),
+        );
+        let resource = state.resources.get_mut("data").unwrap();
+        resource.lifecycle = Some(ResourceLifecycle::Frozen);
+        resource.config = Resource::new(
+            Storage::new("data".into())
+                .notifications(vec![StorageNotification::builder()
+                    .queue((&Queue::new("jobs".into()).build()).into())
+                    .build()])
+                .build(),
+        );
+        assert!(protect_retained_storage(
+            &state,
+            &["data".into()],
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &provider,
+            &ExternalBindings::default(),
+            &[ResourceLifecycle::Frozen],
+        )
+        .await
+        .unwrap());
+        let written = written.lock().unwrap();
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].queue_configurations, [unrecognised]);
+    }
+
     #[tokio::test]
     async fn s3_retention_of_setup_owned_bucket_removes_exactly_the_rules_setup_wrote() {
         let entry = |id: &str, queue: &str, prefix: &str| QueueConfiguration {
