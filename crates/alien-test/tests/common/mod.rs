@@ -4,12 +4,14 @@ pub mod commands;
 pub mod container;
 pub mod events;
 pub mod lifecycle;
+pub mod notification_cleanup;
 pub mod remote_bindings;
 pub mod routing;
 pub mod runner;
 pub mod runtime_less;
 pub mod sandbox;
 pub mod storage_cleanup;
+pub mod storage_notifications;
 
 use std::future::Future;
 use std::time::Duration;
@@ -72,10 +74,12 @@ macro_rules! e2e_test_context {
             }
 
             async fn teardown(self) {
-                self.ctx
-                    .cleanup()
-                    .await
-                    .expect("E2E cleanup must reach a safe terminal state");
+                let cleanup = if self.ctx.app == alien_test::TestApp::StorageNotifications {
+                    crate::common::notification_cleanup::cleanup(self.ctx).await
+                } else {
+                    self.ctx.cleanup().await
+                };
+                cleanup.expect("E2E cleanup must reach a safe terminal state");
             }
         }
     };

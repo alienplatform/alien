@@ -132,6 +132,15 @@ fn is_missing_optional_bucket_metadata(error: &AlienError<CloudClientErrorData>)
     )
 }
 
+fn may_manage_notifications(ctx: &ResourceControllerContext<'_>, id: &str) -> bool {
+    ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        || !ctx
+            .desired_stack
+            .resources
+            .get(id)
+            .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Frozen)
+}
+
 #[controller]
 pub struct AwsStorageController {
     /// The actual bucket name (includes stack name prefix).
@@ -152,6 +161,9 @@ pub struct AwsStorageController {
     /// do not prove that an unchanged declaration was applied.
     #[serde(default)]
     pub(crate) read_cors_applied: bool,
+    /// Records notification ownership across rule removal and interrupted updates.
+    #[serde(default)]
+    pub(crate) notifications_managed: bool,
 }
 
 #[controller]
@@ -517,8 +529,9 @@ impl AwsStorageController {
 
         info!(bucket=%config.id, "Successfully applied resource-scoped permissions");
 
+        self.notifications_managed |= !config.notifications.is_empty();
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: CreatingNotifications,
             suggested_delay: None,
         })
     }
@@ -660,6 +673,9 @@ impl AwsStorageController {
                 suggested_delay: None,
             });
         }
+
+        self.notifications_managed |=
+            !config.notifications.is_empty() || !prev_config.notifications.is_empty();
 
         if config.cors_allowed_origins != prev_config.cors_allowed_origins {
             self.require_cors_authority(ctx)?;
@@ -992,9 +1008,54 @@ impl AwsStorageController {
         }
 
         Ok(HandlerAction::Continue {
+            state: UpdatingNotifications,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = CreatingNotifications, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn creating_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.reconcile_queue_notifications(ctx, false).await?;
+        Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
+    }
+
+    #[handler(state = UpdatingNotifications, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.reconcile_queue_notifications(ctx, false).await?;
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: None,
+        })
+    }
+
+    /// Runs only for a bucket whose ownership `DeleteStart` proved, so state from earlier
+    /// versions that names another account's or region's bucket never reaches it.
+    #[handler(state = DeletingNotifications, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
+    async fn deleting_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.reconcile_queue_notifications(ctx, true).await?;
+        Ok(HandlerAction::Continue {
+            state: DeletingBucket,
+            suggested_delay: None,
+        })
+    }
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        Ok(may_manage_notifications(ctx, &config.id)
+            && !self.notifications_managed
+            && !config.notifications.is_empty())
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
@@ -1079,6 +1140,38 @@ impl AwsStorageController {
             };
             return Ok(self.keep_bucket(&config.id, &bucket_name, reason));
         }
+
+        Ok(HandlerAction::Continue {
+            state: DeletingNotifications,
+            suggested_delay: None,
+        })
+    }
+
+    /// Empties and deletes the bucket `DeleteStart` proved ours.
+    #[handler(
+        state = DeletingBucket,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_bucket(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        let Some(bucket_name) = self
+            .bucket_name
+            .clone()
+            .or_else(|| self.requested_bucket_name.clone())
+        else {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
+        let client = ctx
+            .service_provider
+            .get_aws_s3_client(ctx.get_aws_config()?)
+            .await?;
 
         info!(bucket=%bucket_name, "Starting bucket deletion");
 
@@ -1365,6 +1458,39 @@ impl AwsStorageController {
 }
 
 impl AwsStorageController {
+    async fn reconcile_queue_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        deleting: bool,
+    ) -> Result<()> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        if !may_manage_notifications(ctx, &config.id) {
+            return Ok(());
+        }
+        let previously_notifying = ctx
+            .state
+            .resources
+            .get(&config.id)
+            .and_then(|resource| resource.previous_config.as_ref())
+            .and_then(|resource| resource.downcast_ref::<Storage>())
+            .is_some_and(|storage| !storage.notifications.is_empty());
+        if !self.notifications_managed && config.notifications.is_empty() && !previously_notifying {
+            return Ok(());
+        }
+        let Some(bucket) = self.bucket_name.as_deref() else {
+            if deleting {
+                return Ok(());
+            }
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "Bucket identity missing during notification reconciliation".into(),
+            }));
+        };
+        super::aws_notifications::reconcile(ctx, bucket, &config, deleting).await?;
+        self.notifications_managed = !deleting && !config.notifications.is_empty();
+        Ok(())
+    }
+
     fn require_cors_authority(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let config = ctx.desired_resource_config::<Storage>()?;
         if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
@@ -1409,6 +1535,7 @@ impl AwsStorageController {
             requested_bucket_name: None,
             ownership_verified: true,
             read_cors_applied: false,
+            notifications_managed: false,
             _internal_stay_count: None,
         }
     }
@@ -1865,6 +1992,47 @@ mod tests {
         assert!(executor.outputs().is_none());
     }
 
+    /// State from earlier versions can name a bucket this deployment never proved it made.
+    /// Deleting a notifying Storage must keep that bucket without reading or writing its
+    /// notification document: only a bucket proven ours reaches notification cleanup.
+    #[tokio::test]
+    async fn delete_keeps_an_unproven_bucket_without_touching_its_notifications() {
+        let storage = Storage::new(basic_storage().id)
+            .notifications(vec![alien_core::StorageNotification::builder()
+                .queue(alien_core::ResourceRef::new(
+                    alien_core::Queue::RESOURCE_TYPE,
+                    "jobs",
+                ))
+                .build()])
+            .build();
+        let account = account_with(Some(handmade_bucket()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .controller(AwsStorageController {
+                notifications_managed: true,
+                ..AwsStorageController::mock_ready(&storage.id)
+            })
+            .platform(Platform::Aws)
+            // No notification expectations: any notification call would fail the test.
+            .service_provider(setup_mock_service_provider(Arc::new(fake_s3(
+                account.clone(),
+                Fault::None,
+            ))))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            account.lock().unwrap().clone().expect("the bucket is kept"),
+            handmade_bucket()
+        );
+    }
+
     /// A step whose S3 call succeeded but whose response was lost is retried. The retry finds
     /// the bucket this controller just made (untagged, or already tagged) and carries on.
     #[rstest]
@@ -2030,6 +2198,7 @@ mod tests {
             requested_bucket_name: None,
             ownership_verified: false,
             read_cors_applied: false,
+            notifications_managed: false,
             _internal_stay_count: None,
         }
     }
@@ -3049,6 +3218,7 @@ mod tests {
             requested_bucket_name: None,
             ownership_verified: false,
             read_cors_applied: false,
+            notifications_managed: false,
             _internal_stay_count: None,
         };
 
@@ -3129,6 +3299,7 @@ mod tests {
                 requested_bucket_name: None,
                 ownership_verified: true,
                 read_cors_applied: false,
+                notifications_managed: false,
                 _internal_stay_count: None,
             })
             .platform(Platform::Aws)

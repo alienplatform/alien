@@ -59,6 +59,9 @@ const AZURE_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
 const KUBERNETES_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
 const KUBERNETES_FULL_STACK_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(3_600);
 
+mod notifications;
+pub use notifications::verify_rule_update;
+
 /// Artifact cleanup that sits outside the manager's normal destroy flow.
 pub enum DistributionArtifactCleanup {
     CloudFormation {
@@ -598,7 +601,8 @@ async fn cleanup_retained_dynamodb_table(
     Ok(())
 }
 
-struct DistributionPrepared {
+#[derive(Clone)]
+pub(crate) struct DistributionPrepared {
     manager: Arc<TestManager>,
     config: TestConfig,
     built_stack: Stack,
@@ -1980,11 +1984,7 @@ async fn prepare_terraform_erasure(workdir: &Path, env: &[(String, String)]) -> 
         );
         let state = String::from_utf8(output.stdout)
             .context("terraform state list printed invalid UTF-8")?;
-        let targets = erasable
-            .iter()
-            .filter(|address| state.lines().any(|line| line == address.as_str()))
-            .map(|address| format!("-target={address}"))
-            .collect::<Vec<_>>();
+        let targets = erasable_targets(&erasable, &state);
         if !targets.is_empty() {
             let mut apply = Command::new("terraform");
             apply
@@ -1996,6 +1996,22 @@ async fn prepare_terraform_erasure(workdir: &Path, env: &[(String, String)]) -> 
         }
     }
     Ok(())
+}
+
+/// `-target` arguments for the erasable resources `terraform state list` holds. A resource
+/// with `count` or `for_each` (a gated Storage, say) is listed per instance, as `type.label[0]`
+/// or `type.label["key"]`; targeting `type.label` applies every instance.
+fn erasable_targets(erasable: &[String], state_list: &str) -> Vec<String> {
+    erasable
+        .iter()
+        .filter(|address| {
+            state_list.lines().any(|line| {
+                line.strip_prefix(address.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('['))
+            })
+        })
+        .map(|address| format!("-target={address}"))
+        .collect()
 }
 
 /// Setup protects the data resources it owns: they carry `prevent_destroy`, and buckets
@@ -2210,9 +2226,11 @@ async fn apply_terraform_and_import(
                 "Skipping Azure management OIDC permission probe; local AKS run will validate the same management identity through in-cluster workload identity"
             );
         }
+        let name = tfvars["name"].as_str().context("Terraform deployment name missing")?;
         let request = terraform_import_request_from_outputs(
             &outputs,
             &prepared.dg_token,
+            name,
             reservation.as_ref(),
         )?;
         let base_platform = request.base_platform;
@@ -2939,6 +2957,7 @@ fn context_from_deployment(
         app: prepared.app,
         agent: None,
         distribution_cleanups: cleanups,
+        distribution_setup: Some(prepared.clone()),
     }
 }
 
@@ -2953,7 +2972,10 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
     if ctx.model == DeploymentModel::Push
         && !matches!(
             ctx.app,
-            TestApp::ByoEncryptionKey | TestApp::ByoAi | TestApp::AutomaticSetup
+            TestApp::ByoEncryptionKey
+                | TestApp::ByoAi
+                | TestApp::AutomaticSetup
+                | TestApp::StorageNotifications
         )
         && matches!(
             ctx.platform,
@@ -3229,6 +3251,7 @@ async fn grant_terraform_shared_env_join_permission(
 fn terraform_import_request_from_outputs(
     output: &Value,
     token: &str,
+    name: &str,
     reservation: Option<&TerraformReservation>,
 ) -> anyhow::Result<StackImportRequest> {
     let platform: Platform = terraform_output_string(output, "deployment_platform")?
@@ -3286,7 +3309,7 @@ fn terraform_import_request_from_outputs(
             setup_fingerprint_version = reservation.setup_fingerprint_version;
             reservation.deployment_name.clone()
         }
-        None => format!("terraform-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+        None => name.to_string(),
     };
     // Emitted only when the stack declares deployer inputs; without it a live
     // `.enabled(input)` answer would fall back to the input's default at
@@ -4392,6 +4415,66 @@ mod tests {
         }
     }
 
+    /// Gated setup data is count-indexed, so `terraform state list` names its instances,
+    /// never the bare address. Uses Terraform's real state listing of a module whose
+    /// resources are plain, `count`-ed, `for_each`-ed, gated off, or only share a prefix.
+    #[test]
+    fn erase_prep_targets_count_and_for_each_instances_from_real_state() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            workdir.path().join("main.tf"),
+            r#"resource "terraform_data" "plain" {}
+resource "terraform_data" "gated" { count = 1 }
+resource "terraform_data" "keyed" { for_each = toset(["a"]) }
+resource "terraform_data" "gated_off" { count = 0 }
+resource "terraform_data" "gate_keeper" {}
+"#,
+        )
+        .expect("module");
+        let terraform = |args: &[&str]| {
+            let output = std::process::Command::new("terraform")
+                .current_dir(workdir.path())
+                .args(args)
+                .output()
+                .expect("terraform should run");
+            assert!(
+                output.status.success(),
+                "terraform {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).expect("UTF-8")
+        };
+        terraform(&["init", "-input=false", "-no-color"]);
+        terraform(&["apply", "-auto-approve", "-input=false", "-no-color"]);
+        let state = terraform(&["state", "list"]);
+        assert_eq!(
+            state.lines().collect::<Vec<_>>(),
+            [
+                "terraform_data.gate_keeper",
+                "terraform_data.gated[0]",
+                "terraform_data.keyed[\"a\"]",
+                "terraform_data.plain",
+            ]
+        );
+
+        let erasable = [
+            "terraform_data.plain",
+            "terraform_data.gated",
+            "terraform_data.keyed",
+            "terraform_data.gated_off",
+            "terraform_data.gate",
+        ]
+        .map(String::from);
+        assert_eq!(
+            erasable_targets(&erasable, &state),
+            [
+                "-target=terraform_data.plain",
+                "-target=terraform_data.gated",
+                "-target=terraform_data.keyed",
+            ]
+        );
+    }
+
     fn empty_test_config() -> TestConfig {
         TestConfig {
             aws_mgmt: None,
@@ -4794,6 +4877,7 @@ mod tests {
         let request = terraform_import_request_from_outputs(
             &unregistered_gcp_terraform_outputs(),
             "dg-token",
+            "e2e-reserved",
             Some(&reservation),
         )
         .expect("reserved import request should build");
@@ -4807,19 +4891,24 @@ mod tests {
         let unreserved = terraform_import_request_from_outputs(
             &unregistered_gcp_terraform_outputs(),
             "dg-token",
+            "e2e-applied",
             None,
         )
         .expect("unreserved import request should build");
-        assert!(unreserved.deployment_name.starts_with("terraform-"));
+        assert_eq!(unreserved.deployment_name, "e2e-applied");
         assert_eq!(unreserved.setup_target, "");
         assert_eq!(unreserved.setup_fingerprint_version, 0);
 
         let mut other_lane = unregistered_gcp_terraform_outputs();
         other_lane["deployment_setup_target"]["value"] = "gke".into();
         other_lane["deployment_setup_fingerprint_version"]["value"] = 1.into();
-        let error =
-            terraform_import_request_from_outputs(&other_lane, "dg-token", Some(&reservation))
-                .expect_err("a different registered lane must not activate the reservation");
+        let error = terraform_import_request_from_outputs(
+            &other_lane,
+            "dg-token",
+            "e2e-reserved",
+            Some(&reservation),
+        )
+        .expect_err("a different registered lane must not activate the reservation");
         assert!(error.to_string().contains("dep_reserved"), "{error}");
     }
 

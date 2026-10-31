@@ -1,4 +1,7 @@
-use super::{batch_end, encode_batch};
+use super::{
+    batch_end, encode_batch,
+    storage_notifications::{gcp_queue_payload, GcpQueueDelivery},
+};
 use crate::error::{ErrorData, Result};
 use crate::traits::{
     Binding, MessagePayload, Queue, QueueAckResult, QueueMessage, QueueSendResult, MAX_BATCH_SIZE,
@@ -189,26 +192,45 @@ impl Queue for GcpPubSubQueue {
                 })?;
         }
 
-        let messages = response
-            .received_messages
-            .into_iter()
-            .filter_map(|received_msg| {
-                let message = received_msg.message;
-                let raw_data = message.data.unwrap_or_default();
-                let data = base64::prelude::BASE64_STANDARD.decode(&raw_data).ok()?;
-                let raw = String::from_utf8_lossy(&data).into_owned();
-                let payload = serde_json::from_str::<serde_json::Value>(&raw)
-                    .map(MessagePayload::Json)
-                    .unwrap_or_else(|_| MessagePayload::Text(raw));
-                Some(QueueMessage {
-                    payload,
-                    receipt_handle: received_msg.ack_id,
-                    // Pub/Sub delivery attempts are only populated with a
-                    // dead-letter policy; not plumbed on this path yet.
+        let mut messages = Vec::new();
+        let mut filtered_receipts = Vec::new();
+        for received in response.received_messages {
+            let message = received.message;
+            let data = BASE64_STANDARD
+                .decode(message.data.unwrap_or_default())
+                .into_alien_error()
+                .context(ErrorData::QueueProviderResponseInvalid {
+                    reason: "Pub/Sub message data is not valid base64".to_string(),
+                })?;
+            let attributes = message.attributes.unwrap_or_default();
+            match gcp_queue_payload(&data, &attributes) {
+                GcpQueueDelivery::Deliver(payload) => messages.push(QueueMessage {
+                    payload: match payload {
+                        alien_core::MessagePayload::Json(value) => MessagePayload::Json(value),
+                        alien_core::MessagePayload::Text(text) => MessagePayload::Text(text),
+                    },
+                    receipt_handle: received.ack_id,
+                    // Pub/Sub only populates delivery attempts with a dead-letter policy.
                     attempt: 1,
-                })
-            })
-            .collect();
+                }),
+                GcpQueueDelivery::Filtered => filtered_receipts.push(received.ack_id),
+            }
+        }
+        if !filtered_receipts.is_empty() {
+            self.client
+                .acknowledge(
+                    self.subscription.clone(),
+                    AcknowledgeRequest {
+                        ack_ids: filtered_receipts,
+                    },
+                )
+                .await
+                .context(ErrorData::BindingSetupFailed {
+                    binding_type: "queue.pubsub".to_string(),
+                    reason: "Failed to acknowledge suffix-filtered storage notifications"
+                        .to_string(),
+                })?;
+        }
 
         Ok(messages)
     }
@@ -300,5 +322,137 @@ impl Queue for GcpPubSubQueue {
                 reason: "GCP Pub/Sub purge requires subscription Seek, which the Pub/Sub client does not expose".to_string(),
             },
         ))
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+    use alien_core::{GcpCredentials, GcpServiceOverrides, StorageEvent};
+    use httpmock::prelude::*;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    async fn queue(server: &MockServer) -> GcpPubSubQueue {
+        GcpPubSubQueue::new(
+            "jobs".into(),
+            "jobs-sub".into(),
+            alien_gcp_clients::GcpClientConfig {
+                project_id: "test".into(),
+                region: "us-central1".into(),
+                credentials: GcpCredentials::AccessToken {
+                    token: "test-token".into(),
+                },
+                service_overrides: Some(GcpServiceOverrides {
+                    endpoints: HashMap::from([("pubsub".into(), server.base_url())]),
+                }),
+                project_number: None,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn receive_normalizes_matches_and_acknowledges_only_excluded_notifications() {
+        for ack_status in [200, 403] {
+            let server = MockServer::start_async().await;
+            let notifications = ["in/matching.json", "in/excluded.txt"].into_iter().enumerate().map(|(i, key)| json!({
+                "ackId":format!("receipt-{i}"), "message": {
+                    "messageId": format!("id-{i}"),
+                    "data":BASE64_STANDARD.encode(json!({"bucket":"source","name":key,"size":"7"}).to_string()),
+                    "attributes":{"notificationConfig":"config-1","storageNotificationRule":"source/0","eventType":"OBJECT_FINALIZE","payloadFormat":"JSON_API_V1","eventTime":"2026-10-30T08:00:00Z","storageEventSuffixes0":"[\".json\"]"}
+                }
+            })).collect::<Vec<_>>();
+            let pull = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/projects/test/subscriptions/jobs-sub:pull")
+                        .json_body(json!({"maxMessages":10}));
+                    then.status(200)
+                        .json_body(json!({"receivedMessages":notifications}));
+                })
+                .await;
+            let lease = server
+                .mock_async(|when, then| {
+                    when.method(POST)
+                        .path("/projects/test/subscriptions/jobs-sub:modifyAckDeadline")
+                        .json_body(
+                            json!({"ackIds":["receipt-0","receipt-1"],"ackDeadlineSeconds":30}),
+                        );
+                    then.status(200).json_body(json!({}));
+                })
+                .await;
+            let ack = server.mock_async(|when, then| {
+                when.method(POST).path("/projects/test/subscriptions/jobs-sub:acknowledge")
+                    .json_body(json!({"ackIds":["receipt-1"]}));
+                then.status(ack_status).json_body(if ack_status == 200 { json!({}) } else {json!({"error":{"code":403,"message":"denied","status":"PERMISSION_DENIED"}})});
+            }).await;
+            let result = queue(&server).await.receive("jobs", 10).await;
+            if ack_status == 200 {
+                let messages = result.unwrap();
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].receipt_handle, "receipt-0");
+                assert_eq!(messages[0].attempt, 1);
+                let MessagePayload::Json(value) = &messages[0].payload else {
+                    panic!("expected JSON")
+                };
+                let event: StorageEvent = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(event.object_key, "in/matching.json");
+                assert_eq!(event.bucket_name, "source");
+                assert_eq!(event.size, Some(7));
+            } else {
+                assert_eq!(result.unwrap_err().code, "BINDING_SETUP_FAILED");
+            }
+            pull.assert_hits_async(1).await;
+            lease.assert_hits_async(1).await;
+            if ack_status == 200 {
+                ack.assert_hits_async(1).await;
+            } else {
+                // The existing client retry policy can attempt a failed request
+                // more than once; every matched attempt targets only the exclusion.
+                assert!(ack.hits_async().await > 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn receive_rejects_malformed_base64_without_acknowledging() {
+        let server = MockServer::start_async().await;
+        let pull = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/projects/test/subscriptions/jobs-sub:pull");
+                then.status(200).json_body(
+                    json!({"receivedMessages":[{"ackId":"receipt", "message":{"data":"%%%"}}]}),
+                );
+            })
+            .await;
+        let lease = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/projects/test/subscriptions/jobs-sub:modifyAckDeadline");
+                then.status(200).json_body(json!({}));
+            })
+            .await;
+        let ack = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/projects/test/subscriptions/jobs-sub:acknowledge");
+                then.status(200).json_body(json!({}));
+            })
+            .await;
+        assert_eq!(
+            queue(&server)
+                .await
+                .receive("jobs", 1)
+                .await
+                .unwrap_err()
+                .code,
+            "QUEUE_PROVIDER_RESPONSE_INVALID"
+        );
+        pull.assert_hits_async(1).await;
+        lease.assert_hits_async(1).await;
+        ack.assert_hits_async(0).await;
     }
 }

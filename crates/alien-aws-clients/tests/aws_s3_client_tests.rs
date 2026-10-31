@@ -1,12 +1,12 @@
 #![cfg(test)]
 
 use alien_aws_clients::s3::{
-    FilterRule, GetObjectRequest, HeadObjectRequest, LambdaFunctionConfiguration,
-    LifecycleConfiguration, LifecycleExpiration, LifecycleRule, LifecycleRuleFilter,
-    LifecycleRuleStatus, NotificationConfiguration, NotificationFilter, ObjectIdentifier,
-    PublicAccessBlockConfiguration, PutObjectRequest, S3Api, S3Client, S3KeyFilter,
-    VersioningStatus,
+    FilterRule, GetObjectRequest, HeadObjectRequest, LifecycleConfiguration, LifecycleExpiration,
+    LifecycleRule, LifecycleRuleFilter, LifecycleRuleStatus, NotificationConfiguration,
+    NotificationFilter, ObjectIdentifier, PublicAccessBlockConfiguration, PutObjectRequest,
+    QueueConfiguration, S3Api, S3Client, S3KeyFilter, VersioningStatus,
 };
+use alien_aws_clients::sqs::{CreateQueueRequest, SqsApi, SqsClient};
 use alien_aws_clients::AwsCredentialProvider;
 use alien_client_core::Error;
 use alien_client_core::ErrorData;
@@ -41,7 +41,11 @@ async fn put_test_object(
 
 struct S3TestContext {
     client: S3Client,
+    sqs: SqsClient,
+    region: String,
+    account_id: String,
     created_buckets: Mutex<HashSet<String>>,
+    created_queues: Mutex<HashSet<String>>,
 }
 
 impl AsyncTestContext for S3TestContext {
@@ -70,14 +74,23 @@ impl AsyncTestContext for S3TestContext {
             service_overrides: None,
         };
 
+        let (region, account_id) = (aws_config.region.clone(), aws_config.account_id.clone());
         let client = S3Client::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(aws_config.clone()),
+        );
+        let sqs = SqsClient::new(
             Client::new(),
             AwsCredentialProvider::from_config_sync(aws_config),
         );
 
         S3TestContext {
             client,
+            sqs,
+            region,
+            account_id,
             created_buckets: Mutex::new(HashSet::new()),
+            created_queues: Mutex::new(HashSet::new()),
         }
     }
 
@@ -91,6 +104,16 @@ impl AsyncTestContext for S3TestContext {
 
         for bucket_name in buckets_to_cleanup {
             self.cleanup_bucket(&bucket_name).await;
+        }
+
+        let queues_to_cleanup = self.created_queues.lock().unwrap().clone();
+        for queue_url in queues_to_cleanup {
+            if let Err(error) = self.sqs.delete_queue(&queue_url).await {
+                warn!(
+                    "Failed to delete queue {} during cleanup: {:?}",
+                    queue_url, error
+                );
+            }
         }
 
         info!("✅ S3 test cleanup completed");
@@ -179,6 +202,54 @@ impl S3TestContext {
         }
         result
     }
+
+    /// An SQS queue S3 may deliver this bucket's notifications to. S3 checks a
+    /// destination's policy when the notification configuration is written.
+    async fn notification_queue(&self, bucket_name: &str) -> String {
+        let arn = format!(
+            "arn:aws:sqs:{}:{}:{bucket_name}",
+            self.region, self.account_id
+        );
+        let policy = serde_json::json!({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Service": "s3.amazonaws.com"},
+                "Action": "sqs:SendMessage",
+                "Resource": arn,
+                "Condition": {"ArnEquals": {"aws:SourceArn": format!("arn:aws:s3:::{bucket_name}")}}
+            }]
+        });
+        let created = self
+            .sqs
+            .create_queue(CreateQueueRequest {
+                queue_name: bucket_name.to_string(),
+                attributes: Some(
+                    [("Policy".to_string(), policy.to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                tags: None,
+            })
+            .await
+            .expect("Failed to create notification destination queue");
+        self.created_queues
+            .lock()
+            .unwrap()
+            .insert(created.create_queue_result.queue_url);
+        arn
+    }
+}
+
+/// S3 returns filter rule names as `Prefix`/`Suffix` whatever case they were written in.
+fn filter_value<'a>(filter: &'a NotificationFilter, name: &str) -> &'a str {
+    &filter
+        .key
+        .filter_rules
+        .iter()
+        .find(|rule| rule.name.eq_ignore_ascii_case(name))
+        .unwrap_or_else(|| panic!("Should have a {name} filter rule"))
+        .value
 }
 
 #[test_context(S3TestContext)]
@@ -1990,61 +2061,16 @@ async fn test_put_and_get_bucket_notification_configuration(ctx: &mut S3TestCont
     ctx.create_test_bucket(&bucket_name)
         .await
         .expect("Failed to create bucket for notification config test");
-
-    // Construct a notification configuration with a Lambda function.
-    // NOTE: This requires a real Lambda ARN with S3 invocation permission.
-    // If the env var is not set, we skip the actual put/get and only verify
-    // that the types serialize correctly.
-    let lambda_arn = match env::var("AWS_TEST_LAMBDA_ARN") {
-        Ok(arn) if !arn.is_empty() => arn,
-        _ => {
-            info!("AWS_TEST_LAMBDA_ARN not set — skipping live notification configuration test, verifying serialization only");
-
-            let config = NotificationConfiguration {
-                lambda_function_configurations: vec![LambdaFunctionConfiguration {
-                    id: Some("test-notification".to_string()),
-                    lambda_function_arn: "arn:aws:lambda:us-east-1:123456789012:function:test-fn"
-                        .to_string(),
-                    events: vec!["s3:ObjectCreated:*".to_string()],
-                    filter: None,
-                }],
-            };
-
-            // Verify serialization round-trip via quick_xml
-            let xml = quick_xml::se::to_string_with_root("NotificationConfiguration", &config)
-                .expect("Failed to serialize NotificationConfiguration");
-            assert!(
-                xml.contains("s3:ObjectCreated:*"),
-                "Serialized XML should contain the event type"
-            );
-            assert!(
-                xml.contains("arn:aws:lambda:us-east-1:123456789012:function:test-fn"),
-                "Serialized XML should contain the Lambda ARN"
-            );
-
-            let deserialized: NotificationConfiguration = quick_xml::de::from_str(&xml)
-                .expect("Failed to deserialize NotificationConfiguration");
-            assert_eq!(deserialized.lambda_function_configurations.len(), 1);
-            assert_eq!(
-                deserialized.lambda_function_configurations[0].lambda_function_arn,
-                "arn:aws:lambda:us-east-1:123456789012:function:test-fn"
-            );
-            assert_eq!(
-                deserialized.lambda_function_configurations[0].events,
-                vec!["s3:ObjectCreated:*"]
-            );
-
-            return;
-        }
-    };
+    let queue_arn = ctx.notification_queue(&bucket_name).await;
 
     let config = NotificationConfiguration {
-        lambda_function_configurations: vec![LambdaFunctionConfiguration {
+        queue_configurations: vec![QueueConfiguration {
             id: Some("test-notification".to_string()),
-            lambda_function_arn: lambda_arn.clone(),
+            queue_arn: queue_arn.clone(),
             events: vec!["s3:ObjectCreated:*".to_string()],
             filter: None,
         }],
+        ..Default::default()
     };
 
     ctx.client
@@ -2059,19 +2085,12 @@ async fn test_put_and_get_bucket_notification_configuration(ctx: &mut S3TestCont
         .expect("Failed to get notification configuration");
 
     assert_eq!(
-        retrieved_config.lambda_function_configurations.len(),
-        1,
-        "Expected exactly one lambda function configuration"
+        retrieved_config.queue_configurations, config.queue_configurations,
+        "The queue configuration should round-trip unchanged"
     );
-    assert_eq!(
-        retrieved_config.lambda_function_configurations[0].lambda_function_arn, lambda_arn,
-        "Lambda function ARN should match"
-    );
-    assert_eq!(
-        retrieved_config.lambda_function_configurations[0].events,
-        vec!["s3:ObjectCreated:*"],
-        "Event types should match"
-    );
+    assert!(retrieved_config.lambda_function_configurations.is_empty());
+    assert!(retrieved_config.topic_configurations.is_empty());
+    assert!(retrieved_config.event_bridge_configuration.is_none());
 
     // Clean up: remove the notification configuration
     ctx.client
@@ -2088,86 +2107,12 @@ async fn test_notification_config_with_event_filter(ctx: &mut S3TestContext) {
     ctx.create_test_bucket(&bucket_name)
         .await
         .expect("Failed to create bucket for notification filter test");
-
-    // Build a configuration with specific event types and a key prefix/suffix filter
-    let lambda_arn = match env::var("AWS_TEST_LAMBDA_ARN") {
-        Ok(arn) if !arn.is_empty() => arn,
-        _ => {
-            info!(
-                "AWS_TEST_LAMBDA_ARN not set — testing serialization of filter configuration only"
-            );
-
-            let config = NotificationConfiguration {
-                lambda_function_configurations: vec![LambdaFunctionConfiguration {
-                    id: Some("filtered-notification".to_string()),
-                    lambda_function_arn: "arn:aws:lambda:us-east-1:123456789012:function:filter-fn"
-                        .to_string(),
-                    events: vec![
-                        "s3:ObjectCreated:Put".to_string(),
-                        "s3:ObjectRemoved:Delete".to_string(),
-                    ],
-                    filter: Some(NotificationFilter {
-                        key: S3KeyFilter {
-                            filter_rules: vec![
-                                FilterRule {
-                                    name: "prefix".to_string(),
-                                    value: "uploads/".to_string(),
-                                },
-                                FilterRule {
-                                    name: "suffix".to_string(),
-                                    value: ".json".to_string(),
-                                },
-                            ],
-                        },
-                    }),
-                }],
-            };
-
-            let xml = quick_xml::se::to_string_with_root("NotificationConfiguration", &config)
-                .expect("Failed to serialize filtered NotificationConfiguration");
-            assert!(
-                xml.contains("uploads/"),
-                "Serialized XML should contain the prefix filter value"
-            );
-            assert!(
-                xml.contains(".json"),
-                "Serialized XML should contain the suffix filter value"
-            );
-            assert!(
-                xml.contains("s3:ObjectCreated:Put"),
-                "Serialized XML should contain Put event"
-            );
-            assert!(
-                xml.contains("s3:ObjectRemoved:Delete"),
-                "Serialized XML should contain Delete event"
-            );
-
-            let deserialized: NotificationConfiguration = quick_xml::de::from_str(&xml)
-                .expect("Failed to deserialize filtered NotificationConfiguration");
-            assert_eq!(deserialized.lambda_function_configurations.len(), 1);
-
-            let lambda_config = &deserialized.lambda_function_configurations[0];
-            assert_eq!(lambda_config.events.len(), 2);
-            assert!(
-                lambda_config.filter.is_some(),
-                "Filter should be present after deserialization"
-            );
-
-            let filter = lambda_config.filter.as_ref().unwrap();
-            assert_eq!(
-                filter.key.filter_rules.len(),
-                2,
-                "Should have two filter rules"
-            );
-
-            return;
-        }
-    };
+    let queue_arn = ctx.notification_queue(&bucket_name).await;
 
     let config = NotificationConfiguration {
-        lambda_function_configurations: vec![LambdaFunctionConfiguration {
+        queue_configurations: vec![QueueConfiguration {
             id: Some("filtered-notification".to_string()),
-            lambda_function_arn: lambda_arn.clone(),
+            queue_arn: queue_arn.clone(),
             events: vec![
                 "s3:ObjectCreated:Put".to_string(),
                 "s3:ObjectRemoved:Delete".to_string(),
@@ -2187,6 +2132,7 @@ async fn test_notification_config_with_event_filter(ctx: &mut S3TestContext) {
                 },
             }),
         }],
+        ..Default::default()
     };
 
     ctx.client
@@ -2201,61 +2147,23 @@ async fn test_notification_config_with_event_filter(ctx: &mut S3TestContext) {
         .expect("Failed to get filtered notification configuration");
 
     assert_eq!(
-        retrieved_config.lambda_function_configurations.len(),
+        retrieved_config.queue_configurations.len(),
         1,
-        "Expected exactly one lambda function configuration"
+        "Expected exactly one queue configuration"
     );
-
-    let lambda_config = &retrieved_config.lambda_function_configurations[0];
-    assert_eq!(
-        lambda_config.lambda_function_arn, lambda_arn,
-        "Lambda function ARN should match"
-    );
-    assert_eq!(lambda_config.events.len(), 2, "Should have two event types");
-    assert!(
-        lambda_config
-            .events
-            .contains(&"s3:ObjectCreated:Put".to_string()),
-        "Should contain ObjectCreated:Put event"
-    );
-    assert!(
-        lambda_config
-            .events
-            .contains(&"s3:ObjectRemoved:Delete".to_string()),
-        "Should contain ObjectRemoved:Delete event"
-    );
-
-    let filter = lambda_config
+    let queue_config = &retrieved_config.queue_configurations[0];
+    assert_eq!(queue_config.id.as_deref(), Some("filtered-notification"));
+    assert_eq!(queue_config.queue_arn, queue_arn);
+    let mut events = queue_config.events.clone();
+    events.sort();
+    assert_eq!(events, ["s3:ObjectCreated:Put", "s3:ObjectRemoved:Delete"]);
+    let filter = queue_config
         .filter
         .as_ref()
         .expect("Filter should be present in retrieved configuration");
-    assert_eq!(
-        filter.key.filter_rules.len(),
-        2,
-        "Should have two filter rules"
-    );
-
-    let prefix_rule = filter
-        .key
-        .filter_rules
-        .iter()
-        .find(|r| r.name == "prefix")
-        .expect("Should have a prefix filter rule");
-    assert_eq!(
-        prefix_rule.value, "uploads/",
-        "Prefix filter value should match"
-    );
-
-    let suffix_rule = filter
-        .key
-        .filter_rules
-        .iter()
-        .find(|r| r.name == "suffix")
-        .expect("Should have a suffix filter rule");
-    assert_eq!(
-        suffix_rule.value, ".json",
-        "Suffix filter value should match"
-    );
+    assert_eq!(filter.key.filter_rules.len(), 2);
+    assert_eq!(filter_value(filter, "prefix"), "uploads/");
+    assert_eq!(filter_value(filter, "suffix"), ".json");
 
     // Clean up: remove the notification configuration
     ctx.client

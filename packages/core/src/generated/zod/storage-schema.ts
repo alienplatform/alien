@@ -6,6 +6,7 @@
 import * as z from "zod";
 import { LifecycleRuleSchema } from "./lifecycle-rule-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
+import { StorageNotificationSchema } from "./storage-notification-schema.js";
 
 /**
  * @description Represents an object storage bucket.
@@ -18,6 +19,9 @@ get "encryptionKey"(){
 "id": z.string().describe("Name of the the storage bucket.\nFor names with dots, each dot-separated label must be ≤ 63 characters."),
 get "lifecycleRules"(){
                 return z.array(LifecycleRuleSchema.describe("Defines a rule for managing the lifecycle of objects within a storage bucket.")).describe("List of rules for automatic object management (e.g., expiration).\nDefault: `[]` (empty list)").optional()
+              },
+get "notifications"(){
+                return z.array(StorageNotificationSchema.describe("Delivers matching object events to a queue in the same stack.\nRules on one Storage must not overlap: no object key may match two of them.\nDelivery is at least once, so consumers must tolerate duplicates.")).max(10).describe("Object notification rules delivered into queues (at most 10).\nOmitted when empty to preserve existing serialized configurations and setup digests.").optional()
               },
 "publicRead": z.optional(z.boolean().describe("Allows public read access to objects without authentication.\nDefault: `false`")),
 "versioning": z.optional(z.boolean().describe("Enables object versioning.\nDefault: `false`"))

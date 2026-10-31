@@ -88,14 +88,14 @@ pub fn generate_aws_initial_setup_policy(
 
     for perm_id in &all_provision_ids {
         if let Some(perm_set) = get_permission_set(perm_id) {
-            match generator.generate_policy(perm_set, BindingTarget::Stack, context) {
-                Ok(policy) => {
-                    all_statements.extend(policy.statement);
-                }
-                Err(_) => {
-                    // Permission set has no AWS platform definition — skip
-                }
+            if perm_set.platforms.aws.is_none() {
+                continue;
             }
+            all_statements.extend(
+                generator
+                    .generate_policy(perm_set, BindingTarget::Stack, context)?
+                    .statement,
+            );
         }
     }
 

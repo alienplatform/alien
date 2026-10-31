@@ -191,6 +191,9 @@ impl LocalBindingsProvider {
     /// containers are independent of this process and keep running; owners that tie
     /// container lifetime to their session call [`Self::stop_containers`].
     pub async fn shutdown(self: Arc<Self>) {
+        if let Err(error) = self.storage_manager.shutdown_notifications().await {
+            tracing::error!(%error, "Storage notification shutdown failed");
+        }
         let worker_manager = { self.worker_manager.read().unwrap().clone() };
         if let Some(worker_manager) = worker_manager {
             worker_manager.shutdown_all().await;

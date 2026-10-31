@@ -6,7 +6,7 @@ use alien_core::{
     permissions::ManagementPermissions, AwsOpenSearch, Email, Key, Kv, LifecycleRule,
     PermissionProfile, PermissionSetReference, Queue, QueueBatchConfig, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
-    Storage, Vault, Worker, WorkerCode, WorkerTrigger,
+    Storage, StorageNotification, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 
 #[test]
@@ -1035,4 +1035,67 @@ fn frozen_queue_metadata_policy_has_no_bootstrap_cycle() {
             );
         }
     }
+}
+
+#[test]
+fn aws_storage_notifications_are_valid_with_shared_queue_and_literal_filters() {
+    let notification = |prefix: &str, suffix: &str| {
+        StorageNotification::builder()
+            .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs"))
+            .prefix(prefix.to_string())
+            .suffix(suffix.to_string())
+            .build()
+    };
+    let stack = Stack::new("storage-delivery".into())
+        .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Storage::new("first".into())
+                .notifications(vec![
+                    notification("in/", ".json"),
+                    notification("same", "same"),
+                ])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("second".into())
+                .notifications(vec![notification("literal/${x}*\\é/", ".data")])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "Storage S3 queue notifications with native bucket configuration",
+    );
+}
+
+#[test]
+fn aws_storage_notifications_follow_deployer_enablement() {
+    let storage = Storage::new("files".into())
+        .notifications(vec![StorageNotification::builder()
+            .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs"))
+            .build()])
+        .build();
+    let stack = Stack::new("gated-notifications".into())
+        .inputs(vec![super::helpers::gate_input(
+            "deliveryEnabled",
+            "Enable delivery",
+            "Create the bucket and queue",
+        )])
+        .add_enabled_when(
+            Queue::new("jobs".into()).build(),
+            ResourceLifecycle::Frozen,
+            "deliveryEnabled",
+        )
+        .add_enabled_when(storage, ResourceLifecycle::Frozen, "deliveryEnabled")
+        .build();
+    render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "Gated storage notifications",
+    );
 }

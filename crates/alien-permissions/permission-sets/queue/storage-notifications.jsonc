@@ -1,0 +1,23 @@
+{
+  "id": "queue/storage-notifications",
+  "description": "Allows reconciling the Cloud Storage publisher on a queue topic",
+  "platforms": {
+    "gcp": [
+      {
+        "grant": { "permissions": ["pubsub.topics.getIamPolicy", "pubsub.topics.setIamPolicy"] },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}/topics/${resourceName}" }
+        }
+      },
+      {
+        // Cloud Storage projects.serviceAccount.get provisions and reads the service agent.
+        "grant": { "permissions": ["resourcemanager.projects.get"] },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ]
+  }
+}

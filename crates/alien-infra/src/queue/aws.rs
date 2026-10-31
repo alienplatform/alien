@@ -2,13 +2,17 @@ use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::sqs::{GetQueueAttributesResponse, SetQueueAttributesRequest};
 use alien_core::{
-    standard_resource_tags, AwsSqsQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    bindings::{BindingValue, QueueBinding},
+    standard_resource_tags,
+    storage_notifications::{storages_notifying_queue, AWS_QUEUE_INGRESS_SID},
+    AwsSqsQueueHeartbeatData, HeartbeatBackend, InitialSetupAuthority, ObservedHealth, Platform,
     ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus,
+    Worker, WorkerTrigger,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -20,6 +24,13 @@ pub struct AwsQueueController {
     pub(crate) queue_url: Option<String>,
     /// The SQS queue name (physical)
     pub(crate) queue_name: Option<String>,
+    /// Buckets the queue's storage ingress statement currently admits, sorted. Derived
+    /// from the Storages that notify this queue, so an unchanged stack never rewrites it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) storage_ingress_buckets: Vec<String>,
+    /// Persist intent before a policy write, including recovery after a lost response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) storage_ingress_pending: Option<Vec<String>>,
 }
 
 #[controller]
@@ -80,7 +91,6 @@ impl AwsQueueController {
         // Apply resource-scoped permissions from the stack using the centralized helper.
         // This handles wildcard ("*") permissions and management SA permissions.
         if let Some(queue_name) = &self.queue_name {
-            use crate::core::ResourcePermissionsHelper;
             ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
                 ctx, &config.id, queue_name, "queue",
             )
@@ -173,9 +183,40 @@ impl AwsQueueController {
             })?;
 
         Ok(HandlerAction::Continue {
+            state: ConfiguringStorageIngress,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = ConfiguringStorageIngress, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn configuring_storage_ingress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.prepare_storage_ingress(ctx)?;
+        Ok(HandlerAction::Continue {
+            state: ApplyingStorageIngress,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = ApplyingStorageIngress, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn applying_storage_ingress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.reconcile_storage_ingress(ctx).await?;
+        Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
+    }
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        Ok(may_manage_storage_ingress(ctx, &queue.id)
+            && (self.storage_ingress_pending.is_some()
+                || ingress_buckets(ctx, &queue.id) != self.storage_ingress_buckets))
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -231,7 +272,7 @@ impl AwsQueueController {
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────
-    // Queue has no mutable fields — update is a no-op that also recovers RefreshFailed.
+    // Queue ingress is derived from Storage declarations, even when Queue is unchanged.
     #[flow_entry(Update, from = [Ready, RefreshFailed])]
     #[handler(
         state = UpdateStart,
@@ -239,8 +280,19 @@ impl AwsQueueController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<Queue>()?;
-        info!(id=%config.id, "AWS Queue update (no-op — no mutable fields)");
+        self.prepare_storage_ingress(ctx)?;
+        Ok(HandlerAction::Continue {
+            state: UpdatingStorageIngress,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = UpdatingStorageIngress, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_storage_ingress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.reconcile_storage_ingress(ctx).await?;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -313,7 +365,6 @@ impl AwsQueueController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{BindingValue, QueueBinding};
         if let Some(url) = &self.queue_url {
             let binding = QueueBinding::sqs(BindingValue::value(url.clone()));
             Ok(Some(
@@ -331,6 +382,131 @@ impl AwsQueueController {
 }
 
 impl AwsQueueController {
+    fn prepare_storage_ingress(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        let desired = ingress_buckets(ctx, &queue.id);
+        if may_manage_storage_ingress(ctx, &queue.id)
+            && (self.storage_ingress_pending.is_some() || desired != self.storage_ingress_buckets)
+        {
+            self.storage_ingress_pending = Some(desired);
+        }
+        Ok(())
+    }
+
+    async fn reconcile_storage_ingress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        if !may_manage_storage_ingress(ctx, &queue.id) {
+            return Ok(());
+        }
+        let desired = ingress_buckets(ctx, &queue.id);
+        if desired == self.storage_ingress_buckets && self.storage_ingress_pending.is_none() {
+            return Ok(());
+        }
+        let invalid = |message: &str| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(queue.id.clone()),
+                message: message.into(),
+            })
+        };
+        let url = self
+            .queue_url
+            .as_deref()
+            .ok_or_else(|| invalid("Queue URL missing during ingress reconciliation"))?;
+        let name = self
+            .queue_name
+            .as_deref()
+            .ok_or_else(|| invalid("Queue name missing during ingress reconciliation"))?;
+        let cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_sqs_client(cfg).await?;
+        let response = client
+            .get_queue_attributes(
+                url,
+                alien_aws_clients::sqs::GetQueueAttributesRequest::builder()
+                    .attribute_names(vec!["Policy".into()])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                resource_id: Some(queue.id.clone()),
+                message: format!("Read storage ingress policy for queue '{name}'"),
+            })?;
+        let existing = response
+            .get_queue_attributes_result
+            .attributes
+            .into_iter()
+            .find(|attribute| attribute.name == "Policy")
+            .map(|attribute| attribute.value);
+        let mut policy: serde_json::Value =
+            match existing.as_deref().filter(|value| !value.is_empty()) {
+                Some(value) => serde_json::from_str(value).into_alien_error().context(
+                    ErrorData::ResourceConfigInvalid {
+                        resource_id: Some(queue.id.clone()),
+                        message: format!("Queue '{name}' has an invalid policy document"),
+                    },
+                )?,
+                None => serde_json::json!({"Version": "2012-10-17", "Statement": []}),
+            };
+        let original = policy.clone();
+        let document = policy
+            .as_object_mut()
+            .ok_or_else(|| invalid("Queue policy must be an object"))?;
+        let statements = document
+            .entry("Statement")
+            .or_insert_with(|| serde_json::json!([]));
+        if statements.is_object() {
+            *statements = serde_json::json!([statements.clone()]);
+        }
+        let statements = statements
+            .as_array_mut()
+            .ok_or_else(|| invalid("Queue policy Statement must be an object or array"))?;
+        statements.retain(|statement| statement["Sid"] != AWS_QUEUE_INGRESS_SID);
+        if !desired.is_empty() {
+            let sources: Vec<String> = desired
+                .iter()
+                .map(|bucket| format!("arn:aws:s3:::{bucket}"))
+                .collect();
+            statements.push(serde_json::json!({
+                "Sid": AWS_QUEUE_INGRESS_SID, "Effect": "Allow",
+                "Principal": {"Service": "s3.amazonaws.com"}, "Action": "sqs:SendMessage",
+                "Resource": format!("arn:aws:sqs:{}:{}:{name}", cfg.region, cfg.account_id),
+                "Condition": {
+                    "StringEquals": {"aws:SourceAccount": cfg.account_id},
+                    "ArnLike": {"aws:SourceArn": sources}
+                }
+            }));
+        }
+        // SQS rejects a policy without statements ("Invalid value for the parameter Policy"),
+        // so removing the last one removes the policy.
+        let written = if statements.is_empty() {
+            String::new()
+        } else {
+            policy.to_string()
+        };
+        if policy != original {
+            client
+                .set_queue_attributes(
+                    url,
+                    SetQueueAttributesRequest::builder()
+                        .attributes(std::collections::HashMap::from([(
+                            "Policy".into(),
+                            written,
+                        )]))
+                        .build(),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    resource_id: Some(queue.id.clone()),
+                    message: format!("Reconcile storage ingress policy for queue '{name}'"),
+                })?;
+        }
+        self.storage_ingress_buckets = desired;
+        self.storage_ingress_pending = None;
+        Ok(())
+    }
+
     /// Calculates the appropriate visibility timeout for this queue based on functions that use it
     /// Implements the formula from QUEUE.md: max(30s, min(12h, max_function_timeout * 6))
     fn calculate_visibility_timeout_for_queue(
@@ -338,8 +514,6 @@ impl AwsQueueController {
         ctx: &ResourceControllerContext<'_>,
         queue_config: &Queue,
     ) -> Result<u32> {
-        use alien_core::{Worker, WorkerTrigger};
-
         let mut max_function_timeout = 0u32;
         let mut functions_using_queue = 0;
 
@@ -393,6 +567,27 @@ impl AwsQueueController {
 
         Ok(visibility_timeout)
     }
+}
+
+/// Names of the buckets whose notifications this queue must admit. Live Storage bucket
+/// names are deterministic, so the queue needs no dependency on the Storages that depend
+/// on it.
+fn ingress_buckets(ctx: &ResourceControllerContext<'_>, queue_id: &str) -> Vec<String> {
+    let mut buckets: Vec<String> = storages_notifying_queue(ctx.desired_stack, queue_id)
+        .iter()
+        .map(|storage_id| aws_prefixed_resource_name(ctx.resource_prefix, storage_id))
+        .collect();
+    buckets.sort();
+    buckets
+}
+
+fn may_manage_storage_ingress(ctx: &ResourceControllerContext<'_>, id: &str) -> bool {
+    ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup
+        || !ctx
+            .desired_stack
+            .resources
+            .get(id)
+            .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen)
 }
 
 fn emit_aws_sqs_queue_heartbeat(
@@ -779,3 +974,7 @@ mod tests {
         assert_eq!(before, after);
     }
 }
+
+#[cfg(test)]
+#[path = "aws_notifications_tests.rs"]
+mod notifications_tests;

@@ -1,3 +1,6 @@
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub mod storage_notifications;
+
 #[cfg(feature = "aws")]
 pub mod aws_sqs;
 

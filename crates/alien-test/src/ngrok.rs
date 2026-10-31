@@ -10,6 +10,8 @@
 //! ## Requirements
 //!
 //! - `NGROK_AUTHTOKEN` environment variable must be set (paid plan required).
+//! - `NGROK_ROOT_CAS` optionally selects `host` or a PEM file for environments
+//!   with a custom trust store. Certificate verification remains enabled.
 
 use anyhow::Context;
 use ngrok::config::ForwarderBuilder;
@@ -52,8 +54,14 @@ pub async fn start_tunnel(port: u16) -> anyhow::Result<NgrokTunnel> {
     let forward_url_parsed =
         url::Url::parse(&forward_url).context("Failed to parse forward URL")?;
 
-    let session = ngrok::Session::builder()
-        .authtoken_from_env()
+    let mut session_builder = ngrok::Session::builder();
+    session_builder.authtoken_from_env();
+    if let Ok(root_cas) = std::env::var("NGROK_ROOT_CAS") {
+        session_builder
+            .root_cas(root_cas)
+            .context("Failed to load NGROK_ROOT_CAS")?;
+    }
+    let session = session_builder
         .connect()
         .await
         .context("Failed to connect ngrok session (is NGROK_AUTHTOKEN set?)")?;

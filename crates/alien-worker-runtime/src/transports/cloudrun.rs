@@ -10,6 +10,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use alien_bindings::providers::queue::storage_notifications::{
+    gcp_queue_payload, GcpQueueDelivery,
+};
 use alien_worker_protocol::ControlGrpcServer;
 use axum::{
     body::Body,
@@ -431,23 +434,32 @@ async fn handle_pubsub_push_message(
     };
 
     let attributes = push_msg.message.attributes.unwrap_or_default();
-    match gcs_pubsub_notification_to_storage_events(
-        &data,
-        &attributes,
-        push_msg.message.publish_time,
-    ) {
-        Ok(Some(storage_events)) => {
-            return send_storage_events(
-                storage_events,
-                &state.control_server,
-                state.remaining_timeout(),
-            )
-            .await;
-        }
-        Ok(None) => {}
-        Err(error) => {
-            error!(error = %error, "Failed to parse GCS Pub/Sub notification");
-            return (StatusCode::BAD_REQUEST, "Invalid storage event").into_response();
+    // A GCS envelope on a queue route is still queue work. Only the legacy
+    // dedicated storage subscription dispatches StorageEvent tasks directly.
+    let queue_route = logical_source.is_some()
+        || push_msg
+            .subscription
+            .as_ref()
+            .is_some_and(|source| state.collector.contains_key(source));
+    if !queue_route {
+        match gcs_pubsub_notification_to_storage_events(
+            &data,
+            &attributes,
+            push_msg.message.publish_time,
+        ) {
+            Ok(Some(storage_events)) => {
+                return send_storage_events(
+                    storage_events,
+                    &state.control_server,
+                    state.remaining_timeout(),
+                )
+                .await;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                error!(error = %error, "Failed to parse GCS Pub/Sub notification");
+                return (StatusCode::BAD_REQUEST, "Invalid storage event").into_response();
+            }
         }
     }
 
@@ -456,10 +468,9 @@ async fn handle_pubsub_push_message(
         .message_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    // Convert to QueueMessage and check if it's a command envelope
-    let payload: alien_core::MessagePayload = match serde_json::from_slice(&data) {
-        Ok(json) => alien_core::MessagePayload::Json(json),
-        Err(_) => alien_core::MessagePayload::Text(String::from_utf8_lossy(&data).to_string()),
+    let payload = match gcp_queue_payload(&data, &attributes) {
+        GcpQueueDelivery::Deliver(payload) => payload,
+        GcpQueueDelivery::Filtered => return StatusCode::OK.into_response(),
     };
 
     let original_source = push_msg.subscription.unwrap_or_default();
@@ -750,6 +761,131 @@ mod queue_routing_tests {
                     .is_success());
                 collectors.join().await.expect("owned collectors stop");
             }
+        }
+    }
+    #[tokio::test]
+    async fn storage_notifications_remain_batched_queue_work() {
+        for cloud_event in [false, true] {
+            let control = Arc::new(ControlGrpcServer::new());
+            let mut tasks = control
+                .wait_for_tasks(tonic::Request::new(WaitForTasksRequest {
+                    application_id: "worker".into(),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            let environment = std::collections::HashMap::from([
+                ("ALIEN_QUEUE_BATCH_CONFIG".into(), r#"{"jobs":{"maxMessages":2,"maxWindowSeconds":5}}"#.into()),
+                ("ALIEN_JOBS_BINDING".into(), serde_json::json!({"service":"pubsub","topic":"projects/example/topics/jobs","subscription":"projects/example/subscriptions/jobs-sub"}).to_string()),
+            ]);
+            let collectors = super::super::queue_batch::QueueCollectors::from_environment(
+                &environment,
+                control.clone(),
+            )
+            .unwrap();
+            let state = TransportState {
+                received_at: tokio::time::Instant::now(),
+                collector: collectors.clients.clone(),
+                control_server: control.clone(),
+                app_http_port: None,
+                command_timeout: Duration::from_secs(30),
+                http_client: create_forward_client(),
+                proxy_shutdown: CancellationToken::new(),
+            };
+            let request = |key: &str| {
+                let object =
+                    serde_json::json!({"bucket":"source","name":key,"size":"7","etag":"etag"});
+                let body = serde_json::json!({"message": {"messageId":key,"data":general_purpose::STANDARD.encode(object.to_string()), "attributes": {
+                    "notificationConfig":"projects/_/buckets/source/notificationConfigs/1", "storageNotificationRule":"source/0", "eventType":"OBJECT_FINALIZE", "payloadFormat":"JSON_API_V1", "eventTime":"2026-10-30T08:00:00Z", "storageEventSuffixes0":"[\".json\"]"
+                }}, "subscription":"projects/example/subscriptions/jobs-sub"});
+                let mut builder = Request::builder()
+                    .method("POST")
+                    .uri("/__alien/queue/jobs")
+                    .header("content-type", "application/json");
+                if cloud_event {
+                    builder = builder
+                        .header("ce-specversion", "1.0")
+                        .header("ce-id", key)
+                        .header("ce-type", "google.cloud.pubsub.topic.v1.messagePublished")
+                        .header(
+                            "ce-source",
+                            "//pubsub.googleapis.com/projects/example/topics/jobs",
+                        )
+                        .header("ce-time", "2026-10-30T08:00:00Z");
+                }
+                builder.body(Body::from(body.to_string())).unwrap()
+            };
+            let excluded = handle_request(State(state.clone()), request("in/excluded.txt"))
+                .await
+                .into_response();
+            assert_eq!(excluded.status(), StatusCode::OK);
+            let first_state = state.clone();
+            let first_request = request("in/first.json");
+            let first = tokio::spawn(async move {
+                handle_request(State(first_state), first_request)
+                    .await
+                    .into_response()
+            });
+            let second_request = request("in/second.json");
+            let second = tokio::spawn(async move {
+                handle_request(State(state), second_request)
+                    .await
+                    .into_response()
+            });
+            let task = tokio::time::timeout(Duration::from_secs(3), tasks.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let Some(Payload::QueueBatch(batch)) = task.payload else {
+                panic!("storage notifications must dispatch a queue batch")
+            };
+            assert_eq!(batch.source, "jobs");
+            assert_eq!(batch.deliveries.len(), 2);
+            let mut keys = Vec::new();
+            for delivery in &batch.deliveries {
+                let message = delivery.message.as_ref().unwrap();
+                assert_eq!(message.source, "jobs");
+                let event: alien_core::StorageEvent =
+                    serde_json::from_slice(&message.payload).unwrap();
+                assert_eq!(event.event_type, alien_core::StorageEventType::Created);
+                assert_eq!(event.bucket_name, "source");
+                assert_eq!(event.size, Some(7));
+                assert_eq!(event.etag.as_deref(), Some("etag"));
+                keys.push(event.object_key);
+            }
+            keys.sort();
+            assert_eq!(keys, ["in/first.json", "in/second.json"]);
+            assert!(
+                !first.is_finished() && !second.is_finished(),
+                "enqueue must not acknowledge"
+            );
+            control
+                .send_task_result(tonic::Request::new(SendTaskResultRequest {
+                    task_id: task.task_id,
+                    result: Some(send_task_result_request::Result::QueueBatch(
+                        QueueBatchResult {
+                            outcomes: batch
+                                .deliveries
+                                .iter()
+                                .map(|delivery| QueueDeliveryOutcome {
+                                    delivery_id: delivery.delivery_id.clone(),
+                                    disposition: Disposition::Success as i32,
+                                })
+                                .collect(),
+                        },
+                    )),
+                }))
+                .await
+                .unwrap();
+            assert_eq!(first.await.unwrap().status(), StatusCode::OK);
+            assert_eq!(second.await.unwrap().status(), StatusCode::OK);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), tasks.next())
+                    .await
+                    .is_err()
+            );
+            collectors.join().await.unwrap();
         }
     }
 }

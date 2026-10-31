@@ -65,10 +65,11 @@ pub use alien_bindings::{
     Bindings, BoundQueue as Queue, Container, ErrorData, Kv, Result, Storage, Vault,
 };
 
-/// Errors returned by the application binding and Worker APIs.
-pub mod error {
-    pub use alien_bindings::error::{Error, ErrorData, Result};
-}
+pub mod error;
+pub mod storage_events;
+pub use storage_events::{
+    storage_event_from_message, StorageEvent, StorageEventMessage, StorageEventType,
+};
 
 /// Serializable requests returned by storage presigning operations.
 pub mod presigned {

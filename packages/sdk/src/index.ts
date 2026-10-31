@@ -27,6 +27,8 @@
  * @packageDocumentation
  */
 
+export { storageEventFromMessage } from "./storage-events.js"
+
 // ============================================================================
 // Worker handler APIs (protocol-only registrars; the runtime wiring lives
 // behind ./worker-runtime)

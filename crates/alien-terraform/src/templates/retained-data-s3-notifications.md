@@ -1,0 +1,2 @@
+
+When retaining buckets that deliver storage notifications, install AWS CLI and use the same target-account installer credentials as Terraform. Before detaching, the helper removes the bucket's queue notifications that this setup wrote, matched by the Ids in state, and keeps every other notification. S3 checks every destination left in the notification document: if one no longer exists, the helper stops and nothing is detached; fix or remove that entry and rerun. Required permissions are `s3:GetBucketNotification` and `s3:PutBucketNotification`.

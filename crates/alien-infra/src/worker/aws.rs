@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod storage_notifications_tests;
+
 mod linked_containers;
 
 use serde::{Deserialize, Serialize};
@@ -275,6 +278,83 @@ fn replace_lambda_notification_config(
 }
 
 impl AwsWorkerController {
+    /// Remove exactly this Worker's entry, preserving all other destinations and filters.
+    /// Repeated calls after a lost response are harmless; failures retain ownership.
+    async fn remove_storage_notification(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        storage: &ResourceRef,
+    ) -> Result<()> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        // A create that failed before assigning a function name cannot have installed
+        // an S3 notification. No dependency or cloud lookup is needed to delete it.
+        if self.worker_name.is_none()
+            && self.arn.is_none()
+            && self.s3_permission_statement_ids.is_empty()
+        {
+            return Ok(());
+        }
+        let worker_name = self.worker_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Worker name is required to identify its storage notification".into(),
+                resource_id: Some(worker.id.clone()),
+            })
+        })?;
+        let statement_id = format!("{worker_name}-s3-{}", storage.id);
+        // A Storage that has left state, never got controller state, or never got a bucket
+        // holds no notification of this Worker's, so there is nothing to remove.
+        let controller =
+            match ctx.require_dependency::<crate::storage::AwsStorageController>(storage) {
+                Ok(controller) => controller,
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(ErrorData::DependencyNotFound { .. })
+                            | Some(ErrorData::DependencyNotReady { .. })
+                    ) =>
+                {
+                    return Ok(())
+                }
+                Err(error) => return Err(error),
+            };
+        let Some(bucket) = controller.bucket_name.as_deref() else {
+            return Ok(());
+        };
+        let client = ctx
+            .service_provider
+            .get_aws_s3_client(ctx.get_aws_config()?)
+            .await?;
+        let existing = client.get_bucket_notification_configuration(bucket).await;
+        match existing {
+            Ok(mut config) => {
+                let count = config.lambda_function_configurations.len();
+                config
+                    .lambda_function_configurations
+                    .retain(|entry| entry.id.as_deref() != Some(statement_id.as_str()));
+                if config.lambda_function_configurations.len() != count {
+                    match client.put_bucket_notification_configuration(bucket, &config).await {
+                        Ok(()) => {}
+                        Err(error) if is_remote_not_found(&error) => {}
+                        Err(error) => return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!("Failed to remove notification '{statement_id}' from bucket '{bucket}'"),
+                            resource_id: Some(worker.id.clone()),
+                        })),
+                    }
+                }
+            }
+            Err(error) if is_remote_not_found(&error) => {}
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to read notifications for bucket '{bucket}'"),
+                    resource_id: Some(worker.id.clone()),
+                }))
+            }
+        }
+        self.s3_permission_statement_ids
+            .retain(|id| id != &statement_id);
+        Ok(())
+    }
+
     async fn renew_certificate(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
@@ -4075,35 +4155,17 @@ impl AwsWorkerController {
 
         let triggers_changed = current_config.triggers != previous_config.triggers;
         if triggers_changed {
-            // Clean up old S3 storage trigger notifications
+            // Retained buckets are updated in place below. Only detach removed sources.
             for trigger in &previous_config.triggers {
-                if let alien_core::WorkerTrigger::Storage {
-                    storage: storage_ref,
-                    ..
-                } = trigger
-                {
-                    if let Ok(storage_controller) =
-                        ctx.require_dependency::<crate::storage::AwsStorageController>(storage_ref)
-                    {
-                        if let Some(bucket_name) = storage_controller.bucket_name.as_deref() {
-                            let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
-                            let empty_config = NotificationConfiguration::default();
-                            if let Err(e) = s3_client
-                                .put_bucket_notification_configuration(bucket_name, &empty_config)
-                                .await
-                            {
-                                warn!(
-                                    worker=%current_config.id,
-                                    bucket=%bucket_name,
-                                    error=%e,
-                                    "Failed to clear old S3 notification configuration (best-effort)"
-                                );
-                            }
-                        }
+                if let alien_core::WorkerTrigger::Storage { storage, .. } = trigger {
+                    let retained = current_config.triggers.iter().any(|trigger| {
+                        matches!(trigger, alien_core::WorkerTrigger::Storage { storage: current, .. } if current == storage)
+                    });
+                    if !retained {
+                        self.remove_storage_notification(ctx, storage).await?;
                     }
                 }
             }
-            self.s3_permission_statement_ids.clear();
 
             // Clean up old EventBridge schedule triggers
             if !self.eventbridge_rule_names.is_empty() {
@@ -4592,47 +4654,26 @@ impl AwsWorkerController {
             info!(worker=%worker_config.id, "No event source mappings to delete");
         }
 
-        // Clean up S3 storage trigger notifications (best-effort)
-        if !self.s3_permission_statement_ids.is_empty() {
-            info!(worker=%worker_config.id, "Cleaning up S3 storage trigger notifications");
-
-            // Best-effort: put empty notification configuration on any referenced buckets
-            // We don't track which bucket each statement_id maps to, so we attempt to
-            // clean up by iterating over storage triggers from the config
-            for trigger in &worker_config.triggers {
-                if let alien_core::WorkerTrigger::Storage {
-                    storage: storage_ref,
-                    ..
-                } = trigger
-                {
-                    if let Ok(storage_controller) =
-                        ctx.require_dependency::<crate::storage::AwsStorageController>(storage_ref)
-                    {
-                        if let Some(bucket_name) = storage_controller.bucket_name.as_deref() {
-                            let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
-                            let empty_config = NotificationConfiguration::default();
-                            if let Err(e) = s3_client
-                                .put_bucket_notification_configuration(bucket_name, &empty_config)
-                                .await
-                            {
-                                warn!(
-                                    worker=%worker_config.id,
-                                    bucket=%bucket_name,
-                                    error=%e,
-                                    "Failed to clear S3 notification configuration (best-effort)"
-                                );
-                            } else {
-                                info!(
-                                    worker=%worker_config.id,
-                                    bucket=%bucket_name,
-                                    "S3 notification configuration cleared"
-                                );
-                            }
-                        }
+        // Derive ownership even if a successful PUT was never checkpointed. During an
+        // interrupted update the previous config may still own a removed source.
+        let mut storages = Vec::new();
+        let previous = ctx
+            .state
+            .resources
+            .get(&worker_config.id)
+            .and_then(|state| state.previous_config.as_ref())
+            .and_then(|config| config.downcast_ref::<Worker>());
+        for config in std::iter::once(worker_config).chain(previous) {
+            for trigger in &config.triggers {
+                if let alien_core::WorkerTrigger::Storage { storage, .. } = trigger {
+                    if !storages.contains(storage) {
+                        storages.push(storage.clone());
                     }
                 }
             }
-            self.s3_permission_statement_ids.clear();
+        }
+        for storage in storages {
+            self.remove_storage_notification(ctx, &storage).await?;
         }
 
         // Always continue to DeletingScheduleTriggers state (linear flow)
@@ -7217,11 +7258,13 @@ mod tests {
             .expect_remove_targets()
             .withf(|rule, ids| rule == "test-basic-func-cron-0" && *ids == ["1"])
             .returning(|rule, _| {
-                Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
-                    message: "RemoveTargets failed for target '1'".to_string(),
-                    resource_type: "Rule".to_string(),
-                    resource_name: rule.to_string(),
-                }))
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        message: "RemoveTargets failed for target '1'".to_string(),
+                        resource_type: "Rule".to_string(),
+                        resource_name: rule.to_string(),
+                    },
+                ))
             });
         eventbridge.expect_delete_rule().times(0);
 
@@ -7248,7 +7291,10 @@ mod tests {
             .expect_remove_targets()
             .times(1)
             .returning(move |rule, _| {
-                recorded.lock().unwrap().push(format!("RemoveTargets {rule}"));
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push(format!("RemoveTargets {rule}"));
                 Ok(())
             });
         let recorded = calls.clone();
@@ -11098,7 +11144,9 @@ mod tests {
     mod linked_binding_refresh {
         use super::*;
         use crate::sandbox::{AwsSandboxController, AwsSandboxState};
-        use alien_core::{ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+        use alien_core::{
+            ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        };
 
         const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-sb";
 
@@ -11191,8 +11239,9 @@ mod tests {
             lambda
                 .expect_update_function_configuration()
                 .returning(move |name, request| {
-                    *sink.lock().unwrap() =
-                        request.environment.and_then(|environment| environment.variables);
+                    *sink.lock().unwrap() = request
+                        .environment
+                        .and_then(|environment| environment.variables);
                     Ok(create_successful_function_response(name))
                 });
             let mut executor = executor(
@@ -11278,7 +11327,10 @@ mod tests {
 
             executor.step().await.expect("the heartbeat runs");
             assert_eq!(
-                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
                 AwsWorkerState::RefreshingLinkedBindings
             );
             assert_eq!(
@@ -11286,7 +11338,10 @@ mod tests {
                 ResourceStatus::Updating,
                 "the planner must not start an update mid-refresh: updates begin only from Ready"
             );
-            executor.step().await.expect("the refresh applies the binding");
+            executor
+                .step()
+                .await
+                .expect("the refresh applies the binding");
             executor.step().await.expect("the refresh settles");
             let controller = executor.internal_state::<AwsWorkerController>().unwrap();
             assert_eq!(controller.state, AwsWorkerState::Ready);
@@ -11326,7 +11381,10 @@ mod tests {
                 .await;
                 executor.step().await.expect("the heartbeat runs");
                 assert_eq!(
-                    executor.internal_state::<AwsWorkerController>().unwrap().state,
+                    executor
+                        .internal_state::<AwsWorkerController>()
+                        .unwrap()
+                        .state,
                     AwsWorkerState::Ready
                 );
             }
@@ -11361,11 +11419,14 @@ mod tests {
         async fn a_throttled_comparison_is_skipped_without_failing_the_heartbeat() {
             let mut lambda = MockLambdaApi::new();
             active(&mut lambda);
-            lambda.expect_get_function_environment().times(1).returning(|_| {
-                Err(AlienError::new(CloudClientErrorData::RateLimitExceeded {
-                    message: "Rate exceeded".to_string(),
-                }))
-            });
+            lambda
+                .expect_get_function_environment()
+                .times(1)
+                .returning(|_| {
+                    Err(AlienError::new(CloudClientErrorData::RateLimitExceeded {
+                        message: "Rate exceeded".to_string(),
+                    }))
+                });
             lambda.expect_update_function_configuration().times(0);
             let mut executor = executor(
                 lambda,
@@ -11374,9 +11435,15 @@ mod tests {
                 None,
             )
             .await;
-            executor.step().await.expect("a throttled comparison does not fail the heartbeat");
+            executor
+                .step()
+                .await
+                .expect("a throttled comparison does not fail the heartbeat");
             assert_eq!(
-                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
                 AwsWorkerState::Ready
             );
             assert_eq!(executor.status(), ResourceStatus::Running);
@@ -11427,7 +11494,10 @@ mod tests {
             .await;
             executor.step().await.expect("the heartbeat runs");
             assert_eq!(
-                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
                 AwsWorkerState::Ready
             );
         }
@@ -11469,9 +11539,15 @@ mod tests {
                 Some(previous),
             )
             .await;
-            executor.step().await.expect("the update re-renders the binding");
+            executor
+                .step()
+                .await
+                .expect("the update re-renders the binding");
             assert_eq!(
-                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
                 AwsWorkerState::UpdateConfigWaitForActive
             );
         }
@@ -11500,10 +11576,12 @@ mod tests {
             .await;
             executor.step().await.expect("the update runs");
             assert_eq!(
-                executor.internal_state::<AwsWorkerController>().unwrap().state,
+                executor
+                    .internal_state::<AwsWorkerController>()
+                    .unwrap()
+                    .state,
                 AwsWorkerState::UpdateConfigWaitForActive
             );
         }
     }
-
 }

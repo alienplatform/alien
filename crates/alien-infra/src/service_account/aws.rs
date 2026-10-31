@@ -248,6 +248,17 @@ impl AwsServiceAccountController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
         let previous = ctx.previous_resource_config::<ServiceAccount>()?;
+        // An unchanged config means only the stack's ordering edges changed, such as
+        // the edge to management added for the AWS permissions boundary. The executor
+        // records the new edges when the update starts, and the role needs nothing.
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+            && previous == config
+        {
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
         // Frozen compatibility has already verified the installed explicit grants.
         // Capturing their metadata changes no AWS role policy, and runtime does
         // not need IAM write access to record it.
@@ -406,7 +417,8 @@ impl AwsServiceAccountController {
         // Step 1: List and detach all managed policies
         match client.list_attached_role_policies(role_name).await {
             Ok(response) => {
-                more_policies |= response.list_attached_role_policies_result.is_truncated == Some(true);
+                more_policies |=
+                    response.list_attached_role_policies_result.is_truncated == Some(true);
                 if let Some(attached_policies) = response
                     .list_attached_role_policies_result
                     .attached_policies
@@ -2397,8 +2409,15 @@ mod tests {
         );
     }
 
+    /// A real config change, here a dropped stack grant, still needs setup.
     #[tokio::test]
     async fn resumed_trust_and_policy_updates_reject_runtime_authority_before_iam() {
+        let granted = ServiceAccount::from_permission_profile(
+            "reader-sa".to_string(),
+            &PermissionProfile::new().global(["vault/data-read"]),
+            |id| alien_permissions::get_permission_set(id).cloned(),
+        )
+        .unwrap();
         for state in [
             AwsServiceAccountState::UpdateStart,
             AwsServiceAccountState::ApplyingStackPermissions,
@@ -2412,7 +2431,7 @@ mod tests {
             };
             let mut executor = SingleControllerExecutor::builder()
                 .resource(ServiceAccount::new("reader-sa".to_string()).build())
-                .previous_resource(ServiceAccount::new("reader-sa".to_string()).build())
+                .previous_resource(granted.clone())
                 .controller(controller)
                 .platform(Platform::Aws)
                 .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
@@ -2424,6 +2443,57 @@ mod tests {
             assert!(!executor.needs_update().unwrap());
             let error = executor.step().await.unwrap_err();
             assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+        }
+    }
+
+    /// An update with an unchanged config only records new stack edges, so a template-installed
+    /// role is left alone. Direct setup still reconciles the role.
+    #[tokio::test]
+    async fn unchanged_config_updates_avoid_iam_only_for_imported_handoffs() {
+        let account = ServiceAccount::from_permission_profile(
+            "reader-sa".to_string(),
+            &PermissionProfile::new()
+                .global(["vault/data-read"])
+                .resource("objects", ["storage/data-read"]),
+            |id| alien_permissions::get_permission_set(id).cloned(),
+        )
+        .unwrap();
+        for authority in [
+            alien_core::InitialSetupAuthority::ImportedHandoff,
+            alien_core::InitialSetupAuthority::DirectSetup,
+        ] {
+            let direct_setup = authority == alien_core::InitialSetupAuthority::DirectSetup;
+            let mut iam = alien_aws_clients::iam::MockIamApi::new();
+            iam.expect_update_assume_role_policy()
+                .times(usize::from(direct_setup))
+                .returning(|_, _| Ok(()));
+            let iam = Arc::new(iam);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_iam_client()
+                .times(usize::from(direct_setup))
+                .returning(move |_| Ok(iam.clone()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(account.clone())
+                .controller(AwsServiceAccountController::mock_ready("reader-sa"))
+                .platform(Platform::Aws)
+                .initial_setup_authority(authority)
+                .service_provider(Arc::new(provider))
+                .with_test_dependencies()
+                .build()
+                .await
+                .unwrap();
+            executor.update(account.clone()).unwrap();
+            executor.step().await.unwrap();
+            assert_eq!(
+                executor.status(),
+                if direct_setup {
+                    ResourceStatus::Updating
+                } else {
+                    ResourceStatus::Running
+                },
+                "{authority:?}"
+            );
         }
     }
 
