@@ -447,7 +447,7 @@ pub(crate) fn emit_sandbox_bundle_read(
             message: "permission set 'storage/data-read' is not defined".to_string(),
         })
     })?;
-    let context = aws_terraform_permission_context()
+    let context = stack_permission_context(ctx)
         .with_resource_name(format!("${{{}}}", bucket_path(storage_label, "bucket")));
     emit_iam_role_policy_for_target_with_label(
         fragment,

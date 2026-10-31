@@ -530,7 +530,7 @@ pub(crate) fn sandbox_bundle_read_policy(
             message: "permission set 'storage/data-read' is not defined".to_string(),
         })
     })?;
-    let context = permission_context()
+    let context = stack_permission_context(ctx)
         .with_resource_name(format!("${{AWS::StackName}}-{SANDBOX_BUNDLE_STORAGE_ID}"));
     let policy = AwsCloudFormationPermissionsGenerator::new()
         .generate_policy(read, BindingTarget::Resource, &context)
