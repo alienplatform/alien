@@ -496,7 +496,15 @@ async fn template_installed_service_accounts_take_the_management_edge_without_ia
     for _ in 0..3 {
         state = executor.step(state).await.unwrap().next_state;
     }
-    assert!(executor.is_synced(&state));
+    assert!(
+        executor.is_synced(&state),
+        "{:?}",
+        state
+            .resources
+            .iter()
+            .map(|(id, r)| (id, r.status, &r.error, &r.dependencies))
+            .collect::<Vec<_>>()
+    );
     for id in ["execution-sa", "build-execution-sa"] {
         let account = &state.resources[id];
         assert_eq!(
