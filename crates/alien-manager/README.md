@@ -34,7 +34,12 @@ environment variable (the file's contents), or from the working directory.
 - `[telemetry]` forwards deployments' OpenTelemetry to your backend
 - `[operator]` sets the Operator image deployments run and update to
 - `[commands]` moves command state to DynamoDB, Firestore or Table Storage
-- `[impersonation]` sets the identity used to deploy into customer clouds
+- `[impersonation]` sets the identity used to deploy into customer clouds. With
+  `[impersonation.azure]`, the manager also needs `AZURE_TENANT_ID`,
+  `AZURE_MANAGEMENT_OIDC_ISSUER` and `AZURE_MANAGEMENT_OIDC_SUBJECT`: the tenant, issuer
+  and subject of the OIDC token Azure setups trust. Without them the manager still
+  starts and serves other clouds, logs a warning naming the missing ones, and fails
+  every Azure deployment's render with the same message
 
 ## Embedding
 

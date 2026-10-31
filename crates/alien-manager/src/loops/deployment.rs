@@ -21,14 +21,15 @@ use tracing::{debug, error, info, warn};
 use alien_bindings::BindingsProviderApi;
 use alien_core::{
     CredentialRetry, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
-    ReleaseInfo, Stack, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, ManagementConfig,
+    Platform, ReleaseInfo, Stack, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, GenericError};
 use alien_infra::DefaultPlatformServiceProvider;
 use alien_local::{LocalBindingsProvider, LocalContainerManager};
+use alien_preflights::mutations::remote_stack_management::stack_renders_management_identity;
 
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
@@ -57,7 +58,10 @@ const UNPROVISIONABLE_RECHECK_INTERVAL: chrono::Duration = chrono::Duration::min
 /// later failures never move it, even if a store synthesizes record timestamps.
 const CREDENTIAL_ERROR_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
 const CREDENTIAL_RETRY_INTERVAL: chrono::Duration = chrono::Duration::seconds(5);
-const CREDENTIAL_FAILURE_RECHECK_INTERVAL: chrono::Duration = chrono::Duration::minutes(5);
+/// How long the loop leaves alone a deployment whose phase failed before it
+/// could start (no credentials, no management identity) and whose failure is
+/// saved, unless the deployment changes first.
+const PHASE_FAILURE_RECHECK_INTERVAL: chrono::Duration = chrono::Duration::minutes(5);
 
 /// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
 /// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
@@ -224,6 +228,19 @@ pub struct DeploymentLoop {
     /// Acquisition backoff shared by deployment and heartbeat ticks. The retry
     /// deadline itself comes from persisted retry state, never from this cache.
     deferred: Mutex<HashMap<String, DeferredDeployment>>,
+}
+
+/// A phase that can't start, to be saved as the deployment's failure.
+struct PhaseFailure<'a> {
+    deployment: &'a DeploymentRecord,
+    status: DeploymentStatus,
+    deployment_stack: Option<&'a Stack>,
+    target_release_id: Option<&'a str>,
+    current_release: Option<ReleaseInfo>,
+    had_credential_retry: bool,
+    error: AlienError,
+    session: &'a str,
+    execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
 }
 
 /// The backoff and retry flag left by this processing attempt.
@@ -960,58 +977,28 @@ impl DeploymentLoop {
                         }));
                     }
                 }
-                {
-                    let failed_status = failed_status_for_deployment_error(status);
-                    let unchanged = status == failed_status
-                        && !deployment.retry_requested
-                        && !had_credential_retry
-                        && deployment_record_error(&deployment.error).as_ref() == Some(&e);
-                    if unchanged {
-                        warn!(
-                            deployment_id = %deployment_id,
-                            status = ?status,
-                            error_code = %e.code,
-                            error = %e,
-                            "Credential resolution still failing; leaving unchanged failure checkpoint and backing off"
-                        );
-                        return Ok(Some(AcquisitionBackoff {
-                            status: failed_status,
-                            delay: CREDENTIAL_FAILURE_RECHECK_INTERVAL,
-                            retry_requested: false,
-                        }));
-                    }
-                    warn!(
-                        deployment_id = %deployment_id,
-                        status = ?status,
-                        failed_status = ?failed_status,
-                        platform = ?deployment.platform,
-                        retryable = e.retryable,
-                        error_code = %e.code,
-                        error = %e,
-                        "Credential resolution failed for manager-owned phase; checkpointing failed deployment state"
-                    );
-                    let credential_error = e.into_generic();
-                    let mut failed_state = failed_state_for_credential_error(
-                        &deployment,
+                warn!(
+                    deployment_id = %deployment_id,
+                    status = ?status,
+                    platform = ?deployment.platform,
+                    retryable = e.retryable,
+                    error_code = %e.code,
+                    error = %e,
+                    "Credential resolution failed for manager-owned phase"
+                );
+                return self
+                    .checkpoint_phase_failure(PhaseFailure {
+                        deployment: &deployment,
                         status,
-                        deployment_stack.as_ref(),
+                        deployment_stack: deployment_stack.as_ref(),
                         target_release_id,
-                        credential_error,
-                    );
-                    failed_state.current_release = current_release;
-                    self.checkpoint_without_step(
-                        &deployment_id,
+                        current_release,
+                        had_credential_retry,
+                        error: e.into_generic(),
                         session,
-                        failed_state,
-                        execution_claim.clone(),
-                    )
-                    .await?;
-                }
-                return Ok(Some(AcquisitionBackoff {
-                    status: failed_status_for_deployment_error(status),
-                    delay: CREDENTIAL_FAILURE_RECHECK_INTERVAL,
-                    retry_requested: false,
-                }));
+                        execution_claim,
+                    })
+                    .await;
             }
         };
 
@@ -1075,14 +1062,48 @@ impl DeploymentLoop {
         state.error = deployment_record_error(&deployment.error);
 
         // 4. Build the deployment config. External runners that acquire this
-        //    deployment get the same config from the acquire route.
+        //    deployment get the same config from the acquire route. Without
+        //    its management identity a setup render can't proceed; that is
+        //    saved as the deployment's failure, like a credential failure.
+        let management_config = match resolve_deployment_management_config(
+            self.credential_resolver.as_ref(),
+            &deployment,
+            deployment.platform,
+            ManagementRenderer::Runner,
+        )
+        .await
+        {
+            Ok(management_config) => management_config,
+            Err(error) => {
+                warn!(
+                    deployment_id = %deployment_id,
+                    status = ?status,
+                    platform = ?deployment.platform,
+                    error = %error,
+                    "Management identity unavailable for a setup render"
+                );
+                return self
+                    .checkpoint_phase_failure(PhaseFailure {
+                        deployment: &deployment,
+                        status,
+                        deployment_stack: deployment_stack.as_ref(),
+                        target_release_id,
+                        current_release,
+                        had_credential_retry,
+                        error,
+                        session,
+                        execution_claim,
+                    })
+                    .await;
+            }
+        };
         let mut config = RunnerConfigSources {
             config: &self.config,
             credential_resolver: self.credential_resolver.as_ref(),
             bindings_provider: &self.server_bindings.bindings_provider,
             target_bindings_providers: &self.server_bindings.target_bindings_providers,
         }
-        .deployment_config(&deployment, deployment_stack.as_ref())
+        .deployment_config(&deployment, deployment_stack.as_ref(), management_config)
         .await?;
 
         // Standalone-mode bridge: inject a BYO Horizon backend from env vars
@@ -1267,6 +1288,63 @@ impl DeploymentLoop {
         runner_result.map(|_| None).map_err(|e| e.into_generic())
     }
 
+    /// Saves `failure` as the deployment's error in its phase's failed status and backs off
+    /// acquisition. A failure already saved unchanged is not written again.
+    async fn checkpoint_phase_failure(
+        &self,
+        failure: PhaseFailure<'_>,
+    ) -> Result<Option<AcquisitionBackoff>, AlienError> {
+        let PhaseFailure {
+            deployment,
+            status,
+            deployment_stack,
+            target_release_id,
+            current_release,
+            had_credential_retry,
+            error,
+            session,
+            execution_claim,
+        } = failure;
+        let failed_status = failed_status_for_deployment_error(status);
+        let backoff = AcquisitionBackoff {
+            status: failed_status,
+            delay: PHASE_FAILURE_RECHECK_INTERVAL,
+            retry_requested: false,
+        };
+        let unchanged = status == failed_status
+            && !deployment.retry_requested
+            && !had_credential_retry
+            && deployment_record_error(&deployment.error).as_ref() == Some(&error);
+        if unchanged {
+            warn!(
+                deployment_id = %deployment.id,
+                status = ?status,
+                error_code = %error.code,
+                error = %error,
+                "Phase still failing with its saved error; backing off"
+            );
+            return Ok(Some(backoff));
+        }
+        warn!(
+            deployment_id = %deployment.id,
+            status = ?status,
+            failed_status = ?failed_status,
+            error_code = %error.code,
+            "Checkpointing failed deployment state"
+        );
+        let mut failed_state = failed_state_for_phase_error(
+            deployment,
+            status,
+            deployment_stack,
+            target_release_id,
+            error,
+        );
+        failed_state.current_release = current_release;
+        self.checkpoint_without_step(&deployment.id, session, failed_state, execution_claim)
+            .await?;
+        Ok(Some(backoff))
+    }
+
     async fn clear_skipped_credential_retry(
         &self,
         deployment: &DeploymentRecord,
@@ -1387,6 +1465,138 @@ pub(crate) struct RunnerConfigSources<'a> {
     pub target_bindings_providers: &'a HashMap<Platform, Arc<dyn BindingsProviderApi>>,
 }
 
+/// What renders a deployment's stack, which decides where its management identity comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagementRenderer {
+    /// This manager's loop, or a runner acquiring from it. Its config is
+    /// [`RunnerConfigSources::deployment_config`], which keeps a control plane's supplied
+    /// config, management identity included, over anything else.
+    Runner,
+    /// A target delivered to a pull Operator (sync or air-gapped bundle). It is built without the
+    /// supplied config's identity (`build_target_deployment_config`).
+    PullTarget,
+}
+
+/// What the next operation of a deployment does with its management identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagementIdentityUse {
+    /// The operation renders the stack and creates or updates its resources. Without the
+    /// identity the stack renders without its setup-owned 'management' resource, so a
+    /// resolution failure fails the operation.
+    RendersSetup,
+    /// A Running refresh: it observes the prepared stack and renders no setup, but its
+    /// executor still reads the identity (the AWS permissions-boundary check), so it gets it as
+    /// it always did. A resolution failure is logged and the refresh runs without it, as before.
+    Refresh,
+    /// Deletion and teardown remove what is installed; no handler they run reads the identity,
+    /// so it isn't resolved and a manager that can't render setup can still delete.
+    Unused,
+}
+
+impl ManagementIdentityUse {
+    /// The use for the operation `renderer` runs next for a deployment in `status`. An Operator
+    /// that is Running or RefreshFailed turns a delivered target into an update
+    /// (`accept_target_release` in alien-operator's sync loop) and keeps its config for later
+    /// refreshes, so for a pull target those statuses render setup like any update.
+    pub(crate) fn of(renderer: ManagementRenderer, status: DeploymentStatus) -> Self {
+        match status {
+            DeploymentStatus::Pending
+            | DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetup
+            | DeploymentStatus::InitialSetupFailed
+            | DeploymentStatus::Provisioning
+            | DeploymentStatus::WaitingForMachines
+            | DeploymentStatus::WaitingForSecrets
+            | DeploymentStatus::ProvisioningFailed
+            | DeploymentStatus::UpdatePending
+            | DeploymentStatus::Updating
+            | DeploymentStatus::UpdateFailed => Self::RendersSetup,
+            DeploymentStatus::Running | DeploymentStatus::RefreshFailed => match renderer {
+                ManagementRenderer::Runner => Self::Refresh,
+                ManagementRenderer::PullTarget => Self::RendersSetup,
+            },
+            DeploymentStatus::DeletePending
+            | DeploymentStatus::Deleting
+            | DeploymentStatus::DeleteFailed
+            | DeploymentStatus::TeardownRequired
+            | DeploymentStatus::TeardownFailed
+            | DeploymentStatus::RetentionRequired
+            | DeploymentStatus::Retained
+            | DeploymentStatus::Deleted
+            | DeploymentStatus::Error => Self::Unused,
+        }
+    }
+}
+
+/// The management identity `renderer` renders a deployment's stack with, in the order each
+/// renderer has always used:
+/// - [`ManagementRenderer::Runner`]: a control plane's supplied deployment config's identity,
+///   then the deployment record's, then the credential resolver's;
+/// - [`ManagementRenderer::PullTarget`]: the deployment record's, then the resolver's.
+///
+/// The resolver derives the identity from `platform`'s management binding. How its failure is
+/// handled follows [`ManagementIdentityUse`]. A stack with no setup-owned management resource,
+/// e.g. an Operator's in an existing cluster, renders the same without the identity, so for it a
+/// failure is logged and the render goes on without it, as before. Which stacks have one is
+/// [`stack_renders_management_identity`], the predicate the RemoteStackManagement mutation uses.
+pub(crate) async fn resolve_deployment_management_config(
+    credential_resolver: &dyn CredentialResolver,
+    deployment: &DeploymentRecord,
+    platform: Platform,
+    renderer: ManagementRenderer,
+) -> Result<Option<ManagementConfig>, AlienError> {
+    let supplied = match renderer {
+        ManagementRenderer::Runner => deployment
+            .deployment_config
+            .as_ref()
+            .and_then(|config| config.management_config.as_ref()),
+        ManagementRenderer::PullTarget => None,
+    };
+    if let Some(config) = supplied.or(deployment.management_config.as_ref()) {
+        return Ok(Some(config.clone()));
+    }
+    let use_ = ManagementIdentityUse::of(renderer, parse_status(&deployment.status));
+    if use_ == ManagementIdentityUse::Unused {
+        return Ok(None);
+    }
+    let resolved = credential_resolver
+        .resolve_management_config(platform)
+        .await
+        .context(GenericError {
+            message: format!(
+                "Failed to resolve the {platform} management identity for deployment {}",
+                deployment.id
+            ),
+        });
+    match resolved {
+        Err(error) if use_ == ManagementIdentityUse::Refresh => {
+            warn!(
+                deployment_id = %deployment.id,
+                %error,
+                "Refreshing without the management identity; the refresh renders no setup"
+            );
+            Ok(None)
+        }
+        Err(error)
+            if deployment.stack_settings.as_ref().is_some_and(|settings| {
+                !stack_renders_management_identity(
+                    deployment.platform,
+                    deployment.base_platform,
+                    settings,
+                )
+            }) =>
+        {
+            warn!(
+                deployment_id = %deployment.id,
+                %error,
+                "Rendering without the management identity, which this deployment's stack doesn't use"
+            );
+            Ok(None)
+        }
+        resolved => resolved,
+    }
+}
+
 impl RunnerConfigSources<'_> {
     /// The deployment config a runner applies to this deployment.
     ///
@@ -1397,10 +1607,13 @@ impl RunnerConfigSources<'_> {
     ///
     /// `deployment_stack` is the target release's stack; `None` when the
     /// deployment has none yet, so no resource receives command variables.
+    /// `management_config` comes from [`resolve_deployment_management_config`] for
+    /// [`ManagementRenderer::Runner`].
     pub(crate) async fn deployment_config(
         &self,
         deployment: &DeploymentRecord,
         deployment_stack: Option<&Stack>,
+        management_config: Option<ManagementConfig>,
     ) -> Result<DeploymentConfig, AlienError> {
         let environment_variables =
             deployment_environment_variables(self.config, deployment, deployment_stack)?;
@@ -1409,29 +1622,6 @@ impl RunnerConfigSources<'_> {
             .as_ref()
             .and_then(|config| config.monitoring.clone())
             .or_else(|| build_monitoring_config(self.config, deployment));
-
-        // Management config resolution:
-        //   1. From platform API (per-deployment, on DeploymentRecord — e.g. private managers)
-        //   2. From credential resolver (per-platform, derived from target provider's management binding)
-        let management_config = if let Some(mc) = deployment.management_config.clone() {
-            Some(mc)
-        } else {
-            match self
-                .credential_resolver
-                .resolve_management_config(deployment.platform)
-                .await
-            {
-                Ok(mc) => mc,
-                Err(e) => {
-                    warn!(
-                        deployment_id = %deployment.id,
-                        error = %e,
-                        "Failed to resolve management config from bindings"
-                    );
-                    None
-                }
-            }
-        };
 
         let native_image_host = crate::registry_access::derive_native_image_host(
             self.bindings_provider,
@@ -1748,7 +1938,7 @@ fn credential_retry_remaining(
         .filter(|remaining| !remaining.is_zero())
 }
 
-fn failed_state_for_credential_error(
+pub(crate) fn failed_state_for_phase_error(
     deployment: &DeploymentRecord,
     status: DeploymentStatus,
     deployment_stack: Option<&alien_core::Stack>,
@@ -1827,9 +2017,11 @@ mod tests {
         active_work_statuses, build_monitoring_config, commands_receiver_env_vars,
         credential_error_retry_remaining, get_or_create_local_bindings_provider,
         has_remote_stack_management_outputs, manager_candidate_statuses,
-        needs_provision_capability, parse_status, retryable_failed_statuses,
-        should_wait_for_credential_handoff, supplied_release_stacks, worker_commands_push_env_vars,
-        DeploymentLoop, ProcessOptions, RunnerConfigSources, CREDENTIAL_ERROR_GRACE_PERIOD,
+        needs_provision_capability, parse_status, resolve_deployment_management_config,
+        retryable_failed_statuses, should_wait_for_credential_handoff, supplied_release_stacks,
+        worker_commands_push_env_vars, DeploymentLoop, ManagementIdentityUse,
+        ManagementIdentityUse::{Refresh, RendersSetup, Unused},
+        ManagementRenderer, ProcessOptions, RunnerConfigSources, CREDENTIAL_ERROR_GRACE_PERIOD,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
@@ -1841,7 +2033,7 @@ mod tests {
         ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
     };
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
-    use alien_error::AlienError;
+    use alien_error::{AlienError, GenericError};
     use alien_local::{ContainerConfig, LocalContainerManager};
     use chrono::Utc;
     use std::collections::HashMap;
@@ -2613,7 +2805,7 @@ mod tests {
     mod credential_retry_tests {
         use super::*;
         use alien_core::Storage;
-        use alien_infra::{LocalStorageController, state_utils::StackResourceStateExt};
+        use alien_infra::{state_utils::StackResourceStateExt, LocalStorageController};
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
         struct Credentials {
@@ -2621,6 +2813,9 @@ mod tests {
             visits: AtomicUsize,
             error: AlienError,
             state_directory: String,
+            /// When set, the management identity fails to resolve with this error.
+            management_error: Mutex<Option<AlienError>>,
+            management_visits: AtomicUsize,
         }
 
         #[async_trait]
@@ -2636,6 +2831,17 @@ mod tests {
                     Ok(alien_core::ClientConfig::Local {
                         state_directory: self.state_directory.clone(),
                     })
+                }
+            }
+
+            async fn resolve_management_config(
+                &self,
+                _: Platform,
+            ) -> Result<Option<alien_core::ManagementConfig>, AlienError> {
+                self.management_visits.fetch_add(1, Ordering::SeqCst);
+                match self.management_error.lock().unwrap().clone() {
+                    Some(error) => Err(error),
+                    None => Ok(None),
                 }
             }
         }
@@ -2665,6 +2871,8 @@ mod tests {
                     visits: AtomicUsize::new(0),
                     error,
                     state_directory: directory.path().to_string_lossy().to_string(),
+                    management_error: Mutex::new(None),
+                    management_visits: AtomicUsize::new(0),
                 });
                 let manager = crate::server::AlienManager::builder(crate::config::ManagerConfig {
                     db_path: Some(db_path.clone()),
@@ -2830,6 +3038,112 @@ mod tests {
                 http_response_text: None,
             })
             .into_generic()
+        }
+
+        /// An Azure manager missing its management configuration, with working cloud credentials.
+        fn without_azure_management(fixture: &Fixture) -> AlienError {
+            let error = AlienError::new(GenericError {
+                message: "[impersonation.azure] needs AZURE_MANAGEMENT_OIDC_ISSUER in the manager's environment".to_string(),
+            });
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            *fixture.credentials.management_error.lock().unwrap() = Some(error.clone());
+            error
+        }
+
+        /// An update that can't render without the management identity ends failed with the
+        /// cause saved, and the loop leaves it alone until someone retries.
+        #[tokio::test]
+        async fn an_unresolvable_management_identity_fails_the_update_with_its_cause() {
+            let fixture = Fixture::new_for_platform(
+                DeploymentStatus::UpdatePending,
+                transient_error(),
+                Platform::Azure,
+            )
+            .await;
+            let cause = without_azure_management(&fixture);
+            let runner = fixture.runner();
+
+            runner.tick().await;
+            let record = fixture.record().await;
+            assert_eq!(record.status, "update-failed");
+            assert!(!record.retry_requested);
+            let saved: AlienError = serde_json::from_value(record.error.expect("saved error"))
+                .expect("saved error decodes");
+            assert_eq!(
+                saved.message,
+                format!(
+                    "Failed to resolve the azure management identity for deployment {}",
+                    fixture.id
+                )
+            );
+            assert_eq!(saved.source.expect("resolver error").message, cause.message);
+            assert_eq!(
+                fixture.credentials.management_visits.load(Ordering::SeqCst),
+                1
+            );
+
+            // Not re-picked: no lease writes, no further resolution.
+            let writes = fixture.writes().await;
+            for _ in 0..5 {
+                runner.tick().await;
+            }
+            assert_eq!(fixture.writes().await, writes);
+            assert_eq!(
+                fixture.credentials.management_visits.load(Ordering::SeqCst),
+                1
+            );
+
+            // A retry renders again, and fails again with the same saved cause.
+            fixture
+                .manager
+                .deployment_store
+                .set_retry_requested(&Subject::system(), &fixture.id)
+                .await
+                .unwrap();
+            runner.tick().await;
+            let record = fixture.record().await;
+            assert_eq!(
+                fixture.credentials.management_visits.load(Ordering::SeqCst),
+                2
+            );
+            assert_eq!(record.status, "update-failed");
+            assert!(!record.retry_requested);
+            let saved: AlienError =
+                serde_json::from_value(record.error.expect("saved error")).unwrap();
+            assert_eq!(saved.source.expect("resolver error").message, cause.message);
+        }
+
+        /// Deletion removes what is installed and never renders setup, so it needs no
+        /// management identity.
+        #[tokio::test]
+        async fn an_azure_deployment_deletes_without_its_management_identity() {
+            let fixture = Fixture::new_for_platform(
+                DeploymentStatus::DeletePending,
+                transient_error(),
+                Platform::Azure,
+            )
+            .await;
+            without_azure_management(&fixture);
+
+            fixture.runner().tick().await;
+
+            assert!(
+                fixture
+                    .manager
+                    .deployment_store
+                    .get_deployment(&Subject::system(), &fixture.id)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "the deleted deployment's record is removed"
+            );
+            assert_eq!(
+                fixture.credentials.management_visits.load(Ordering::SeqCst),
+                0
+            );
         }
 
         #[tokio::test]
@@ -4193,7 +4507,7 @@ mod tests {
             "handoff retry must be bounded"
         );
 
-        let failed = super::failed_state_for_credential_error(
+        let failed = super::failed_state_for_phase_error(
             &deployment,
             DeploymentStatus::Provisioning,
             None,
@@ -4918,6 +5232,321 @@ mod tests {
         }
     }
 
+    struct UnresolvableManagementIdentity;
+
+    #[async_trait]
+    impl CredentialResolver for UnresolvableManagementIdentity {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn resolve_management_config(
+            &self,
+            _: alien_core::Platform,
+        ) -> Result<Option<alien_core::ManagementConfig>, AlienError> {
+            Err(AlienError::new(GenericError {
+                message: "AZURE_MANAGEMENT_OIDC_ISSUER is not set".to_string(),
+            }))
+        }
+    }
+
+    struct ResolvedManagementIdentity;
+
+    #[async_trait]
+    impl CredentialResolver for ResolvedManagementIdentity {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn resolve_management_config(
+            &self,
+            _: alien_core::Platform,
+        ) -> Result<Option<alien_core::ManagementConfig>, AlienError> {
+            Ok(Some(alien_core::ManagementConfig::Azure(
+                alien_core::AzureManagementConfig {
+                    managing_tenant_id: "resolved-tenant".to_string(),
+                    oidc_issuer: "https://resolved.example.com".to_string(),
+                    oidc_subject: "manager".to_string(),
+                },
+            )))
+        }
+    }
+
+    /// Rendering without the management identity would drop the setup-owned 'management'
+    /// resource, so a failure to resolve it stops a setup render instead of rendering without it.
+    /// A Running refresh gets the identity as before (its executor reads it), and runs without it
+    /// when it doesn't resolve. Deletion and teardown never read it. A pull Operator turns any
+    /// target it receives while Running into an update, so a pull target always renders setup.
+    #[tokio::test]
+    async fn the_management_identity_is_required_only_to_render_setup() {
+        for (status, runner, pull_target) in [
+            (DeploymentStatus::Pending, RendersSetup, RendersSetup),
+            (
+                DeploymentStatus::PreflightsFailed,
+                RendersSetup,
+                RendersSetup,
+            ),
+            (DeploymentStatus::InitialSetup, RendersSetup, RendersSetup),
+            (
+                DeploymentStatus::InitialSetupFailed,
+                RendersSetup,
+                RendersSetup,
+            ),
+            (DeploymentStatus::Provisioning, RendersSetup, RendersSetup),
+            (
+                DeploymentStatus::WaitingForMachines,
+                RendersSetup,
+                RendersSetup,
+            ),
+            (
+                DeploymentStatus::WaitingForSecrets,
+                RendersSetup,
+                RendersSetup,
+            ),
+            (
+                DeploymentStatus::ProvisioningFailed,
+                RendersSetup,
+                RendersSetup,
+            ),
+            (DeploymentStatus::UpdatePending, RendersSetup, RendersSetup),
+            (DeploymentStatus::Updating, RendersSetup, RendersSetup),
+            (DeploymentStatus::UpdateFailed, RendersSetup, RendersSetup),
+            (DeploymentStatus::Running, Refresh, RendersSetup),
+            (DeploymentStatus::RefreshFailed, Refresh, RendersSetup),
+            (DeploymentStatus::DeletePending, Unused, Unused),
+            (DeploymentStatus::Deleting, Unused, Unused),
+            (DeploymentStatus::DeleteFailed, Unused, Unused),
+            (DeploymentStatus::TeardownRequired, Unused, Unused),
+            (DeploymentStatus::TeardownFailed, Unused, Unused),
+            (DeploymentStatus::RetentionRequired, Unused, Unused),
+            (DeploymentStatus::Retained, Unused, Unused),
+            (DeploymentStatus::Deleted, Unused, Unused),
+            (DeploymentStatus::Error, Unused, Unused),
+        ] {
+            assert_eq!(
+                ManagementIdentityUse::of(ManagementRenderer::Runner, status),
+                runner,
+                "{status:?}"
+            );
+            assert_eq!(
+                ManagementIdentityUse::of(ManagementRenderer::PullTarget, status),
+                pull_target,
+                "{status:?}"
+            );
+        }
+
+        for (renderer, status, use_) in [
+            (
+                ManagementRenderer::Runner,
+                DeploymentStatus::UpdatePending,
+                RendersSetup,
+            ),
+            (
+                ManagementRenderer::Runner,
+                DeploymentStatus::Running,
+                Refresh,
+            ),
+            (
+                ManagementRenderer::Runner,
+                DeploymentStatus::DeletePending,
+                Unused,
+            ),
+            (
+                ManagementRenderer::PullTarget,
+                DeploymentStatus::Running,
+                RendersSetup,
+            ),
+            (
+                ManagementRenderer::PullTarget,
+                DeploymentStatus::DeletePending,
+                Unused,
+            ),
+        ] {
+            let deployment = deployment_record(status, None);
+            let resolved = resolve_deployment_management_config(
+                &ResolvedManagementIdentity,
+                &deployment,
+                deployment.platform,
+                renderer,
+            )
+            .await
+            .expect("resolves");
+            assert_eq!(
+                resolved.map(
+                    |config| serde_json::to_value(config).unwrap()["managingTenantId"].clone()
+                ),
+                (use_ != Unused).then(|| serde_json::json!("resolved-tenant")),
+                "{renderer:?} {status:?}"
+            );
+
+            let resolved = resolve_deployment_management_config(
+                &UnresolvableManagementIdentity,
+                &deployment,
+                deployment.platform,
+                renderer,
+            )
+            .await;
+            if use_ == RendersSetup {
+                let error = resolved.expect_err("a setup render needs the management identity");
+                assert_eq!(
+                    error.message,
+                    format!(
+                        "Failed to resolve the {} management identity for deployment {}",
+                        deployment.platform, deployment.id
+                    )
+                );
+                assert_eq!(
+                    error.source.as_ref().expect("resolver error").message,
+                    "AZURE_MANAGEMENT_OIDC_ISSUER is not set"
+                );
+            } else {
+                assert!(
+                    resolved.expect("not fatal").is_none(),
+                    "{renderer:?} {status:?} runs without the identity"
+                );
+            }
+        }
+
+        // A control plane's per-deployment identity wins; the resolver isn't consulted.
+        let recorded = alien_core::ManagementConfig::Azure(alien_core::AzureManagementConfig {
+            managing_tenant_id: "managing-tenant".to_string(),
+            oidc_issuer: "https://issuer.example.com".to_string(),
+            oidc_subject: "manager".to_string(),
+        });
+        let mut deployment = deployment_record(DeploymentStatus::UpdatePending, None);
+        deployment.management_config = Some(recorded.clone());
+        for renderer in [ManagementRenderer::Runner, ManagementRenderer::PullTarget] {
+            let resolved = resolve_deployment_management_config(
+                &UnresolvableManagementIdentity,
+                &deployment,
+                deployment.platform,
+                renderer,
+            )
+            .await
+            .expect("the recorded identity needs no resolver");
+            assert_eq!(
+                serde_json::to_value(resolved).unwrap(),
+                serde_json::to_value(Some(&recorded)).unwrap(),
+                "{renderer:?}"
+            );
+        }
+    }
+
+    /// A control plane that supplies the deployment's config can carry the management identity
+    /// in it, and each renderer keeps the order it has always used. A runner renders with the
+    /// supplied identity ahead of the record's, so a manager whose own resolution fails still
+    /// renders the update, without calling the resolver. A pull target is built without the
+    /// supplied identity: it uses the record's, else resolves.
+    #[tokio::test]
+    async fn a_supplied_management_identity_renders_without_the_resolver() {
+        let identity = |tenant: &str| {
+            alien_core::ManagementConfig::Azure(alien_core::AzureManagementConfig {
+                managing_tenant_id: tenant.to_string(),
+                oidc_issuer: "https://control-plane.example.com".to_string(),
+                oidc_subject: "control-plane".to_string(),
+            })
+        };
+        let mut deployment = deployment_record(DeploymentStatus::UpdatePending, None);
+        deployment.deployment_config = Some(
+            DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .management_config(identity("supplied-tenant"))
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build(),
+        );
+        let manager_config = crate::config::ManagerConfig::default();
+        let sources = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &UnresolvableManagementIdentity,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
+        };
+        let tenant = |config: Option<alien_core::ManagementConfig>| {
+            config.map(|config| serde_json::to_value(config).unwrap()["managingTenantId"].clone())
+        };
+
+        // The runner renders with the supplied identity; the resolver isn't called.
+        let management_config = resolve_deployment_management_config(
+            &UnresolvableManagementIdentity,
+            &deployment,
+            deployment.platform,
+            ManagementRenderer::Runner,
+        )
+        .await
+        .expect("the supplied identity needs no resolver");
+        let config = sources
+            .deployment_config(&deployment, None, management_config)
+            .await
+            .expect("runner config");
+        assert_eq!(
+            tenant(config.management_config),
+            Some(serde_json::json!("supplied-tenant"))
+        );
+        // A pull target doesn't carry the supplied identity, so it resolves, and fails.
+        let error = resolve_deployment_management_config(
+            &UnresolvableManagementIdentity,
+            &deployment,
+            deployment.platform,
+            ManagementRenderer::PullTarget,
+        )
+        .await
+        .expect_err("a pull update needs the identity");
+        assert_eq!(
+            error.source.expect("resolver error").message,
+            "AZURE_MANAGEMENT_OIDC_ISSUER is not set"
+        );
+
+        // With the record's identity too, the runner still takes the supplied one and the
+        // pull target the record's.
+        deployment.management_config = Some(identity("recorded-tenant"));
+        for (renderer, expected) in [
+            (ManagementRenderer::Runner, "supplied-tenant"),
+            (ManagementRenderer::PullTarget, "recorded-tenant"),
+        ] {
+            let resolved = resolve_deployment_management_config(
+                &UnresolvableManagementIdentity,
+                &deployment,
+                deployment.platform,
+                renderer,
+            )
+            .await
+            .expect("no resolver call");
+            assert_eq!(
+                tenant(resolved),
+                Some(serde_json::json!(expected)),
+                "{renderer:?}"
+            );
+        }
+        let management_config = resolve_deployment_management_config(
+            &UnresolvableManagementIdentity,
+            &deployment,
+            deployment.platform,
+            ManagementRenderer::Runner,
+        )
+        .await
+        .expect("no resolver call");
+        let config = sources
+            .deployment_config(&deployment, None, management_config)
+            .await
+            .expect("runner config");
+        assert_eq!(
+            tenant(config.management_config),
+            Some(serde_json::json!("supplied-tenant"))
+        );
+    }
+
     /// A control plane's config carries its own copy of the deployment's
     /// variables. The runner config replaces it with the manager's snapshot:
     /// the identity and command variables plus the deployment's own.
@@ -4968,7 +5597,7 @@ mod tests {
             bindings_provider: &None,
             target_bindings_providers: &HashMap::new(),
         }
-        .deployment_config(&deployment, Some(&stack))
+        .deployment_config(&deployment, Some(&stack), None)
         .await
         .expect("runner config");
 

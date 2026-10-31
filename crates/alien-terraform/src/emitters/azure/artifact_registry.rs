@@ -15,7 +15,10 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label, resource_prefix_template, tags},
+    emitters::azure::helpers::{
+        downcast, emit_profile_grants, permission_context, required_label,
+        resource_prefix_template, tags, ProfileGrants,
+    },
     expr,
 };
 use alien_core::{import::EmitContext, ArtifactRegistry, Result};
@@ -100,6 +103,18 @@ impl TfEmitter for AzureArtifactRegistryEmitter {
                 ],
             ));
         }
+
+        emit_profile_grants(
+            ctx,
+            &mut fragment,
+            label,
+            ProfileGrants {
+                resource_type: "artifact-registry",
+                context: permission_context(label)
+                    .with_resource_name(format!("${{azurerm_container_registry.{label}.name}}")),
+                scope: None,
+            },
+        )?;
 
         fragment.retain_resources(|kind, _| kind == "azurerm_container_registry");
         Ok(fragment)

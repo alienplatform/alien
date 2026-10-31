@@ -1107,3 +1107,132 @@ mod target_assignment_tests {
         assert!(seen.is_empty());
     }
 }
+
+/// Which grants [`emit_profile_grants`] renders for one setup-owned resource, and where.
+pub struct ProfileGrants<'a> {
+    /// The resource type: wildcard (`*`) refs of this type count, as they do for the controller.
+    pub resource_type: &'a str,
+    /// Interpolates the permission sets' resource scope templates.
+    pub context: PermissionContext,
+    /// The assignment scope when the permission set's resource scope doesn't fit how setup
+    /// lays the resource out.
+    pub scope: Option<Expression>,
+}
+
+/// Grants that permission profiles hold on one setup-owned resource, for example a Worker
+/// identity's `kv/data-write` on a linked KV.
+///
+/// The resource's controller applies them only in its create flow, and setup imports the
+/// resources it creates already Ready, so setup must render them. Provision sets are left
+/// out: the setup identity, not a profile, provisions the resource.
+pub fn emit_profile_grants(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    label: &str,
+    grants: ProfileGrants<'_>,
+) -> Result<()> {
+    let resource_type = grants.resource_type;
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let refs = deduplicated_permission_refs(profile, ctx.resource_id, resource_type);
+        if refs.is_empty() {
+            continue;
+        }
+        let Some(principal_id) = service_account_principal_id(ctx, profile_name) else {
+            continue;
+        };
+        for permission_set_ref in refs {
+            let permission_set = permission_set_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "permission set '{}' referenced by Azure {resource_type} '{}' was not found",
+                            permission_set_ref.id(),
+                            ctx.resource_id
+                        ),
+                    })
+                })?;
+            if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
+            {
+                continue;
+            }
+            let grant_plan = AzureRuntimePermissionsGenerator::new()
+                .generate_grant_plan(&permission_set, BindingTarget::Resource, &grants.context)
+                .context(ErrorData::GenericError {
+                    message: format!(
+                        "failed to generate Azure {resource_type} grants for '{}'",
+                        permission_set.id
+                    ),
+                })?;
+            for (index, binding) in grant_plan.bindings.iter().enumerate() {
+                let role_definition_id = match &binding.role_definition {
+                    AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                        expr::template(role_definition_id.clone())
+                    }
+                    AzureRoleDefinitionRef::Custom { key } => {
+                        let role_index = grant_plan
+                            .custom_roles
+                            .iter()
+                            .position(|role| &role.key == key)
+                            .ok_or_else(|| {
+                                AlienError::new(ErrorData::GenericError {
+                                    message: format!(
+                                        "Azure {resource_type} permission set '{}' references missing custom role '{key}'",
+                                        permission_set.id
+                                    ),
+                                })
+                            })?;
+                        let role_label = setup_execution_role_label(
+                            profile_name,
+                            &binding.role_name,
+                            role_index,
+                        );
+                        expr::traversal([
+                            "azurerm_role_definition",
+                            role_label.as_str(),
+                            "role_definition_resource_id",
+                        ])
+                    }
+                };
+                let scope = grants
+                    .scope
+                    .clone()
+                    .unwrap_or_else(|| expr::template(binding.scope.clone()));
+                let role_label = sanitize_role_label(&binding.role_name);
+                fragment.resource_blocks.push(resource_block(
+                    "azurerm_role_assignment",
+                    &format!("{label}_{role_label}_{profile_name}_assignment_{index}"),
+                    [
+                        attr(
+                            "name",
+                            expr::raw(format!(
+                                "uuidv5(\"oid\", \"deployment:azure:{resource_type}-role-assign:${{local.resource_prefix}}:{}:{role_label}:{profile_name}:{index}\")",
+                                ctx.resource_id
+                            )),
+                        ),
+                        attr("scope", scope),
+                        attr("role_definition_id", role_definition_id),
+                        attr("principal_id", principal_id.clone()),
+                    ],
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A profile's refs to `resource_id`: its own, then wildcard refs of `resource_type`, each
+/// permission set once.
+fn deduplicated_permission_refs<'a>(
+    profile: &'a alien_core::permissions::PermissionProfile,
+    resource_id: &str,
+    resource_type: &str,
+) -> Vec<&'a PermissionSetReference> {
+    let mut refs: Vec<&PermissionSetReference> = Vec::new();
+    for permission_ref in resource_scoped_permission_refs(profile, resource_id, resource_type) {
+        if !refs.iter().any(|seen| seen.id() == permission_ref.id()) {
+            refs.push(permission_ref);
+        }
+    }
+    refs
+}

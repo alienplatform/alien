@@ -1,9 +1,12 @@
 //! Builder for constructing an `AlienManager` with customizable providers.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use alien_bindings::BindingsProviderApi;
+use alien_core::Platform;
 use alien_error::AlienError;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::auth::Authz;
 use crate::config::ManagerConfig;
@@ -405,34 +408,11 @@ impl AlienManagerBuilder {
         // EnvironmentCredentialResolver (direct env creds — for single-account setups
         // where only artifact registry is configured, no impersonation).
         if self.credential_resolver.is_none() {
-            let has_impersonation = toml_config.impersonation.aws.is_some()
-                || toml_config.impersonation.gcp.is_some()
-                || toml_config.impersonation.azure.is_some();
-
-            if has_impersonation && !target_bindings.is_empty() {
-                let primary_provider = target_bindings.values().next().unwrap().clone();
-                let management_binding_platforms = [
-                    (Platform::Aws, toml_config.impersonation.aws.is_some()),
-                    (Platform::Gcp, toml_config.impersonation.gcp.is_some()),
-                    (Platform::Azure, toml_config.impersonation.azure.is_some()),
-                ]
-                .into_iter()
-                .filter_map(|(platform, configured)| configured.then_some(platform))
-                .collect();
-                self.credential_resolver = Some(Arc::new(
-                    crate::providers::impersonation_credentials::ImpersonationCredentialResolver::new(
-                        primary_provider,
-                        target_bindings.clone(),
-                        management_binding_platforms,
-                    ),
-                ));
-                info!("Cross-account mode: using ImpersonationCredentialResolver");
-            } else {
-                self.credential_resolver = Some(Arc::new(
-                    crate::providers::environment_credentials::EnvironmentCredentialResolver::new(),
-                ));
-                info!("Single-account mode: using EnvironmentCredentialResolver");
-            }
+            self.credential_resolver = Some(credential_resolver_from_config(
+                &toml_config.impersonation,
+                &target_bindings,
+                std::env::vars().collect(),
+            ));
         }
 
         // --- Telemetry backend ---
@@ -824,6 +804,63 @@ impl AlienManagerBuilder {
 // Binding → Platform helpers
 // ---------------------------------------------------------------------------
 
+/// The credential resolver for `impersonation`: cross-account impersonation when it has sections
+/// and their target bindings exist, else the manager's own environment credentials.
+///
+/// An incomplete Azure management identity doesn't stop the manager: AWS, GCP and Kubernetes
+/// deployments never use it, and each Azure render fails with the missing variables named.
+fn credential_resolver_from_config(
+    impersonation: &crate::standalone_config::ImpersonationSection,
+    target_bindings: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    environment: HashMap<String, String>,
+) -> Arc<dyn CredentialResolver> {
+    let management_binding_platforms: HashSet<Platform> = [
+        (Platform::Aws, impersonation.aws.is_some()),
+        (Platform::Gcp, impersonation.gcp.is_some()),
+        (Platform::Azure, impersonation.azure.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(platform, configured)| configured.then_some(platform))
+    .collect();
+
+    let primary_provider = target_bindings.values().next().cloned();
+    let Some(primary_provider) =
+        primary_provider.filter(|_| !management_binding_platforms.is_empty())
+    else {
+        info!("Single-account mode: using EnvironmentCredentialResolver");
+        return Arc::new(
+            crate::providers::environment_credentials::EnvironmentCredentialResolver::new(),
+        );
+    };
+
+    if let Some(gap) = azure_management_gap(impersonation, &environment) {
+        warn!(
+            "Azure management is not fully configured; Azure deployments fail to render until it is: {}",
+            gap.message
+        );
+    }
+
+    info!("Cross-account mode: using ImpersonationCredentialResolver");
+    Arc::new(
+        crate::providers::impersonation_credentials::ImpersonationCredentialResolver::new(
+            primary_provider,
+            target_bindings.clone(),
+            management_binding_platforms,
+        )
+        .with_environment(environment),
+    )
+}
+
+/// Why the Azure management identity [impersonation.azure] asks for can't be derived from
+/// `environment`, if it can't.
+fn azure_management_gap(
+    impersonation: &crate::standalone_config::ImpersonationSection,
+    environment: &HashMap<String, String>,
+) -> Option<AlienError> {
+    impersonation.azure.as_ref()?;
+    crate::providers::impersonation_credentials::azure_management_config_from_env(environment).err()
+}
+
 /// Determine which cloud platform a KV binding targets.
 fn kv_binding_platform(binding: &alien_core::bindings::KvBinding) -> alien_core::Platform {
     use alien_core::bindings::KvBinding;
@@ -1182,4 +1219,196 @@ pub fn parse_target_bindings(
     }
 
     bindings
+}
+
+#[cfg(test)]
+mod tests {
+    use alien_bindings::BindingsProvider;
+    use alien_core::{
+        AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, ClientConfig,
+        ManagementConfig,
+    };
+
+    use super::*;
+    use crate::standalone_config::ManagerTomlConfig;
+
+    const AZURE_MANAGEMENT: &str = r#"
+[impersonation.azure]
+service = "azuremanagedidentity"
+clientId = "00000000-0000-0000-0000-000000000001"
+resourceId = "/subscriptions/s/resourceGroups/g/providers/Microsoft.ManagedIdentity/userAssignedIdentities/management"
+principalId = "00000000-0000-0000-0000-000000000002"
+"#;
+
+    const AWS_MANAGEMENT: &str = r#"
+[impersonation.aws]
+service = "awsiam"
+roleName = "management"
+roleArn = "arn:aws:iam::123456789012:role/management"
+"#;
+
+    fn complete_azure_environment() -> HashMap<String, String> {
+        HashMap::from([
+            ("AZURE_TENANT_ID".to_string(), "managing-tenant".to_string()),
+            (
+                "AZURE_MANAGEMENT_OIDC_ISSUER".to_string(),
+                "https://issuer.example.com".to_string(),
+            ),
+            (
+                "AZURE_MANAGEMENT_OIDC_SUBJECT".to_string(),
+                "system:serviceaccount:manager:manager".to_string(),
+            ),
+        ])
+    }
+
+    /// Starts the manager's credential resolution from `toml` the way `with_standalone_defaults`
+    /// does: one target bindings provider per cloud, holding its impersonation bindings. AWS
+    /// always has a provider, as an artifact registry would give it one.
+    fn resolver_for(
+        toml: &str,
+        environment: HashMap<String, String>,
+    ) -> Arc<dyn CredentialResolver> {
+        let config: ManagerTomlConfig = toml::from_str(toml).expect("config should parse");
+        let client_configs = [
+            (
+                Platform::Aws,
+                ClientConfig::Aws(Box::new(AwsClientConfig {
+                    account_id: "123456789012".to_string(),
+                    region: "us-east-2".to_string(),
+                    credentials: AwsCredentials::AccessKeys {
+                        access_key_id: "key".to_string(),
+                        secret_access_key: "secret".to_string(),
+                        session_token: None,
+                    },
+                    service_overrides: None,
+                })),
+            ),
+            (
+                Platform::Azure,
+                ClientConfig::Azure(Box::new(AzureClientConfig {
+                    subscription_id: "subscription".to_string(),
+                    tenant_id: "managing-tenant".to_string(),
+                    region: None,
+                    credentials: AzureCredentials::AccessToken {
+                        token: "token".to_string(),
+                    },
+                    service_overrides: None,
+                })),
+            ),
+        ];
+        let target_bindings = client_configs
+            .into_iter()
+            .filter_map(|(platform, client_config)| {
+                let bindings: HashMap<String, serde_json::Value> = config
+                    .impersonation
+                    .target_bindings(platform)
+                    .into_iter()
+                    .map(|(name, binding)| {
+                        (name.to_string(), serde_json::to_value(binding).unwrap())
+                    })
+                    .collect();
+                if bindings.is_empty() && platform != Platform::Aws {
+                    return None;
+                }
+                let provider = BindingsProvider::new(client_config, bindings)
+                    .expect("target bindings provider should be valid");
+                Some((platform, Arc::new(provider) as Arc<dyn BindingsProviderApi>))
+            })
+            .collect();
+        credential_resolver_from_config(&config.impersonation, &target_bindings, environment)
+    }
+
+    /// A self-hosted manager without [impersonation] keeps rendering every cloud without a
+    /// management identity, whatever its Azure variables are.
+    #[tokio::test]
+    async fn manager_without_impersonation_renders_without_management_identity() {
+        let resolver = resolver_for("", HashMap::new());
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            assert!(
+                resolver
+                    .resolve_management_config(platform)
+                    .await
+                    .expect("no management identity is not an error")
+                    .is_none(),
+                "{platform}"
+            );
+        }
+        assert!(azure_management_gap(
+            &crate::standalone_config::ImpersonationSection::default(),
+            &HashMap::new()
+        )
+        .is_none());
+    }
+
+    /// [impersonation.aws] alone renders AWS with its management role and never looks at the
+    /// Azure variables.
+    #[tokio::test]
+    async fn aws_only_impersonation_renders_aws_identity() {
+        let config: ManagerTomlConfig = toml::from_str(AWS_MANAGEMENT).unwrap();
+        assert!(azure_management_gap(&config.impersonation, &HashMap::new()).is_none());
+
+        let resolver = resolver_for(AWS_MANAGEMENT, HashMap::new());
+        let Some(ManagementConfig::Aws(aws)) = resolver
+            .resolve_management_config(Platform::Aws)
+            .await
+            .expect("AWS management identity")
+        else {
+            panic!("expected an AWS management identity");
+        };
+        assert_eq!(
+            aws.managing_role_arn,
+            "arn:aws:iam::123456789012:role/management"
+        );
+    }
+
+    /// Missing Azure variables don't stop the manager or touch AWS: only the Azure render fails,
+    /// naming what is missing.
+    #[tokio::test]
+    async fn partial_azure_management_fails_only_azure_renders() {
+        let toml = format!("{AWS_MANAGEMENT}{AZURE_MANAGEMENT}");
+        let mut environment = complete_azure_environment();
+        environment.remove("AZURE_MANAGEMENT_OIDC_ISSUER");
+
+        let config: ManagerTomlConfig = toml::from_str(&toml).unwrap();
+        let gap = azure_management_gap(&config.impersonation, &environment)
+            .expect("the startup warning should name the gap");
+        assert!(
+            gap.message
+                .starts_with("[impersonation.azure] needs AZURE_MANAGEMENT_OIDC_ISSUER in the manager's environment:"),
+            "{}",
+            gap.message
+        );
+
+        let resolver = resolver_for(&toml, environment);
+        assert!(matches!(
+            resolver.resolve_management_config(Platform::Aws).await,
+            Ok(Some(ManagementConfig::Aws(_)))
+        ));
+        let error = resolver
+            .resolve_management_config(Platform::Azure)
+            .await
+            .expect_err("the Azure render must fail instead of dropping the identity");
+        assert_eq!(error.message, gap.message);
+    }
+
+    /// With every Azure variable set, Azure renders carry the identity setups trust.
+    #[tokio::test]
+    async fn complete_azure_management_renders_azure_identity() {
+        let config: ManagerTomlConfig = toml::from_str(AZURE_MANAGEMENT).unwrap();
+        assert!(
+            azure_management_gap(&config.impersonation, &complete_azure_environment()).is_none()
+        );
+
+        let resolver = resolver_for(AZURE_MANAGEMENT, complete_azure_environment());
+        let Some(ManagementConfig::Azure(azure)) = resolver
+            .resolve_management_config(Platform::Azure)
+            .await
+            .expect("Azure management identity")
+        else {
+            panic!("expected an Azure management identity");
+        };
+        assert_eq!(azure.managing_tenant_id, "managing-tenant");
+        assert_eq!(azure.oidc_issuer, "https://issuer.example.com");
+        assert_eq!(azure.oidc_subject, "system:serviceaccount:manager:manager");
+    }
 }

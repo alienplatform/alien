@@ -179,11 +179,23 @@ async fn target(
     // No token: the environment pulls from its own registry and never calls
     // the manager. Bundles are applied by Operators that support air-gapped
     // mode, which all understand tunnels.
-    let mut target: TargetDeployment =
-        match super::sync::build_pull_target(&state, &deployment, release, None, true).await {
-            Ok(target) => target,
-            Err(response) => return response,
-        };
+    let management_config = match super::sync::pull_management_config(&state, &deployment).await {
+        Ok(management_config) => management_config,
+        Err(error) => return error.into_response(),
+    };
+    let mut target: TargetDeployment = match super::sync::build_pull_target(
+        &state,
+        &deployment,
+        release,
+        management_config,
+        None,
+        true,
+    )
+    .await
+    {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
     // Workloads can't reach this manager to export telemetry; the Operator
     // buffers it for the next sync instead.
     target.config.monitoring = None;
