@@ -306,6 +306,97 @@ mod tests {
             .expect_err("a bundle that was not written fails the step");
     }
 
+    /// The same once the old bundles are listed but their delete fails, whether S3 refuses the whole
+    /// request or one key. The serving bundle and the new one are never offered for deletion.
+    #[tokio::test]
+    async fn a_failing_stale_bundle_delete_does_not_fail_the_write() {
+        use alien_aws_clients::s3::{
+            DeleteObjectsOutput, ErrorObject, ListObjectsV2Output, MockS3Api, Object,
+            PutObjectOutput,
+        };
+        use alien_client_core::ErrorData as CloudError;
+
+        let bundle = render(
+            "p-sandbox-bundles",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:bbbb",
+            "agents",
+        )
+        .unwrap();
+        let serving = "sandbox-bundle/agents/serving/bundle.zip";
+        let stale = "sandbox-bundle/agents/stale/bundle.zip";
+
+        for whole_request_fails in [true, false] {
+            let mut client = MockS3Api::new();
+            let written = bundle.key.clone();
+            client
+                .expect_put_object()
+                .times(1)
+                .withf(move |request| request.key == written)
+                .returning(|_| {
+                    Ok(PutObjectOutput {
+                        e_tag: None,
+                        version_id: None,
+                        server_side_encryption: None,
+                    })
+                });
+            let listed = [bundle.key.clone(), serving.to_string(), stale.to_string()];
+            client
+                .expect_list_objects_v2()
+                .times(1)
+                .returning(move |bucket, _, _| {
+                    Ok(ListObjectsV2Output {
+                        contents: listed
+                            .iter()
+                            .map(|key| Object {
+                                key: key.clone(),
+                                last_modified: String::new(),
+                                e_tag: String::new(),
+                                size: 0,
+                                storage_class: String::new(),
+                            })
+                            .collect(),
+                        name: bucket.to_string(),
+                        max_keys: 1000,
+                        key_count: 3,
+                        is_truncated: false,
+                        next_continuation_token: None,
+                    })
+                });
+            client
+                .expect_delete_objects()
+                .times(1)
+                .withf(move |_, keys, _| {
+                    keys.iter().map(|k| k.key.as_str()).collect::<Vec<_>>() == [stale]
+                })
+                .returning(move |bucket, keys, _| {
+                    if whole_request_fails {
+                        Err(AlienError::new(CloudError::RemoteAccessDenied {
+                            resource_type: "Bucket".into(),
+                            resource_name: bucket.to_string(),
+                        }))
+                    } else {
+                        Ok(DeleteObjectsOutput {
+                            deleted: Vec::new(),
+                            errors: vec![ErrorObject {
+                                key: keys[0].key.clone(),
+                                code: "InternalError".into(),
+                                message: "We encountered an internal error.".into(),
+                            }],
+                        })
+                    }
+                });
+
+            write(
+                &client,
+                &bundle,
+                Some(&format!("s3://p-sandbox-bundles/{serving}")),
+                "agents",
+            )
+            .await
+            .expect("the bundle was written; a stale one left behind changes no build");
+        }
+    }
+
     #[test]
     fn a_reference_that_would_write_directives_is_refused() {
         for image in [
