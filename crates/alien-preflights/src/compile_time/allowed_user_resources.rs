@@ -1,5 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
+use alien_core::permissions::ManagementPermissions;
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
 use alien_core::{
@@ -65,6 +66,29 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             errors.push(
                 "The sandbox gateway permission profile is reserved for preflight".to_string(),
             );
+        }
+
+        // A grant scoped to the bundle bucket would reach it past its write guard.
+        let management_profile = match &stack.permissions.management {
+            ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+                Some(("management", profile))
+            }
+            ManagementPermissions::Auto => None,
+        };
+        for (profile_name, profile) in stack
+            .permissions
+            .profiles
+            .iter()
+            .map(|(name, profile)| (name.as_str(), profile))
+            .chain(management_profile)
+        {
+            for scope in profile.0.keys() {
+                if scope.starts_with(SANDBOX_BUNDLE_STORAGE_ID) {
+                    errors.push(format!(
+                        "Permission profile '{profile_name}' grants on '{scope}', which is reserved for the bucket sandbox images are built from"
+                    ));
+                }
+            }
         }
 
         for (resource_id, resource_entry) in stack.resources() {
@@ -298,6 +322,41 @@ mod tests {
                 .await
                 .expect("reserved-id validation should run");
             assert_eq!(!result.success, rejected, "{id}: {:?}", result.errors);
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_grants_scoped_to_the_sandbox_bundle_bucket() {
+        let workload = Stack::new("test-stack".to_string())
+            .permissions(alien_core::permissions::PermissionsConfig {
+                profiles: IndexMap::from([(
+                    "execution".to_string(),
+                    alien_core::permissions::PermissionProfile::new()
+                        .resource("sandbox-bundles", ["storage/data-write"]),
+                )]),
+                ..Default::default()
+            })
+            .build();
+        let management = Stack::new("test-stack".to_string())
+            .permissions(alien_core::permissions::PermissionsConfig {
+                management: ManagementPermissions::Extend(
+                    alien_core::permissions::PermissionProfile::new()
+                        .resource("sandbox-bundles", ["storage/provision"]),
+                ),
+                ..Default::default()
+            })
+            .build();
+        for stack in [workload, management] {
+            let result = AllowedUserResourcesCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .expect("reserved-scope validation should run");
+            assert!(!result.success);
+            assert!(
+                result.errors[0].contains("'sandbox-bundles', which is reserved"),
+                "{:?}",
+                result.errors
+            );
         }
     }
 
