@@ -31,6 +31,7 @@ get "dependencies"(){
 get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()
               },
+"externalBinding": z.optional(z.boolean().describe("Whether this resource was adopted from an external binding instead of provisioned.\nThe binding may exist only where the adopting executor ran (a Helm value or a\nchart-created database), so the record carries it: deleting the resource releases it\nand never touches what the binding points at.")),
 "lastFailedState": z.optional(z.any().describe("Stores the controller state that failed, used for manual retry operations.\nThis allows resuming from the exact point where the failure occurred.\nStored as JSON to make the struct serializable and movable to alien-core.")),
 get "lifecycle"(){
                 return z.union([ResourceLifecycleSchema, z.null()]).optional()
