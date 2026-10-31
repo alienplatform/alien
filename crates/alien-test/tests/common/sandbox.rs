@@ -118,6 +118,46 @@ async fn workload_write(
     serde_json::from_str(&body).with_context(|| format!("parse /write-object response: {body}"))
 }
 
+#[derive(Debug, Deserialize)]
+struct RewriteResponse {
+    rewritten: bool,
+    code: Option<String>,
+}
+
+/// Asks the Worker to read a bucket's policy and write it back unchanged with its own credentials.
+async fn workload_rewrite_policy(
+    ctx: &TestContext,
+    bucket: &str,
+) -> anyhow::Result<RewriteResponse> {
+    let url = ctx
+        .deployment
+        .url
+        .as_deref()
+        .context("the deployment has no public URL")?;
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/rewrite-bucket-policy",
+            url.trim_end_matches('/')
+        ))
+        .bearer_auth(&ctx.deployment.id)
+        .json(&serde_json::json!({ "bucket": bucket }))
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+        .context("POST /rewrite-bucket-policy")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("read /rewrite-bucket-policy response")?;
+    ensure!(
+        status.is_success(),
+        "/rewrite-bucket-policy answered {status}: {body}"
+    );
+    serde_json::from_str(&body)
+        .with_context(|| format!("parse /rewrite-bucket-policy response: {body}"))
+}
+
 /// A bundle decides what a sandbox runs, so only the deployment's management role may write one.
 /// The Worker holds a stack-wide storage write grant: it writes the ordinary bucket, and is refused
 /// on the bundle bucket.
@@ -133,6 +173,21 @@ pub async fn check_workload_cannot_write_bundles(ctx: &TestContext) -> anyhow::R
         control.code
     );
     let bundles = storage_bucket(ctx, SANDBOX_BUNDLE_STORAGE_ID).await?;
+
+    // The same Worker also holds stack-wide storage provision: it may rewrite its own bucket's
+    // policy, and must not be able to lift the bundle bucket's write guard.
+    let control = workload_rewrite_policy(ctx, &uploads).await?;
+    ensure!(
+        control.rewritten,
+        "the Worker's stack-wide provision grant should rewrite '{uploads}' policy: {:?}",
+        control.code
+    );
+    let attempt = workload_rewrite_policy(ctx, &bundles).await?;
+    ensure!(
+        !attempt.rewritten && attempt.code.as_deref() == Some("AccessDenied"),
+        "the Worker must not rewrite the bundle bucket's policy '{bundles}', got {attempt:?}"
+    );
+
     let attempt =
         workload_write(ctx, &bundles, "sandbox-bundle/agents/workload/bundle.zip").await?;
     ensure!(

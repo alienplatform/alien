@@ -1,6 +1,6 @@
 //! Give a deployment's Live AWS sandboxes a bucket of its own to build their images from.
 
-use crate::error::{ErrorData, Result};
+use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
@@ -8,12 +8,8 @@ use alien_core::{
     DeploymentConfig, Platform, RemoteStackManagement, Resource, ResourceEntry, ResourceLifecycle,
     ResourceRef, Sandbox, SandboxCode, Stack, StackState, Storage,
 };
-use alien_error::AlienError;
 use async_trait::async_trait;
 use tracing::info;
-
-/// The permission sets that grant changing a bucket's policy across the stack.
-const BUCKET_POLICY_SETS: [&str; 2] = ["storage/provision", "email/provision"];
 
 /// Lets management write and delete bundles in the bundle Storage, and in no other bucket.
 const SANDBOX_BUNDLE_WRITE: &str = "sandbox/bundle-write";
@@ -39,10 +35,12 @@ impl StackMutation for SandboxBundleStorageMutation {
     }
 
     fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
+        // An installed one stays even once no sandbox renders into it: dropping a Frozen resource
+        // would need setup, and an empty bucket costs nothing.
         state.platform == Platform::Aws
-            && (state.resources.is_empty()
-                || state.resources.contains_key(SANDBOX_BUNDLE_STORAGE_ID))
-            && stack.resources().any(|(_, entry)| renders_bundle(entry))
+            && (state.resources.contains_key(SANDBOX_BUNDLE_STORAGE_ID)
+                || (state.resources.is_empty()
+                    && stack.resources().any(|(_, entry)| renders_bundle(entry))))
     }
 
     async fn mutate(
@@ -52,32 +50,6 @@ impl StackMutation for SandboxBundleStorageMutation {
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         info!("Adding the sandbox bundle bucket");
-        // The bucket's policy lets only management write bundles. A workload holding a set that
-        // can rewrite bucket policies across the stack could lift that, so such a grant and a
-        // rendered sandbox cannot share a stack.
-        if let Some((profile, set)) =
-            stack
-                .permissions
-                .profiles
-                .iter()
-                .find_map(|(name, profile)| {
-                    profile.0.get("*").and_then(|sets| {
-                        sets.iter()
-                            .find(|set| BUCKET_POLICY_SETS.contains(&set.id()))
-                            .map(|set| (name.clone(), set.id().to_string()))
-                    })
-                })
-        {
-            return Err(AlienError::new(ErrorData::StackMutationFailed {
-                mutation_name: self.description().to_string(),
-                message: format!(
-                    "permission profile '{profile}' holds '{set}' stack-wide, which can rewrite \
-                     the policy that lets only management write sandbox image bundles; grant it \
-                     on the buckets that need it instead"
-                ),
-                resource_id: Some(SANDBOX_BUNDLE_STORAGE_ID.to_string()),
-            }));
-        }
         stack
             .resources
             .entry(SANDBOX_BUNDLE_STORAGE_ID.to_string())
@@ -316,22 +288,6 @@ mod tests {
             .await
             .expect("an automatic setup prepares the release");
         assert!(aws_sandbox_renders_bundle(&setup, "agents"));
-    }
-
-    /// A workload able to rewrite bucket policies across the stack could lift the one that keeps
-    /// bundle writes to management.
-    #[tokio::test]
-    async fn a_workload_that_can_rewrite_bucket_policies_is_refused() {
-        let mut stack = release(RELEASED, None);
-        stack.permissions.profiles.insert(
-            "execution".to_string(),
-            PermissionProfile::new().resource("*", ["storage/provision"]),
-        );
-        let error = PreflightRunner::new()
-            .apply_mutations(stack, &StackState::new(Platform::Aws), &config())
-            .await
-            .expect_err("the grant could lift the bundle bucket's write guard");
-        assert!(error.to_string().contains("storage/provision"), "{error}");
     }
 
     /// A Frozen sandbox is built by setup from its published bundle and needs no bucket.
