@@ -132,7 +132,7 @@ mod tests {
     use super::*;
     use crate::compatibility::FrozenResourcesUnchangedCheck;
     use crate::runner::PreflightRunner;
-    use crate::StackCompatibilityCheck;
+    use crate::{PreflightRegistry, StackCompatibilityCheck};
     use alien_core::permissions::PermissionProfile;
     use alien_core::sandbox_setup_inputs::{
         aws_sandbox_renders_bundle, comparable_aws_sandbox_setup_inputs,
@@ -336,6 +336,62 @@ mod tests {
         };
         assert!(ids("execution").contains(&PROTECT_BUNDLE_POLICY.to_string()));
         assert!(!ids("reader").contains(&PROTECT_BUNDLE_POLICY.to_string()));
+    }
+
+    /// An install set up before the bundle bucket existed, by a release whose workload can manage
+    /// bucket policies, and the release that moves its sandbox to a container image.
+    async fn pre_change_install_and_update() -> (Stack, Stack) {
+        let with_policy_workload = |mut stack: Stack| {
+            stack.permissions.profiles.insert(
+                "execution".to_string(),
+                PermissionProfile::new().resource("*", ["storage/data-write", "storage/provision"]),
+            );
+            stack
+        };
+        let mut before_this_change = PreflightRegistry::with_built_ins();
+        before_this_change.mutations.retain(|mutation| {
+            mutation.description() != SandboxBundleStorageMutation.description()
+        });
+        let pre_change = PreflightRunner::with_registry(before_this_change)
+            .apply_mutations(
+                with_policy_workload(release(
+                    "s3://publisher-{region}/sandbox-bundle/v1/bundle.zip",
+                    None,
+                )),
+                &StackState::new(Platform::Aws),
+                &config(),
+            )
+            .await
+            .expect("the earlier release prepares");
+        let update = prepared(
+            with_policy_workload(release(
+                RELEASED,
+                Some("s3://publisher-{region}/sandbox-bundle/v2/bundle.zip"),
+            )),
+            &installed(&pre_change),
+        )
+        .await;
+        (pre_change, update)
+    }
+
+    /// Without the bundle bucket, the workload's ServiceAccount compiles exactly as it did before
+    /// this change: no guard is added for a bucket the stack does not hold.
+    #[tokio::test]
+    async fn without_the_bundle_bucket_the_workload_service_account_compiles_unchanged() {
+        let (pre_change, update) = pre_change_install_and_update().await;
+        assert!(!update.resources.contains_key(SANDBOX_BUNDLE_STORAGE_ID));
+        let service_account = |stack: &Stack| {
+            serde_json::to_vec(&stack.resources["execution-sa"]).expect("it serializes")
+        };
+        assert_eq!(service_account(&pre_change), service_account(&update));
+    }
+
+    /// The same update passes the Frozen-resources check against the pre-change install, so it
+    /// deploys without setup.
+    #[tokio::test]
+    async fn a_pre_change_install_with_a_bucket_policy_workload_passes_the_frozen_check() {
+        let (pre_change, update) = pre_change_install_and_update().await;
+        assert!(frozen_unchanged(&pre_change, &update).await);
     }
 
     /// A Frozen sandbox is built by setup from its published bundle and needs no bucket.
