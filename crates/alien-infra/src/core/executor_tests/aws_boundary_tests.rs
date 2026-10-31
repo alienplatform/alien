@@ -17,7 +17,7 @@ use alien_core::{
     Resource, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus, ServiceAccount,
     SetupManagement, Stack, StackResourceState, StackState, Storage,
 };
-use alien_permissions::PermissionContext;
+use alien_permissions::{generators::aws_permissions_boundary_covers, PermissionContext};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -596,6 +596,58 @@ async fn boundaries_installed_with_copied_prefixed_grants_still_cover_the_stack(
             "arn:aws:ssm:us-east-1:123456789012:parameter/boundary-test-secret-two"]}),
     );
     let earlier = json!({"Version": "2012-10-17", "Statement": statements});
+    installed(&mut state)["permissionsBoundaryDocument"] = earlier;
+
+    validate_installed_aws_permissions_boundary(
+        &stack,
+        &state,
+        &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+        &config,
+    )
+    .unwrap();
+    let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
+    executor.step(state.clone()).await.unwrap();
+    executor.refresh(state).await.unwrap();
+}
+
+/// A setup installed before scoped patterns were merged holds each catalog pattern on its own.
+/// It does not cover today's wider merged patterns, but it covers everything the stack's
+/// runtime needs, so runtime continues without a setup rerun.
+#[tokio::test]
+async fn boundaries_installed_before_scoped_patterns_were_merged_still_cover_the_stack() {
+    let (stack, mut state, config) = fixture();
+    let current =
+        aws_permissions_boundary_for_stack(&stack, &state, &permission_context("boundary-test"))
+            .unwrap();
+    let mut earlier = current.clone();
+    let scoped = earlier["Statement"][0]["Resource"].as_array_mut().unwrap();
+    let region = "arn:aws:codebuild:us-east-1:123456789012";
+    let logs = "arn:aws:logs:us-east-1:123456789012:log-group";
+    for (merged, members) in [
+        (
+            format!("{region}:*/boundary-test-*"),
+            vec![
+                format!("{region}:project/boundary-test-*"),
+                format!("{region}:report-group/boundary-test-*"),
+            ],
+        ),
+        (
+            format!("{logs}:/aws/*/boundary-test-*"),
+            vec![
+                format!("{logs}:/aws/codebuild/boundary-test-*:*"),
+                format!("{logs}:/aws/lambda/boundary-test-*"),
+            ],
+        ),
+    ] {
+        let position = scoped
+            .iter()
+            .position(|pattern| pattern == &json!(merged))
+            .unwrap_or_else(|| panic!("{merged} is not in {current}"));
+        scoped.remove(position);
+        scoped.extend(members.into_iter().map(Value::from));
+    }
+    scoped.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    assert!(!aws_permissions_boundary_covers(&earlier, &current).unwrap());
     installed(&mut state)["permissionsBoundaryDocument"] = earlier;
 
     validate_installed_aws_permissions_boundary(

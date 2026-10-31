@@ -94,14 +94,28 @@ pub fn aws_stack_permissions_boundary(
     context: &PermissionContext,
     resolve_context: impl FnMut(&str, &str) -> Result<PermissionContext>,
 ) -> Result<Value> {
-    stack_boundary(stack, context, resolve_context, CopiedGrants::NotAdmitted)
+    stack_boundary(stack, context, resolve_context, Rendering::Current)
+}
+
+/// The ceiling the stack's runtime needs, to check that an installed boundary still covers it.
+///
+/// Unlike [`aws_stack_permissions_boundary`], it lists each scoped pattern without merging any
+/// for size ([`WIDENED_SCOPED_PATTERNS`]), so boundaries installed before or after a pattern
+/// was merged both cover it. It is never installed, so it has no size limit. The resolver is
+/// called as for [`aws_stack_permissions_boundary`].
+pub fn aws_stack_boundary_requirement(
+    stack: &Stack,
+    context: &PermissionContext,
+    resolve_context: impl FnMut(&str, &str) -> Result<PermissionContext>,
+) -> Result<Value> {
+    stack_boundary(stack, context, resolve_context, Rendering::Requirement)
 }
 
 fn stack_boundary(
     stack: &Stack,
     context: &PermissionContext,
     mut resolve_context: impl FnMut(&str, &str) -> Result<PermissionContext>,
-    copied: CopiedGrants,
+    rendering: Rendering,
 ) -> Result<Value> {
     let generator = AwsRuntimePermissionsGenerator::new();
     let mut statements = Vec::new();
@@ -223,7 +237,7 @@ fn stack_boundary(
         &statements,
         exact_resources,
         &inline_grants,
-        copied,
+        rendering,
     )
 }
 
@@ -262,15 +276,20 @@ fn grant_source(profile_name: &str, scope: &str, reference: &PermissionSetRefere
     format!("profile '{profile_name}' {scope} ({})", reference.id())
 }
 
-/// Which compiled grants `render_boundary` copies into the document.
+/// How `render_boundary` renders the document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CopiedGrants {
-    /// Grants the scoped `NotAction: iam:*` Allow does not already admit.
-    NotAdmitted,
-    /// Every grant, as the renderer did before admitted grants were skipped. Tests compare the
-    /// two renderings.
+enum Rendering {
+    /// The document setup installs: copies only grants the scoped `NotAction: iam:*` Allow does
+    /// not already admit, merges scoped patterns within a service
+    /// ([`WIDENED_SCOPED_PATTERNS`]), and must fit IAM's managed-policy limit.
+    Current,
+    /// What an installed boundary must cover: as `Current`, without merging scoped patterns or
+    /// limiting the size.
+    Requirement,
+    /// Copies every grant and lists each scoped pattern, as the renderer did before admitted
+    /// grants were skipped and patterns merged. Tests compare the two renderings.
     #[cfg(test)]
-    All,
+    Earlier,
 }
 
 fn collect_resolved_grants(
@@ -347,7 +366,7 @@ pub fn aws_permissions_boundary(
         &sourced,
         BTreeMap::new(),
         custom_statements,
-        CopiedGrants::NotAdmitted,
+        Rendering::Current,
     )
 }
 
@@ -356,7 +375,7 @@ fn render_boundary(
     custom_statements: &[SourcedStatement],
     exact_resources: BTreeMap<String, BTreeSet<String>>,
     exception_grants: &[AwsIamStatement],
-    copied: CopiedGrants,
+    rendering: Rendering,
 ) -> Result<Value> {
     let prefix = context.stack_prefix.as_deref().ok_or_else(|| {
         AlienError::new(ErrorData::VariableNotFound {
@@ -462,17 +481,23 @@ fn render_boundary(
     // grants on prefixed resources (such as one per secret input and consumer) would otherwise
     // grow the boundary with the stack. Denies stay, and still lift no exemptions below.
     for custom in custom_statements {
-        let admitted = match copied {
-            CopiedGrants::NotAdmitted => {
+        let admitted = match rendering {
+            Rendering::Current | Rendering::Requirement => {
                 admitted_by_scoped_allow(&custom.statement, &scoped_resources)
             }
             #[cfg(test)]
-            CopiedGrants::All => false,
+            Rendering::Earlier => false,
         };
         if !admitted {
             merge_statement(&mut statements, custom.clone());
         }
     }
+    let scoped_resources = match rendering {
+        Rendering::Current => widen_scoped_patterns(context, prefix, &scoped_resources)?,
+        Rendering::Requirement => scoped_resources.into_iter().cloned().collect(),
+        #[cfg(test)]
+        Rendering::Earlier => scoped_resources.into_iter().cloned().collect(),
+    };
     // Rendered statements and resources that come from the stack's grants rather than the
     // stack-independent ceiling are attributed to their sources, to name them on overflow.
     let mut contributions = Contributions::default();
@@ -600,7 +625,7 @@ fn render_boundary(
     );
     let policy = json!({"Version": "2012-10-17", "Statement": rendered});
     let size = minified_size(&policy);
-    if size > MANAGED_POLICY_LIMIT {
+    if size > MANAGED_POLICY_LIMIT && rendering != Rendering::Requirement {
         return Err(AlienError::new(ErrorData::PermissionsBoundaryTooLarge {
             size,
             limit: MANAGED_POLICY_LIMIT,
@@ -615,6 +640,71 @@ const CATALOG_SOURCE: &str = "runtime catalog";
 
 /// Label for sharing Denies split out because grants name their actions exactly.
 const EXEMPTED_DENIES: &str = "sharing Denies lifted for grants naming their actions";
+
+/// Scoped patterns of one service rendered as a single wider pattern, with `{region}`,
+/// `{account}` and `{prefix}` standing for the context's values. A wider pattern only admits
+/// more names that start with the stack prefix right after a `/` separator, in a service whose
+/// catalog grants already reach the stack's resources there. It is used only when every member
+/// is scoped, and grants are still proven admitted against the members.
+///
+/// - CodeBuild `*/<prefix>-*` newly matches other CodeBuild resource types named with the
+///   prefix, such as `build/<prefix>-…`, `build-batch/<prefix>-…`, `report/<prefix>-…` and
+///   `fleet/<prefix>-…`.
+/// - CloudWatch Logs `log-group:/aws/*/<prefix>-*` newly matches log groups whose last path
+///   segment, or any segment after `/aws/`, starts with the prefix, such as
+///   `/aws/ecs/<prefix>-…` or `/aws/rds/cluster/<prefix>-…`, and the CodeBuild log group
+///   itself rather than only its streams.
+const WIDENED_SCOPED_PATTERNS: &[(&[&str], &str)] = &[
+    (
+        &[
+            "arn:aws:codebuild:{region}:{account}:project/{prefix}-*",
+            "arn:aws:codebuild:{region}:{account}:report-group/{prefix}-*",
+        ],
+        "arn:aws:codebuild:{region}:{account}:*/{prefix}-*",
+    ),
+    (
+        &[
+            "arn:aws:logs:{region}:{account}:log-group:/aws/codebuild/{prefix}-*:*",
+            "arn:aws:logs:{region}:{account}:log-group:/aws/lambda/{prefix}-*",
+        ],
+        "arn:aws:logs:{region}:{account}:log-group:/aws/*/{prefix}-*",
+    ),
+];
+
+/// The scoped patterns to render, with each complete group of [`WIDENED_SCOPED_PATTERNS`]
+/// replaced by its wider pattern.
+fn widen_scoped_patterns(
+    context: &PermissionContext,
+    prefix: &str,
+    scoped: &[&String],
+) -> Result<Vec<String>> {
+    let variable = |name: &str, value: &Option<String>| {
+        value.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::VariableNotFound {
+                variable: name.to_string(),
+            })
+        })
+    };
+    let region = variable("awsRegion", &context.aws_region)?;
+    let account = variable("awsAccountId", &context.aws_account_id)?;
+    let render = |pattern: &str| {
+        pattern
+            .replace("{region}", &region)
+            .replace("{account}", &account)
+            .replace("{prefix}", prefix)
+    };
+    let mut rendered: BTreeSet<String> = scoped.iter().map(|pattern| pattern.to_string()).collect();
+    for (members, widened) in WIDENED_SCOPED_PATTERNS {
+        let members: Vec<_> = members.iter().map(|member| render(member)).collect();
+        if members.iter().all(|member| rendered.contains(member)) {
+            for member in &members {
+                rendered.remove(member);
+            }
+            rendered.insert(render(widened));
+        }
+    }
+    Ok(rendered.into_iter().collect())
+}
 
 /// Characters the stack's own grants add to the boundary, by grant source. Runtime catalog
 /// statements, the two base Allows and unexempted Denies are the stack-independent rest.
@@ -1944,15 +2034,44 @@ mod tests {
         pattern.replace('*', "probe").replace('?', "p")
     }
 
-    /// Render `stack` before and after skipping admitted grants, and require the same decision
-    /// for every runtime catalog action and every sharing action, on stack, external and
-    /// foreign resources, including each copied grant's own requests. Returns both documents.
+    /// Requests on resources only [`WIDENED_SCOPED_PATTERNS`] admit, all named with the stack
+    /// prefix right after a `/`, and requests the widened patterns must still not admit.
+    fn widening_probes() -> (Vec<String>, Vec<String>) {
+        let prefix = "s".repeat(40);
+        let codebuild = "arn:aws:codebuild:ap-southeast-7:123456789012";
+        let logs = "arn:aws:logs:ap-southeast-7:123456789012:log-group";
+        let widened = vec![
+            format!("{codebuild}:build/{prefix}-images:0a1b2c3d"),
+            format!("{codebuild}:build-batch/{prefix}-images:0a1b2c3d"),
+            format!("{codebuild}:report/{prefix}-tests:0a1b2c3d"),
+            format!("{codebuild}:fleet/{prefix}-runners"),
+            format!("{logs}:/aws/codebuild/{prefix}-images"),
+            format!("{logs}:/aws/ecs/{prefix}-api"),
+            format!("{logs}:/aws/rds/cluster/{prefix}-db/postgresql"),
+        ];
+        let excluded = vec![
+            format!("{codebuild}:project/other-{prefix}-images"),
+            format!("{codebuild}:project/{prefix}images"),
+            format!("{logs}:/aws/ecs/team-{prefix}-api"),
+            format!("{logs}:/{prefix}-api"),
+            format!("{logs}:/custom/{prefix}-api"),
+            format!("arn:aws:logs:ap-southeast-7:999999999999:log-group:/aws/ecs/{prefix}-api"),
+            format!("arn:aws:codebuild:us-east-1:123456789012:fleet/{prefix}-runners"),
+        ];
+        (widened, excluded)
+    }
+
+    /// Render `stack` with the earlier renderer and the current one, and require the same
+    /// decision for every runtime catalog action and every sharing action, on stack, external
+    /// and foreign resources, including each copied grant's own requests. The only exception is
+    /// the documented widening: non-IAM actions on [`widening_probes`] resources become
+    /// allowed. Returns both documents.
     fn assert_same_decisions(stack: &Stack) -> (Value, Value) {
         let before = stack_boundary(
             stack,
             &context(),
             |_, scope| key_context(scope),
-            CopiedGrants::All,
+            Rendering::Earlier,
         )
         .unwrap();
         let after =
@@ -2011,22 +2130,35 @@ mod tests {
             })
             .collect();
         resources.extend(foreign);
+        let (widened, excluded) = widening_probes();
+        resources.extend(widened.iter().cloned());
+        resources.extend(excluded);
 
         let mut decisions = BTreeSet::new();
+        let mut newly_allowed = BTreeSet::new();
         for action in &actions {
             for resource in &resources {
                 for conditions_hold in [true, false] {
                     let decision = decide(&after, action, resource, conditions_hold);
-                    assert_eq!(
-                        decide(&before, action, resource, conditions_hold),
-                        decision,
-                        "{action} on {resource} (conditions hold: {conditions_hold})"
-                    );
+                    let earlier = decide(&before, action, resource, conditions_hold);
+                    if earlier != decision {
+                        assert!(
+                            earlier == Decision::NotAllowed
+                                && decision == Decision::Allowed
+                                && widened.contains(resource)
+                                && !action_pattern_matches("iam:*", action),
+                            "{action} on {resource} (conditions hold: {conditions_hold}): \
+                             {earlier:?} before, {decision:?} now"
+                        );
+                        newly_allowed.insert(resource.clone());
+                    }
                     decisions.insert(format!("{decision:?}"));
                 }
             }
         }
         assert_eq!(decisions.len(), 3, "probes must reach every decision");
+        // Each documented widening is real, so the probes would notice it disappear.
+        assert_eq!(newly_allowed, widened.into_iter().collect());
         (before, after)
     }
 
@@ -2143,7 +2275,8 @@ mod tests {
             .build();
 
         let (before, after) = assert_same_decisions(&stack);
-        assert_eq!(after, before);
+        // Every grant is copied; only the scoped patterns are merged.
+        assert_eq!(statements_of(&after)[1..], statements_of(&before)[1..]);
         let rendered = |resource: &str| {
             resource
                 .replace("${awsRegion}", "ap-southeast-7")
@@ -2182,7 +2315,7 @@ mod tests {
             &stack,
             &context(),
             |_, scope| key_context(scope),
-            CopiedGrants::All,
+            Rendering::Earlier,
         )
         .expect_err("copied grants exceed the managed policy limit");
         assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
@@ -2208,6 +2341,54 @@ mod tests {
             }),
         );
         assert_eq!(boundary, expected);
+    }
+
+    /// Installed boundaries are checked against the requirement. Both today's document, with
+    /// merged scoped patterns, and one installed earlier, listing them separately, cover it.
+    #[test]
+    fn merged_and_separate_scoped_patterns_both_cover_the_requirement() {
+        let stack = Stack::new("test".to_string())
+            .permission("kept", kept_grants_profile())
+            .add(
+                alien_core::Key::new("encryption".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let current =
+            aws_stack_permissions_boundary(&stack, &context(), |_, scope| key_context(scope))
+                .unwrap();
+        let requirement =
+            aws_stack_boundary_requirement(&stack, &context(), |_, scope| key_context(scope))
+                .unwrap();
+        assert_eq!(
+            statements_of(&current)[1..],
+            statements_of(&requirement)[1..]
+        );
+        let scoped = |boundary: &Value| -> BTreeSet<String> {
+            values_of(&statements_of(boundary)[0]["Resource"])
+                .into_iter()
+                .map(String::from)
+                .collect()
+        };
+        let prefix = "s".repeat(40);
+        let render = |pattern: &str| {
+            pattern
+                .replace("{region}", "ap-southeast-7")
+                .replace("{account}", "123456789012")
+                .replace("{prefix}", &prefix)
+        };
+        let mut merged = scoped(&requirement);
+        for (members, widened) in WIDENED_SCOPED_PATTERNS {
+            for member in *members {
+                assert!(merged.remove(&render(member)), "{member} is not scoped");
+            }
+            merged.insert(render(widened));
+        }
+        assert_eq!(scoped(&current), merged);
+        let covers = super::super::aws_permissions_boundary_covers;
+        assert!(covers(&current, &requirement).unwrap());
+        assert!(covers(&requirement, &requirement).unwrap());
+        assert!(!covers(&requirement, &current).unwrap());
     }
 
     /// Grants outside the stack's scope still count, and still fail with the actionable error.
@@ -2315,5 +2496,9 @@ mod tests {
             )),
             "{largest_contributors}"
         );
+        // The requirement is never installed, so it renders whatever its size.
+        let requirement = aws_stack_boundary_requirement(&stack, &context(), |_, _| Ok(context()))
+            .expect("the requirement has no size limit");
+        assert!(minified_size(&requirement) > MANAGED_POLICY_LIMIT);
     }
 }

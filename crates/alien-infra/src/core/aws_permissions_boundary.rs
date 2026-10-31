@@ -6,7 +6,10 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    generators::{aws_permissions_boundary_covers, aws_stack_permissions_boundary},
+    generators::{
+        aws_permissions_boundary_covers, aws_stack_boundary_requirement,
+        aws_stack_permissions_boundary,
+    },
     ErrorData as PermissionErrorData, PermissionContext,
 };
 use serde::de::DeserializeOwned;
@@ -25,7 +28,7 @@ use crate::{
     worker::AwsWorkerController,
 };
 
-/// Generate the required boundary for direct setup or a deployment compatibility check.
+/// Generate the boundary direct setup installs.
 ///
 /// `context` supplies the deployment account, region, prefix and management identity.
 /// Existing resources use durable controller names, including imported names outside
@@ -36,10 +39,38 @@ pub fn aws_permissions_boundary_for_stack(
     state: &StackState,
     context: &PermissionContext,
 ) -> Result<Value> {
+    boundary_for_stack(stack, state, context, |stack, base, resolve| {
+        aws_stack_permissions_boundary(stack, base, resolve)
+    })
+}
+
+/// Generate the ceiling an installed boundary must cover for this stack, resolved as
+/// [`aws_permissions_boundary_for_stack`]. Boundaries installed by earlier setups list scoped
+/// patterns that today's are merged from, and still cover it.
+pub fn aws_permissions_boundary_requirement_for_stack(
+    stack: &Stack,
+    state: &StackState,
+    context: &PermissionContext,
+) -> Result<Value> {
+    boundary_for_stack(stack, state, context, |stack, base, resolve| {
+        aws_stack_boundary_requirement(stack, base, resolve)
+    })
+}
+
+fn boundary_for_stack(
+    stack: &Stack,
+    state: &StackState,
+    context: &PermissionContext,
+    render: impl FnOnce(
+        &Stack,
+        &PermissionContext,
+        &mut dyn FnMut(&str, &str) -> alien_permissions::Result<PermissionContext>,
+    ) -> alien_permissions::Result<Value>,
+) -> Result<Value> {
     let mut base = context.clone();
     base.resource_id = None;
     base.resource_name = None;
-    aws_stack_permissions_boundary(stack, &base, |_, scope| {
+    render(stack, &base, &mut |_, scope| {
         boundary_grant_context(stack, state, &base, scope).context(
             PermissionErrorData::GeneratorError {
                 platform: "aws".to_string(),
@@ -109,7 +140,7 @@ pub fn validate_installed_aws_permissions_boundary(
                 )));
             }
         }
-        let required = aws_permissions_boundary_for_stack(stack, state, &context)
+        let required = aws_permissions_boundary_requirement_for_stack(stack, state, &context)
             .context(setup_required(format!(
                 "Cannot resolve the permissions required by boundary '{arn}'; regenerate and rerun setup"
             )))?;

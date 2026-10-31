@@ -383,20 +383,19 @@ fn pattern_covers(installed: &str, required: &str) -> bool {
         .take_while(|(left, right)| left == right)
         .map(|(character, _)| character.len_utf8())
         .sum::<usize>();
-    let installed = &installed[..installed.len() - common_suffix];
-    let required = &required[..required.len() - common_suffix];
-    if let Some(prefix) = installed.strip_suffix('*') {
-        if !prefix.contains(['*', '?']) && required.starts_with(prefix) {
+    let installed_head = &installed[..installed.len() - common_suffix];
+    let required_head = &required[..required.len() - common_suffix];
+    if let Some(prefix) = installed_head.strip_suffix('*') {
+        if !prefix.contains(['*', '?']) && required_head.starts_with(prefix) {
             return true;
         }
     }
-    // Matching a requested wildcard as literal text is not a subset proof (e.g. '?' vs '*').
-    if required.contains(['*', '?']) {
-        return false;
-    }
+    // A requested wildcard may only fall within an installed `*`, or a requested `?` on an
+    // installed `?`. Every string the requested pattern matches then substitutes into that
+    // installed wildcard, which is a subset proof. Matching it as literal text is not.
     let expression = regex::escape(installed)
         .replace(r"\*", ".*")
-        .replace(r"\?", ".");
+        .replace(r"\?", "[^*]");
     regex::Regex::new(&format!("\\A{expression}\\z")).is_ok_and(|re| re.is_match(required))
 }
 
@@ -464,7 +463,20 @@ mod tests {
             ("prefix?", "prefix*", false),
             ("prefix*", "prefix?", true),
             ("prefix*", "pre*", false),
-            ("a*b", "ax*b", false), // conservative, not general glob inclusion
+            ("a*b", "ax*b", true),
+            ("a*b", "a*xb", true),
+            ("a?b", "a*b", false),
+            ("a*c*b", "a*b", false),
+            (
+                "arn:aws:logs:r:1:log-group:/aws/*/p-*",
+                "arn:aws:logs:r:1:log-group:/aws/codebuild/p-build:*",
+                true,
+            ),
+            (
+                "arn:aws:logs:r:1:log-group:/aws/*/p-*",
+                "arn:aws:logs:r:1:log-group:/aws/*-p-*",
+                false,
+            ),
             ("a*b", "axxb", true),
             ("a?b", "ab", false),
             ("a?b", "axb", true),

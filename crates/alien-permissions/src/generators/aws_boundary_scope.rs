@@ -126,9 +126,10 @@ mod tests {
     /// and ownership Allows, the runtime catalog statements outside the stack prefix, and the
     /// Denies. A stack's own grants outside its prefix, exact key ARNs and exempted Denies must
     /// fit in the rest of IAM's 6,144-character limit, so growing this part shrinks the room of
-    /// every stack. It is today's size: a catalog change that grows it needs this budget
-    /// raised, deliberately, in review.
-    const STACK_INDEPENDENT_BUDGET: usize = 5_060;
+    /// every stack. It is 4,828 characters today, which leaves more than 20% of the limit to
+    /// the stack. A catalog change that grows it past the budget needs the budget raised,
+    /// deliberately, in review.
+    const STACK_INDEPENDENT_BUDGET: usize = 4_900;
 
     #[test]
     fn stack_independent_boundary_stays_within_its_budget() {
