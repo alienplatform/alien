@@ -354,8 +354,10 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     finish_tracked_deletion(tracker.as_mut(), args.name.as_deref(), args.erase_data)?;
 
     output::step(total_steps, total_steps, "Done!");
-    if args.erase_data {
+    if args.erase_data && site_bound.is_empty() {
         output::success("Deployment and its durable data erased successfully.");
+    } else if args.erase_data {
+        output::success("Deployment and the durable data Alien created erased successfully.");
     } else {
         output::success("Deployment stopped. Durable data and recovery tracking retained; use --erase-data to erase later.");
     }
