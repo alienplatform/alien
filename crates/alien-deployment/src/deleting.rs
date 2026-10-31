@@ -630,6 +630,9 @@ pub(crate) fn retained_resource_ids(current: &DeploymentState, state: &StackStat
 /// An AWS artifact registry is not one: its controller owns only the pull and push roles, and
 /// deleting it removes that access while the repositories and their images stay in the account.
 /// GCP and Azure registries delete their repository or registry, so they are retained.
+///
+/// Nor is a resource recorded as adopted from a binding: whoever supplied it keeps it, and
+/// Alien can neither recover nor erase it.
 pub fn installed_durable_resource_ids(state: &StackState) -> Vec<String> {
     state
         .resources
@@ -665,6 +668,7 @@ pub fn installed_durable_resource_ids(state: &StackState) -> Vec<String> {
                     .is_some_and(|id| !id.is_empty())
             });
             (resource.status != ResourceStatus::Deleted
+                && !resource.external_binding
                 && storage_installed
                 && !(resource.status == ResourceStatus::Pending
                     && resource.internal_state.is_none()
@@ -1321,6 +1325,7 @@ mod tests {
             dependencies: Vec::new(),
             last_failed_state: None,
             remote_binding_params: None,
+            external_binding: false,
         }
     }
 
@@ -2428,5 +2433,62 @@ mod tests {
         ] {
             assert_eq!(super::destroy_without_runtime(&state), None, "{case}");
         }
+    }
+
+    /// A database supplied at the site and adopted there is the site's to keep: a retaining
+    /// delete has nothing of Alien's to hold for it, and it doesn't block forgetting the record.
+    /// A controller-less resource the record doesn't show as bound still counts.
+    #[tokio::test]
+    async fn a_resource_recorded_as_bound_is_not_retained_data() {
+        let stack = Stack::new("site".to_string())
+            .add(
+                alien_core::Postgres::new("database".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let bindings: ExternalBindings = serde_json::from_value(serde_json::json!({
+            "database": {
+                "type": "postgres",
+                "service": "external",
+                "host": "release-pg-database.site.svc",
+                "port": 5432,
+                "database": "database",
+                "username": "postgres",
+                "password": {"secretKeyRef": {"name": "release-pg-database", "key": "password"}},
+                "sslMode": "disable"
+            }
+        }))
+        .unwrap();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(bindings)
+            .allow_frozen_changes(false)
+            .build();
+        let mut state = StackExecutor::builder(&stack, ClientConfig::Test)
+            .deployment_config(&config)
+            .build()
+            .unwrap()
+            .run_until_synced(StackState::new(Platform::Test))
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(state.resources["database"].status, ResourceStatus::Running);
+
+        assert!(super::installed_durable_resource_ids(&state).is_empty());
+
+        state
+            .resources
+            .get_mut("database")
+            .unwrap()
+            .external_binding = false;
+        assert_eq!(
+            super::installed_durable_resource_ids(&state),
+            vec!["database".to_string()]
+        );
     }
 }

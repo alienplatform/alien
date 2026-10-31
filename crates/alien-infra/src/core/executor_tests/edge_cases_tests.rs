@@ -978,3 +978,48 @@ async fn test_external_binding_resource_deletes_without_controller() -> Result<(
 
     Ok(())
 }
+
+/// A record adopted before adoption was recorded learns it from the next executor that still
+/// holds the binding, so a later teardown without the binding can release the resource.
+#[tokio::test]
+async fn test_executor_holding_the_binding_records_an_earlier_adoption() -> Result<()> {
+    let stack = Stack::new("external-binding-backfill-test".to_owned())
+        .add(test_storage("external-store"), ResourceLifecycle::Frozen)
+        .build();
+    let deployment_config = external_storage_config("external-store");
+    let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&deployment_config)
+        .build()?;
+    let mut state = run_to_synced(&executor, new_test_state()).await?;
+    let adopted = state.resources.get_mut("external-store").unwrap();
+    assert!(adopted.external_binding, "adoption must be recorded");
+    adopted.external_binding = false;
+
+    let refreshed = executor.refresh(state).await?.next_state;
+
+    let store = &refreshed.resources["external-store"];
+    assert!(store.external_binding);
+    assert_eq!(store.status, ResourceStatus::Running);
+    assert!(store.internal_state.is_none());
+
+    let teardown = StackExecutor::for_deletion(
+        ClientConfig::Test,
+        &DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::new())
+            .allow_frozen_changes(false)
+            .build(),
+        None,
+    )?;
+    let deleted = run_to_synced(&teardown, refreshed).await?;
+    assert_eq!(
+        deleted.resources["external-store"].status,
+        ResourceStatus::Deleted
+    );
+    Ok(())
+}

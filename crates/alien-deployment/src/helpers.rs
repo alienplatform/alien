@@ -1889,6 +1889,7 @@ mod tests {
             dependencies: Vec::new(),
             last_failed_state: None,
             remote_binding_params: None,
+            external_binding: false,
         }
     }
 
