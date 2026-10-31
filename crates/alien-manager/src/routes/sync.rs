@@ -1384,6 +1384,67 @@ mod tests {
         );
     }
 
+    fn pull_record_in_cluster(
+        status: &str,
+        ownership: alien_core::KubernetesClusterOwnership,
+    ) -> DeploymentRecord {
+        let mut record = deployment_record_with_state(status, None);
+        record.stack_settings = Some(StackSettings {
+            deployment_model: alien_core::DeploymentModel::Pull,
+            kubernetes: Some(alien_core::KubernetesSettings {
+                cluster: Some(alien_core::KubernetesClusterSettings {
+                    ownership,
+                    namespace: Some("application".to_string()),
+                    cloud: None,
+                }),
+                exposure: None,
+            }),
+            ..Default::default()
+        });
+        record
+    }
+
+    /// An Operator installed into an existing cluster gets no setup-owned management
+    /// resource, so its update renders without the identity the manager can't resolve.
+    /// An Operator whose cluster the setup manages still needs it.
+    #[tokio::test]
+    async fn an_existing_cluster_pull_update_renders_without_the_management_identity() {
+        let sync = sync_without_management_identity(pull_record_in_cluster(
+            "update-pending",
+            alien_core::KubernetesClusterOwnership::Existing,
+        ))
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        let target = sync.response.get("target").expect("update target");
+        assert!(
+            target["config"].get("managementConfig").is_none(),
+            "{target}"
+        );
+        assert!(
+            sync.reconciled
+                .iter()
+                .all(|data| data.state.status == DeploymentStatus::UpdatePending),
+            "no failure saved"
+        );
+
+        let sync = sync_without_management_identity(pull_record_in_cluster(
+            "update-pending",
+            alien_core::KubernetesClusterOwnership::Managed,
+        ))
+        .await;
+        assert_eq!(
+            sync.status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{}",
+            sync.response
+        );
+        assert_eq!(sync.reconciled.len(), 1);
+        assert_eq!(
+            sync.reconciled[0].state.status,
+            DeploymentStatus::UpdateFailed
+        );
+    }
+
     /// Deleting a pull deployment never renders setup, so the Operator gets its delete
     /// target without the management identity.
     #[tokio::test]

@@ -29,6 +29,7 @@ use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy,
 use alien_error::{AlienError, Context, GenericError};
 use alien_infra::DefaultPlatformServiceProvider;
 use alien_local::{LocalBindingsProvider, LocalContainerManager};
+use alien_preflights::mutations::remote_stack_management::operator_in_existing_cluster;
 
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
@@ -1501,7 +1502,8 @@ pub(crate) fn operation_renders_setup(status: DeploymentStatus) -> bool {
 /// then reads as removed and makes every update of an imported setup fail with
 /// DEPLOYMENT_SETUP_REQUIRED. Other operations (see [`operation_renders_setup`]) never consult
 /// the resolver, so a manager that can't render a platform's setup can still delete and refresh
-/// its deployments.
+/// its deployments. An Operator in an existing cluster renders no management resource, so for
+/// it a failure renders without the identity.
 pub(crate) async fn resolve_deployment_management_config(
     credential_resolver: &dyn CredentialResolver,
     deployment: &DeploymentRecord,
@@ -1513,7 +1515,7 @@ pub(crate) async fn resolve_deployment_management_config(
     if !operation_renders_setup(parse_status(&deployment.status)) {
         return Ok(None);
     }
-    credential_resolver
+    let resolved = credential_resolver
         .resolve_management_config(platform)
         .await
         .context(GenericError {
@@ -1521,7 +1523,28 @@ pub(crate) async fn resolve_deployment_management_config(
                 "Failed to resolve the {platform} management identity for deployment {}",
                 deployment.id
             ),
-        })
+        });
+    match resolved {
+        // An Operator in an existing cluster gets no setup-owned management resource, so its
+        // render doesn't depend on the identity.
+        Err(error)
+            if deployment.stack_settings.as_ref().is_some_and(|settings| {
+                operator_in_existing_cluster(
+                    deployment.platform,
+                    deployment.base_platform,
+                    settings,
+                )
+            }) =>
+        {
+            warn!(
+                deployment_id = %deployment.id,
+                %error,
+                "Rendering an existing-cluster Operator's target without the management identity, which its setup doesn't use"
+            );
+            Ok(None)
+        }
+        resolved => resolved,
+    }
 }
 
 impl RunnerConfigSources<'_> {

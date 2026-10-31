@@ -6,7 +6,7 @@ use crate::{
 };
 use alien_core::{
     DeploymentConfig, DeploymentModel, KubernetesClusterOwnership, Platform, RemoteStackManagement,
-    ResourceEntry, ResourceLifecycle, Stack, StackState,
+    ResourceEntry, ResourceLifecycle, Stack, StackSettings, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -18,6 +18,36 @@ use tracing::{debug, info};
 /// AWS, GCP, and Azure platforms. For other platforms, cross-account management
 /// is not applicable.
 pub struct RemoteStackManagementMutation;
+
+fn is_cloud_backed_kubernetes_pull(
+    platform: Platform,
+    base_platform: Option<Platform>,
+    stack_settings: &StackSettings,
+) -> bool {
+    platform == Platform::Kubernetes
+        && matches!(
+            base_platform.unwrap_or(platform),
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        )
+        && stack_settings.deployment_model == DeploymentModel::Pull
+}
+
+/// Whether the deployment is a cloud-backed Kubernetes pull deployment whose
+/// operator is installed into an existing cluster. That operator already has its
+/// workload identity, so the stack gets no setup-owned management identity to
+/// provision or import.
+pub fn operator_in_existing_cluster(
+    platform: Platform,
+    base_platform: Option<Platform>,
+    stack_settings: &StackSettings,
+) -> bool {
+    is_cloud_backed_kubernetes_pull(platform, base_platform, stack_settings)
+        && stack_settings
+            .kubernetes
+            .as_ref()
+            .and_then(|settings| settings.cluster.as_ref())
+            .is_some_and(|cluster| cluster.ownership != KubernetesClusterOwnership::Managed)
+}
 
 #[async_trait]
 impl StackMutation for RemoteStackManagementMutation {
@@ -50,24 +80,10 @@ impl StackMutation for RemoteStackManagementMutation {
             return false;
         }
 
-        let cloud_backed_kubernetes_pull = platform == Platform::Kubernetes
-            && matches!(
-                base_platform,
-                Platform::Aws | Platform::Gcp | Platform::Azure
-            )
-            && config.stack_settings.deployment_model == DeploymentModel::Pull;
+        let cloud_backed_kubernetes_pull =
+            is_cloud_backed_kubernetes_pull(platform, config.base_platform, &config.stack_settings);
 
-        // An operator installed into an existing cluster already has its
-        // workload identity. There is no setup-owned management identity to
-        // provision or import in this deployment.
-        if cloud_backed_kubernetes_pull
-            && config
-                .stack_settings
-                .kubernetes
-                .as_ref()
-                .and_then(|settings| settings.cluster.as_ref())
-                .is_some_and(|cluster| cluster.ownership != KubernetesClusterOwnership::Managed)
-        {
+        if operator_in_existing_cluster(platform, config.base_platform, &config.stack_settings) {
             return false;
         }
 
