@@ -132,33 +132,46 @@ async fn workload_rewrite_policy(
     ctx: &TestContext,
     bucket: &str,
 ) -> anyhow::Result<RewriteResponse> {
+    workload_post(ctx, "/rewrite-bucket-policy", bucket).await
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteResponse {
+    deleted: bool,
+    code: Option<String>,
+}
+
+/// Asks the Worker to delete a bucket with its own credentials.
+async fn workload_delete_bucket(ctx: &TestContext, bucket: &str) -> anyhow::Result<DeleteResponse> {
+    workload_post(ctx, "/delete-bucket", bucket).await
+}
+
+/// Posts `{ bucket }` to one of the Worker's bucket probes, authorized by the deployment id.
+async fn workload_post<T: serde::de::DeserializeOwned>(
+    ctx: &TestContext,
+    path: &str,
+    bucket: &str,
+) -> anyhow::Result<T> {
     let url = ctx
         .deployment
         .url
         .as_deref()
         .context("the deployment has no public URL")?;
     let response = reqwest::Client::new()
-        .post(format!(
-            "{}/rewrite-bucket-policy",
-            url.trim_end_matches('/')
-        ))
+        .post(format!("{}{path}", url.trim_end_matches('/')))
         .bearer_auth(&ctx.deployment.id)
         .json(&serde_json::json!({ "bucket": bucket }))
         .timeout(Duration::from_secs(60))
         .send()
         .await
-        .context("POST /rewrite-bucket-policy")?;
+        .with_context(|| format!("POST {path}"))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .context("read /rewrite-bucket-policy response")?;
-    ensure!(
-        status.is_success(),
-        "/rewrite-bucket-policy answered {status}: {body}"
-    );
-    serde_json::from_str(&body)
-        .with_context(|| format!("parse /rewrite-bucket-policy response: {body}"))
+        .with_context(|| format!("read {path} response"))?;
+    ensure!(status.is_success(), "{path} answered {status}: {body}");
+    serde_json::from_str(&body).with_context(|| format!("parse {path} response: {body}"))
 }
 
 /// A bundle decides what a sandbox runs, so only the deployment's management role may write one.
@@ -180,33 +193,48 @@ pub async fn check_workload_cannot_write_bundles(ctx: &TestContext) -> anyhow::R
     // The same Worker also holds stack-wide storage provision: it may rewrite its own bucket's
     // policy, and must not be able to lift the bundle bucket's write guard.
     let control = workload_rewrite_policy(ctx, &uploads).await?;
-    if !control.rewritten {
-        // A role the management identity writes carries the deployment's permissions boundary,
-        // which refuses bucket-policy writes to every such role. Only that excuses the control.
-        let role = control
-            .caller_arn
-            .as_deref()
-            .and_then(|arn| arn.split('/').nth(1))
-            .with_context(|| format!("the Worker did not report its role: {control:?}"))?;
-        let bounded = target_iam()
-            .await?
-            .get_role(role)
-            .await
-            .map_err(|error| anyhow::anyhow!("GetRole {role}: {error}"))?
-            .get_role_result
-            .role
-            .permissions_boundary
-            .is_some();
-        ensure!(
-            bounded && control.code.as_deref() == Some("AccessDenied"),
-            "the Worker's stack-wide provision grant should rewrite '{uploads}' policy unless a \
-             permissions boundary refuses it: {control:?}"
-        );
-    }
+    let role = control
+        .caller_arn
+        .as_deref()
+        .and_then(|arn| arn.split('/').nth(1))
+        .with_context(|| format!("the Worker did not report its role: {control:?}"))?;
+    let bounded = target_iam()
+        .await?
+        .get_role(role)
+        .await
+        .map_err(|error| anyhow::anyhow!("GetRole {role}: {error}"))?
+        .get_role_result
+        .role
+        .permissions_boundary
+        .is_some();
+    // A role the management identity writes carries the deployment's permissions boundary, which
+    // refuses bucket-policy writes to every such role. Only that excuses the control.
+    ensure!(
+        control.rewritten || (bounded && control.code.as_deref() == Some("AccessDenied")),
+        "the Worker's stack-wide provision grant should rewrite '{uploads}' policy unless a \
+         permissions boundary refuses it: {control:?}"
+    );
     let attempt = workload_rewrite_policy(ctx, &bundles).await?;
     ensure!(
         !attempt.rewritten && attempt.code.as_deref() == Some("AccessDenied"),
         "the Worker must not rewrite the bundle bucket's policy '{bundles}', got {attempt:?}"
+    );
+
+    // Deleting the bundle bucket and creating one of the same name would drop its write guard.
+    // Both buckets hold an object, so a delete the grant allows is refused as BucketNotEmpty and
+    // removes nothing; only a Deny answers AccessDenied.
+    let control = workload_delete_bucket(ctx, &uploads).await?;
+    ensure!(
+        !control.deleted
+            && (control.code.as_deref() == Some("BucketNotEmpty")
+                || (bounded && control.code.as_deref() == Some("AccessDenied"))),
+        "the Worker's stack-wide provision grant should reach '{uploads}' (BucketNotEmpty) \
+         unless a permissions boundary refuses it: {control:?}"
+    );
+    let attempt = workload_delete_bucket(ctx, &bundles).await?;
+    ensure!(
+        !attempt.deleted && attempt.code.as_deref() == Some("AccessDenied"),
+        "the Worker must not delete the bundle bucket '{bundles}', got {attempt:?}"
     );
 
     let attempt =

@@ -1,6 +1,6 @@
 import { sandbox } from "@alienplatform/sdk"
 import { Hono } from "hono"
-import { rewriteBucketPolicy } from "./s3-policy"
+import { deleteBucket, rewriteBucketPolicy } from "./s3-policy"
 
 // Bun's built-in S3 client, which the Worker runtime provides.
 declare const Bun: {
@@ -85,6 +85,18 @@ app.post("/rewrite-bucket-policy", async c => {
   }
   const { bucket } = (await c.req.json()) as { bucket: string }
   return c.json(await rewriteBucketPolicy(bucket))
+})
+
+// Deletes a bucket with this Worker's credentials. Deleting the bundle bucket and creating one of
+// the same name would drop its write guard, so the grant must not reach it either.
+app.post("/delete-bucket", async c => {
+  const deploymentId = process.env.ALIEN_DEPLOYMENT_ID
+  if (!deploymentId) return c.json({ error: "ALIEN_DEPLOYMENT_ID is not set" }, 503)
+  if (c.req.header("authorization") !== `Bearer ${deploymentId}`) {
+    return c.json({ error: "unauthorized" }, 401)
+  }
+  const { bucket } = (await c.req.json()) as { bucket: string }
+  return c.json(await deleteBucket(bucket))
 })
 
 export default app

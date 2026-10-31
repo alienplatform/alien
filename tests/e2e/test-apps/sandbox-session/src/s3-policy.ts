@@ -1,4 +1,5 @@
-// Reads a bucket's policy and writes it back unchanged, signed with this Worker's own role.
+// Bucket-level calls signed with this Worker's own role: rewriting a bucket's policy unchanged,
+// and deleting a bucket.
 // Bun's S3 client covers objects only, so these calls are signed here (AWS Signature Version 4).
 
 const encoder = new TextEncoder()
@@ -23,7 +24,7 @@ async function hmac(key: ArrayBuffer | Uint8Array, data: string): Promise<ArrayB
 async function signedRequest(
   service: "s3" | "sts",
   host: string,
-  method: "GET" | "PUT",
+  method: "GET" | "PUT" | "DELETE",
   query: string,
   body: string,
 ): Promise<Response> {
@@ -93,4 +94,11 @@ export async function rewriteBucketPolicy(
   return written.ok
     ? { rewritten: true, callerArn: caller }
     : { rewritten: false, code: await errorCode(written), callerArn: caller }
+}
+
+/** Deletes the bucket. S3 refuses a bucket that still holds objects with `BucketNotEmpty`. */
+export async function deleteBucket(bucket: string): Promise<{ deleted: boolean; code?: string }> {
+  const host = `${bucket}.s3.${process.env.AWS_REGION}.amazonaws.com`
+  const response = await signedRequest("s3", host, "DELETE", "", "")
+  return response.ok ? { deleted: true } : { deleted: false, code: await errorCode(response) }
 }
