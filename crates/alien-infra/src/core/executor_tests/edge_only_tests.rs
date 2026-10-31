@@ -185,11 +185,11 @@ async fn a_managed_frozen_resource_records_an_edge_to_an_existing_dependency() {
 fn a_managed_frozen_resource_waits_to_update_for_an_unsettled_new_dependency() {
     let (stack, mut state) = registry_gaining_an_edge();
     state.resources.get_mut("cache").unwrap().status = ResourceStatus::Updating;
-    let executor = executor(&stack, InitialSetupAuthority::ImportedHandoff);
-    let plan = executor.plan(&state).unwrap();
+    let waiting = executor(&stack, InitialSetupAuthority::ImportedHandoff);
+    let plan = waiting.plan(&state).unwrap();
     assert!(plan.dependency_records.is_empty());
     assert!(plan.updates.is_empty(), "deferred until cache settles");
-    assert!(!executor.is_synced(&state));
+    assert!(!waiting.is_synced(&state));
 
     let (stack, mut state) = registry_gaining_an_edge();
     state.resources.remove("cache");
