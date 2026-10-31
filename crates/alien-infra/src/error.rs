@@ -98,6 +98,19 @@ pub enum ErrorData {
         resource_id: String,
     },
 
+    /// A resource adopted from a binding must change, but this executor doesn't have the binding.
+    #[error(
+        code = "EXTERNAL_BINDING_MISSING",
+        message = "Can't update '{resource_id}': it was adopted from a binding this run doesn't have. A binding supplied where the deployment was installed (a Helm value or the chart's database) is known only there, so apply the change there",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    ExternalBindingMissing {
+        /// ID of the adopted resource that can't be updated
+        resource_id: String,
+    },
+
     /// Resource state serialization or deserialization failed.
     #[error(
         code = "RESOURCE_STATE_SERIALIZATION_FAILED",

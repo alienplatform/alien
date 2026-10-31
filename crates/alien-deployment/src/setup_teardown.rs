@@ -2338,6 +2338,38 @@ mod tests {
         assert!(released.error.is_none());
     }
 
+    /// The record as an Operator without adoption recording wrote it: `database` has no
+    /// controller and nothing says it was adopted from a binding.
+    fn without_recorded_adoption(state: &mut DeploymentState) {
+        let mut legacy = serde_json::to_value(state.stack_state.as_ref().unwrap()).unwrap();
+        legacy["resources"]["database"]
+            .as_object_mut()
+            .unwrap()
+            .remove("externalBinding");
+        state.stack_state = Some(serde_json::from_value(legacy).unwrap());
+    }
+
+    /// The failed delete an erase on a version without adoption recording leaves behind: the
+    /// database stays in the record as delete-failed, with that version's error.
+    fn as_left_by_a_failed_erase_before_adoption_was_recorded(state: &mut DeploymentState) {
+        let database = state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("database")
+            .unwrap();
+        *database = database.with_failure(
+            ResourceStatus::DeleteFailed,
+            AlienError::new(alien_infra::ErrorData::ResourceStateSerializationFailed {
+                resource_id: "database".to_string(),
+                message: "Missing controller state for non-external resource deletion".to_string(),
+            })
+            .into_generic(),
+        );
+        state.status = DeploymentStatus::TeardownFailed;
+    }
+
     /// The false erase: a record written before adoption was recorded can't be told apart from
     /// a resource that lost its controller. Teardown must fail on every attempt and keep the
     /// database in the record. Before, the second attempt read the failed delete as never
@@ -2346,19 +2378,18 @@ mod tests {
     #[tokio::test]
     async fn erase_of_a_controllerless_resource_not_recorded_as_bound_fails_on_every_attempt() {
         let mut state = erase_handoff_with_site_bound_database().await;
-        // The record as an operator without adoption recording wrote it.
-        let mut legacy = serde_json::to_value(state.stack_state.as_ref().unwrap()).unwrap();
-        legacy["resources"]["database"]
-            .as_object_mut()
-            .unwrap()
-            .remove("externalBinding");
-        state.stack_state = Some(serde_json::from_value(legacy).unwrap());
+        without_recorded_adoption(&mut state);
 
         let recorded_config = state.stack_state.as_ref().unwrap().resources["database"]
             .config
             .clone();
 
         for attempt in 1..=2 {
+            if attempt == 2 {
+                // Start the retry from the error an older version recorded, so only a retry
+                // that ran the delete again can record why it refused.
+                as_left_by_a_failed_erase_before_adoption_was_recorded(&mut state);
+            }
             let result = erase_without_site_bindings(&mut state).await;
             let failed = match result {
                 Ok(Some(result)) => result.loop_result.outcome == LoopOutcome::Failure,
@@ -2381,14 +2412,16 @@ mod tests {
                 database.config, recorded_config,
                 "attempt {attempt} must keep the database in the record"
             );
+            let error = database
+                .error
+                .as_ref()
+                .expect("the database names why it can't be deleted");
+            assert_eq!(
+                error.code, "RESOURCE_PROVENANCE_UNKNOWN",
+                "attempt {attempt} must retry the delete and refuse it again"
+            );
+            assert!(error.message.contains("'database'"), "{}", error.message);
+            assert!(!error.internal, "the operator must see why");
         }
-
-        let error = state.stack_state.as_ref().unwrap().resources["database"]
-            .error
-            .as_ref()
-            .expect("the database names why it can't be deleted");
-        assert_eq!(error.code, "RESOURCE_PROVENANCE_UNKNOWN");
-        assert!(error.message.contains("'database'"), "{}", error.message);
-        assert!(!error.internal, "the operator must see why");
     }
 }

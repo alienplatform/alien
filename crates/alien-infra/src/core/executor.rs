@@ -2423,6 +2423,22 @@ impl StackExecutor {
                                 state.external_binding = true;
                             });
                             initial_transitions.insert(resource_id.clone(), updated_state);
+                        } else if current_state.external_binding {
+                            // Adopted where its binding was supplied (a Helm value or the
+                            // chart's database), which this executor didn't receive. Only the
+                            // binding says what the new config means for it.
+                            error!(
+                                "Cannot update '{}': it was adopted from a binding this executor doesn't have",
+                                resource_id
+                            );
+                            let failed_update_state = current_state.with_failure(
+                                ResourceStatus::UpdateFailed,
+                                AlienError::new(ErrorData::ExternalBindingMissing {
+                                    resource_id: resource_id.clone(),
+                                })
+                                .into_generic(),
+                            );
+                            initial_transitions.insert(resource_id.clone(), failed_update_state);
                         } else {
                             error!(
                                 "Cannot start update transition for '{}' from state {:?}: no controller state",

@@ -488,6 +488,35 @@ pub(super) fn prepare_for_destroy_matching(
             continue;
         }
 
+        // A resource without a controller has no failed step to resume, so a retry runs its
+        // delete again from the state it was adopted in. The delete releases it if it was
+        // adopted from a binding, and refuses it again otherwise. That covers a delete that
+        // failed before adoption was recorded, and a resource recorded as bound whose update
+        // failed for want of its binding.
+        let controllerless =
+            resource_state.internal_state.is_none() && resource_state.last_failed_state.is_none();
+        let failed_without_controller = resource_state.status == ResourceStatus::DeleteFailed
+            || (resource_state.external_binding
+                && matches!(
+                    resource_state.status,
+                    ResourceStatus::ProvisionFailed
+                        | ResourceStatus::UpdateFailed
+                        | ResourceStatus::RefreshFailed
+                ));
+        if controllerless && failed_without_controller {
+            tracing::info!(
+                resource_id = %resource_id,
+                failed_status = ?resource_state.status,
+                "Restoring a failed resource without a controller as adopted so its delete runs again"
+            );
+            resource_state.status = ResourceStatus::Running;
+            resource_state.progress = None;
+            resource_state.retry_attempt = 0;
+            resource_state.error = None;
+            prepared_resource_ids.push(resource_id.clone());
+            continue;
+        }
+
         match resource_state.status {
             ResourceStatus::ProvisionFailed
             | ResourceStatus::UpdateFailed
