@@ -250,7 +250,10 @@ async fn compiled_worker_consumes_notifications_after_cold_restart() {
     // Cover a complete 30-second safety scan as well as filesystem hints.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(32);
     while tokio::time::Instant::now() < deadline {
-        assert_eq!(assert_records(&root, &expected), 18);
+        assert_eq!(
+            assert_records(&root, &expected),
+            expected.values().sum::<usize>()
+        );
         sleep(Duration::from_millis(250)).await;
     }
     assert_eq!(
