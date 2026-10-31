@@ -20,9 +20,9 @@ use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        downcast, emit_remote_bindings_role_definitions, permission_context,
-        remote_bindings_role_label, remote_stack_management_label, required_label,
-        service_account_principal_id, setup_execution_role_label, setup_management_role_label,
+        ProfileGrants, downcast, emit_profile_grants, emit_remote_bindings_role_definitions,
+        permission_context, remote_bindings_role_label, remote_stack_management_label,
+        required_label, setup_management_role_label,
     },
     expr,
 };
@@ -236,66 +236,18 @@ fn emit_storage_permissions(
     parent_label: &str,
     fragment: &mut TfFragment,
 ) -> Result<()> {
-    for (profile_name, permission_set_refs) in storage_permission_owners(ctx) {
-        let Some(principal_id_expr) = service_account_principal_id(ctx, &profile_name) else {
-            continue;
-        };
-
-        for permission_set_ref in permission_set_refs {
-            let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
-            if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
-            {
-                continue;
-            }
-
-            let generator = AzureRuntimePermissionsGenerator::new();
-            let permission_context = permission_context(storage_label)
+    emit_profile_grants(
+        ctx,
+        fragment,
+        storage_label,
+        ProfileGrants {
+            resource_type: "storage",
+            context: permission_context(storage_label)
                 .with_resource_name(container_name_expr_string(ctx.resource_id))
-                .with_storage_account_name(storage_account_name_expr_string(parent_label));
-            let grant_plan = generator
-                .generate_grant_plan(
-                    &permission_set,
-                    BindingTarget::Resource,
-                    &permission_context,
-                )
-                .context(ErrorData::GenericError {
-                    message: format!(
-                        "failed to generate Azure storage grants for '{}'",
-                        permission_set.id
-                    ),
-                })?;
-
-            for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
-                let role_definition_id = match &binding.role_definition {
-                    AzureRoleDefinitionRef::Predefined { role_definition_id } => {
-                        expr::template(role_definition_id.clone())
-                    }
-                    AzureRoleDefinitionRef::Custom { key } => {
-                        let index =
-                            custom_role_index(&grant_plan.custom_roles, key, &permission_set.id)?;
-                        let role_label =
-                            setup_execution_role_label(&profile_name, &binding.role_name, index);
-                        expr::traversal([
-                            "azurerm_role_definition",
-                            role_label.as_str(),
-                            "role_definition_resource_id",
-                        ])
-                    }
-                };
-                emit_role_assignment(
-                    fragment,
-                    ctx.resource_id,
-                    storage_label,
-                    &profile_name,
-                    binding_index,
-                    &binding.role_name,
-                    expr::template(binding.scope.clone()),
-                    role_definition_id,
-                    principal_id_expr.clone(),
-                )?;
-            }
-        }
-    }
+                .with_storage_account_name(storage_account_name_expr_string(parent_label)),
+            scope: None,
+        },
+    )?;
 
     if let Some(management_label) = remote_stack_management_label(ctx) {
         let management_principal_id_expr = expr::traversal([
@@ -491,20 +443,6 @@ fn emit_role_assignment(
     );
     fragment.resource_blocks.push(assignment);
     Ok(())
-}
-
-fn storage_permission_owners<'a>(
-    ctx: &'a EmitContext<'_>,
-) -> Vec<(String, Vec<&'a PermissionSetReference>)> {
-    let mut owners = Vec::new();
-    for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let refs = resource_permission_refs(profile, ctx.resource_id);
-        if refs.is_empty() {
-            continue;
-        }
-        owners.push((profile_name.clone(), refs));
-    }
-    owners
 }
 
 fn management_permission_refs<'a>(ctx: &'a EmitContext<'_>) -> Vec<&'a PermissionSetReference> {
