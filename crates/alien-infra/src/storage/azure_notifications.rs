@@ -14,17 +14,29 @@ use alien_azure_clients::event_grid::{
     ServiceBusQueueDestinationProperties,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::Storage;
+use alien_core::{storage_notifications::notification_rule_key, Storage, StorageNotification};
 use alien_error::{AlienError, Context};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-pub(super) fn subscription_name(container: &str, index: usize) -> String {
-    // Keep in sync with the Terraform storage emitter. Azure container names
-    // are ASCII; the hash keeps long names distinct after truncation.
-    let head: String = container.chars().take(40).collect();
+/// Every subscription name of this container's rules starts with this. Keep in sync with
+/// the Terraform storage emitter. Azure container names are ASCII; the hash keeps long names
+/// distinct after truncation.
+fn subscription_prefix(container: &str) -> String {
+    let head: String = container.chars().take(28).collect();
     let hash = format!("{:x}", Sha256::digest(container.as_bytes()));
-    format!("{head}-sn-{}-{index}", &hash[..12])
+    format!("{head}-sn-{}-", &hash[..10])
+}
+
+/// A rule's subscription name carries the hash of what the rule delivers, not its position:
+/// adding or removing another rule never replaces it, and a changed rule gets a new name, so
+/// its new subscription can exist before the old one is deleted. At most 59 characters.
+pub(super) fn subscription_name(container: &str, rule: &StorageNotification) -> String {
+    format!(
+        "{}{}",
+        subscription_prefix(container),
+        notification_rule_key(rule)
+    )
 }
 
 pub(super) fn source_id(subscription: &str, group: &str, account: &str) -> String {
@@ -32,7 +44,8 @@ pub(super) fn source_id(subscription: &str, group: &str, account: &str) -> Strin
 }
 
 fn owned(name: &str, container: &str) -> bool {
-    (0..10).any(|index| name == subscription_name(container, index))
+    name.strip_prefix(&subscription_prefix(container))
+        .is_some_and(|key| key.len() == 16 && key.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 fn cloud_error(storage: &str, action: &str) -> ErrorData {
@@ -121,7 +134,7 @@ pub(super) async fn reconcile(
     let client = ctx.service_provider.get_azure_event_grid_client(cfg)?;
     let mut desired = BTreeMap::new();
     if !deleting {
-        for (index, rule) in storage.notifications.iter().enumerate() {
+        for rule in &storage.notifications {
             let queue = ctx.require_dependency::<AzureQueueController>(&rule.queue)?;
             let (Some(namespace), Some(queue_name)) = (&queue.namespace_name, &queue.queue_name)
             else {
@@ -130,7 +143,7 @@ pub(super) async fn reconcile(
                     dependency_id: rule.queue.id.clone(),
                 }));
             };
-            desired.insert(subscription_name(container, index), EventSubscriptionRequest {
+            desired.insert(subscription_name(container, rule), EventSubscriptionRequest {
                 properties: EventSubscriptionRequestProperties {
                     destination: ServiceBusQueueDestination {
                         endpoint_type: "ServiceBusQueue".into(),
@@ -182,6 +195,7 @@ async fn reconcile_subscriptions(
         }
         Err(error) => return Err(error).context(cloud_error(storage, "List")),
     };
+    let mut obsolete = Vec::new();
     for subscription in &existing {
         let Some(name) = subscription.name.as_ref() else {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -224,18 +238,23 @@ async fn reconcile_subscriptions(
                 return Ok(false);
             }
         } else {
-            client
-                .delete_event_subscription(source.into(), name.clone())
-                .await
-                .context(cloud_error(storage, "Delete"))?;
-            return Ok(false);
+            obsolete.push(name);
         }
     }
+    // Create before delete: a changed rule has a new name, so its new subscription delivers
+    // (possibly alongside the old one) before the old one goes.
     if let Some((name, rule)) = desired.into_iter().next() {
         client
             .create_or_update_event_subscription(source.into(), name, rule)
             .await
             .context(cloud_error(storage, "Create"))?;
+        return Ok(false);
+    }
+    if let Some(name) = obsolete.first() {
+        client
+            .delete_event_subscription(source.into(), (*name).clone())
+            .await
+            .context(cloud_error(storage, "Delete"))?;
         return Ok(false);
     }
     Ok(true)
@@ -343,7 +362,7 @@ mod tests {
             });
         let deletes = remote.clone();
         mock.expect_delete_event_subscription()
-            .times(2)
+            .times(3)
             .returning(move |_, name| {
                 assert_ne!(name, "independent-webhook");
                 let mut actual = deletes.lock().unwrap();
@@ -415,9 +434,14 @@ mod tests {
         let actual = remote.lock().unwrap().clone();
         assert_eq!(actual.len(), 3);
         assert_eq!(actual[0], foreign);
+        // The changed rule got a new subscription; the old one is gone.
+        let name = |storage: Storage| subscription_name("test-uploads", &storage.notifications[0]);
+        assert!(!actual
+            .iter()
+            .any(|item| item.name.as_deref() == Some(&name(storage("in/")))));
         let first = actual
             .iter()
-            .find(|item| item.name.as_deref() == Some(&subscription_name("test-uploads", 0)))
+            .find(|item| item.name.as_deref() == Some(&name(storage("changed/"))))
             .unwrap();
         let filter = first.properties.as_ref().unwrap().filter.as_ref().unwrap();
         assert_eq!(
@@ -489,7 +513,7 @@ mod tests {
     /// that is still wanted is deleted and reported, then created afresh on the next pass.
     #[tokio::test]
     async fn failed_subscriptions_are_deleted_and_wanted_ones_are_recreated_on_retry() {
-        let name = subscription_name("test-uploads", 0);
+        let name = subscription_name("test-uploads", &storage("in/").notifications[0]);
         let rule: EventSubscriptionRequest = serde_json::from_value(json!({"properties":{
             "destination":{"endpointType":"ServiceBusQueue","properties":{"resourceId":"queue"}},
             "filter":{"includedEventTypes":["Microsoft.Storage.BlobCreated"],
@@ -556,9 +580,124 @@ mod tests {
         assert_eq!(*created.lock().unwrap(), vec![name]);
     }
 
+    /// Subscriptions are named by what their rule delivers, not its position: inserting a
+    /// rule first and reordering the rest only creates the new one, and a changed rule's new
+    /// subscription is created before the old one is deleted.
+    #[tokio::test]
+    async fn unchanged_rules_survive_edits_and_changed_rules_are_replaced_create_first() {
+        let rule = |prefix: &str, suffix: &str| {
+            StorageNotification::builder()
+                .queue((&Queue::new("work".into()).build()).into())
+                .prefix(prefix.into())
+                .suffix(suffix.into())
+                .build()
+        };
+        let request = |name: &str| -> EventSubscription {
+            serde_json::from_value(
+                json!({"name":name, "properties":{"provisioningState":"Succeeded"}}),
+            )
+            .unwrap()
+        };
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let remote = Arc::new(Mutex::new(Vec::<EventSubscription>::new()));
+        let mut mock = MockEventGridApi::new();
+        let read = remote.clone();
+        mock.expect_list_event_subscriptions()
+            .returning(move |_| Ok(read.lock().unwrap().clone()));
+        let (writes, created) = (remote.clone(), log.clone());
+        mock.expect_create_or_update_event_subscription()
+            .returning(move |_, name, body| {
+                created.lock().unwrap().push(format!("create {name}"));
+                let mut value = serde_json::to_value(body).unwrap();
+                value["name"] = json!(name);
+                value["properties"]["provisioningState"] = json!("Succeeded");
+                let subscription: EventSubscription = serde_json::from_value(value).unwrap();
+                writes.lock().unwrap().push(subscription.clone());
+                Ok(subscription)
+            });
+        let (deletes, deleted) = (remote.clone(), log.clone());
+        mock.expect_delete_event_subscription()
+            .returning(move |_, name| {
+                deleted.lock().unwrap().push(format!("delete {name}"));
+                deletes
+                    .lock()
+                    .unwrap()
+                    .retain(|item| item.name.as_deref() != Some(&name));
+                Ok(())
+            });
+        let name = |rule: &StorageNotification| subscription_name("test-uploads", rule);
+        let run = |rules: Vec<StorageNotification>| {
+            let mut desired = BTreeMap::new();
+            for rule in &rules {
+                desired.insert(
+                    name(rule),
+                    serde_json::from_value(json!({"properties":{
+                        "destination":{"endpointType":"ServiceBusQueue","properties":{"resourceId":"queue"}},
+                        "filter":{"includedEventTypes":["Microsoft.Storage.BlobCreated"],
+                            "subjectBeginsWith":format!("/blobServices/default/containers/test-uploads/blobs/{}", rule.prefix.clone().unwrap()),
+                            "subjectEndsWith":rule.suffix.clone(), "isSubjectCaseSensitive":true},
+                        "eventDeliverySchema":"CloudEventSchemaV1_0"}}))
+                    .unwrap(),
+                );
+            }
+            desired
+        };
+        let converge = |desired: BTreeMap<String, EventSubscriptionRequest>| {
+            let mock = &mock;
+            async move {
+                for _ in 0..10 {
+                    if reconcile_subscriptions()
+                        .client(mock)
+                        .source("source")
+                        .container("test-uploads")
+                        .storage("uploads")
+                        .desired(desired.clone())
+                        .deleting(false)
+                        .call()
+                        .await
+                        .unwrap()
+                    {
+                        return;
+                    }
+                }
+                panic!("did not converge");
+            }
+        };
+        let (a, b) = (rule("in/", ".json"), rule("logs/", ".csv"));
+        converge(run(vec![a.clone(), b.clone()])).await;
+        remote.lock().unwrap().push(request("independent"));
+        log.lock().unwrap().clear();
+
+        let c = rule("new/", ".bin");
+        converge(run(vec![c.clone(), b.clone(), a.clone()])).await;
+        assert_eq!(*log.lock().unwrap(), [format!("create {}", name(&c))]);
+        log.lock().unwrap().clear();
+
+        let changed = rule("logs/", ".txt");
+        converge(run(vec![c.clone(), changed.clone(), a.clone()])).await;
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                format!("create {}", name(&changed)),
+                format!("delete {}", name(&b))
+            ]
+        );
+        let names: Vec<_> = remote
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item.name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            [name(&a), "independent".into(), name(&c), name(&changed)]
+        );
+        assert!(names.iter().all(|name| name.len() <= 64));
+    }
+
     #[tokio::test]
     async fn failed_delete_is_not_cleanup_success() {
-        let name = subscription_name("test-uploads", 0);
+        let name = subscription_name("test-uploads", &storage("in/").notifications[0]);
         let mut mock = MockEventGridApi::new();
         mock.expect_list_event_subscriptions().returning(move |_| {
             Ok(vec![serde_json::from_value(

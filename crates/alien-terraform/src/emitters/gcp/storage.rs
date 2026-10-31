@@ -105,7 +105,7 @@ fn emit_notifications(
         gcs_notification_configs(storage).context(alien_core::ErrorData::GenericError {
             message: format!("Storage '{}' notifications as GCS configs", storage.id()),
         })?;
-    for (index, config) in configs.into_iter().enumerate() {
+    for config in configs {
         let queue_label = ctx.name_for(&config.queue.id).ok_or_else(|| {
             AlienError::new(alien_core::ErrorData::GenericError {
                 message: format!(
@@ -146,7 +146,8 @@ fn emit_notifications(
         let mut attributes = vec![(
             GCS_RULE_ATTRIBUTE.to_string(),
             expr::raw(format!(
-                "format(\"%s/{index}\", google_storage_bucket.{label}.name)"
+                "format(\"%s/{}\", google_storage_bucket.{label}.name)",
+                config.key
             )),
         )];
         attributes.extend(
@@ -156,9 +157,15 @@ fn emit_notifications(
                 .map(|(name, value)| (name, Expression::String(value))),
         );
         body.push(attr("custom_attributes", expr::object(attributes)));
+        // A changed suffix set replaces the group's config: create the new one first, so
+        // the group keeps delivering (possibly twice) during the swap.
+        body.push(nested(block(
+            "lifecycle",
+            [attr("create_before_destroy", Expression::Bool(true))],
+        )));
         fragment.resource_blocks.push(resource_block(
             "google_storage_notification",
-            &format!("{label}_notification_{index}"),
+            &format!("{label}_notification_{}", config.key),
             body,
         ));
     }

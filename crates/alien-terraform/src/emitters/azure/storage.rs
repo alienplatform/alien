@@ -28,7 +28,7 @@ use crate::{
 };
 use alien_core::{
     AzureStorageAccount, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    Result, Storage, import::EmitContext,
+    Result, Storage, import::EmitContext, storage_notifications::notification_rule_key,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
@@ -124,11 +124,12 @@ fn emit_notifications(
     storage: &Storage,
     fragment: &mut TfFragment,
 ) -> Result<()> {
-    for (index, notification) in storage.notifications.iter().enumerate() {
+    for notification in &storage.notifications {
+        let key = notification_rule_key(notification);
         let queue_label = ctx.name_for(&notification.queue.id).ok_or_else(|| {
             AlienError::new(ErrorData::GenericError {
                 message: format!(
-                    "Storage '{}' notification {index} queue '{}' has no Terraform resource",
+                    "Storage '{}' notification queue '{}' has no Terraform resource",
                     storage.id(),
                     notification.queue.id
                 ),
@@ -137,7 +138,7 @@ fn emit_notifications(
         let container = format!("azurerm_storage_container.{label}.name");
         // Match the controller's deterministic name, including long container names.
         let name = expr::raw(format!(
-            "format(\"%s-sn-%s-{index}\", substr({container}, 0, 40), substr(sha256({container}), 0, 12))"
+            "format(\"%s-sn-%s-{key}\", substr({container}, 0, 28), substr(sha256({container}), 0, 10))"
         ));
         let mut filter = vec![
             attr("case_sensitive", Expression::Bool(true)),
@@ -171,7 +172,7 @@ fn emit_notifications(
         // Storage must never take ownership of the shared topic.
         fragment.resource_blocks.push(resource_block(
             "azurerm_eventgrid_event_subscription",
-            &format!("{label}_notification_{index}"),
+            &format!("{label}_notification_{key}"),
             [
                 attr("name", name),
                 attr(

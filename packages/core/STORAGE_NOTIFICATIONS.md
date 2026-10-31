@@ -110,6 +110,14 @@ targets and subscriptions it created.
 
 Workers that only consume the queue need no extra permissions.
 
+Adding, removing or reordering rules leaves every other rule's provider configuration
+untouched. A changed rule's new configuration is created before the old one is removed,
+so it keeps delivering through the change, possibly twice for a short while. Two
+exceptions: a Cloud Storage bucket that already has 10 notification configs (including
+ones made outside Alien) has room only after the old config is removed, so objects
+written in between aren't delivered; and in an Azure Terraform setup a changed rule is a
+new subscription, which Terraform may create after removing the old one.
+
 ### AWS: setup owns the bucket's notification configuration
 
 Once a Storage declares notifications, **setup owns its S3 notification
