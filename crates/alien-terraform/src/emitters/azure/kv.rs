@@ -6,7 +6,7 @@
 //! same `tablestorage` binding the runtime uses in push mode.
 
 use crate::{
-    block::{attr, resource_block},
+    block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, emit_profile_grants, permission_context, remote_bindings_role_label,
@@ -33,18 +33,30 @@ impl TfEmitter for AzureKvEmitter {
 
         let mut fragment = TfFragment::default();
 
+        // Through ARM, like `AzureKvController`: azurerm's `azurerm_storage_table` also reads and
+        // writes the table ACL on the data plane, which Azure Table storage now answers with 415
+        // because the provider sends no `Accept` header, so the table could neither be created
+        // nor refreshed.
         let table = resource_block(
-            "azurerm_storage_table",
+            "azapi_resource",
             label,
             [
-                attr("name", table_name_expr(kv.id())),
                 attr(
-                    "storage_account_name",
-                    expr::traversal(["azurerm_storage_account", &parent_label, "name"]),
+                    "type",
+                    Expression::String(format!("{TABLE_TYPE}@{TABLE_API_VERSION}")),
+                ),
+                attr("name", table_name_expr(kv.id())),
+                attr("parent_id", table_service_id_expr(&parent_label)),
+                // Table properties carry only access policies, which Alien does not set; the
+                // controller sends none either.
+                attr(
+                    "body",
+                    expr::object([("properties", expr::object(Vec::<(&str, Expression)>::new()))]),
                 ),
             ],
         );
         fragment.resource_blocks.push(table);
+        emit_table_migration(&mut fragment, label);
 
         emit_profile_grants(
             ctx,
@@ -53,7 +65,7 @@ impl TfEmitter for AzureKvEmitter {
             ProfileGrants {
                 resource_type: "kv",
                 context: permission_context(label)
-                    .with_resource_name(format!("${{azurerm_storage_table.{label}.name}}"))
+                    .with_resource_name(format!("${{azapi_resource.{label}.name}}"))
                     .with_storage_account_name(format!(
                         "${{azurerm_storage_account.{parent_label}.name}}"
                     )),
@@ -62,12 +74,12 @@ impl TfEmitter for AzureKvEmitter {
                 // Azure rejects. The binding only touches its table's entities, so setup grants
                 // on the table, as it does for remote access.
                 scope: Some(expr::template(format!(
-                    "/subscriptions/${{var.azure_subscription_id}}/resourceGroups/${{var.azure_resource_group_name}}/providers/Microsoft.Storage/storageAccounts/${{azurerm_storage_account.{parent_label}.name}}/tableServices/default/tables/${{azurerm_storage_table.{label}.name}}"
+                    "/subscriptions/${{var.azure_subscription_id}}/resourceGroups/${{var.azure_resource_group_name}}/providers/Microsoft.Storage/storageAccounts/${{azurerm_storage_account.{parent_label}.name}}/tableServices/default/tables/${{azapi_resource.{label}.name}}"
                 ))),
             },
         )?;
         emit_remote_access(ctx, &mut fragment, label, &parent_label)?;
-        fragment.retain_resources(|kind, _| kind == "azurerm_storage_table");
+        fragment.retain_resources(|kind, _| kind == "azapi_resource");
         Ok(fragment)
     }
 
@@ -83,7 +95,7 @@ impl TfEmitter for AzureKvEmitter {
             ),
             (
                 "tableName",
-                expr::traversal(["azurerm_storage_table", label, "name"]),
+                expr::traversal(["azapi_resource", label, "name"]),
             ),
             (
                 "tableEndpoint",
@@ -111,10 +123,37 @@ impl TfEmitter for AzureKvEmitter {
             ),
             (
                 "tableName",
-                expr::traversal(["azurerm_storage_table", label, "name"]),
+                expr::traversal(["azapi_resource", label, "name"]),
             ),
         ])))
     }
+}
+
+/// The ARM type and API version `AzureKvController` creates tables with.
+const TABLE_TYPE: &str = "Microsoft.Storage/storageAccounts/tableServices/tables";
+pub(crate) const TABLE_API_VERSION: &str = "2024-01-01";
+
+fn table_service_id_expr(parent_label: &str) -> Expression {
+    expr::template(format!(
+        "${{azurerm_storage_account.{parent_label}.id}}/tableServices/default"
+    ))
+}
+
+/// Forget a table an earlier package managed as `azurerm_storage_table` without deleting it.
+/// `import-kv-tables.py` moves it to the `azapi_resource` address. An `import` block can't:
+/// Terraform before 1.15 and OpenTofu reject one in a child module, even with an empty
+/// `for_each`, and this module may be wrapped.
+fn emit_table_migration(fragment: &mut TfFragment, label: &str) {
+    fragment.moved_blocks.push(block(
+        "removed",
+        [
+            attr("from", expr::traversal(["azurerm_storage_table", label])),
+            nested(block(
+                "lifecycle",
+                [attr("destroy", Expression::Bool(false))],
+            )),
+        ],
+    ));
 }
 
 /// Find the auxiliary Azure Storage Account required by Azure KV.
@@ -177,7 +216,7 @@ fn emit_remote_access(
             })
         })?;
     let context = permission_context(label)
-        .with_resource_name(format!("${{azurerm_storage_table.{label}.name}}"))
+        .with_resource_name(format!("${{azapi_resource.{label}.name}}"))
         .with_storage_account_name(format!("${{azurerm_storage_account.{parent_label}.name}}"));
     let plan = AzureRuntimePermissionsGenerator::new()
         .generate_grant_plan(permission_set, BindingTarget::Resource, &context)

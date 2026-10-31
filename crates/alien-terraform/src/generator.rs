@@ -25,7 +25,7 @@ use crate::{
 use alien_core::{
     import::{setup_import_format_version_for_platform, EmitContext},
     ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
-    KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
+    KubernetesExposureSettings, KubernetesSettings, Kv, Network, NetworkSettings, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
     StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
     TelemetryMode, UpdatesMode,
@@ -501,6 +501,10 @@ fn generate_terraform_module_internal(
     // missing provider block fails at `terraform init` rather than at plan, which reads as a
     // broken package rather than a missing declaration.
     let emits_azapi_resource = has_resource_type(&per_resource, "azapi_resource");
+    let emits_azure_kv_tables = platform == alien_core::Platform::Azure
+        && stack.resources().any(|(id, entry)| {
+            entry.config.resource_type() == Kv::RESOURCE_TYPE && per_resource.contains_key(id)
+        });
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
         || has_resource_type(&per_resource, "azapi_resource_action")
         || emits_azapi_resource;
@@ -686,6 +690,10 @@ fn generate_terraform_module_internal(
         );
     }
 
+    if emits_azure_kv_tables {
+        files.insert("import-kv-tables.py".into(), import_kv_tables_helper()?);
+    }
+
     let resource_inventory = resource_inventory(stack, &per_resource);
     for (resource_id, fragment) in per_resource {
         let body = fragment_to_body(fragment);
@@ -753,6 +761,7 @@ fn generate_terraform_module_internal(
             requires_remote_operator_collector_token,
             &stack_inputs,
             emits_azapi_resource,
+            emits_azure_kv_tables,
             profile,
         ),
     );
@@ -4915,6 +4924,7 @@ fn readme_md(
     requires_remote_operator_collector_token: bool,
     stack_inputs: &[StackInputDefinition],
     emits_azapi_resource: bool,
+    emits_azure_kv_tables: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> String {
     let required_env = if registration.is_some() {
@@ -5057,6 +5067,11 @@ fn readme_md(
     } else {
         ""
     };
+    let azure_kv_note = if emits_azure_kv_tables {
+        "## KV tables\n\nKV tables are created through the `azapi` provider at `Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01`, the same Azure Resource Manager resource the runtime manages. Earlier packages declared them as `azurerm_storage_table`, whose table access-policy calls Azure Table storage now rejects with `415 Unsupported Media Type`, so those installations can no longer plan.\n\nTo upgrade such an installation, replace its package with this one and, before the next apply, move each table to its new address. This imports the same table, with its data, and forgets the old address; nothing in Azure changes:\n\n```bash\npython3 ./import-kv-tables.py          # print the moves\npython3 ./import-kv-tables.py --apply\n```\n\nSet `TF_CLI=tofu` for OpenTofu, pass `--module-address` when this module is wrapped, and pass `--var-file` (repeatable) for any variable files the configuration needs. The next plan then only updates `terraform_data.retention_inventory` to the new addresses. A table left tainted by a failed apply needs no `terraform untaint` first.\n\nIf you apply without moving the tables, nothing is deleted. OpenTofu fails on the 415 before changing anything. Terraform forgets the old addresses and then fails to create the tables because they exist; the helper then finds no old addresses, imports the tables the plan would create instead, and the next apply succeeds.\n\n"
+    } else {
+        ""
+    };
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -5064,7 +5079,7 @@ Target: `{target}`.\n\n\
 This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.\n\n\
 {resource_inventory}## Inputs\n\n\
 {inputs}\n\n\
-{azure_sandbox_note}{azure_identity_note}## Run\n\n\
+{azure_sandbox_note}{azure_identity_note}{azure_kv_note}## Run\n\n\
 Use your organization's normal backend and approval workflow. A typical local review looks like:\n\n\
 ```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n{runtime_sandbox_note}\n\
 ## Registration\n\n\
@@ -5084,7 +5099,8 @@ Use your organization's normal backend and approval workflow. A typical local re
         registration_note = registration_note,
         kubernetes_operations = kubernetes_operations,
         azure_sandbox_note = azure_sandbox_note,
-        azure_identity_note = azure_identity_note
+        azure_identity_note = azure_identity_note,
+        azure_kv_note = azure_kv_note
     )
 }
 
@@ -5311,6 +5327,23 @@ fn setup_notification_markers(
             })
         })
         .collect()
+}
+
+/// The upgrade helper that moves `azurerm_storage_table` KV tables to `azapi_resource`, pinned
+/// to the API version the table resource declares.
+fn import_kv_tables_helper() -> Result<String> {
+    let helper = include_str!("templates/import-kv-tables.py");
+    let placeholder = "__TABLE_API_VERSION__";
+    if helper.matches(placeholder).count() != 1 {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "The KV table import helper template lost its API version placeholder".into(),
+        }));
+    }
+    Ok(helper.replacen(
+        placeholder,
+        crate::emitters::azure::kv::TABLE_API_VERSION,
+        1,
+    ))
 }
 
 /// The retention helper. Packages that retain an S3 bucket notification also remove the

@@ -21,6 +21,7 @@ mod generator {
     pub mod azure_compute_tests;
     pub mod azure_data_layer_tests;
     pub mod azure_full_stack_tests;
+    pub mod azure_kv_upgrade_tests;
     pub mod azure_identity_tests;
     pub mod azure_profile_grant_tests;
     pub mod azure_queue_grant_tests;

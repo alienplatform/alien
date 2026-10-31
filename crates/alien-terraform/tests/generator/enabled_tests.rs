@@ -233,11 +233,9 @@ fn a_gated_azure_resource_renders_the_table_conditionally() {
     let main = &normalized(&module);
 
     assert!(
-        main.contains("resource \"azurerm_storage_table\""),
-        "the table block is still declared:\n{main}"
-    );
-    assert!(
-        main.contains("count = var.input_store_enabled ? 1 : 0"),
+        main.contains(
+            "resource \"azapi_resource\" \"store\" { count = var.input_store_enabled ? 1 : 0"
+        ),
         "the table must be created only when the deployer says yes:\n{main}"
     );
     assert_terraform_valid(&module, "gated azure kv stack");
@@ -256,7 +254,7 @@ fn a_gated_azure_resource_indexes_only_its_own_references() {
     let main = &normalized(&module);
 
     assert!(
-        main.contains("azurerm_storage_table.store[0].name"),
+        main.contains("azapi_resource.store[0].name"),
         "references to the counted table must be indexed:\n{main}"
     );
     assert!(
@@ -287,11 +285,11 @@ fn an_ungated_azure_resource_is_untouched() {
     let main = &normalized(&module);
 
     assert!(
-        !main.contains("azurerm_storage_table.store[0]"),
+        !main.contains("azapi_resource.store[0]"),
         "no indexing on an ungated table:\n{main}"
     );
     assert!(
-        main.contains("azurerm_storage_table.store.name"),
+        main.contains("azapi_resource.store.name"),
         "references stay unindexed:\n{main}"
     );
     assert_ungated_registration_list_is_a_plain_array(main);
