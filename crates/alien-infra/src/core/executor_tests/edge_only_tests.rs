@@ -1,8 +1,9 @@
 //! A release that only changes a resource's stack dependencies.
 //!
 //! Ordering edges belong to the executor: it orders creates and deletes by them, and no controller
-//! reads them. When setup owns a resource and only its edges changed, the executor records them
-//! and does not run the controller, which under template setup may not write the resource.
+//! reads them. When setup owns a resource and only its ordering edges changed, the executor records
+//! them and does not run the controller, which under template setup may not write the resource.
+//! An edge from a resource to an identity carries grants, so changing one is still an update.
 
 use super::helpers::default_deployment_config;
 use crate::{
@@ -72,7 +73,12 @@ fn release_adding_an_edge(subjects: Vec<Subject>) -> (Stack, StackState) {
         let id = entry.config.id().to_string();
         state.resources.insert(
             id.clone(),
-            installed(entry.config.clone(), ResourceLifecycle::Frozen, vec![], controller),
+            installed(
+                entry.config.clone(),
+                ResourceLifecycle::Frozen,
+                vec![],
+                controller,
+            ),
         );
         entry.dependencies = cache_edge();
         stack.resources.insert(id, entry);
@@ -94,8 +100,13 @@ fn executor(stack: &Stack, authority: InitialSetupAuthority) -> StackExecutor {
 fn setup_owned_subjects() -> Vec<Subject> {
     vec![
         (
-            frozen(ServiceAccount::new("execution-sa".to_string()).build(), vec![]),
-            Box::new(AwsServiceAccountController::mock_ready("edges-test-execution-sa")),
+            frozen(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                vec![],
+            ),
+            Box::new(AwsServiceAccountController::mock_ready(
+                "edges-test-execution-sa",
+            )),
         ),
         (
             frozen(Storage::new("objects".to_string()).build(), vec![]),
@@ -126,7 +137,12 @@ async fn template_setup_records_new_edges_of_setup_owned_resources_without_their
     for id in ["execution-sa", "objects"] {
         let (before, after) = (&state.resources[id], &next.resources[id]);
         assert_eq!(after.dependencies, cache_edge(), "{id}");
-        assert_eq!(after.status, ResourceStatus::Running, "{id}: {:?}", after.error);
+        assert_eq!(
+            after.status,
+            ResourceStatus::Running,
+            "{id}: {:?}",
+            after.error
+        );
         assert_eq!(after.config, before.config, "{id}");
         assert_eq!(after.previous_config, before.previous_config, "{id}");
         assert_eq!(after.internal_state, before.internal_state, "{id}");
@@ -231,8 +247,16 @@ fn a_dependency_updated_in_the_same_plan_still_updates_a_managed_frozen_resource
     let plan = executor(&stack, InitialSetupAuthority::ImportedHandoff)
         .plan(&state)
         .unwrap();
-    assert!(plan.updates.contains_key("uploads"), "{:?}", plan.updates.keys());
-    assert!(plan.updates.contains_key("images"), "{:?}", plan.updates.keys());
+    assert!(
+        plan.updates.contains_key("uploads"),
+        "{:?}",
+        plan.updates.keys()
+    );
+    assert!(
+        plan.updates.contains_key("images"),
+        "{:?}",
+        plan.updates.keys()
+    );
     assert!(plan.dependency_records.is_empty());
 }
 
@@ -241,10 +265,9 @@ fn a_dependency_updated_in_the_same_plan_still_updates_a_managed_frozen_resource
 fn a_config_change_with_new_edges_is_still_an_update() {
     let (mut stack, state) = release_adding_an_edge(setup_owned_subjects());
     let changed = Storage::new("objects".to_string()).versioning(true).build();
-    stack.resources.insert(
-        "objects".to_string(),
-        frozen(changed, cache_edge()),
-    );
+    stack
+        .resources
+        .insert("objects".to_string(), frozen(changed, cache_edge()));
     let plan = executor(&stack, InitialSetupAuthority::ImportedHandoff)
         .plan(&state)
         .unwrap();
@@ -316,4 +339,35 @@ fn a_new_edge_is_recorded_while_its_dependency_is_still_settling() {
     let mut recorded = plan.dependency_records.clone();
     recorded.sort();
     assert_eq!(recorded, ["execution-sa", "objects"]);
+}
+
+/// An edge from a bucket to a service account is the bucket's grant to that account. Gaining one
+/// is a permission change, so it stays an update: the controller applies it, or refuses when
+/// that is setup's job.
+#[test]
+fn a_new_grant_edge_is_an_update_not_a_record() {
+    let (mut stack, mut state) = release_adding_an_edge(setup_owned_subjects());
+    let objects = stack.resources.get_mut("objects").unwrap();
+    objects.dependencies = vec![ResourceRef::new(
+        ServiceAccount::RESOURCE_TYPE,
+        "execution-sa",
+    )];
+    state
+        .resources
+        .get_mut("execution-sa")
+        .unwrap()
+        .dependencies = cache_edge();
+    let plan = executor(&stack, InitialSetupAuthority::ImportedHandoff)
+        .plan(&state)
+        .unwrap();
+    assert!(
+        plan.updates.contains_key("objects"),
+        "{:?}",
+        plan.updates.keys()
+    );
+    assert!(
+        plan.dependency_records.is_empty(),
+        "{:?}",
+        plan.dependency_records
+    );
 }

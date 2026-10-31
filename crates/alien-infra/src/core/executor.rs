@@ -59,8 +59,8 @@ pub struct PlanResult {
     /// credentials must not perform. They stay failed until setup is rerun.
     #[serde(default)]
     pub setup_required: Vec<String>,
-    /// Setup-created Frozen resource IDs whose only change is their stack dependencies. The new
-    /// dependencies are recorded in state; their controllers do not run.
+    /// Setup-created Frozen resource IDs whose only change is stack dependencies that carry no
+    /// grants. The new dependencies are recorded in state; their controllers do not run.
     #[serde(default)]
     pub dependency_records: Vec<String>,
 }
@@ -825,16 +825,11 @@ impl StackExecutor {
         Ok(self)
     }
 
-    /// Whether a dependency only orders permission grants after identity creation.
-    /// Config dependencies, including an interrupted update's old config, still
-    /// describe actual use and must preserve deletion order.
-    pub fn permission_only_dependency(
-        resource: &StackResourceState,
-        dependency_id: &str,
-        state: &StackState,
-    ) -> bool {
+    /// Whether an edge from a resource of this type to that dependency carries permission
+    /// grants: the resource's controller applies its resource-scoped grants to that identity.
+    fn grant_edge(resource_type: &str, dependency_type: &str) -> bool {
         matches!(
-            resource.config.resource_type().as_ref(),
+            resource_type,
             "storage"
                 | "kv"
                 | "queue"
@@ -843,13 +838,27 @@ impl StackExecutor {
                 | "key"
                 | "artifact-registry"
                 | "experimental/aws-opensearch"
-        ) && state
+        ) && matches!(
+            dependency_type,
+            "service-account" | "remote-stack-management" | "resource-access"
+        )
+    }
+
+    /// Whether a dependency only orders permission grants after identity creation.
+    /// Config dependencies, including an interrupted update's old config, still
+    /// describe actual use and must preserve deletion order.
+    pub fn permission_only_dependency(
+        resource: &StackResourceState,
+        dependency_id: &str,
+        state: &StackState,
+    ) -> bool {
+        state
             .resources
             .get(dependency_id)
             .is_some_and(|dependency| {
-                matches!(
+                Self::grant_edge(
+                    resource.config.resource_type().as_ref(),
                     dependency.config.resource_type().as_ref(),
-                    "service-account" | "remote-stack-management" | "resource-access"
                 )
             })
             && !resource
@@ -1333,13 +1342,34 @@ impl StackExecutor {
                                     .iter()
                                     .all(|dep_ref| self.dependency_settled(dep_ref.id(), state));
 
-                                // Ordering edges are the executor's, not the resource's: no
-                                // controller reads them. On a Frozen resource that setup created,
-                                // recording them is the whole change, and its update would run
-                                // runtime against what setup owns. The resource exists, so a new
-                                // edge waits for nothing: it only orders later work on it.
+                                // An edge that does not carry grants only orders work, and no
+                                // controller reads it. On a Frozen resource that setup created,
+                                // recording such edges is the whole change, and its update would
+                                // run runtime against what setup owns. The resource exists, so a
+                                // new edge waits for nothing. A grant edge added or removed is a
+                                // permission change: the update applies it, or refuses when that
+                                // is setup's to do.
+                                let resource_type = desired_config.resource.resource_type();
+                                let ordering_only = desired_config
+                                    .dependencies
+                                    .iter()
+                                    .filter(|dependency| {
+                                        !current_resource_state.dependencies.contains(dependency)
+                                    })
+                                    .chain(current_resource_state.dependencies.iter().filter(
+                                        |dependency| {
+                                            !desired_config.dependencies.contains(dependency)
+                                        },
+                                    ))
+                                    .all(|dependency| {
+                                        !Self::grant_edge(
+                                            resource_type.as_ref(),
+                                            dependency.resource_type().as_ref(),
+                                        )
+                                    });
                                 let edges_only = desired_config.resource
                                     == current_resource_state.config
+                                    && ordering_only
                                     && !self.external_binding_drifted(
                                         resource_id,
                                         current_resource_state,
