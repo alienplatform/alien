@@ -1612,20 +1612,45 @@ pub async fn push_stack(
     platform: Platform,
     push_settings: &PushSettings,
 ) -> Result<Stack> {
-    push_stack_with_sandbox_repository(stack, platform, push_settings, None).await
+    push_stack_to_destinations(stack, platform, push_settings, ImageDestinations::default()).await
 }
 
-/// Push sandbox images to an independently assigned destination when configured.
+/// Repositories, on the registry of the push settings, that take some resources' images instead
+/// of the push settings' repository.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImageDestinations<'a> {
+    /// Sandbox images.
+    pub sandbox: Option<&'a str>,
+    /// Container and daemon images. Their runtime pulls them only through the registry they were
+    /// pushed to, never natively from the cloud provider, so they can be stored where the cloud
+    /// provider does not copy them to other regions.
+    pub proxy_only: Option<&'a str>,
+}
+
+impl<'a> ImageDestinations<'a> {
+    /// The repository a resource of `resource_type` is pushed to, `default` unless a destination
+    /// above takes it.
+    pub fn repository_for(&self, resource_type: &str, default: &'a str) -> &'a str {
+        let destination = match resource_type {
+            "sandbox" => self.sandbox,
+            "container" | "daemon" => self.proxy_only,
+            _ => None,
+        };
+        destination.unwrap_or(default)
+    }
+}
+
+/// Push images, sending each resource's image to its destination in `destinations`.
 #[alien_event(AlienEvent::PushingStack {
     stack: stack.id().to_string(),
     platform: platform.as_str().to_string(),
     destination: push_settings.destination_label.clone(),
 })]
-pub async fn push_stack_with_sandbox_repository(
+pub async fn push_stack_to_destinations(
     mut stack: Stack,
     platform: Platform,
     push_settings: &PushSettings,
-    sandbox_repository: Option<&str>,
+    destinations: ImageDestinations<'_>,
 ) -> Result<Stack> {
     let push_started = Instant::now();
     info!(
@@ -1664,9 +1689,9 @@ pub async fn push_stack_with_sandbox_repository(
             let resource_name = target.resource_name().to_string();
             let resource_names = target.resource_names.clone();
             let platform = platform.clone();
-            let repository = if target.resource_type == "sandbox" {
-                sandbox_repository.unwrap_or(&push_settings.repository)
-            } else { &push_settings.repository }.to_string();
+            let repository = destinations
+                .repository_for(target.resource_type, &push_settings.repository)
+                .to_string();
             let push_opts = push_settings.options.clone();
             let bus = current_bus.clone();
             let cancel_token = cancel_token.clone();
