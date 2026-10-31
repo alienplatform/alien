@@ -59,6 +59,10 @@ pub struct PlanResult {
     /// credentials must not perform. They stay failed until setup is rerun.
     #[serde(default)]
     pub setup_required: Vec<String>,
+    /// Setup-owned resource IDs whose only change is their stack dependencies. The new
+    /// dependencies are recorded in state; their controllers do not run.
+    #[serde(default)]
+    pub dependency_records: Vec<String>,
 }
 
 /// Represents the outcome of a single step in the stack execution process.
@@ -1030,6 +1034,16 @@ impl StackExecutor {
             || current_resource_state.outputs != outputs)
     }
 
+    /// Whether runtime must leave this resource to setup: a Frozen resource that setup owns
+    /// outright, under a setup that is not this executor. Frozen resources with management
+    /// operations are still reconciled by runtime.
+    fn setup_owns_writes(&self, desired: &ResourceConfig) -> bool {
+        self.initial_setup_authority != InitialSetupAuthority::DirectSetup
+            && desired.lifecycle == ResourceLifecycle::Frozen
+            && !ownership_policy_for_resource_type(desired.resource.resource_type().as_ref())
+                .requires_management_permissions()
+    }
+
     /// Whether replacing this resource is setup's job: a setup-owned resource is never
     /// deleted with runtime credentials, only by an executor running as setup.
     fn replacement_requires_setup(
@@ -1319,7 +1333,29 @@ impl StackExecutor {
                                     .iter()
                                     .all(|dep_ref| self.dependency_settled(dep_ref.id(), state));
 
-                                if new_dependencies_ready {
+                                // Ordering edges are the executor's, not the resource's: no
+                                // controller reads them. When nothing else changed on a resource
+                                // runtime may not write, recording them is the whole change, and
+                                // running its update would ask runtime to rewrite what setup owns.
+                                let edges_only = desired_config.resource
+                                    == current_resource_state.config
+                                    && !self.external_binding_drifted(
+                                        resource_id,
+                                        current_resource_state,
+                                    )?;
+                                if new_dependencies_ready
+                                    && edges_only
+                                    && current_resource_state.lifecycle
+                                        == Some(ResourceLifecycle::Frozen)
+                                    && self.setup_owns_writes(desired_config)
+                                    && status != ResourceStatus::UpdateFailed
+                                {
+                                    debug!(
+                                        "Recording new dependencies of setup-owned '{}' without an update",
+                                        resource_id
+                                    );
+                                    plan_result.dependency_records.push(resource_id.clone());
+                                } else if new_dependencies_ready {
                                     debug!("Scheduling UPDATE transition for '{}'", resource_id);
 
                                     // Skipped only for an adopted binding: the rules guard
@@ -1603,13 +1639,7 @@ impl StackExecutor {
 
                 // A dependency change does not authorize runtime to rewrite setup-owned
                 // resources. Frozen resources with management operations still reconcile.
-                if self.initial_setup_authority != InitialSetupAuthority::DirectSetup
-                    && desired_config.lifecycle == ResourceLifecycle::Frozen
-                    && !ownership_policy_for_resource_type(
-                        desired_config.resource.resource_type().as_ref(),
-                    )
-                    .requires_management_permissions()
-                {
+                if self.setup_owns_writes(desired_config) {
                     continue;
                 }
 
@@ -2208,6 +2238,19 @@ impl StackExecutor {
                     Some(create_error) => create_error.context(setup_required).into_generic(),
                     None => surfaced,
                 });
+            }
+        }
+
+        // Record the new edges of setup-owned resources whose config is unchanged. Status,
+        // config and controller stay as they are: there is nothing for the controller to do.
+        for resource_id in &plan_result.dependency_records {
+            if let (Some(resource_state), Some(desired)) = (
+                next_state.resources.get_mut(resource_id),
+                self.resources.get(resource_id),
+            ) {
+                resource_state
+                    .dependencies
+                    .clone_from(&desired.dependencies);
             }
         }
 
@@ -3222,7 +3265,7 @@ impl StackExecutor {
     /// Checks if the stack state is "synced" - meaning the desired state matches the current state.
     ///
     /// This returns true when:
-    /// - All desired resources are `Running` with matching configs
+    /// - All desired resources are `Running` with matching configs and dependencies
     /// - All resources to be deleted are `Deleted` or `DeleteFailed`
     ///
     /// Note: This does NOT mean the stack is "done" - controllers continuously run heartbeat
@@ -3238,6 +3281,9 @@ impl StackExecutor {
                         // Resource exists in state. Check if it's Running AND config matches.
                         // DeleteFailed is NOT a valid terminal state for a *desired* resource.
                         let is_running = current_view.status == ResourceStatus::Running;
+                        // Edges are desired state too: one left unrecorded is work outstanding.
+                        let dependencies_match =
+                            current_view.dependencies == desired_resource_config.dependencies;
 
                         let config_matches = if self.is_external_binding_resource(id) {
                             let remote_binding_matches = !self
@@ -3254,7 +3300,7 @@ impl StackExecutor {
                                 })
                         };
 
-                        is_running && config_matches
+                        is_running && config_matches && dependencies_match
                     }
                     None => {
                         false // Desired resource not even in state yet -> not terminal

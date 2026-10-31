@@ -483,19 +483,17 @@ async fn template_installed_service_accounts_take_the_management_edge_without_ia
             .service_provider(Arc::new(MockPlatformServiceProvider::new()))
             .build()
             .unwrap();
+    assert!(!executor.is_synced(&state));
     let plan = executor.plan(&state).unwrap();
+    assert!(plan.updates.is_empty(), "{:?}", plan.updates.keys());
     assert_eq!(
-        plan.updates
-            .keys()
+        plan.dependency_records
+            .iter()
             .map(String::as_str)
             .collect::<std::collections::BTreeSet<_>>(),
         ["build-execution-sa", "execution-sa"].into(),
     );
-    // `is_synced` compares configs only, so step as the deployment's update does.
-    let mut state = state;
-    for _ in 0..3 {
-        state = executor.step(state).await.unwrap().next_state;
-    }
+    let state = executor.step(state).await.unwrap().next_state;
     assert!(
         executor.is_synced(&state),
         "{:?}",
@@ -516,5 +514,6 @@ async fn template_installed_service_accounts_take_the_management_edge_without_ia
         assert_eq!(account.dependencies, edge, "{id}");
         assert_eq!(account.config, stack.resources[id].config, "{id}");
     }
-    assert!(executor.plan(&state).unwrap().updates.is_empty());
+    let replanned = executor.plan(&state).unwrap();
+    assert!(replanned.updates.is_empty() && replanned.dependency_records.is_empty());
 }
