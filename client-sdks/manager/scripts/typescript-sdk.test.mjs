@@ -147,7 +147,11 @@ for (const quotaWarningOverrides of [["L-1216C47A"], []]) {
 
 test("stack import responses retain resource metadata and accept older managers", async () => {
   const { stackImportResponseFromJSON } = await import("../typescript/esm/models/stackimportresponse.js")
-  for (const metadata of [{}, { displayName: "Document storage", description: "Stores uploaded documents." }]) {
+  for (const metadata of [
+    {},
+    { displayName: "Document storage", description: "Stores uploaded documents." },
+    { externalBinding: true },
+  ]) {
     const parsed = stackImportResponseFromJSON(JSON.stringify({
       deploymentId: "deployment-example",
       stackSettings: {},
@@ -169,6 +173,7 @@ test("stack import responses retain resource metadata and accept older managers"
       const resource = parsed.value.stackState.resources.documents
       assert.equal(resource.displayName, metadata.displayName)
       assert.equal(resource.description, metadata.description)
+      assert.equal(resource.externalBinding, metadata.externalBinding)
       assert.equal(resource.config.id, "documents")
     }
   }
