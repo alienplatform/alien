@@ -1,14 +1,35 @@
+import { z } from "zod/v4"
+import { AlienError, defineError } from "./error.js"
 import {
   type LifecycleRule,
   type ResourceType,
   type Storage as StorageConfig,
+  type StorageNotification,
   StorageSchema,
 } from "./generated/index.js"
 import { encryptionKeyRef } from "./key.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
-export type { LifecycleRule, Storage as StorageConfig, StorageOutputs } from "./generated/index.js"
+export type {
+  LifecycleRule,
+  Storage as StorageConfig,
+  StorageNotification,
+  StorageNotificationEvent,
+  StorageOutputs,
+} from "./generated/index.js"
 export { StorageSchema as StorageConfigSchema } from "./generated/index.js"
+
+/** Options for delivering object creation events into a queue. */
+export type StorageNotificationOptions = Partial<Omit<StorageNotification, "queue">>
+
+const InvalidStorageNotification = defineError({
+  code: "INVALID_STORAGE_NOTIFICATION",
+  context: z.object({ reason: z.string() }),
+  message: ({ reason }) => `Invalid storage notification: ${reason}`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 400,
+})
 
 /**
  * Represents an object storage bucket.
@@ -80,6 +101,30 @@ export class Storage extends ResourceBuilder {
    */
   public corsAllowedOrigins(origins: string[]): this {
     this._config.corsAllowedOrigins = origins
+    return this
+  }
+
+  /**
+   * Delivers matching object creation events into a Queue in the same stack.
+   * Prefix and suffix are literal and case sensitive. Rules on one Storage must not
+   * overlap (no key may match two of them); delivery is at least once. Storage and Queue
+   * must both be Frozen or both be Live.
+   */
+  public notify(queue: Resource, options: StorageNotificationOptions = {}): this {
+    if (queue.config.type !== "queue") {
+      throw new AlienError(
+        InvalidStorageNotification.create({
+          reason: `expected a Queue, received '${queue.config.type}'`,
+        }),
+      )
+    }
+    const notification: StorageNotification = {
+      queue: queue.ref(),
+      events: options.events === undefined ? ["created"] : [...options.events],
+      ...(options.prefix !== undefined ? { prefix: options.prefix } : {}),
+      ...(options.suffix !== undefined ? { suffix: options.suffix } : {}),
+    }
+    this._config.notifications = [...(this._config.notifications ?? []), notification]
     return this
   }
 

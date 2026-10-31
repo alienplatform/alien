@@ -113,6 +113,8 @@ use utoipa::OpenApi;
     AzureManagementConfig,
     Storage,
     StorageOutputs,
+    StorageNotification,
+    StorageNotificationEvent,
     Key,
     KeyFingerprint,
     KeyOutputs,

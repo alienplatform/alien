@@ -81,6 +81,13 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("remote AI checks failed: {error:#}");
             }
         }
+        TestApp::StorageNotifications => {
+            common::storage_notifications::check_delivery(&ctx.deployment).await;
+            alien_test::distribution::verify_rule_update(ctx)
+                .await
+                .expect("frozen notification change must require and recover through setup");
+            common::storage_notifications::check_updated_delivery(&ctx.deployment).await;
+        }
         TestApp::AutomaticSetup => {
             let installed = ctx
                 .manager
@@ -874,10 +881,12 @@ macro_rules! distribution_test_context {
             }
 
             async fn teardown(self) {
-                self.ctx
-                    .cleanup()
-                    .await
-                    .expect("distribution cleanup must reach a safe setup handoff");
+                let cleanup = if self.ctx.app == TestApp::StorageNotifications {
+                    common::notification_cleanup::cleanup(self.ctx).await
+                } else {
+                    self.ctx.cleanup().await
+                };
+                cleanup.expect("distribution cleanup must reach a safe setup handoff");
             }
         }
     };
@@ -1233,5 +1242,53 @@ distribution_test_context!(
 #[tokio::test]
 #[ignore = "on-prem Helm local-import needs a complete external binding fixture for comprehensive-rust"]
 async fn terraform_onprem_helm_pull_comprehensive_rust(ctx: &mut TerraformOnpremHelmPullRust) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    CloudFormationAwsNotifications,
+    DistributionFlow::CloudFormationAwsPush,
+    TestApp::StorageNotifications
+);
+
+#[test_context(CloudFormationAwsNotifications)]
+#[tokio::test]
+async fn cloudformation_aws_push_storage_notifications(ctx: &mut CloudFormationAwsNotifications) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAwsNotifications,
+    DistributionFlow::TerraformAwsPush,
+    TestApp::StorageNotifications
+);
+
+#[test_context(TerraformAwsNotifications)]
+#[tokio::test]
+async fn terraform_aws_push_storage_notifications(ctx: &mut TerraformAwsNotifications) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformGcpNotifications,
+    DistributionFlow::TerraformGcpPush,
+    TestApp::StorageNotifications
+);
+
+#[test_context(TerraformGcpNotifications)]
+#[tokio::test]
+async fn terraform_gcp_push_storage_notifications(ctx: &mut TerraformGcpNotifications) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAzureNotifications,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::StorageNotifications
+);
+
+#[test_context(TerraformAzureNotifications)]
+#[tokio::test]
+async fn terraform_azure_push_storage_notifications(ctx: &mut TerraformAzureNotifications) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }

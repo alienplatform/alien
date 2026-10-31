@@ -1,4 +1,7 @@
-use super::{batch_end, encode_batch};
+use super::{
+    batch_end, encode_batch,
+    storage_notifications::{aws_queue_payload, AwsQueueDelivery},
+};
 use crate::error::{ErrorData, Result};
 use crate::traits::{
     Binding, MessagePayload, Queue, QueueAckResult, QueueMessage, QueueSendResult, MAX_BATCH_SIZE,
@@ -209,7 +212,10 @@ impl Queue for AwsSqsQueue {
         Ok(results)
     }
 
-    async fn receive(&self, _queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {
+    /// S3 event notifications are normalized into one `StorageEvent` message per record,
+    /// so a receive can return more messages than `max_messages` SQS messages; those from
+    /// one SQS message share its receipt handle. S3 test events are deleted, not returned.
+    async fn receive(&self, queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {
         // Client-side validation: check batch size
         if max_messages == 0 || max_messages > MAX_BATCH_SIZE {
             return Err(alien_error::AlienError::new(
@@ -238,22 +244,40 @@ impl Queue for AwsSqsQueue {
                 binding_type: "queue.sqs".to_string(),
                 reason: "Failed to receive".to_string(),
             })?;
-        resp.receive_message_result
-            .messages
-            .into_iter()
-            .map(|m| {
-                let attempt = receive_count(&m)?;
-                let raw = m.body;
-                let payload = serde_json::from_str::<serde_json::Value>(&raw)
-                    .map(MessagePayload::Json)
-                    .unwrap_or(MessagePayload::Text(raw));
-                Ok(QueueMessage {
-                    payload,
-                    receipt_handle: m.receipt_handle,
-                    attempt,
-                })
-            })
-            .collect()
+        let mut messages = Vec::new();
+        let mut discarded = Vec::new();
+        for message in resp.receive_message_result.messages {
+            let attempt = receive_count(&message)?;
+            match aws_queue_payload(&message.body) {
+                // S3 normally sends one record per notification. When an SQS message holds
+                // several, each becomes its own QueueMessage sharing the one receipt handle,
+                // so acknowledging any of them deletes the whole SQS message.
+                AwsQueueDelivery::Deliver(payloads) => {
+                    messages.extend(payloads.into_iter().map(|payload| QueueMessage {
+                        payload: match payload {
+                            alien_core::MessagePayload::Json(value) => MessagePayload::Json(value),
+                            alien_core::MessagePayload::Text(text) => MessagePayload::Text(text),
+                        },
+                        receipt_handle: message.receipt_handle.clone(),
+                        attempt,
+                    }))
+                }
+                AwsQueueDelivery::Discard => discarded.push(message.receipt_handle),
+            }
+        }
+        if !discarded.is_empty() {
+            let outcomes = self.ack_batch(queue, &discarded).await?;
+            if let Some(QueueAckResult::Failed { code, message }) = outcomes
+                .into_iter()
+                .find(|outcome| !matches!(outcome, QueueAckResult::Acknowledged))
+            {
+                return Err(AlienError::new(ErrorData::BindingSetupFailed {
+                    binding_type: "queue.sqs".to_string(),
+                    reason: format!("Failed to delete S3 test notifications ({code}): {message}"),
+                }));
+            }
+        }
+        Ok(messages)
     }
 
     async fn ack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
@@ -382,10 +406,12 @@ fn receive_count(message: &Message) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::queue::storage_notifications::aws_fixtures;
     #[cfg(not(target_arch = "wasm32"))]
     use alien_aws_clients::{
         AwsClientConfig, AwsClientConfigExt, AwsCredentialProvider, ServiceOverrides,
     };
+    use alien_core::{StorageEvent, StorageEventType};
     #[cfg(not(target_arch = "wasm32"))]
     use axum::{
         body::Body,
@@ -457,6 +483,100 @@ mod tests {
         assert_eq!(calls.lock().expect("calls").len(), 2);
         assert!(queue.ack_batch("q", &[]).await.expect("empty").is_empty());
         assert_eq!(calls.lock().expect("calls").len(), 2);
+        server.abort();
+        assert!(server.await.expect_err("aborted").is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn receive_normalizes_s3_notifications_and_deletes_test_events() {
+        let deleted = Arc::new(Mutex::new(Vec::<String>::new()));
+        let app = Router::new()
+            .route(
+                "/",
+                post(
+                    |State(deleted): State<Arc<Mutex<Vec<String>>>>, body: String| async move {
+                        let form: HashMap<String, String> =
+                            url::form_urlencoded::parse(body.as_bytes())
+                                .into_owned()
+                                .collect();
+                        match form["Action"].as_str() {
+                            "ReceiveMessage" => {
+                                let messages: String = [
+                                    ("test-event", aws_fixtures::test_event()),
+                                    (
+                                        "two-records",
+                                        aws_fixtures::notification(vec![
+                                            aws_fixtures::s3_put("in/with+space.json"),
+                                            aws_fixtures::s3_put("in/plus%2Bsign.json"),
+                                        ]),
+                                    ),
+                                    ("ordinary", "plain text".to_string()),
+                                ]
+                                .into_iter()
+                                .map(|(receipt, body)| {
+                                    let body = body
+                                        .replace('&', "&amp;")
+                                        .replace('<', "&lt;")
+                                        .replace('"', "&quot;");
+                                    format!(
+                                        "<Message><MessageId>{receipt}-id</MessageId>\
+                                         <ReceiptHandle>{receipt}</ReceiptHandle>\
+                                         <MD5OfBody>unused</MD5OfBody><Body>{body}</Body>\
+                                         <Attribute><Name>ApproximateReceiveCount</Name>\
+                                         <Value>2</Value></Attribute></Message>"
+                                    )
+                                })
+                                .collect();
+                                format!("<ReceiveMessageResponse><ReceiveMessageResult>{messages}</ReceiveMessageResult></ReceiveMessageResponse>")
+                            }
+                            "DeleteMessageBatch" => {
+                                assert!(!form.contains_key(
+                                    "DeleteMessageBatchRequestEntry.2.ReceiptHandle"
+                                ));
+                                deleted.lock().expect("deleted").push(
+                                    form["DeleteMessageBatchRequestEntry.1.ReceiptHandle"].clone(),
+                                );
+                                "<DeleteMessageBatchResponse><DeleteMessageBatchResult><DeleteMessageBatchResultEntry><Id>0</Id></DeleteMessageBatchResultEntry></DeleteMessageBatchResult></DeleteMessageBatchResponse>".to_string()
+                            }
+                            action => panic!("unexpected SQS action {action}"),
+                        }
+                    },
+                ),
+            )
+            .with_state(deleted.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+        let endpoint = format!("http://{}", listener.local_addr().expect("address"));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+        let config = AwsClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("sqs".to_string(), endpoint.clone())]),
+        });
+        let credentials = AwsCredentialProvider::from_config(config)
+            .await
+            .expect("credentials");
+        let queue = AwsSqsQueue::new(
+            endpoint,
+            SqsClient::new(reqwest::Client::new(), credentials),
+        );
+
+        let messages = queue.receive("q", 3).await.expect("receive");
+
+        assert_eq!(*deleted.lock().expect("deleted"), ["test-event"]);
+        assert_eq!(messages.len(), 3);
+        let mut keys = Vec::new();
+        for message in &messages[..2] {
+            assert_eq!(message.receipt_handle, "two-records");
+            assert_eq!(message.attempt, 2);
+            let MessagePayload::Json(value) = &message.payload else {
+                panic!("S3 records must become StorageEvent JSON");
+            };
+            let event: StorageEvent = serde_json::from_value(value.clone()).expect("StorageEvent");
+            assert_eq!(event.event_type, StorageEventType::Created);
+            assert_eq!(event.bucket_name, "example-bucket");
+            keys.push(event.object_key);
+        }
+        assert_eq!(keys, ["in/with space.json", "in/plus+sign.json"]);
+        assert_eq!(messages[2].receipt_handle, "ordinary");
+        assert!(matches!(&messages[2].payload, MessagePayload::Text(text) if text == "plain text"));
         server.abort();
         assert!(server.await.expect_err("aborted").is_cancelled());
     }

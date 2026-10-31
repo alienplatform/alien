@@ -16,10 +16,12 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, LifecycleRule, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, Result, ServiceAccount, Storage,
+    import::EmitContext,
+    storage_notifications::{gcs_notification_configs, GCS_RULE_ATTRIBUTE},
+    LifecycleRule, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
+    ServiceAccount, Storage,
 };
-use alien_error::Context;
+use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     BindingTarget,
@@ -50,6 +52,7 @@ impl TfEmitter for GcpStorageEmitter {
         }
 
         emit_storage_iam(ctx, &mut fragment, label)?;
+        emit_notifications(ctx, &mut fragment, label, storage)?;
 
         // This grant lets the storage service decrypt retained objects. Application
         // and public IAM members remain managed for revocation.
@@ -90,6 +93,83 @@ impl TfEmitter for GcpStorageEmitter {
             ),
         ])))
     }
+}
+
+fn emit_notifications(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    label: &str,
+    storage: &Storage,
+) -> Result<()> {
+    let configs =
+        gcs_notification_configs(storage).context(alien_core::ErrorData::GenericError {
+            message: format!("Storage '{}' notifications as GCS configs", storage.id()),
+        })?;
+    for config in configs {
+        let queue_label = ctx.name_for(&config.queue.id).ok_or_else(|| {
+            AlienError::new(alien_core::ErrorData::GenericError {
+                message: format!(
+                    "Storage '{}' notification queue '{}' has no Terraform resource",
+                    storage.id(),
+                    config.queue.id
+                ),
+            })
+        })?;
+        let mut body = vec![
+            attr("bucket", bucket_name(label)),
+            attr(
+                "topic",
+                expr::traversal(["google_pubsub_topic", queue_label, "id"]),
+            ),
+            attr(
+                "payload_format",
+                Expression::String("JSON_API_V1".to_string()),
+            ),
+            attr(
+                "event_types",
+                Expression::Array(vec![Expression::String("OBJECT_FINALIZE".to_string())]),
+            ),
+            attr(
+                "depends_on",
+                Expression::Array(vec![expr::traversal([
+                    "google_pubsub_topic_iam_member",
+                    &format!("{queue_label}_storage_publisher"),
+                ])]),
+            ),
+        ];
+        if let Some(prefix) = config.prefix {
+            body.push(attr(
+                "object_name_prefix",
+                Expression::String(prefix.to_string()),
+            ));
+        }
+        let mut attributes = vec![(
+            GCS_RULE_ATTRIBUTE.to_string(),
+            expr::raw(format!(
+                "format(\"%s/{}\", google_storage_bucket.{label}.name)",
+                config.key
+            )),
+        )];
+        attributes.extend(
+            config
+                .suffix_attributes
+                .into_iter()
+                .map(|(name, value)| (name, Expression::String(value))),
+        );
+        body.push(attr("custom_attributes", expr::object(attributes)));
+        // A changed suffix set replaces the group's config: create the new one first, so
+        // the group keeps delivering (possibly twice) during the swap.
+        body.push(nested(block(
+            "lifecycle",
+            [attr("create_before_destroy", Expression::Bool(true))],
+        )));
+        fragment.resource_blocks.push(resource_block(
+            "google_storage_notification",
+            &format!("{label}_notification_{}", config.key),
+            body,
+        ));
+    }
+    Ok(())
 }
 
 fn emit_storage_key_access(fragment: &mut TfFragment, label: &str, key_label: &str) {

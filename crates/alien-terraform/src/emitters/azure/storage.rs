@@ -17,7 +17,7 @@
 //!   single account-wide management policy.
 
 use crate::{
-    block::{attr, resource_block},
+    block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, emit_remote_bindings_role_definitions, permission_context,
@@ -28,14 +28,17 @@ use crate::{
 };
 use alien_core::{
     AzureStorageAccount, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    Result, Storage, import::EmitContext,
+    Result, Storage, import::EmitContext, storage_notifications::notification_rule_key,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     BindingTarget,
     generators::{AzureCustomRole, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
 };
-use hcl::expr::Expression;
+use hcl::{
+    Identifier,
+    expr::{Expression, FuncCall},
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureStorageEmitter;
@@ -72,6 +75,7 @@ impl TfEmitter for AzureStorageEmitter {
         fragment.resource_blocks.push(container);
 
         emit_storage_permissions(ctx, label, &parent_label, &mut fragment)?;
+        emit_notifications(ctx, label, &parent_label, storage, &mut fragment)?;
 
         fragment.retain_resources(|kind, _| kind == "azurerm_storage_container");
         Ok(fragment)
@@ -111,6 +115,89 @@ impl TfEmitter for AzureStorageEmitter {
             ),
         ])))
     }
+}
+
+fn emit_notifications(
+    ctx: &EmitContext<'_>,
+    label: &str,
+    parent_label: &str,
+    storage: &Storage,
+    fragment: &mut TfFragment,
+) -> Result<()> {
+    for notification in &storage.notifications {
+        let key = notification_rule_key(notification);
+        let queue_label = ctx.name_for(&notification.queue.id).ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "Storage '{}' notification queue '{}' has no Terraform resource",
+                    storage.id(),
+                    notification.queue.id
+                ),
+            })
+        })?;
+        let container = format!("azurerm_storage_container.{label}.name");
+        // Match the controller's deterministic name, including long container names.
+        let name = expr::raw(format!(
+            "format(\"%s-sn-%s-{key}\", substr({container}, 0, 28), substr(sha256({container}), 0, 10))"
+        ));
+        let mut filter = vec![
+            attr("case_sensitive", Expression::Bool(true)),
+            attr(
+                "subject_begins_with",
+                Expression::FuncCall(Box::new(
+                    FuncCall::builder(Identifier::sanitized("format"))
+                        .arg(Expression::String(
+                            "/blobServices/default/containers/%s/blobs/%s".into(),
+                        ))
+                        .arg(expr::traversal([
+                            "azurerm_storage_container",
+                            label,
+                            "name",
+                        ]))
+                        .arg(Expression::String(
+                            notification.prefix.clone().unwrap_or_default(),
+                        ))
+                        .build(),
+                )),
+            ),
+        ];
+        if let Some(suffix) = &notification.suffix {
+            filter.push(attr(
+                "subject_ends_with",
+                Expression::String(suffix.clone()),
+            ));
+        }
+        // Account-scoped subscriptions reuse an existing system topic (including
+        // one used by Worker storage triggers). Azure creates it if absent; this
+        // Storage must never take ownership of the shared topic.
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_eventgrid_event_subscription",
+            &format!("{label}_notification_{key}"),
+            [
+                attr("name", name),
+                attr(
+                    "scope",
+                    expr::traversal(["azurerm_storage_account", parent_label, "id"]),
+                ),
+                attr(
+                    "service_bus_queue_endpoint_id",
+                    expr::traversal(["azurerm_servicebus_queue", queue_label, "id"]),
+                ),
+                attr(
+                    "event_delivery_schema",
+                    Expression::String("CloudEventSchemaV1_0".into()),
+                ),
+                attr(
+                    "included_event_types",
+                    Expression::Array(vec![Expression::String(
+                        "Microsoft.Storage.BlobCreated".into(),
+                    )]),
+                ),
+                nested(block("subject_filter", filter)),
+            ],
+        ));
+    }
+    Ok(())
 }
 
 /// Find the auxiliary `azure_storage_account` resource in the stack and

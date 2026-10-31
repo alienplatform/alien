@@ -1,23 +1,64 @@
 //! Protect retained storage before removing runtime access.
 
-use alien_aws_clients::s3::S3Api;
+use alien_aws_clients::s3::{QueueConfiguration, S3Api};
 use alien_azure_clients::azure::models::blob::{
     BlobContainer, ContainerProperties, ContainerPropertiesPublicAccess,
 };
 use alien_client_core::ErrorData as ClientError;
 use alien_core::{
-    ClientConfig, ExternalBindings, Platform, ResourceLifecycle, ResourceStatus, StackState,
-    Storage,
+    AwsClientConfig, ClientConfig, ExternalBindings, Platform, ResourceLifecycle, ResourceStatus,
+    StackResourceState, StackState, Storage,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::gcs::{Bucket, GcsApi, IamConfiguration, Lifecycle};
 use serde_json::Value;
+use tracing::warn;
 
 use super::{AwsStorageController, AzureStorageController, GcpStorageController};
 use crate::{
-    core::aws_ownership::is_tagged_as_ours, infra_requirements::azure_utils, ErrorData,
-    PlatformServiceProvider, Result, StackResourceStateExt,
+    core::aws_ownership::is_tagged_as_ours, infra_requirements::azure_utils,
+    queue::aws::AwsQueueController, ErrorData, PlatformServiceProvider, Result,
+    StackResourceStateExt,
 };
+
+/// The S3 queue configurations setup wrote for a Storage's rules, now or before its last
+/// update, with queue ARNs read from the installed queue state. A rule whose queue is no
+/// longer in state, or never recorded a name, can't be recognised by its rule; its entries
+/// are then removed only if they carry our Id, so a retry after lost state isn't blocked.
+fn setup_written_rules(
+    state: &StackState,
+    resource: &StackResourceState,
+    config: &AwsClientConfig,
+    id: &str,
+) -> Result<Vec<QueueConfiguration>> {
+    let mut rules = Vec::new();
+    for storage in std::iter::once(&resource.config)
+        .chain(resource.previous_config.iter())
+        .filter_map(|config| config.downcast_ref::<Storage>())
+    {
+        for notification in &storage.notifications {
+            let queue = match state.resources.get(&notification.queue.id) {
+                Some(queue) if queue.internal_state.is_some() => {
+                    queue.get_internal_controller_typed::<AwsQueueController>()?
+                }
+                _ => {
+                    warn!(storage = %id, queue = %notification.queue.id, "Notified queue has no installed state; removing only Id-tagged notifications");
+                    continue;
+                }
+            };
+            let Some(name) = queue.queue_name.as_deref() else {
+                warn!(storage = %id, queue = %notification.queue.id, "Notified queue has no recorded name; removing only Id-tagged notifications");
+                continue;
+            };
+            rules.push(super::aws_notifications::queue_configuration(
+                notification,
+                format!("arn:aws:sqs:{}:{}:{name}", config.region, config.account_id),
+                None,
+            ));
+        }
+    }
+    Ok(rules)
+}
 
 /// Stop S3/GCS lifecycle actions and revoke declared public reads on retained storage.
 ///
@@ -25,6 +66,8 @@ use crate::{
 /// and the setup authority passes both when it finishes retention, because Frozen storage is
 /// setup-owned. This operation does not certify removal of workload or management access.
 /// Every retry re-reads provider state; saved resource identities and recovery data stay intact.
+/// Returns false while a provider is still removing owned notifications; the caller waits and
+/// calls again, as it does for retained KV.
 pub async fn protect_retained_storage(
     state: &StackState,
     retained_ids: &[String],
@@ -32,7 +75,8 @@ pub async fn protect_retained_storage(
     provider: &dyn PlatformServiceProvider,
     external_bindings: &ExternalBindings,
     lifecycles: &[ResourceLifecycle],
-) -> Result<()> {
+) -> Result<bool> {
+    let mut complete = true;
     for id in retained_ids {
         let resource = state
             .resources
@@ -76,7 +120,16 @@ pub async fn protect_retained_storage(
                 .and_then(|previous| previous.downcast_ref::<Storage>())
                 .is_some_and(|previous| previous.public_read);
         let platform = resource.controller_platform.unwrap_or(state.platform);
-        if (!was_public && !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure))
+        let has_local_notifications = platform == Platform::Local
+            && (!storage.notifications.is_empty()
+                || resource
+                    .previous_config
+                    .as_ref()
+                    .and_then(|previous| previous.downcast_ref::<Storage>())
+                    .is_some_and(|previous| !previous.notifications.is_empty()));
+        if (!was_public
+            && !has_local_notifications
+            && !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure))
             || resource.status == ResourceStatus::Deleted
         {
             continue;
@@ -107,18 +160,45 @@ pub async fn protect_retained_storage(
                 let client = provider.get_aws_s3_client(config).await?;
                 // Legacy checkpoints may contain a name saved before a failed create.
                 let tags = match client.get_bucket_tagging(name).await {
-                    Ok(tags) => tags,
-                    Err(error) if missing(&error) => continue,
+                    Ok(tags) => Some(tags),
+                    Err(error) if missing(&error) => None,
                     Err(error) => return Err(error.context(cloud_error(id))),
                 };
-                if !is_tagged_as_ours(
-                    &tags,
-                    &alien_core::standard_resource_tags(&state.resource_prefix, id),
-                ) {
+                if tags.as_ref().is_some_and(|tags| {
+                    !is_tagged_as_ours(
+                        tags,
+                        &alien_core::standard_resource_tags(&state.resource_prefix, id),
+                    )
+                }) {
                     return Err(invalid(
                         id,
                         "Bucket ownership tags do not match the retained resource",
                     ));
+                }
+                if tags.is_none() {
+                    continue;
+                }
+                if controller.notifications_managed
+                    || !storage.notifications.is_empty()
+                    || resource
+                        .previous_config
+                        .as_ref()
+                        .and_then(|previous| previous.downcast_ref::<Storage>())
+                        .is_some_and(|previous| !previous.notifications.is_empty())
+                {
+                    let setup_rules = if resource.lifecycle == Some(ResourceLifecycle::Frozen) {
+                        setup_written_rules(state, resource, config, id)?
+                    } else {
+                        Vec::new()
+                    };
+                    super::aws_notifications::remove_owned(
+                        client.as_ref(),
+                        &state.resource_prefix,
+                        name,
+                        id,
+                        &setup_rules,
+                    )
+                    .await?;
                 }
                 stop_s3_lifecycle(client.as_ref(), name, id).await?;
                 if was_public {
@@ -143,6 +223,16 @@ pub async fn protect_retained_storage(
                     Err(error) if missing(&error) => continue,
                     Err(error) => return Err(error.context(cloud_error(id))),
                 };
+                if controller.notifications_managed
+                    || !storage.notifications.is_empty()
+                    || resource
+                        .previous_config
+                        .as_ref()
+                        .and_then(|previous| previous.downcast_ref::<Storage>())
+                        .is_some_and(|previous| !previous.notifications.is_empty())
+                {
+                    super::gcp_notifications::remove_owned(client.as_ref(), name, id).await?;
+                }
                 if !was_public {
                     stop_gcs_lifecycle(client.as_ref(), name, id, &observed).await?;
                     continue;
@@ -186,6 +276,28 @@ pub async fn protect_retained_storage(
                 let config = client_config
                     .azure_config()
                     .ok_or_else(|| invalid(id, "Azure runtime credentials are required"))?;
+                if controller.notifications_managed
+                    || !storage.notifications.is_empty()
+                    || resource
+                        .previous_config
+                        .as_ref()
+                        .and_then(|previous| previous.downcast_ref::<Storage>())
+                        .is_some_and(|previous| !previous.notifications.is_empty())
+                {
+                    let notifications = provider.get_azure_event_grid_client(config)?;
+                    let source = super::azure_notifications::source_id(
+                        &config.subscription_id,
+                        &group,
+                        account,
+                    );
+                    complete &= super::azure_notifications::remove_owned(
+                        notifications.as_ref(),
+                        &source,
+                        name,
+                        id,
+                    )
+                    .await?;
+                }
                 let client = provider.get_azure_blob_container_client(config)?;
                 let observed = match client.get_blob_container(&group, account, name).await {
                     Ok(container) => container,
@@ -232,7 +344,20 @@ pub async fn protect_retained_storage(
                     .await
                     .context(cloud_error(id))?;
             }
-            Platform::Local | Platform::Test => {}
+            Platform::Local =>
+            {
+                #[cfg(feature = "local")]
+                if has_local_notifications {
+                    let manager = provider
+                        .get_local_storage_manager()
+                        .ok_or_else(|| invalid(id, "Local storage manager is unavailable"))?;
+                    manager
+                        .stop_notifications(id)
+                        .await
+                        .context(cloud_error(id))?;
+                }
+            }
+            Platform::Test => {}
             _ => {
                 return Err(invalid(
                     id,
@@ -241,7 +366,7 @@ pub async fn protect_retained_storage(
             }
         }
     }
-    Ok(())
+    Ok(complete)
 }
 
 /// Require applicable Azure lifecycle deletion rules to be disabled before handoff.
@@ -472,13 +597,17 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use alien_aws_clients::{
-        s3::{GetBucketPolicyOutput, MockS3Api},
+        s3::{
+            GetBucketPolicyOutput, LambdaFunctionConfiguration, MockS3Api,
+            NotificationConfiguration, QueueConfiguration,
+        },
         AwsClientConfigExt,
     };
     use alien_azure_clients::{blob_containers::MockBlobContainerApi, AzureClientConfigExt};
     use alien_core::{
-        AwsClientConfig, AzureClientConfig, AzureResourceGroup, AzureResourceGroupOutputs,
-        GcpClientConfig, Resource, ResourceOutputs, StackResourceState,
+        storage_notifications::aws_notification_id, AwsClientConfig, AzureClientConfig,
+        AzureResourceGroup, AzureResourceGroupOutputs, GcpClientConfig, Queue, Resource,
+        ResourceOutputs, StackResourceState, StorageNotification,
     };
     use alien_gcp_clients::{gcs::MockGcsApi, iam::IamPolicy, GcpClientConfigExt};
     use serde_json::json;
@@ -500,6 +629,237 @@ mod tests {
         resource.set_internal_controller(Some(controller)).unwrap();
         state.resources.insert("data".into(), resource);
         serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn s3_retention_of_a_bucket_already_gone_completes_without_notification_writes() {
+        // The notification configuration lives in the bucket, so a bucket deleted out of
+        // band has nothing left to remove. Any notification call would hit an unset mock.
+        let mut s3 = MockS3Api::new();
+        s3.expect_get_bucket_tagging().times(1).returning(|name| {
+            Err(AlienError::new(ClientError::RemoteResourceNotFound {
+                resource_type: "bucket".into(),
+                resource_name: name.into(),
+            }))
+        });
+        let s3 = Arc::new(s3);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_s3_client()
+            .returning(move |_| Ok(s3.clone()));
+        let state = installed(
+            Platform::Aws,
+            Box::new(AwsStorageController {
+                bucket_name: Some("owned-data".into()),
+                notifications_managed: true,
+                ..Default::default()
+            }),
+        );
+        assert!(protect_retained_storage(
+            &state,
+            &["data".into()],
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &provider,
+            &ExternalBindings::default(),
+            &[ResourceLifecycle::Live],
+        )
+        .await
+        .unwrap());
+    }
+
+    /// CloudFormation can't put an Id on a queue configuration; S3 assigns a random one.
+    /// Retaining a setup-owned bucket must still remove exactly the entries setup wrote, or
+    /// they keep pointing at the deployment's deleted queue. Hand-made entries stay, even
+    /// one to the same queue with another filter.
+    /// After lost state the notified queue may be missing from installed state. Retention
+    /// can't recognise setup's rule entries then, but it must not be blocked: it removes the
+    /// entries carrying our Id and keeps everything else.
+    #[tokio::test]
+    async fn s3_retention_without_the_notified_queue_falls_back_to_owned_ids() {
+        let entry = |id: String, queue: &str| QueueConfiguration {
+            id: Some(id),
+            queue_arn: format!("arn:aws:sqs:us-east-1:123456789012:{queue}"),
+            events: vec!["s3:ObjectCreated:*".into()],
+            filter: None,
+        };
+        let ours = entry(aws_notification_id("owned", "data", 0), "owned-jobs");
+        let unrecognised = entry("ZDI2MTI4NmYtM2Ex".into(), "owned-jobs");
+        let document = NotificationConfiguration {
+            queue_configurations: vec![ours, unrecognised.clone()],
+            ..Default::default()
+        };
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let mut api = MockS3Api::new();
+        api.expect_get_bucket_tagging()
+            .returning(|_| Ok(alien_core::standard_resource_tags("owned", "data")));
+        let current = document.clone();
+        api.expect_get_bucket_notification_configuration()
+            .returning(move |_| Ok(current.clone()));
+        let sink = written.clone();
+        api.expect_put_bucket_notification_configuration()
+            .returning(move |_, document| {
+                sink.lock().unwrap().push(document.clone());
+                Ok(())
+            });
+        api.expect_get_bucket_lifecycle_configuration()
+            .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration { rules: vec![] }));
+        let api = Arc::new(api);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_s3_client()
+            .returning(move |_| Ok(api.clone()));
+        let mut state = installed(
+            Platform::Aws,
+            Box::new(AwsStorageController {
+                bucket_name: Some("owned-data".into()),
+                ..Default::default()
+            }),
+        );
+        let resource = state.resources.get_mut("data").unwrap();
+        resource.lifecycle = Some(ResourceLifecycle::Frozen);
+        resource.config = Resource::new(
+            Storage::new("data".into())
+                .notifications(vec![StorageNotification::builder()
+                    .queue((&Queue::new("jobs".into()).build()).into())
+                    .build()])
+                .build(),
+        );
+        assert!(protect_retained_storage(
+            &state,
+            &["data".into()],
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            &provider,
+            &ExternalBindings::default(),
+            &[ResourceLifecycle::Frozen],
+        )
+        .await
+        .unwrap());
+        let written = written.lock().unwrap();
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].queue_configurations, [unrecognised]);
+    }
+
+    #[tokio::test]
+    async fn s3_retention_of_setup_owned_bucket_removes_exactly_the_rules_setup_wrote() {
+        let entry = |id: &str, queue: &str, prefix: &str| QueueConfiguration {
+            id: Some(id.into()),
+            queue_arn: format!("arn:aws:sqs:us-east-1:123456789012:{queue}"),
+            events: vec!["s3:ObjectCreated:*".into()],
+            filter: Some(alien_aws_clients::s3::NotificationFilter {
+                key: alien_aws_clients::s3::S3KeyFilter {
+                    filter_rules: vec![alien_aws_clients::s3::FilterRule {
+                        name: "Prefix".into(),
+                        value: prefix.into(),
+                    }],
+                },
+            }),
+        };
+        let ours = "owned-jobs-Jobs-8Ox1f1kjoMGG";
+        let document = NotificationConfiguration {
+            queue_configurations: vec![
+                entry("ZDI2MTI4NmYtM2ExYy00MDg2LWIy", ours, "in/"),
+                entry("manual-same-queue", ours, "manual/"),
+                entry("manual", "elsewhere", "in/"),
+            ],
+            lambda_function_configurations: vec![LambdaFunctionConfiguration {
+                id: Some("worker".into()),
+                lambda_function_arn: "arn:aws:lambda:us-east-1:123456789012:function:f".into(),
+                events: vec!["s3:ObjectRemoved:*".into()],
+                filter: None,
+            }],
+            ..Default::default()
+        };
+        for (lifecycle, expected_writes) in
+            [(ResourceLifecycle::Frozen, 1), (ResourceLifecycle::Live, 0)]
+        {
+            let written = Arc::new(Mutex::new(Vec::new()));
+            let mut api = MockS3Api::new();
+            api.expect_get_bucket_tagging()
+                .returning(|_| Ok(alien_core::standard_resource_tags("owned", "data")));
+            let current = document.clone();
+            api.expect_get_bucket_notification_configuration()
+                .returning(move |bucket| {
+                    assert_eq!(bucket, "owned-data");
+                    Ok(current.clone())
+                });
+            let sink = written.clone();
+            api.expect_put_bucket_notification_configuration()
+                .returning(move |_, document| {
+                    sink.lock().unwrap().push(document.clone());
+                    Ok(())
+                });
+            api.expect_get_bucket_lifecycle_configuration()
+                .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration { rules: vec![] }));
+            let api = Arc::new(api);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_s3_client()
+                .returning(move |_| Ok(api.clone()));
+
+            let mut state = StackState::new(Platform::Aws);
+            state.resource_prefix = "owned".into();
+            let queue = Queue::new("jobs".into()).build();
+            let mut storage = StackResourceState::new_pending(
+                "storage".into(),
+                Resource::new(
+                    Storage::new("data".into())
+                        .notifications(vec![StorageNotification::builder()
+                            .queue((&queue).into())
+                            .prefix("in/".into())
+                            .build()])
+                        .build(),
+                ),
+                None,
+                vec![],
+            );
+            storage.lifecycle = Some(lifecycle);
+            storage.status = ResourceStatus::Running;
+            storage
+                .set_internal_controller(Some(Box::new(AwsStorageController {
+                    bucket_name: Some("owned-data".into()),
+                    ..Default::default()
+                })))
+                .unwrap();
+            let mut jobs =
+                StackResourceState::new_pending("queue".into(), Resource::new(queue), None, vec![]);
+            jobs.lifecycle = Some(lifecycle);
+            jobs.status = ResourceStatus::Running;
+            jobs.set_internal_controller(Some(Box::new(AwsQueueController {
+                queue_name: Some("owned-jobs-Jobs-8Ox1f1kjoMGG".into()),
+                ..Default::default()
+            })))
+            .unwrap();
+            state.resources.insert("data".into(), storage);
+            state.resources.insert("jobs".into(), jobs);
+            let state: StackState =
+                serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+
+            assert!(protect_retained_storage(
+                &state,
+                &["data".into()],
+                &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+                &provider,
+                &ExternalBindings::default(),
+                &[lifecycle],
+            )
+            .await
+            .unwrap());
+            let written = written.lock().unwrap();
+            assert_eq!(written.len(), expected_writes, "{lifecycle:?}");
+            if let Some(remaining) = written.first() {
+                assert_eq!(
+                    remaining.queue_configurations,
+                    [
+                        entry("manual-same-queue", ours, "manual/"),
+                        entry("manual", "elsewhere", "in/")
+                    ]
+                );
+                assert_eq!(
+                    remaining.lambda_function_configurations,
+                    document.lambda_function_configurations
+                );
+            }
+        }
     }
 
     fn transient() -> AlienError<ClientError> {
@@ -570,7 +930,7 @@ mod tests {
         .is_err());
         for _ in 0..2 {
             let reloaded = serde_json::from_value(original.clone()).unwrap();
-            protect_retained_storage(
+            assert!(protect_retained_storage(
                 &reloaded,
                 &["data".into()],
                 &client,
@@ -579,7 +939,7 @@ mod tests {
                 &[ResourceLifecycle::Live],
             )
             .await
-            .unwrap();
+            .unwrap());
             assert_eq!(serde_json::to_value(reloaded).unwrap(), original);
         }
         // A failed replacement can leave the old storage controller behind a
@@ -587,7 +947,7 @@ mod tests {
         let entry = state.resources.get_mut("data").unwrap();
         entry.config = Resource::new(alien_core::Vault::new("data".into()).build());
         let old_identity = entry.internal_state.clone();
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &["data".into()],
             &client,
@@ -596,7 +956,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         assert_eq!(state.resources["data"].internal_state, old_identity);
         assert_eq!(
             policy.lock().unwrap()["Statement"],
@@ -931,7 +1291,7 @@ mod tests {
         .is_err());
         for _ in 0..2 {
             let reloaded = serde_json::from_value(original.clone()).unwrap();
-            protect_retained_storage(
+            assert!(protect_retained_storage(
                 &reloaded,
                 &["data".into()],
                 &client,
@@ -940,7 +1300,7 @@ mod tests {
                 &[ResourceLifecycle::Live],
             )
             .await
-            .unwrap();
+            .unwrap());
             assert_eq!(serde_json::to_value(reloaded).unwrap(), original);
         }
         let actual = serde_json::to_value(policy.lock().unwrap().clone()).unwrap();
@@ -1138,7 +1498,7 @@ mod tests {
         let original = serde_json::to_value(&state).unwrap();
         for _ in 0..2 {
             let reloaded = serde_json::from_value(original.clone()).unwrap();
-            protect_retained_storage(
+            assert!(protect_retained_storage(
                 &reloaded,
                 &["data".into()],
                 &client,
@@ -1147,7 +1507,7 @@ mod tests {
                 &[ResourceLifecycle::Live],
             )
             .await
-            .unwrap();
+            .unwrap());
             assert_eq!(serde_json::to_value(reloaded).unwrap(), original);
         }
         assert!(*private.lock().unwrap());
@@ -1164,7 +1524,7 @@ mod tests {
         )]));
         let provider = MockPlatformServiceProvider::new();
         let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &["data".into()],
             &client,
@@ -1173,7 +1533,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         state.resources.get_mut("data").unwrap().internal_state = original_controller;
         assert!(protect_retained_storage(
             &state,
@@ -1198,7 +1558,7 @@ mod tests {
         );
         state.resources.get_mut("data").unwrap().lifecycle = Some(ResourceLifecycle::Frozen);
         let original = serde_json::to_value(&state).unwrap();
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &["data".into()],
             &ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
@@ -1207,7 +1567,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         assert_eq!(serde_json::to_value(state).unwrap(), original);
     }
 
@@ -1217,7 +1577,7 @@ mod tests {
         state.resources.get_mut("data").unwrap().lifecycle = Some(ResourceLifecycle::Frozen);
         let provider = MockPlatformServiceProvider::new();
         let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &["data".into()],
             &client,
@@ -1226,9 +1586,9 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         state.resources.get_mut("data").unwrap().lifecycle = Some(ResourceLifecycle::Live);
-        protect_retained_storage(
+        assert!(protect_retained_storage(
             &state,
             &[],
             &client,
@@ -1237,7 +1597,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
         state.resources.get_mut("data").unwrap().lifecycle = None;
         assert!(protect_retained_storage(
             &state,

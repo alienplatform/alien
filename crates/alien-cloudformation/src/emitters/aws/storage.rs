@@ -73,7 +73,16 @@ impl CfEmitter for AwsStorageEmitter {
             "PublicAccessBlockConfiguration".to_string(),
             public_access_block(!storage.public_read),
         );
-        if let Some(notification) = storage_notification_configuration(ctx)? {
+        // A preflight forbids a Storage with queue notifications from also being a
+        // Worker storage-trigger source, so at most one of these owns the document.
+        if !storage.notifications.is_empty() {
+            let (configuration, policies) =
+                super::storage_notifications::notification_configuration(ctx, storage)?;
+            bucket
+                .properties
+                .insert("NotificationConfiguration".into(), configuration);
+            bucket.depends_on.extend(policies);
+        } else if let Some(notification) = storage_notification_configuration(ctx)? {
             bucket
                 .properties
                 .insert("NotificationConfiguration".to_string(), notification);
@@ -202,7 +211,7 @@ impl CfEmitter for AwsStorageEmitter {
     }
 }
 
-fn bucket_name(storage_id: &str) -> CfExpression {
+pub(super) fn bucket_name(storage_id: &str) -> CfExpression {
     CfExpression::object([(
         "Fn::Join",
         CfExpression::list([

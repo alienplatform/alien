@@ -1,16 +1,19 @@
 mod aws;
+mod aws_notifications;
 pub use aws::*;
 
 mod aws_import;
 pub use aws_import::AwsStorageImporter;
 
 mod gcp;
+mod gcp_notifications;
 pub use gcp::*;
 
 mod gcp_import;
 pub use gcp_import::GcpStorageImporter;
 
 pub(crate) mod azure;
+mod azure_notifications;
 pub use azure::*;
 
 mod azure_import;

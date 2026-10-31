@@ -12,9 +12,10 @@ use alien_azure_clients::azure::models::blob::{
 use alien_azure_clients::azure::models::storage::{ManagementPolicyRule, StorageAccount};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureBlobStorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
-    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
+    bindings::StorageBinding, AzureBlobStorageHeartbeatData, HeartbeatBackend,
+    InitialSetupAuthority, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus, Storage,
+    StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -253,6 +254,9 @@ pub struct AzureStorageController {
     /// Whether the role assignment IDs were durably planned in an earlier controller step.
     #[serde(default)]
     pub(crate) role_assignments_planned: bool,
+    /// This controller has managed queue notifications on the container.
+    #[serde(default)]
+    pub(crate) notifications_managed: bool,
 }
 
 #[controller]
@@ -331,6 +335,7 @@ impl AzureStorageController {
         );
 
         self.container_name = Some(container_name.clone());
+        self.notifications_managed = !config.notifications.is_empty();
 
         Ok(HandlerAction::Continue {
             state: PlanningPermissions,
@@ -413,7 +418,7 @@ impl AzureStorageController {
         info!(resource_id = %config.id(), "Successfully applied resource-scoped permissions");
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: CreatingNotifications,
             suggested_delay: None,
         })
     }
@@ -492,6 +497,8 @@ impl AzureStorageController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Storage>()?;
         let prev = ctx.previous_resource_config::<Storage>()?;
+        self.notifications_managed |=
+            !config.notifications.is_empty() || !prev.notifications.is_empty();
 
         info!(resource_id = %config.id(), "Starting update of Azure Storage Container");
 
@@ -608,7 +615,7 @@ impl AzureStorageController {
         .await?;
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: UpdatingNotifications,
             suggested_delay: None,
         })
     }
@@ -668,7 +675,7 @@ impl AzureStorageController {
         }
 
         Ok(HandlerAction::Continue {
-            state: DeletingContainer,
+            state: DeletingNotifications,
             suggested_delay: None,
         })
     }
@@ -741,6 +748,46 @@ impl AzureStorageController {
         })
     }
 
+    #[handler(state = CreatingNotifications, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn creating_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let done = self.reconcile_queue_notifications(ctx, false).await?;
+        Ok(HandlerAction::Continue {
+            state: if done { Ready } else { CreatingNotifications },
+            suggested_delay: (!done).then_some(Duration::from_secs(2)),
+        })
+    }
+
+    #[handler(state = UpdatingNotifications, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let done = self.reconcile_queue_notifications(ctx, false).await?;
+        Ok(HandlerAction::Continue {
+            state: if done { Ready } else { UpdatingNotifications },
+            suggested_delay: (!done).then_some(Duration::from_secs(2)),
+        })
+    }
+
+    #[handler(state = DeletingNotifications, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
+    async fn deleting_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let done = self.reconcile_queue_notifications(ctx, true).await?;
+        Ok(HandlerAction::Continue {
+            state: if done {
+                DeletingContainer
+            } else {
+                DeletingNotifications
+            },
+            suggested_delay: (!done).then_some(Duration::from_secs(2)),
+        })
+    }
+
     // ─────────────── TERMINALS ────────────────────────────────
     terminal_state!(
         state = CreateFailed,
@@ -758,6 +805,13 @@ impl AzureStorageController {
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        Ok(may_manage_notifications(ctx, &config.id)
+            && !self.notifications_managed
+            && !config.notifications.is_empty())
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.container_name.as_ref().map(|container_name| {
             ResourceOutputs::new(StorageOutputs {
@@ -767,8 +821,6 @@ impl AzureStorageController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::StorageBinding;
-
         if let (Some(storage_account_name), Some(container_name)) =
             (&self.storage_account_name, &self.container_name)
         {
@@ -785,6 +837,44 @@ impl AzureStorageController {
         } else {
             Ok(None)
         }
+    }
+}
+
+fn may_manage_notifications(ctx: &ResourceControllerContext<'_>, id: &str) -> bool {
+    let frozen = ctx
+        .desired_stack
+        .resources
+        .get(id)
+        .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen);
+    !frozen || ctx.initial_setup_authority == InitialSetupAuthority::DirectSetup
+}
+
+impl AzureStorageController {
+    async fn reconcile_queue_notifications(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        deleting: bool,
+    ) -> Result<bool> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        if !may_manage_notifications(ctx, &config.id)
+            || (!self.notifications_managed && config.notifications.is_empty())
+        {
+            return Ok(true);
+        }
+        let Some(container) = &self.container_name else {
+            if deleting {
+                return Ok(true);
+            }
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "Container name missing during notification reconciliation".into(),
+            }));
+        };
+        let done = super::azure_notifications::reconcile(ctx, container, config, deleting).await?;
+        if done {
+            self.notifications_managed = !deleting && !config.notifications.is_empty();
+        }
+        Ok(done)
     }
 }
 
@@ -928,6 +1018,7 @@ impl AzureStorageController {
             storage_account_name: Some("test-storage-account".to_string()),
             role_assignment_ids: Vec::new(),
             role_assignments_planned: true,
+            notifications_managed: false,
             _internal_stay_count: None,
         }
     }
@@ -1697,6 +1788,7 @@ mod tests {
             storage_account_name: None,
             role_assignment_ids: Vec::new(),
             role_assignments_planned: true,
+            notifications_managed: false,
             _internal_stay_count: None,
         };
 

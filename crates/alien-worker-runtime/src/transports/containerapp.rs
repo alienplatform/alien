@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use alien_bindings::providers::queue::storage_notifications::azure_queue_payload;
 use alien_worker_protocol::ControlGrpcServer;
 use axum::{
     body::{Body, Bytes},
@@ -322,9 +323,31 @@ async fn handle_dapr_message(request: Request<Body>, state: &TransportState) -> 
         }
     };
 
+    // Event Grid sends a complete CloudEvent as the Service Bus message body.
+    // Keep notifications delivered to a queue route in the queue dispatcher.
+    if cloud_event.ty() == "Microsoft.Storage.BlobCreated" {
+        if let Some(logical) = parts.uri.path().strip_prefix("/__alien/queue/") {
+            return handle_raw_dapr_message(&body_bytes, state, Some(logical)).await;
+        }
+    }
+
     // Process as Dapr CloudEvent (Service Bus message)
     match dapr_cloudevent_to_queue_messages(cloud_event) {
-        Ok(queue_messages) => {
+        Ok(mut queue_messages) => {
+            if let Some(logical) = parts.uri.path().strip_prefix("/__alien/queue/") {
+                for message in &mut queue_messages {
+                    message.source = if state.collector.contains_key(logical) {
+                        logical.to_owned()
+                    } else {
+                        super::shared::single_queue_source(
+                            &state.control_server,
+                            &message.source,
+                            logical,
+                        )
+                        .await
+                    };
+                }
+            }
             dispatch_queue_messages(
                 queue_messages,
                 &state.control_server,
@@ -452,9 +475,11 @@ async fn handle_raw_dapr_message(
         None => original_source.to_owned(),
     };
 
+    let payload = azure_queue_payload(alien_core::MessagePayload::Json(json_value));
+
     let qm = alien_core::QueueMessage {
         id: message_id,
-        payload: alien_core::MessagePayload::Json(json_value),
+        payload,
         receipt_handle: String::new(),
         timestamp: Utc::now(),
         source,
@@ -554,8 +579,11 @@ async fn handle_azure_storage_cloudevent(
 mod tests {
     use super::*;
     use alien_worker_protocol::control::{
-        control_service_server::ControlService, WaitForTasksRequest,
+        control_service_server::ControlService, queue_delivery_outcome::Disposition,
+        send_task_result_request, task::Payload, QueueBatchResult, QueueDeliveryOutcome,
+        SendTaskResultRequest, WaitForTasksRequest,
     };
+    use tokio_stream::StreamExt;
 
     #[tokio::test]
     async fn single_dapr_routes_preserve_existing_sources() {
@@ -684,5 +712,135 @@ mod tests {
         assert_eq!(health(&state).await, StatusCode::SERVICE_UNAVAILABLE);
         control.application_stopped();
         assert_eq!(health(&state).await, StatusCode::SERVICE_UNAVAILABLE);
+    }
+    #[tokio::test]
+    async fn storage_notifications_remain_batched_queue_work() {
+        for wrapped in [false, true] {
+            let control = Arc::new(ControlGrpcServer::new());
+            let mut tasks = control
+                .wait_for_tasks(tonic::Request::new(WaitForTasksRequest {
+                    application_id: "worker".into(),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            let environment = std::collections::HashMap::from([
+            (
+                "ALIEN_QUEUE_BATCH_CONFIG".into(),
+                r#"{"jobs":{"maxMessages":2,"maxWindowSeconds":5}}"#.into(),
+            ),
+            (
+                "ALIEN_JOBS_BINDING".into(),
+                serde_json::json!({"service":"servicebus", "namespace":"test", "queueName":"jobs"})
+                    .to_string(),
+            ),
+        ]);
+            let collectors = super::super::queue_batch::QueueCollectors::from_environment(
+                &environment,
+                control.clone(),
+            )
+            .unwrap();
+            let state = TransportState {
+                received_at: tokio::time::Instant::now(),
+                collector: collectors.clients.clone(),
+                control_server: control.clone(),
+                app_http_port: None,
+                command_timeout: Duration::from_secs(30),
+                http_client: create_forward_client(),
+                proxy_shutdown: CancellationToken::new(),
+            };
+            let request = |key: &str| {
+                let body = serde_json::json!({"id":key,"specversion":"1.0", "type":"Microsoft.Storage.BlobCreated", "source":"/test/storage", "time":"2026-10-30T08:00:00Z", "subject":format!("/blobServices/default/containers/source/blobs/{key}"), "data":{"contentLength":7,"eTag":"etag"}});
+                let body = if wrapped {
+                    serde_json::json!({
+                        "specversion":"1.0", "id":key, "source":"test", "type":"com.dapr.event.sent",
+                        "time":"2026-10-30T08:00:00Z", "datacontenttype":"application/json", "topic":"physical-jobs", "data":body,
+                    })
+                } else {
+                    body
+                };
+                let builder = Request::builder()
+                    .method("POST")
+                    .uri("/__alien/queue/jobs")
+                    .header(
+                        "content-type",
+                        if wrapped {
+                            "application/cloudevents+json"
+                        } else {
+                            "application/json"
+                        },
+                    );
+
+                builder.body(Body::from(body.to_string())).unwrap()
+            };
+
+            let first_state = state.clone();
+            let first_request = request("in/first.json");
+            let first = tokio::spawn(async move {
+                handle_request(State(first_state), first_request)
+                    .await
+                    .into_response()
+            });
+            let second_request = request("in/second.json");
+            let second = tokio::spawn(async move {
+                handle_request(State(state), second_request)
+                    .await
+                    .into_response()
+            });
+            let task = tokio::time::timeout(Duration::from_secs(3), tasks.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let Some(Payload::QueueBatch(batch)) = task.payload else {
+                panic!("storage notifications must dispatch a queue batch")
+            };
+            assert_eq!(batch.source, "jobs");
+            assert_eq!(batch.deliveries.len(), 2);
+            let mut keys = Vec::new();
+            for delivery in &batch.deliveries {
+                let message = delivery.message.as_ref().unwrap();
+                assert_eq!(message.source, "jobs");
+                let event: alien_core::StorageEvent =
+                    serde_json::from_slice(&message.payload).unwrap();
+                assert_eq!(event.event_type, alien_core::StorageEventType::Created);
+                assert_eq!(event.bucket_name, "source");
+                assert_eq!(event.size, Some(7));
+                assert_eq!(event.etag.as_deref(), Some("etag"));
+                keys.push(event.object_key);
+            }
+            keys.sort();
+            assert_eq!(keys, ["in/first.json", "in/second.json"]);
+            assert!(
+                !first.is_finished() && !second.is_finished(),
+                "enqueue must not acknowledge"
+            );
+            control
+                .send_task_result(tonic::Request::new(SendTaskResultRequest {
+                    task_id: task.task_id,
+                    result: Some(send_task_result_request::Result::QueueBatch(
+                        QueueBatchResult {
+                            outcomes: batch
+                                .deliveries
+                                .iter()
+                                .map(|delivery| QueueDeliveryOutcome {
+                                    delivery_id: delivery.delivery_id.clone(),
+                                    disposition: Disposition::Success as i32,
+                                })
+                                .collect(),
+                        },
+                    )),
+                }))
+                .await
+                .unwrap();
+            assert_eq!(first.await.unwrap().status(), StatusCode::OK);
+            assert_eq!(second.await.unwrap().status(), StatusCode::OK);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), tasks.next())
+                    .await
+                    .is_err()
+            );
+            collectors.join().await.unwrap();
+        }
     }
 }

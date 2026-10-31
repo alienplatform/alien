@@ -468,3 +468,150 @@ fn azure_retention_checks_only_applicable_delete_actions() {
             .unwrap(),
     );
 }
+
+fn notification_package(notifications: bool) -> alien_terraform::ModuleFiles {
+    use alien_core::{
+        Queue, ResourceLifecycle, ResourceRef, Stack, StackSettings, Storage, StorageNotification,
+    };
+    let rule = |prefix: &str| {
+        StorageNotification::builder()
+            .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs"))
+            .prefix(prefix.into())
+            .build()
+    };
+    let rules = if notifications {
+        vec![rule("in/"), rule("other/")]
+    } else {
+        Vec::new()
+    };
+    let stack = Stack::new("retention".into())
+        .add(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Storage::new("source".into()).notifications(rules).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    alien_terraform::generate_terraform_module(
+        &stack,
+        alien_terraform::TerraformTarget::Aws,
+        alien_terraform::TerraformOptions {
+            display_name: None,
+            registry: &alien_terraform::TfRegistry::built_in(),
+            stack_settings: StackSettings::default(),
+            registration: None,
+            helm_install: None,
+            supported_aws_regions: Vec::new(),
+        },
+    )
+    .unwrap()
+}
+
+/// Detaching a retained bucket's notification keeps its document while teardown deletes the
+/// queues. The helper first removes exactly the entries setup wrote (by the Ids in state) and
+/// keeps every other entry; a failed write stops before anything is detached.
+#[cfg(unix)]
+#[test]
+fn retaining_a_notifying_bucket_removes_only_setup_entries_before_detaching() {
+    let plain = notification_package(false);
+    let plain_files: std::collections::BTreeMap<_, _> = plain.iter().collect();
+    assert_eq!(
+        plain_files["retain-data.py"],
+        include_str!("../src/templates/retain-data.py"),
+        "packages without notifications keep the helper unchanged"
+    );
+
+    let package = notification_package(true);
+    let files: std::collections::BTreeMap<_, _> = package.iter().collect();
+    let manifest: Vec<String> = serde_json::from_str(files["retained-data.json"]).unwrap();
+    assert!(manifest.contains(&"aws_s3_bucket_notification.source_notifications".to_string()));
+    for put_fails in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("retain-data.py"), files["retain-data.py"]).unwrap();
+        fs::write(
+            root.path().join("retained-data.json"),
+            files["retained-data.json"],
+        )
+        .unwrap();
+        let addresses: Vec<&str> = manifest.iter().map(String::as_str).collect();
+        let ours =
+            |index| alien_core::storage_notifications::aws_notification_id("p", "source", index);
+        let state = with_inventory(
+            json!({"version":4, "lineage":"test", "serial":1, "resources":[
+                {"mode":"managed", "type":"aws_s3_bucket", "name":"source",
+                 "instances":[{"attributes":{"id":"bucket"}}]},
+                {"mode":"managed", "type":"aws_s3_bucket_notification", "name":"source_notifications",
+                 "instances":[{"attributes":{"id":"bucket", "bucket":"bucket", "region":"us-east-2",
+                    // A refresh records the whole document, hand-added entries included.
+                    "queue":[{"id":ours(0)}, {"id":ours(1)}, {"id":"hand-made"}]}}]}
+            ]}),
+            &addresses,
+        );
+        fs::write(
+            root.path().join("state.json"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        let entry = |id: &str, queue: &str| json!({"Id":id, "QueueArn":format!("arn:aws:sqs:us-east-2:123456789012:{queue}"), "Events":["s3:ObjectCreated:*"]});
+        let document = json!({
+            "QueueConfigurations":[entry(&ours(0),"jobs"), entry("hand-made","manual"), entry(&ours(1),"jobs")],
+            "TopicConfigurations":[{"Id":"topic", "TopicArn":"arn:aws:sns:us-east-2:123456789012:t", "Events":["s3:ObjectCreated:*"]}],
+            "ResponseMetadata":{"RequestId":"x"}
+        });
+        fs::write(
+            root.path().join("document.json"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .unwrap();
+        let terraform = root.path().join("terraform");
+        fs::write(&terraform, "#!/bin/sh\nif [ \"$1 $2\" = 'state pull' ]; then cat state.json; exit 0; fi\nif [ \"$1 $2\" = 'state rm' ]; then echo \"$@\" >> removed.log; exit 0; fi\nexit 1\n").unwrap();
+        let aws = root.path().join("aws");
+        fs::write(&aws, "#!/bin/sh\necho \"$@\" >> aws.log\ncase \"$2\" in\nget-bucket-notification-configuration) cat document.json ;;\nput-bucket-notification-configuration) [ \"$PUT_FAILS\" = yes ] && exit 254; while [ \"$1\" != --notification-configuration ]; do shift; done; printf '%s' \"$2\" > put.json ;;\n*) exit 1 ;;\nesac\n").unwrap();
+        for cli in [&terraform, &aws] {
+            fs::set_permissions(cli, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let output = Command::new("python3")
+            .current_dir(root.path())
+            .args(["retain-data.py", "--detach", "--receipt-dir", "receipts"])
+            .env("PUT_FAILS", if put_fails { "yes" } else { "no" })
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    root.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .output()
+            .unwrap();
+        let calls = fs::read_to_string(root.path().join("aws.log")).unwrap();
+        assert!(
+            calls.contains("--region us-east-2 --bucket bucket"),
+            "{calls}"
+        );
+        if put_fails {
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stderr).contains("nothing detached"));
+            assert!(
+                !root.path().join("removed.log").exists(),
+                "nothing may be detached"
+            );
+            continue;
+        }
+        success(output);
+        let written: Value =
+            serde_json::from_slice(&fs::read(root.path().join("put.json")).unwrap()).unwrap();
+        assert_eq!(
+            written,
+            json!({
+                "QueueConfigurations":[entry("hand-made","manual")],
+                "TopicConfigurations":document["TopicConfigurations"]
+            })
+        );
+        let removed = fs::read_to_string(root.path().join("removed.log")).unwrap();
+        assert!(
+            removed.contains("aws_s3_bucket_notification.source_notifications"),
+            "{removed}"
+        );
+        assert!(removed.contains("aws_s3_bucket.source"), "{removed}");
+    }
+}

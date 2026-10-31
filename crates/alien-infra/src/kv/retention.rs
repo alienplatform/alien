@@ -447,7 +447,7 @@ mod tests {
         let state: StackState =
             serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
         assert!(step(&state, &provider).await.unwrap());
-        crate::protect_retained_storage(
+        assert!(crate::protect_retained_storage(
             &state,
             &["data".into()],
             &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
@@ -456,7 +456,7 @@ mod tests {
             &[ResourceLifecycle::Live],
         )
         .await
-        .unwrap();
+        .unwrap());
 
         let mut bucket = state.clone();
         let entry = bucket.resources.get_mut("data").unwrap();
