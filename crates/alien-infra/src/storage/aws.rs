@@ -1036,7 +1036,8 @@ impl AwsStorageController {
         })
     }
 
-    #[flow_entry(Delete)]
+    /// Runs only for a bucket whose ownership `DeleteStart` proved, so state from earlier
+    /// versions that names another account's or region's bucket never reaches it.
     #[handler(state = DeletingNotifications, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
     async fn deleting_notifications(
         &mut self,
@@ -1044,7 +1045,7 @@ impl AwsStorageController {
     ) -> Result<HandlerAction> {
         self.reconcile_queue_notifications(ctx, true).await?;
         Ok(HandlerAction::Continue {
-            state: DeleteStart,
+            state: DeletingBucket,
             suggested_delay: None,
         })
     }
@@ -1057,6 +1058,7 @@ impl AwsStorageController {
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
+    #[flow_entry(Delete)]
     #[handler(
         state = DeleteStart,
         on_failure = DeleteFailed,
@@ -1137,6 +1139,38 @@ impl AwsStorageController {
             };
             return Ok(self.keep_bucket(&config.id, &bucket_name, reason));
         }
+
+        Ok(HandlerAction::Continue {
+            state: DeletingNotifications,
+            suggested_delay: None,
+        })
+    }
+
+    /// Empties and deletes the bucket `DeleteStart` proved ours.
+    #[handler(
+        state = DeletingBucket,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_bucket(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        let Some(bucket_name) = self
+            .bucket_name
+            .clone()
+            .or_else(|| self.requested_bucket_name.clone())
+        else {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
+        let client = ctx
+            .service_provider
+            .get_aws_s3_client(ctx.get_aws_config()?)
+            .await?;
 
         info!(bucket=%bucket_name, "Starting bucket deletion");
 
@@ -1935,6 +1969,47 @@ mod tests {
         assert_eq!(bucket.objects, 1, "its objects are kept");
         assert_eq!(bucket, handmade_bucket());
         assert!(executor.outputs().is_none());
+    }
+
+    /// State from earlier versions can name a bucket this deployment never proved it made.
+    /// Deleting a notifying Storage must keep that bucket without reading or writing its
+    /// notification document: only a bucket proven ours reaches notification cleanup.
+    #[tokio::test]
+    async fn delete_keeps_an_unproven_bucket_without_touching_its_notifications() {
+        let storage = Storage::new(basic_storage().id)
+            .notifications(vec![alien_core::StorageNotification::builder()
+                .queue(alien_core::ResourceRef::new(
+                    alien_core::Queue::RESOURCE_TYPE,
+                    "jobs",
+                ))
+                .build()])
+            .build();
+        let account = account_with(Some(handmade_bucket()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .controller(AwsStorageController {
+                notifications_managed: true,
+                ..AwsStorageController::mock_ready(&storage.id)
+            })
+            .platform(Platform::Aws)
+            // No notification expectations: any notification call would fail the test.
+            .service_provider(setup_mock_service_provider(Arc::new(fake_s3(
+                account.clone(),
+                Fault::None,
+            ))))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            account.lock().unwrap().clone().expect("the bucket is kept"),
+            handmade_bucket()
+        );
     }
 
     /// A step whose S3 call succeeded but whose response was lost is retried. The retry finds
