@@ -6,8 +6,8 @@ use alien_azure_clients::azure::models::blob::{
 };
 use alien_client_core::ErrorData as ClientError;
 use alien_core::{
-    AwsClientConfig, ClientConfig, ExternalBindings, Platform, ResourceLifecycle, ResourceStatus,
-    StackResourceState, StackState, Storage,
+    AwsClientConfig, ClientConfig, ExternalBindings, InitialSetupAuthority, Platform,
+    ResourceLifecycle, ResourceStatus, StackResourceState, StackState, Storage,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::gcs::{Bucket, GcsApi, IamConfiguration, Lifecycle};
@@ -16,7 +16,7 @@ use tracing::warn;
 
 use super::{AwsStorageController, AzureStorageController, GcpStorageController};
 use crate::{
-    core::aws_ownership::is_tagged_as_ours, infra_requirements::azure_utils,
+    core::aws_ownership::is_retained_resource_ours, infra_requirements::azure_utils,
     queue::aws::AwsQueueController, ErrorData, PlatformServiceProvider, Result,
     StackResourceStateExt,
 };
@@ -75,6 +75,7 @@ pub async fn protect_retained_storage(
     provider: &dyn PlatformServiceProvider,
     external_bindings: &ExternalBindings,
     lifecycles: &[ResourceLifecycle],
+    setup_authority: InitialSetupAuthority,
 ) -> Result<bool> {
     let mut complete = true;
     for id in retained_ids {
@@ -134,8 +135,8 @@ pub async fn protect_retained_storage(
         {
             continue;
         }
-        match resource.lifecycle {
-            Some(lifecycle) if lifecycles.contains(&lifecycle) => {}
+        let lifecycle = match resource.lifecycle {
+            Some(lifecycle) if lifecycles.contains(&lifecycle) => lifecycle,
             Some(_) => continue,
             None => {
                 return Err(invalid(
@@ -143,7 +144,7 @@ pub async fn protect_retained_storage(
                     "Storage lifecycle is required before protecting retained data",
                 ));
             }
-        }
+        };
         match platform {
             Platform::Aws => {
                 let controller =
@@ -165,9 +166,13 @@ pub async fn protect_retained_storage(
                     Err(error) => return Err(error.context(cloud_error(id))),
                 };
                 if tags.as_ref().is_some_and(|tags| {
-                    !is_tagged_as_ours(
+                    !is_retained_resource_ours(
                         tags,
-                        &alien_core::standard_resource_tags(&state.resource_prefix, id),
+                        &state.resource_prefix,
+                        id,
+                        Storage::RESOURCE_TYPE.as_ref(),
+                        lifecycle,
+                        setup_authority,
                     )
                 }) {
                     return Err(invalid(
@@ -186,7 +191,7 @@ pub async fn protect_retained_storage(
                         .and_then(|previous| previous.downcast_ref::<Storage>())
                         .is_some_and(|previous| !previous.notifications.is_empty())
                 {
-                    let setup_rules = if resource.lifecycle == Some(ResourceLifecycle::Frozen) {
+                    let setup_rules = if lifecycle == ResourceLifecycle::Frozen {
                         setup_written_rules(state, resource, config, id)?
                     } else {
                         Vec::new()
@@ -594,7 +599,10 @@ fn singleton(value: &Value, expected: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
     use alien_aws_clients::{
         s3::{
@@ -662,6 +670,7 @@ mod tests {
             &provider,
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap());
@@ -691,7 +700,7 @@ mod tests {
         let written = Arc::new(Mutex::new(Vec::new()));
         let mut api = MockS3Api::new();
         api.expect_get_bucket_tagging()
-            .returning(|_| Ok(alien_core::standard_resource_tags("owned", "data")));
+            .returning(|_| Ok(creator_tags(ResourceLifecycle::Frozen)));
         let current = document.clone();
         api.expect_get_bucket_notification_configuration()
             .returning(move |_| Ok(current.clone()));
@@ -731,6 +740,7 @@ mod tests {
             &provider,
             &ExternalBindings::default(),
             &[ResourceLifecycle::Frozen],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap());
@@ -775,7 +785,7 @@ mod tests {
             let written = Arc::new(Mutex::new(Vec::new()));
             let mut api = MockS3Api::new();
             api.expect_get_bucket_tagging()
-                .returning(|_| Ok(alien_core::standard_resource_tags("owned", "data")));
+                .returning(move |_| Ok(creator_tags(lifecycle)));
             let current = document.clone();
             api.expect_get_bucket_notification_configuration()
                 .returning(move |bucket| {
@@ -841,6 +851,7 @@ mod tests {
                 &provider,
                 &ExternalBindings::default(),
                 &[lifecycle],
+                InitialSetupAuthority::ImportedHandoff,
             )
             .await
             .unwrap());
@@ -859,6 +870,82 @@ mod tests {
                     document.lambda_function_configurations
                 );
             }
+        }
+    }
+
+    /// A setup-owned bucket carries the setup package's tags, not the runtime ones. Retention
+    /// accepts exactly those for a Frozen bucket and refuses every other tag set with the same
+    /// error before changing anything.
+    #[tokio::test]
+    async fn setup_owned_buckets_are_judged_by_setup_tags() {
+        let setup = |prefix: &str| -> HashMap<String, String> {
+            alien_core::setup_resource_tags(prefix, "data", Storage::RESOURCE_TYPE.as_ref())
+                .into_iter()
+                .collect()
+        };
+        for (tags, accepted) in [
+            (setup("owned"), true),
+            (alien_core::standard_resource_tags("owned", "data"), false),
+            (setup("foreign"), false),
+            (alien_core::standard_resource_tags("foreign", "data"), false),
+            (HashMap::new(), false),
+        ] {
+            let mut api = MockS3Api::new();
+            let listed = tags.clone();
+            api.expect_get_bucket_tagging().returning(move |bucket| {
+                assert_eq!(bucket, "owned-data");
+                Ok(listed.clone())
+            });
+            api.expect_get_bucket_lifecycle_configuration()
+                .times(usize::from(accepted))
+                .returning(|_| Ok(alien_aws_clients::s3::LifecycleConfiguration { rules: vec![] }));
+            let api = Arc::new(api);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_s3_client()
+                .returning(move |_| Ok(api.clone()));
+            let mut state = installed(
+                Platform::Aws,
+                Box::new(AwsStorageController {
+                    bucket_name: Some("owned-data".into()),
+                    ..Default::default()
+                }),
+            );
+            let resource = state.resources.get_mut("data").unwrap();
+            resource.lifecycle = Some(ResourceLifecycle::Frozen);
+            resource.config = Resource::new(Storage::new("data".into()).build());
+            let result = protect_retained_storage(
+                &state,
+                &["data".into()],
+                &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+                &provider,
+                &ExternalBindings::default(),
+                &[ResourceLifecycle::Live, ResourceLifecycle::Frozen],
+                InitialSetupAuthority::ImportedHandoff,
+            )
+            .await;
+            if accepted {
+                result.unwrap_or_else(|error| panic!("{tags:?}: {error}"));
+            } else {
+                let error = result.expect_err("foreign or wrong-owner tags must be refused");
+                assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{tags:?}");
+                assert!(error
+                    .to_string()
+                    .contains("Bucket ownership tags do not match the retained resource"));
+            }
+        }
+    }
+
+    /// The tags the creator of an "owned" deployment's "data" bucket wrote: the setup package
+    /// for a Frozen bucket of an imported setup, the runtime for a Live one.
+    fn creator_tags(lifecycle: ResourceLifecycle) -> HashMap<String, String> {
+        match lifecycle {
+            ResourceLifecycle::Frozen => {
+                alien_core::setup_resource_tags("owned", "data", Storage::RESOURCE_TYPE.as_ref())
+                    .into_iter()
+                    .collect()
+            }
+            ResourceLifecycle::Live => alien_core::standard_resource_tags("owned", "data"),
         }
     }
 
@@ -924,7 +1011,8 @@ mod tests {
             &client,
             &provider,
             &ExternalBindings::default(),
-            &[ResourceLifecycle::Live]
+            &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff
         )
         .await
         .is_err());
@@ -937,6 +1025,7 @@ mod tests {
                 &provider,
                 &ExternalBindings::default(),
                 &[ResourceLifecycle::Live],
+                InitialSetupAuthority::ImportedHandoff,
             )
             .await
             .unwrap());
@@ -954,6 +1043,7 @@ mod tests {
             &provider,
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap());
@@ -1101,7 +1191,8 @@ mod tests {
             &client,
             &provider,
             &ExternalBindings::default(),
-            &[ResourceLifecycle::Live]
+            &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff
         )
         .await
         .is_err());
@@ -1118,6 +1209,7 @@ mod tests {
                 } else {
                     &[ResourceLifecycle::Live, ResourceLifecycle::Frozen]
                 },
+                InitialSetupAuthority::ImportedHandoff,
             )
             .await;
             assert_eq!(
@@ -1169,6 +1261,7 @@ mod tests {
                 &provider,
                 &ExternalBindings::default(),
                 &[ResourceLifecycle::Live],
+                InitialSetupAuthority::ImportedHandoff,
             )
             .await;
             assert_eq!(result.is_ok(), absent);
@@ -1201,6 +1294,7 @@ mod tests {
             &provider,
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap_err();
@@ -1285,7 +1379,8 @@ mod tests {
             &client,
             &provider,
             &ExternalBindings::default(),
-            &[ResourceLifecycle::Live]
+            &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff
         )
         .await
         .is_err());
@@ -1298,6 +1393,7 @@ mod tests {
                 &provider,
                 &ExternalBindings::default(),
                 &[ResourceLifecycle::Live],
+                InitialSetupAuthority::ImportedHandoff,
             )
             .await
             .unwrap());
@@ -1383,6 +1479,7 @@ mod tests {
             &provider,
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap_err();
@@ -1491,7 +1588,8 @@ mod tests {
             &client,
             &provider,
             &ExternalBindings::default(),
-            &[ResourceLifecycle::Live]
+            &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff
         )
         .await
         .is_err());
@@ -1505,6 +1603,7 @@ mod tests {
                 &provider,
                 &ExternalBindings::default(),
                 &[ResourceLifecycle::Live],
+                InitialSetupAuthority::ImportedHandoff,
             )
             .await
             .unwrap());
@@ -1531,6 +1630,7 @@ mod tests {
             &provider,
             &bindings,
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap());
@@ -1541,7 +1641,8 @@ mod tests {
             &client,
             &provider,
             &bindings,
-            &[ResourceLifecycle::Live]
+            &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff
         )
         .await
         .is_err());
@@ -1565,6 +1666,7 @@ mod tests {
             &MockPlatformServiceProvider::new(),
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap());
@@ -1584,6 +1686,7 @@ mod tests {
             &provider,
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap());
@@ -1595,6 +1698,7 @@ mod tests {
             &provider,
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap());
@@ -1605,7 +1709,8 @@ mod tests {
             &client,
             &provider,
             &ExternalBindings::default(),
-            &[ResourceLifecycle::Live]
+            &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff
         )
         .await
         .is_err());
