@@ -16,7 +16,7 @@ output "config_values" {
         service           = "tablestorage"
         resourceGroupName = azurerm_resource_group.manager.name
         accountName       = azurerm_storage_account.manager.name
-        tableName         = azurerm_storage_table.commands[0].name
+        tableName         = azapi_resource.commands[0].name
       }
       storage = {
         service       = "blob"
