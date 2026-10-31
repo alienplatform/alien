@@ -25,7 +25,7 @@ use crate::{
 use alien_core::{
     import::{setup_import_format_version_for_platform, EmitContext},
     ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
-    KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
+    KubernetesExposureSettings, KubernetesSettings, Kv, Network, NetworkSettings, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
     StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
     TelemetryMode, UpdatesMode,
@@ -501,6 +501,10 @@ fn generate_terraform_module_internal(
     // missing provider block fails at `terraform init` rather than at plan, which reads as a
     // broken package rather than a missing declaration.
     let emits_azapi_resource = has_resource_type(&per_resource, "azapi_resource");
+    let emits_azure_kv_tables = platform == alien_core::Platform::Azure
+        && stack.resources().any(|(id, entry)| {
+            entry.config.resource_type() == Kv::RESOURCE_TYPE && per_resource.contains_key(id)
+        });
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
         || has_resource_type(&per_resource, "azapi_resource_action")
         || emits_azapi_resource;
@@ -569,13 +573,15 @@ fn generate_terraform_module_internal(
                     .iter()
                     .any(|block| block.identifier.as_str() == "removed")
             }),
-            target == TerraformTarget::Azure
-                && stack.resources().any(|(_, entry)| {
-                    entry
-                        .config
-                        .downcast_ref::<alien_core::Storage>()
-                        .is_some_and(|storage| !storage.lifecycle_rules.is_empty())
-                }),
+            per_resource.values().any(|fragment| {
+                fragment.moved_blocks.iter().any(|block| {
+                    block.identifier.as_str() == "import"
+                        && block
+                            .body
+                            .attributes()
+                            .any(|attribute| attribute.key.as_str() == "for_each")
+                })
+            }),
             stack_inputs.iter().any(|input| input.when.is_some()),
         ))?,
     );
@@ -597,6 +603,7 @@ fn generate_terraform_module_internal(
             &stack_inputs,
             alien_core::restricts_network_mode(stack, target.is_kubernetes()),
             !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
+            emits_azure_kv_tables,
             profile,
         )?)?,
     );
@@ -753,6 +760,7 @@ fn generate_terraform_module_internal(
             requires_remote_operator_collector_token,
             &stack_inputs,
             emits_azapi_resource,
+            emits_azure_kv_tables,
             profile,
         ),
     );
@@ -1805,12 +1813,12 @@ fn versions_body(
     include_google_beta_provider: bool,
     include_ephemeral: bool,
     include_removed: bool,
-    include_azure_lifecycle: bool,
+    include_conditional_import: bool,
     include_input_conditions: bool,
 ) -> Body {
     // Conditional imports need a patched OpenTofu reader (1.11.0 rejects
     // variables in import.for_each). Keep one minimum for both setup CLIs.
-    let required_version = if include_azure_lifecycle {
+    let required_version = if include_conditional_import {
         ">= 1.11.1"
     } else if include_ephemeral {
         ">= 1.11.0"
@@ -2158,6 +2166,7 @@ fn variables_body(
     stack_inputs: &[StackInputDefinition],
     needs_named_subnets: bool,
     needs_gateway_subnets: bool,
+    emits_azure_kv_tables: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
@@ -2416,6 +2425,13 @@ fn variables_body(
             "Import the existing account management policy when upgrading an older installation. Legacy container policy addresses are forgotten without deleting the remote policy. Leave false for a new account.",
             Some(false),
         )));
+        if emits_azure_kv_tables {
+            blocks.push(nested(bool_variable_block(
+                crate::emitters::azure::kv::IMPORT_EXISTING_TABLES_VARIABLE,
+                "Import the existing KV tables when upgrading an installation whose package managed them as `azurerm_storage_table`. Their old state entries are forgotten without deleting the tables or their data. Leave false for a new installation.",
+                Some(false),
+            )));
+        }
         blocks.push(nested(bool_variable_block(
             "azure_storage_live_lifecycle_enabled",
             "Explicitly activate lifecycle expiry for Live containers, including existing objects. Older packages ignored these declarations. Review all Live lifecycle rules before enabling; setup owns this shared account policy.",
@@ -4915,6 +4931,7 @@ fn readme_md(
     requires_remote_operator_collector_token: bool,
     stack_inputs: &[StackInputDefinition],
     emits_azapi_resource: bool,
+    emits_azure_kv_tables: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> String {
     let required_env = if registration.is_some() {
@@ -5057,6 +5074,14 @@ fn readme_md(
     } else {
         ""
     };
+    let azure_kv_note = if emits_azure_kv_tables {
+        format!(
+            "## KV tables\n\nKV tables are created through the `azapi` provider at `Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01`, the same Azure Resource Manager resource the runtime manages. Earlier packages declared them as `azurerm_storage_table`, whose table access-policy calls Azure Table storage now rejects with `415 Unsupported Media Type`, so those installations can no longer plan.\n\nTo upgrade such an installation, apply this module once with `{var} = true`. The plan forgets each `azurerm_storage_table` without deleting it and imports the same table, with its data, as an `azapi_resource`. A table left tainted by a failed apply needs no `terraform untaint` first.\n\nOpenTofu reads a resource before forgetting it, and that read fails with the same 415. With OpenTofu, first drop the old entries from state, which deletes nothing in Azure:\n\n```bash\ntofu state list | grep '^azurerm_storage_table\\.' | xargs tofu state rm\n```\n\nThe variable can stay `true` afterwards; an import into a resource Terraform already manages does nothing. Leave it `false` for a new installation, which has no table to import.\n\n",
+            var = crate::emitters::azure::kv::IMPORT_EXISTING_TABLES_VARIABLE
+        )
+    } else {
+        String::new()
+    };
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -5064,7 +5089,7 @@ Target: `{target}`.\n\n\
 This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.\n\n\
 {resource_inventory}## Inputs\n\n\
 {inputs}\n\n\
-{azure_sandbox_note}{azure_identity_note}## Run\n\n\
+{azure_sandbox_note}{azure_identity_note}{azure_kv_note}## Run\n\n\
 Use your organization's normal backend and approval workflow. A typical local review looks like:\n\n\
 ```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n{runtime_sandbox_note}\n\
 ## Registration\n\n\
@@ -5084,7 +5109,8 @@ Use your organization's normal backend and approval workflow. A typical local re
         registration_note = registration_note,
         kubernetes_operations = kubernetes_operations,
         azure_sandbox_note = azure_sandbox_note,
-        azure_identity_note = azure_identity_note
+        azure_identity_note = azure_identity_note,
+        azure_kv_note = azure_kv_note
     )
 }
 

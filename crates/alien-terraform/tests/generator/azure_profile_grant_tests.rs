@@ -119,7 +119,7 @@ fn frozen_kvs_grant_profile_access_on_each_table() {
         .collect();
     let table_scope = |kv: &str| {
         format!(
-            "\"/subscriptions/${{var.azure_subscription_id}}/resourceGroups/${{var.azure_resource_group_name}}/providers/Microsoft.Storage/storageAccounts/${{azurerm_storage_account.storage.name}}/tableServices/default/tables/${{azurerm_storage_table.{kv}.name}}\""
+            "\"/subscriptions/${{var.azure_subscription_id}}/resourceGroups/${{var.azure_resource_group_name}}/providers/Microsoft.Storage/storageAccounts/${{azurerm_storage_account.storage.name}}/tableServices/default/tables/${{azapi_resource.{kv}.name}}\""
         )
     };
     let principal = "azurerm_user_assigned_identity.execution_sa.principal_id".to_string();

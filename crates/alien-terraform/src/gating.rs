@@ -19,6 +19,7 @@
 
 use crate::emitter::TfFragment;
 use crate::emitters::enabled;
+use crate::expr;
 use alien_core::{ErrorData, Result};
 use alien_error::AlienError;
 use hcl::{
@@ -120,6 +121,58 @@ pub(crate) fn gate_fragment(
         enabled::gate(block, Some(input_id))?;
         gated.addresses.insert(address);
     }
+    for block in &mut fragment.moved_blocks {
+        if block.identifier.as_str() == "import" {
+            gate_import(block, input_id, gated)?;
+        }
+    }
+    Ok(())
+}
+
+/// An import into a gated resource targets its single counted instance, and only while the
+/// gate is on: an import into an instance the configuration does not declare fails the plan.
+fn gate_import(block: &mut Block, input_id: &str, gated: &GatedAddresses) -> Result<()> {
+    let mut for_each = None;
+    let mut targets_gated = false;
+    for attribute in block.body.attributes_mut() {
+        match attribute.key.as_str() {
+            "to" => {
+                let Expression::Traversal(traversal) = &mut attribute.expr else {
+                    continue;
+                };
+                let Expression::Variable(root) = &traversal.expr else {
+                    continue;
+                };
+                let [TraversalOperator::GetAttr(label)] = traversal.operators.as_slice() else {
+                    continue;
+                };
+                if !gated.contains(root.as_str(), label.as_str()) {
+                    return Ok(());
+                }
+                targets_gated = true;
+                traversal
+                    .operators
+                    .push(TraversalOperator::Index(Expression::Number(0.into())));
+            }
+            "for_each" => for_each = Some(attribute),
+            _ => {}
+        }
+    }
+    if !targets_gated {
+        return Ok(());
+    }
+    let Some(for_each) = for_each else {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "enabled() on a resource with an unconditional import".to_string(),
+            reason: "the import must carry a `for_each` the gate can narrow".to_string(),
+        }));
+    };
+    let original = std::mem::replace(&mut for_each.expr, Expression::Null);
+    for_each.expr = Expression::Conditional(Box::new(hcl::expr::Conditional::new(
+        expr::parse(&enabled::gate_variable(input_id))?,
+        Expression::Parenthesis(Box::new(original)),
+        expr::parse("toset([])")?,
+    )));
     Ok(())
 }
 
@@ -206,6 +259,19 @@ pub(crate) fn rewrite_fragment_references(fragment: &mut TfFragment, gated: &Gat
     }
     for (_name, expression) in fragment.locals.iter_mut() {
         rewrite_expression(expression, gated);
+    }
+    // An import's `to` names a state address, which `gate_import` indexes; its other
+    // arguments are ordinary expressions.
+    for block in fragment
+        .moved_blocks
+        .iter_mut()
+        .filter(|block| block.identifier.as_str() == "import")
+    {
+        for attribute in block.body.attributes_mut() {
+            if attribute.key.as_str() != "to" {
+                rewrite_expression(&mut attribute.expr, gated);
+            }
+        }
     }
 }
 

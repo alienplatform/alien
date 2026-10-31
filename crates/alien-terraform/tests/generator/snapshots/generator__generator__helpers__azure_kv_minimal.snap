@@ -4,12 +4,16 @@ expression: buf
 ---
 === versions.tf ===
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.11.1"
 
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
       version = ">= 4.75, < 5.0"
+    }
+    azapi = {
+      source  = "Azure/azapi"
+      version = ">= 2.6, < 3.0"
     }
     random = {
       source  = "hashicorp/random"
@@ -127,6 +131,12 @@ variable "azure_storage_import_existing_policy" {
   default     = false
 }
 
+variable "azure_kv_import_existing_tables" {
+  type        = bool
+  description = "Import the existing KV tables when upgrading an installation whose package managed them as `azurerm_storage_table`. Their old state entries are forgotten without deleting the tables or their data. Leave false for a new installation."
+  default     = false
+}
+
 variable "azure_storage_live_lifecycle_enabled" {
   type        = bool
   description = "Explicitly activate lifecycle expiry for Live containers, including existing objects. Older packages ignored these declarations. Review all Live lifecycle rules before enabling; setup owns this shared account policy."
@@ -167,6 +177,8 @@ provider "azurerm" {
     }
   }
 }
+
+provider "azapi" {}
 
 === resource_prefix.tf ===
 resource "random_id" "resource_prefix" {
@@ -214,7 +226,7 @@ locals {
         subscriptionId     = var.azure_subscription_id
         resourceGroup      = var.azure_resource_group_name
         storageAccountName = azurerm_storage_account.default_storage_account.name
-        tableName          = azurerm_storage_table.metadata.name
+        tableName          = azapi_resource.metadata.name
         tableEndpoint      = azurerm_storage_account.default_storage_account.primary_table_endpoint
       }
     }
@@ -225,7 +237,7 @@ locals {
 [
   "azurerm_resource_group.default_resource_group",
   "azurerm_storage_account.default_storage_account",
-  "azurerm_storage_table.metadata"
+  "azapi_resource.metadata"
 ]
 
 === retain-data.py ===
@@ -529,9 +541,27 @@ resource "azurerm_storage_account" "default_storage_account" {
 }
 
 === metadata.tf ===
-resource "azurerm_storage_table" "metadata" {
-  name                 = substr(lower(replace("kv${local.resource_prefix}metadata", "/[^A-Za-z0-9]/", "")), 0, 63)
-  storage_account_name = azurerm_storage_account.default_storage_account.name
+removed {
+  from = azurerm_storage_table.metadata
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+import {
+  for_each = var.azure_kv_import_existing_tables ? toset(["existing"]) : toset([])
+  to       = azapi_resource.metadata
+  id       = format("%s/tableServices/default/tables/%s?api-version=2024-01-01", azurerm_storage_account.default_storage_account.id, substr(lower(replace("kv${local.resource_prefix}metadata", "/[^A-Za-z0-9]/", "")), 0, 63))
+}
+
+resource "azapi_resource" "metadata" {
+  type      = "Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01"
+  name      = substr(lower(replace("kv${local.resource_prefix}metadata", "/[^A-Za-z0-9]/", "")), 0, 63)
+  parent_id = "${azurerm_storage_account.default_storage_account.id}/tableServices/default"
+  body = {
+    properties = {}
+  }
 
   lifecycle {
     prevent_destroy = true
@@ -562,7 +592,7 @@ resource "terraform_data" "deployment_registration" {
   depends_on = [
     azurerm_resource_group.default_resource_group,
     azurerm_storage_account.default_storage_account,
-    azurerm_storage_table.metadata
+    azapi_resource.metadata
   ]
 
   lifecycle {
@@ -662,6 +692,20 @@ Azure settings:
 - `azure_resource_group_name`: target resource group name.
 - `azure_managing_tenant_id`, `azure_oidc_issuer`, `azure_oidc_subject`: management identity trust settings when this setup grants Azure management access.
 
+## KV tables
+
+KV tables are created through the `azapi` provider at `Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01`, the same Azure Resource Manager resource the runtime manages. Earlier packages declared them as `azurerm_storage_table`, whose table access-policy calls Azure Table storage now rejects with `415 Unsupported Media Type`, so those installations can no longer plan.
+
+To upgrade such an installation, apply this module once with `azure_kv_import_existing_tables = true`. The plan forgets each `azurerm_storage_table` without deleting it and imports the same table, with its data, as an `azapi_resource`. A table left tainted by a failed apply needs no `terraform untaint` first.
+
+OpenTofu reads a resource before forgetting it, and that read fails with the same 415. With OpenTofu, first drop the old entries from state, which deletes nothing in Azure:
+
+```bash
+tofu state list | grep '^azurerm_storage_table\.' | xargs tofu state rm
+```
+
+The variable can stay `true` afterwards; an import into a resource Terraform already manages does nothing. Leave it `false` for a new installation, which has no table to import.
+
 ## Run
 
 Use your organization's normal backend and approval workflow. A typical local review looks like:
@@ -724,7 +768,7 @@ resource "terraform_data" "retention_inventory" {
     addresses = [
       "azurerm_resource_group.default_resource_group",
       "azurerm_storage_account.default_storage_account",
-      "azurerm_storage_table.metadata"
+      "azapi_resource.metadata"
     ]
   }
 }
