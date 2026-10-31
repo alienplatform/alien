@@ -14,9 +14,9 @@ use crate::{
 };
 use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt};
 use alien_core::{
-    ArtifactRegistry, ClientConfig, InitialSetupAuthority, Kv, Platform, Resource, ResourceEntry,
-    ResourceLifecycle, ResourceRef, ResourceStatus, ServiceAccount, Stack, StackResourceState,
-    StackState, Storage,
+    ArtifactRegistry, ClientConfig, InitialSetupAuthority, Kv, Platform, Resource,
+    ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus,
+    ServiceAccount, Stack, StackResourceState, StackState, Storage,
 };
 use std::sync::Arc;
 
@@ -38,11 +38,13 @@ fn installed(
     saved
 }
 
-fn entry(resource: Resource, dependencies: Vec<ResourceRef>) -> ResourceEntry {
+fn frozen<T: ResourceDefinition>(resource: T, dependencies: Vec<ResourceRef>) -> ResourceEntry {
     let mut entry = ResourceEntry::new(resource, ResourceLifecycle::Frozen);
     entry.dependencies = dependencies;
     entry
 }
+
+type Subject = (ResourceEntry, Box<dyn crate::core::ResourceController>);
 
 fn cache_edge() -> Vec<ResourceRef> {
     vec![ResourceRef::new(Kv::RESOURCE_TYPE, "cache")]
@@ -50,9 +52,7 @@ fn cache_edge() -> Vec<ResourceRef> {
 
 /// A stack whose setup-owned resources gain an edge to `cache`, and the state of an install
 /// that recorded none. `cache` itself is unchanged.
-fn release_adding_an_edge(
-    subjects: Vec<(Resource, Box<dyn crate::core::ResourceController>)>,
-) -> (Stack, StackState) {
+fn release_adding_an_edge(subjects: Vec<Subject>) -> (Stack, StackState) {
     let cache = Kv::new("cache".to_string()).build();
     let mut stack = Stack::new("edges".to_string())
         .add(cache.clone(), ResourceLifecycle::Frozen)
@@ -68,15 +68,14 @@ fn release_adding_an_edge(
             Box::new(AwsKvController::mock_ready("edges-test-cache")),
         ),
     );
-    for (resource, controller) in subjects {
-        let id = resource.id().to_string();
-        stack
-            .resources
-            .insert(id.clone(), entry(resource.clone(), cache_edge()));
+    for (mut entry, controller) in subjects {
+        let id = entry.config.id().to_string();
         state.resources.insert(
-            id,
-            installed(resource, ResourceLifecycle::Frozen, vec![], controller),
+            id.clone(),
+            installed(entry.config.clone(), ResourceLifecycle::Frozen, vec![], controller),
         );
+        entry.dependencies = cache_edge();
+        stack.resources.insert(id, entry);
     }
     (stack, state)
 }
@@ -92,14 +91,14 @@ fn executor(stack: &Stack, authority: InitialSetupAuthority) -> StackExecutor {
         .unwrap()
 }
 
-fn setup_owned_subjects() -> Vec<(Resource, Box<dyn crate::core::ResourceController>)> {
+fn setup_owned_subjects() -> Vec<Subject> {
     vec![
         (
-            Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
+            frozen(ServiceAccount::new("execution-sa".to_string()).build(), vec![]),
             Box::new(AwsServiceAccountController::mock_ready("edges-test-execution-sa")),
         ),
         (
-            Resource::new(Storage::new("objects".to_string()).build()),
+            frozen(Storage::new("objects".to_string()).build(), vec![]),
             Box::new(AwsStorageController::mock_ready("edges-test-objects")),
         ),
     ]
@@ -153,7 +152,7 @@ fn direct_setup_still_updates_on_an_edge_only_change() {
 
 fn registry_gaining_an_edge() -> (Stack, StackState) {
     release_adding_an_edge(vec![(
-        Resource::new(ArtifactRegistry::new("images".to_string()).build()),
+        frozen(ArtifactRegistry::new("images".to_string()).build(), vec![]),
         Box::new(AwsArtifactRegistryController::mock_ready(
             "123456789012",
             "us-east-1",
@@ -219,7 +218,7 @@ fn a_dependency_updated_in_the_same_plan_still_updates_a_managed_frozen_resource
     stack.resources.insert(
         "uploads".to_string(),
         ResourceEntry::new(
-            Resource::new(Storage::new("uploads".to_string()).versioning(true).build()),
+            Storage::new("uploads".to_string()).versioning(true).build(),
             ResourceLifecycle::Live,
         ),
     );
@@ -243,7 +242,7 @@ fn a_config_change_with_new_edges_is_still_an_update() {
     let changed = Storage::new("objects".to_string()).versioning(true).build();
     stack.resources.insert(
         "objects".to_string(),
-        entry(Resource::new(changed), cache_edge()),
+        frozen(changed, cache_edge()),
     );
     let plan = executor(&stack, InitialSetupAuthority::ImportedHandoff)
         .plan(&state)
