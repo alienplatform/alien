@@ -366,6 +366,7 @@ async fn ensure_data_protection(
         provider,
         &config.external_bindings,
         &[ResourceLifecycle::Live],
+        setup_authority(current),
     )
     .await
     .context(ErrorData::StackExecutionFailed {
@@ -385,6 +386,7 @@ async fn ensure_data_protection(
         provider,
         &config.external_bindings,
         &[ResourceLifecycle::Live],
+        setup_authority(current),
     )
     .await
     .context(ErrorData::StackExecutionFailed {
@@ -402,6 +404,16 @@ async fn ensure_data_protection(
     metadata.retained_storage_protection_hash = Some(digest);
     metadata.retained_storage_protection_confirmed_at = Some(chrono::Utc::now());
     Ok(ProtectionProgress::Confirmed)
+}
+
+/// Who set up the deployment's Frozen resources, which decides the tags they carry. Records
+/// without the field fail closed as an imported setup, as everywhere else.
+fn setup_authority(current: &DeploymentState) -> alien_core::InitialSetupAuthority {
+    current
+        .runtime_metadata
+        .as_ref()
+        .map(|metadata| metadata.initial_setup_authority)
+        .unwrap_or_default()
 }
 
 /// Stops expiry and public reads on every retained store before the setup authority removes the
@@ -425,6 +437,7 @@ pub(crate) async fn protect_retained_data_for_handoff(
         provider,
         &config.external_bindings,
         &lifecycles,
+        setup_authority(current),
     )
     .await
     .context(ErrorData::StackExecutionFailed {
@@ -439,6 +452,7 @@ pub(crate) async fn protect_retained_data_for_handoff(
         provider,
         &config.external_bindings,
         &lifecycles,
+        setup_authority(current),
     )
     .await
     .context(ErrorData::StackExecutionFailed {

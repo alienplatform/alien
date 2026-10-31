@@ -8,13 +8,14 @@ use alien_aws_clients::dynamodb::{
 };
 use alien_client_core::ErrorData as ClientError;
 use alien_core::{
-    ClientConfig, ExternalBindings, Kv, Platform, ResourceLifecycle, ResourceStatus, StackState,
+    ClientConfig, ExternalBindings, InitialSetupAuthority, Kv, Platform, ResourceLifecycle,
+    ResourceStatus, StackState,
 };
 use alien_error::{AlienError, Context, ContextError};
 
 use super::AwsKvController;
 use crate::{
-    core::aws_ownership::is_tagged_as_ours, ErrorData, PlatformServiceProvider, Result,
+    core::aws_ownership::is_retained_resource_ours, ErrorData, PlatformServiceProvider, Result,
     StackResourceStateExt,
 };
 
@@ -77,6 +78,7 @@ pub async fn protect_retained_kv(
     provider: &dyn PlatformServiceProvider,
     external_bindings: &ExternalBindings,
     lifecycles: &[ResourceLifecycle],
+    setup_authority: InitialSetupAuthority,
 ) -> Result<bool> {
     let mut ready = true;
     for id in retained_ids {
@@ -90,12 +92,12 @@ pub async fn protect_retained_kv(
         if resource.internal_state.is_none() {
             external_bindings.get_kv(id).context(cloud_error(id))?;
         }
-        if resource.lifecycle.is_none() {
+        let Some(lifecycle) = resource.lifecycle else {
             return Err(invalid(
                 id,
                 "KV lifecycle is required before protecting retained data",
             ));
-        }
+        };
         let controller = resource.get_internal_controller_typed::<AwsKvController>()?;
         // A rejected request or a lost response can leave no checkpoint identity.
         // Read the deterministic requested name before deciding whether data exists.
@@ -163,9 +165,13 @@ pub async fn protect_retained_kv(
                 ));
             }
         }
-        if !is_tagged_as_ours(
+        if !is_retained_resource_ours(
             &tags,
-            &alien_core::standard_resource_tags(&state.resource_prefix, id),
+            &state.resource_prefix,
+            id,
+            alien_core::Kv::RESOURCE_TYPE.as_ref(),
+            lifecycle,
+            setup_authority,
         ) {
             return Err(invalid(
                 id,
@@ -325,8 +331,76 @@ mod tests {
             provider,
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
+    }
+
+    /// A setup-owned table carries the setup package's tags, not the runtime ones. Retention
+    /// accepts exactly those for a Frozen table and refuses every other tag set with the
+    /// same error before touching TTL.
+    #[tokio::test]
+    async fn setup_owned_tables_are_judged_by_setup_tags() {
+        let setup = |prefix: &str| -> Vec<(String, String)> {
+            alien_core::setup_resource_tags(prefix, "data", Kv::RESOURCE_TYPE.as_ref())
+                .into_iter()
+                .collect()
+        };
+        let runtime = |prefix: &str| -> Vec<(String, String)> {
+            alien_core::standard_resource_tags(prefix, "data")
+                .into_iter()
+                .collect()
+        };
+        for (tags, accepted) in [
+            (setup("owned"), true),
+            (runtime("owned"), false),
+            (setup("foreign"), false),
+            (runtime("foreign"), false),
+            (Vec::new(), false),
+        ] {
+            let mut api = MockDynamoDbApi::new();
+            api.expect_describe_table().returning(|_| {
+                Ok(serde_json::from_value(json!({"Table":{"TableArn":ARN}})).unwrap())
+            });
+            let listed = tags.clone();
+            api.expect_list_tags_of_resource().returning(move |_| {
+                let tags: Vec<Value> = listed
+                    .iter()
+                    .map(|(key, value)| json!({"Key":key,"Value":value}))
+                    .collect();
+                Ok(serde_json::from_value(json!({"Tags":tags})).unwrap())
+            });
+            api.expect_describe_time_to_live()
+                .times(usize::from(accepted))
+                .returning(|_| {
+                    Ok(serde_json::from_value(
+                        json!({"TimeToLiveDescription":{"TimeToLiveStatus":"DISABLED"}}),
+                    )
+                    .unwrap())
+                });
+            let provider = provider(api);
+            let mut state = installed();
+            state.resources.get_mut("data").unwrap().lifecycle = Some(ResourceLifecycle::Frozen);
+            let result = protect_retained_kv(
+                &state,
+                &["data".into()],
+                &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+                &provider,
+                &ExternalBindings::default(),
+                &[ResourceLifecycle::Live, ResourceLifecycle::Frozen],
+                InitialSetupAuthority::ImportedHandoff,
+            )
+            .await;
+            if accepted {
+                assert!(result.unwrap(), "{tags:?}");
+            } else {
+                let error = result.expect_err("foreign or wrong-owner tags must be refused");
+                assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{tags:?}");
+                assert!(error
+                    .to_string()
+                    .contains("Table ownership tags do not match the retained resource"));
+            }
+        }
     }
 
     #[tokio::test]
@@ -454,6 +528,7 @@ mod tests {
             &provider,
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap());
@@ -537,7 +612,8 @@ mod tests {
             &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
             &no_cloud,
             &ExternalBindings::default(),
-            &[ResourceLifecycle::Live]
+            &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff
         )
         .await
         .unwrap());
@@ -552,7 +628,8 @@ mod tests {
             &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
             &no_cloud,
             &bindings,
-            &[ResourceLifecycle::Live]
+            &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff
         )
         .await
         .unwrap());

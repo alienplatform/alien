@@ -328,7 +328,8 @@ mod tests {
 
     use alien_bindings::traits::Queue as QueueBinding;
     use alien_core::{
-        ClientConfig, ExternalBindings, Queue, ResourceLifecycle, StorageNotification,
+        ClientConfig, ExternalBindings, InitialSetupAuthority, Queue, ResourceLifecycle,
+        StorageNotification,
     };
     use alien_local::{LocalQueueManager, LocalStorageManager};
 
@@ -418,6 +419,7 @@ mod tests {
             provider.as_ref(),
             &ExternalBindings::default(),
             &[ResourceLifecycle::Live],
+            InitialSetupAuthority::ImportedHandoff,
         )
         .await
         .unwrap());
