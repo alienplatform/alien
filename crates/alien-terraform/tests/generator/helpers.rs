@@ -94,13 +94,22 @@ pub fn try_render(
     target: TerraformTarget,
     settings: StackSettings,
 ) -> alien_core::Result<ModuleFiles> {
-    let registry = TfRegistry::built_in();
+    render_with_registry(stack, target, settings, &TfRegistry::built_in())
+}
+
+/// [`try_render`] against a registry with extension emitters registered.
+pub fn render_with_registry(
+    stack: &Stack,
+    target: TerraformTarget,
+    settings: StackSettings,
+    registry: &TfRegistry,
+) -> alien_core::Result<ModuleFiles> {
     generate_terraform_module(
         stack,
         target,
         TerraformOptions {
             display_name: None,
-            registry: &registry,
+            registry,
             stack_settings: settings,
             registration: None,
             helm_install: None,

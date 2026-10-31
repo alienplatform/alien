@@ -517,3 +517,95 @@ async fn template_installed_service_accounts_take_the_management_edge_without_ia
     let replanned = executor.plan(&state).unwrap();
     assert!(replanned.updates.is_empty() && replanned.dependency_records.is_empty());
 }
+
+/// Profiles with least-privilege grants on prefixed resources: two consumers of secret
+/// parameters and a Deny that protects one of them. Before admitted grants were skipped, the
+/// renderer copied these into the boundary.
+fn prefixed_grant_profiles(stack: &mut Stack) {
+    let inline = |id: &str, effect: &str, actions: &[&str], resources: &[&str]| {
+        PermissionSetReference::from_inline(
+            serde_json::from_value(json!({
+                "id": id, "description": "Prefixed grant",
+                "platforms": {"aws": [{"effect": effect, "grant": {"actions": actions},
+                    "binding": {"stack": {"resources": resources}}}]}
+            }))
+            .unwrap(),
+        )
+    };
+    let parameter = |name: &str| {
+        format!("arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/${{stackPrefix}}-{name}")
+    };
+    for (profile, names) in [
+        ("first", vec!["secret-one", "secret-two"]),
+        ("second", vec!["secret-two"]),
+    ] {
+        let resources: Vec<_> = names.iter().map(|name| parameter(name)).collect();
+        let resources: Vec<_> = resources.iter().map(String::as_str).collect();
+        let mut grants = vec![inline(
+            "custom/secret-read",
+            "Allow",
+            &["ssm:GetParameter"],
+            &resources,
+        )];
+        if profile == "first" {
+            grants.push(inline(
+                "custom/protect-config",
+                "Deny",
+                &["ssm:*"],
+                &[&parameter("config")],
+            ));
+        }
+        let mut permissions = PermissionProfile::new();
+        permissions.0.insert("*".to_string(), grants);
+        stack
+            .permissions
+            .profiles
+            .insert(profile.to_string(), permissions);
+    }
+}
+
+/// A setup installed before admitted grants were skipped holds a larger document with those
+/// grants copied in. It still covers the stack, so runtime continues without a setup rerun.
+#[tokio::test]
+async fn boundaries_installed_with_copied_prefixed_grants_still_cover_the_stack() {
+    let (mut stack, mut state, config) = fixture();
+    prefixed_grant_profiles(&mut stack);
+    let required =
+        aws_permissions_boundary_for_stack(&stack, &state, &permission_context("boundary-test"))
+            .unwrap();
+    let mut statements = required["Statement"].as_array().unwrap().clone();
+    assert!(
+        !required.to_string().contains("ssm:GetParameter"),
+        "admitted grants are no longer copied"
+    );
+    // Verbatim from the earlier renderer for this stack, in its order around the inline Deny.
+    // The rest of its document matches today's.
+    let protect = statements
+        .iter()
+        .position(|statement| statement["Action"] == "ssm:*")
+        .unwrap();
+    statements.insert(
+        protect + 1,
+        json!({"Effect": "Allow", "Action": "ssm:GetParameter",
+            "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/boundary-test-secret-two"}),
+    );
+    statements.insert(
+        protect,
+        json!({"Effect": "Allow", "Action": "ssm:GetParameter", "Resource": [
+            "arn:aws:ssm:us-east-1:123456789012:parameter/boundary-test-secret-one",
+            "arn:aws:ssm:us-east-1:123456789012:parameter/boundary-test-secret-two"]}),
+    );
+    let earlier = json!({"Version": "2012-10-17", "Statement": statements});
+    installed(&mut state)["permissionsBoundaryDocument"] = earlier;
+
+    validate_installed_aws_permissions_boundary(
+        &stack,
+        &state,
+        &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+        &config,
+    )
+    .unwrap();
+    let executor = executor(&stack, &config, InitialSetupAuthority::ImportedHandoff);
+    executor.step(state.clone()).await.unwrap();
+    executor.refresh(state).await.unwrap();
+}
