@@ -14,7 +14,9 @@ use crate::{
     list_permission_set_ids, BindingTarget, ErrorData, PermissionContext, Result,
 };
 
-use super::{AwsIamStatement, AwsRuntimePermissionsGenerator};
+use super::{
+    aws_boundary_coverage::action_patterns_overlap, AwsIamStatement, AwsRuntimePermissionsGenerator,
+};
 
 const MANAGED_POLICY_LIMIT: usize = 6_144;
 
@@ -87,7 +89,16 @@ const SHARING_ACTIONS: &[&str] = &[
 pub fn aws_stack_permissions_boundary(
     stack: &Stack,
     context: &PermissionContext,
+    resolve_context: impl FnMut(&str, &str) -> Result<PermissionContext>,
+) -> Result<Value> {
+    stack_boundary(stack, context, resolve_context, CopiedGrants::NotAdmitted)
+}
+
+fn stack_boundary(
+    stack: &Stack,
+    context: &PermissionContext,
     mut resolve_context: impl FnMut(&str, &str) -> Result<PermissionContext>,
+    copied: CopiedGrants,
 ) -> Result<Value> {
     let generator = AwsRuntimePermissionsGenerator::new();
     let mut statements = Vec::new();
@@ -196,7 +207,24 @@ pub fn aws_stack_permissions_boundary(
             );
         }
     }
-    render_boundary(context, &statements, exact_resources, &inline_grants)
+    render_boundary(
+        context,
+        &statements,
+        exact_resources,
+        &inline_grants,
+        copied,
+    )
+}
+
+/// Which compiled grants `render_boundary` copies into the document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CopiedGrants {
+    /// Grants the scoped `NotAction: iam:*` Allow does not already admit.
+    NotAdmitted,
+    /// Every grant, as the renderer did before admitted grants were skipped. Tests compare the
+    /// two renderings.
+    #[cfg(test)]
+    All,
 }
 
 fn collect_resolved_grants(
@@ -255,6 +283,7 @@ pub fn aws_permissions_boundary(
         custom_statements,
         BTreeSet::new(),
         custom_statements,
+        CopiedGrants::NotAdmitted,
     )
 }
 
@@ -263,6 +292,7 @@ fn render_boundary(
     custom_statements: &[AwsIamStatement],
     mut scoped_resources: BTreeSet<String>,
     exception_grants: &[AwsIamStatement],
+    copied: CopiedGrants,
 ) -> Result<Value> {
     let prefix = context.stack_prefix.as_deref().ok_or_else(|| {
         AlienError::new(ErrorData::VariableNotFound {
@@ -348,9 +378,6 @@ fn render_boundary(
             }
         }
     }
-    for statement in custom_statements {
-        merge_statement(&mut statements, statement.clone());
-    }
     // A trailing wildcard also covers longer catalog patterns such as log streams and objects.
     let scoped_resources: Vec<_> = scoped_resources
         .iter()
@@ -363,6 +390,19 @@ fn render_boundary(
             })
         })
         .collect();
+    // Copying a grant the scoped Allow already admits would only add size: least-privilege
+    // grants on prefixed resources (such as one per secret input and consumer) would otherwise
+    // grow the boundary with the stack. Denies stay, and still lift no exemptions below.
+    for statement in custom_statements {
+        let admitted = match copied {
+            CopiedGrants::NotAdmitted => admitted_by_scoped_allow(statement, &scoped_resources),
+            #[cfg(test)]
+            CopiedGrants::All => false,
+        };
+        if !admitted {
+            merge_statement(&mut statements, statement.clone());
+        }
+    }
     let mut rendered = vec![
         json!({
             "Effect": "Allow", "NotAction": "iam:*", "Resource": scoped_resources,
@@ -523,6 +563,51 @@ fn is_runtime_set(id: &str) -> bool {
         )
 }
 
+/// Whether the scoped `NotAction: iam:*` Allow admits every request `statement` allows, so
+/// copying it would leave the boundary's allowed set unchanged. Anything not proven is kept:
+/// Denies, `NotResource`, conditions, actions that may match IAM, and resources outside the
+/// scoped patterns.
+fn admitted_by_scoped_allow(statement: &AwsIamStatement, scoped_resources: &[&String]) -> bool {
+    statement.effect == "Allow"
+        && statement.condition.is_none()
+        && statement.not_resource.is_empty()
+        && !statement.action.is_empty()
+        && !statement.resource.is_empty()
+        && statement
+            .action
+            .iter()
+            .all(|action| !action_patterns_overlap(action, "iam:*"))
+        && statement.resource.iter().all(|resource| {
+            scoped_resources
+                .iter()
+                .any(|scoped| scoped_pattern_contains(scoped, resource))
+        })
+}
+
+/// Whether every ARN `resource` matches also matches the scoped pattern `scoped`.
+///
+/// Proven only for an identical pattern, or a `scoped` pattern that is a literal prefix followed
+/// by `*` and that `resource` starts with. The resource's leading characters are then the same
+/// literals, so all of its matches start with the prefix. Both patterns come from one context,
+/// so template tokens such as `${AWS::StackName}` substitute identically in both. A prefix
+/// ending inside a token could split it, so that case is not proven. ARN matching is
+/// case-sensitive, and so is this comparison.
+fn scoped_pattern_contains(scoped: &str, resource: &str) -> bool {
+    if scoped == resource {
+        return true;
+    }
+    let Some(prefix) = scoped.strip_suffix('*') else {
+        return false;
+    };
+    let ends_inside_token = prefix
+        .rfind("${")
+        .is_some_and(|start| !prefix[start..].contains('}'));
+    !prefix.is_empty()
+        && !prefix.contains(['*', '?'])
+        && !ends_inside_token
+        && resource.starts_with(prefix)
+}
+
 fn merge_statement(statements: &mut Vec<AwsIamStatement>, mut statement: AwsIamStatement) {
     statement.resource.sort();
     statement.resource.dedup();
@@ -648,9 +733,7 @@ mod tests {
                 for action in entry.grant.actions.iter().flatten() {
                     for denied in SHARING_ACTIONS {
                         assert!(
-                            !super::super::aws_boundary_coverage::action_patterns_overlap(
-                                action, denied
-                            ),
+                            !action_patterns_overlap(action, denied),
                             "{id} grants {action}, which the boundary denies"
                         );
                     }
@@ -1423,5 +1506,458 @@ mod tests {
         ] {
             assert!(is_runtime_set(id), "{id}");
         }
+    }
+
+    /// An inline set of one AWS entry, bound stack-wide.
+    fn inline_entry(
+        id: &str,
+        effect: &str,
+        actions: &[&str],
+        resources: &[String],
+        condition: Option<Value>,
+    ) -> PermissionSetReference {
+        let mut binding = json!({"resources": resources});
+        if let Some(condition) = condition {
+            binding["condition"] = condition;
+        }
+        PermissionSetReference::Inline(
+            serde_json::from_value(json!({
+                "id": id,
+                "description": "Test grant",
+                "platforms": {"aws": [{
+                    "effect": effect,
+                    "grant": {"actions": actions},
+                    "binding": {"stack": binding}
+                }]}
+            }))
+            .unwrap(),
+        )
+    }
+
+    /// Least-privilege reads of per-input secret parameters, one profile per consumer. Each
+    /// consumer reads a different window of the keys, so no two grants share a resource list.
+    fn secret_consumer_profiles(
+        keys: usize,
+        consumers: usize,
+    ) -> Vec<(String, alien_core::PermissionProfile)> {
+        (0..consumers)
+            .map(|consumer| {
+                let resources: Vec<_> = (consumer..keys)
+                    .map(|key| {
+                        format!(
+                            "arn:aws:ssm:${{awsRegion}}:${{awsAccountId}}:parameter/${{stackPrefix}}-secret-{key}"
+                        )
+                    })
+                    .collect();
+                (
+                    format!("consumer-{consumer}"),
+                    alien_core::PermissionProfile(indexmap::indexmap! {
+                        "*".to_string() => vec![inline_entry(
+                            "custom/secret-inputs-read",
+                            "Allow",
+                            &["ssm:GetParameter"],
+                            &resources,
+                            None,
+                        )]
+                    }),
+                )
+            })
+            .collect()
+    }
+
+    /// A Deny on a prefixed parameter and a catalog key grant selecting a provider-assigned ARN.
+    fn kept_grants_profile() -> alien_core::PermissionProfile {
+        alien_core::PermissionProfile(indexmap::indexmap! {
+            "*".to_string() => vec![inline_entry(
+                "custom/protect-gateway-config",
+                "Deny",
+                &["ssm:*"],
+                &["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-gateway-config".to_string()],
+                None,
+            )],
+            "encryption".to_string() => vec![PermissionSetReference::from_name("key/native-volume")],
+        })
+    }
+
+    const KEY_ARN: &str =
+        "arn:aws:kms:ap-southeast-7:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab";
+
+    fn key_context(scope: &str) -> Result<PermissionContext> {
+        Ok(match scope {
+            "encryption" => context().with_resource_name(KEY_ARN),
+            _ => context(),
+        })
+    }
+
+    fn statements_of(boundary: &Value) -> &[Value] {
+        boundary["Statement"].as_array().unwrap()
+    }
+
+    fn values_of(value: &Value) -> Vec<&str> {
+        match value {
+            Value::Array(values) => values.iter().map(|v| v.as_str().unwrap()).collect(),
+            Value::Null => vec![],
+            value => vec![value.as_str().unwrap()],
+        }
+    }
+
+    /// IAM's case-sensitive ARN wildcard: `*` matches any run of characters, `?` one.
+    fn arn_matches(pattern: &str, value: &str) -> bool {
+        fn matches(pattern: &[u8], value: &[u8]) -> bool {
+            match (pattern.first(), value.first()) {
+                (None, None) => true,
+                (Some(b'*'), _) => {
+                    matches(&pattern[1..], value)
+                        || (!value.is_empty() && matches(pattern, &value[1..]))
+                }
+                (Some(b'?'), Some(_)) => matches(&pattern[1..], &value[1..]),
+                (Some(left), Some(right)) => left == right && matches(&pattern[1..], &value[1..]),
+                _ => false,
+            }
+        }
+        matches(pattern.as_bytes(), value.as_bytes())
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Decision {
+        Allowed,
+        ExplicitlyDenied,
+        NotAllowed,
+    }
+
+    /// Evaluate a boundary document: an explicit Deny wins, then any Allow. Conditions are not
+    /// modeled per key; `conditions_hold` decides every conditioned statement at once, and
+    /// callers compare documents under both answers.
+    fn decide(boundary: &Value, action: &str, resource: &str, conditions_hold: bool) -> Decision {
+        let applies = |statement: &Value| {
+            let action_listed = |key| {
+                values_of(&statement[key])
+                    .iter()
+                    .any(|pattern| action_pattern_matches(pattern, action))
+            };
+            let action_matches = match statement.get("NotAction") {
+                Some(_) => !action_listed("NotAction"),
+                None => action_listed("Action"),
+            };
+            let resource_matches = match statement.get("NotResource") {
+                Some(not_resources) => !values_of(not_resources)
+                    .iter()
+                    .any(|pattern| arn_matches(pattern, resource)),
+                None => values_of(&statement["Resource"])
+                    .iter()
+                    .any(|pattern| arn_matches(pattern, resource)),
+            };
+            action_matches
+                && resource_matches
+                && (statement.get("Condition").is_none() || conditions_hold)
+        };
+        let matching: Vec<_> = statements_of(boundary)
+            .iter()
+            .filter(|s| applies(s))
+            .collect();
+        if matching.iter().any(|s| s["Effect"] == "Deny") {
+            Decision::ExplicitlyDenied
+        } else if matching.iter().any(|s| s["Effect"] == "Allow") {
+            Decision::Allowed
+        } else {
+            Decision::NotAllowed
+        }
+    }
+
+    /// A concrete request value matched by `pattern`.
+    fn concrete(pattern: &str) -> String {
+        pattern.replace('*', "probe").replace('?', "p")
+    }
+
+    /// Render `stack` before and after skipping admitted grants, and require the same decision
+    /// for every runtime catalog action and every sharing action, on stack, external and
+    /// foreign resources, including each copied grant's own requests. Returns both documents.
+    fn assert_same_decisions(stack: &Stack) -> (Value, Value) {
+        let before = stack_boundary(
+            stack,
+            &context(),
+            |_, scope| key_context(scope),
+            CopiedGrants::All,
+        )
+        .unwrap();
+        let after =
+            aws_stack_permissions_boundary(stack, &context(), |_, scope| key_context(scope))
+                .unwrap();
+        let denies = |boundary: &Value| -> Vec<Value> {
+            statements_of(boundary)
+                .iter()
+                .filter(|s| s["Effect"] == "Deny")
+                .cloned()
+                .collect()
+        };
+        assert_eq!(denies(&after), denies(&before));
+
+        let mut actions: BTreeSet<String> = SHARING_ACTIONS.iter().map(|a| concrete(a)).collect();
+        for id in list_permission_set_ids()
+            .into_iter()
+            .filter(|id| is_runtime_set(id))
+        {
+            for entry in get_permission_set(id)
+                .unwrap()
+                .platforms
+                .aws
+                .iter()
+                .flatten()
+            {
+                actions.extend(entry.grant.actions.iter().flatten().map(|a| concrete(a)));
+            }
+        }
+        let mut resources = BTreeSet::new();
+        for statement in statements_of(&before) {
+            for key in ["Action", "NotAction"] {
+                actions.extend(values_of(&statement[key]).iter().map(|a| concrete(a)));
+            }
+            for key in ["Resource", "NotResource"] {
+                resources.extend(values_of(&statement[key]).iter().map(|r| concrete(r)));
+            }
+        }
+        actions.extend(
+            [
+                "iam:PassRole",
+                "iam:CreateRole",
+                "sts:AssumeRole",
+                "organizations:LeaveOrganization",
+            ]
+            .map(String::from),
+        );
+        // The same names under another deployment's prefix, and in another account.
+        let foreign: Vec<_> = resources
+            .iter()
+            .flat_map(|r| {
+                [
+                    r.replace(&"s".repeat(40), "other-deployment"),
+                    r.replace("123456789012", "999999999999"),
+                ]
+            })
+            .collect();
+        resources.extend(foreign);
+
+        let mut decisions = BTreeSet::new();
+        for action in &actions {
+            for resource in &resources {
+                for conditions_hold in [true, false] {
+                    let decision = decide(&after, action, resource, conditions_hold);
+                    assert_eq!(
+                        decide(&before, action, resource, conditions_hold),
+                        decision,
+                        "{action} on {resource} (conditions hold: {conditions_hold})"
+                    );
+                    decisions.insert(format!("{decision:?}"));
+                }
+            }
+        }
+        assert_eq!(decisions.len(), 3, "probes must reach every decision");
+        (before, after)
+    }
+
+    /// Grants the scoped Allow admits are skipped, and no decision changes. A skipped grant
+    /// that names a sharing action exactly still lifts that Deny on its own resource only.
+    #[test]
+    fn admitted_grants_are_skipped_without_changing_any_decision() {
+        let prefix = "s".repeat(40);
+        let mut profile = kept_grants_profile();
+        profile.0["*"].push(inline_entry(
+            "custom/queue-attributes",
+            "Allow",
+            &["sqs:SetQueueAttributes", "sqs:SendMessage"],
+            &["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-jobs".to_string()],
+            None,
+        ));
+        let mut stack = Stack::new("test".to_string()).permission("kept", profile);
+        for (name, profile) in secret_consumer_profiles(2, 2) {
+            stack = stack.permission(name, profile);
+        }
+        let stack = stack
+            .add(
+                alien_core::Key::new("encryption".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let (before, after) = assert_same_decisions(&stack);
+        let text = after.to_string();
+        assert!(text.len() < before.to_string().len());
+        for skipped in [
+            format!(":parameter/{prefix}-secret-"),
+            "sqs:SendMessage".into(),
+        ] {
+            assert!(!text.contains(skipped.as_str()), "{skipped} was copied: {text}");
+        }
+        for kept in ["-gateway-config", KEY_ARN] {
+            assert!(text.contains(kept), "{kept} is missing: {text}");
+        }
+        let parameter =
+            format!("arn:aws:ssm:ap-southeast-7:123456789012:parameter/{prefix}-secret-1");
+        assert_eq!(
+            decide(&after, "ssm:GetParameter", &parameter, false),
+            Decision::Allowed
+        );
+        let gateway =
+            format!("arn:aws:ssm:ap-southeast-7:123456789012:parameter/{prefix}-gateway-config");
+        assert_eq!(
+            decide(&after, "ssm:GetParameter", &gateway, true),
+            Decision::ExplicitlyDenied
+        );
+        let queue = |name: &str| format!("arn:aws:sqs:ap-southeast-7:123456789012:{prefix}-{name}");
+        assert_eq!(
+            decide(&after, "sqs:SetQueueAttributes", &queue("jobs"), true),
+            Decision::Allowed
+        );
+        assert_eq!(
+            decide(&after, "sqs:SetQueueAttributes", &queue("other"), true),
+            Decision::ExplicitlyDenied
+        );
+    }
+
+    /// Grants the scoped Allow can't be proven to admit are copied unchanged: external
+    /// resources, conditions, IAM actions, actions that may match IAM, and patterns that are not
+    /// a literal prefix of the resource.
+    #[test]
+    fn unproven_grants_are_kept() {
+        let grants = [
+            ("s3:GetObject", "arn:aws:s3:::partner-exports/*", None),
+            (
+                "dynamodb:GetItem",
+                "arn:aws:dynamodb:${awsRegion}:${awsAccountId}:table/${stackPrefix}-orders",
+                Some(json!({"StringEquals": {"aws:PrincipalTag/team": "orders"}})),
+            ),
+            (
+                "iam:GetRole",
+                "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-worker",
+                None,
+            ),
+            ("i*:*", "arn:aws:s3:::${stackPrefix}-uploads", None),
+            // A wildcard before the prefix can match names outside it.
+            (
+                "s3:GetObject",
+                "arn:aws:s3:::*${stackPrefix}-archive/*",
+                None,
+            ),
+            // ARN matching is case-sensitive.
+            (
+                "s3:GetObject",
+                "arn:aws:S3:::${stackPrefix}-reports/*",
+                None,
+            ),
+        ];
+        let references = grants
+            .iter()
+            .map(|(action, resource, condition)| {
+                inline_entry(
+                    "custom/kept",
+                    "Allow",
+                    &[action],
+                    &[resource.to_string()],
+                    condition.clone(),
+                )
+            })
+            .collect();
+        let stack = Stack::new("test".to_string())
+            .permission(
+                "kept",
+                alien_core::PermissionProfile(indexmap::indexmap! {"*".to_string() => references}),
+            )
+            .build();
+
+        let (before, after) = assert_same_decisions(&stack);
+        assert_eq!(after, before);
+        let rendered = |resource: &str| {
+            resource
+                .replace("${awsRegion}", "ap-southeast-7")
+                .replace("${awsAccountId}", "123456789012")
+                .replace("${stackPrefix}", &"s".repeat(40))
+        };
+        for (action, resource, condition) in grants {
+            assert!(
+                statements_of(&after)
+                    .iter()
+                    .any(|s| s["Action"] == json!(action)
+                        && s["Resource"] == json!(rendered(resource))
+                        && s.get("Condition") == condition.as_ref()),
+                "{action} on {resource} is missing"
+            );
+        }
+    }
+
+    /// Grants on prefixed resources grow with secret inputs and their consumers. Copied, they
+    /// exceeded the limit; skipped, the boundary is the stack-independent ceiling plus only the
+    /// grants it cannot prove.
+    #[test]
+    fn prefixed_grants_no_longer_grow_the_boundary_past_the_limit() {
+        let mut stack = Stack::new("test".to_string()).permission("kept", kept_grants_profile());
+        for (name, profile) in secret_consumer_profiles(12, 4) {
+            stack = stack.permission(name, profile);
+        }
+        let stack = stack
+            .add(
+                alien_core::Key::new("encryption".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let error = stack_boundary(
+            &stack,
+            &context(),
+            |_, scope| key_context(scope),
+            CopiedGrants::All,
+        )
+        .expect_err("copied grants exceed the managed policy limit");
+        assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
+        let Some(ErrorData::PermissionsBoundaryTooLarge { size, limit }) = &error.error else {
+            panic!("unexpected error {error:?}");
+        };
+        assert!(*size > *limit + 1_000, "{size}");
+
+        let boundary =
+            aws_stack_permissions_boundary(&stack, &context(), |_, scope| key_context(scope))
+                .expect("the boundary fits");
+        let mut expected = aws_permissions_boundary(&context(), &[]).unwrap();
+        let statements = expected["Statement"].as_array_mut().unwrap();
+        let scoped = statements[0]["Resource"].as_array_mut().unwrap();
+        scoped.push(json!(KEY_ARN));
+        scoped.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+        statements.insert(
+            statements.len() - 2,
+            json!({
+                "Effect": "Deny",
+                "Action": "ssm:*",
+                "Resource": format!("arn:aws:ssm:ap-southeast-7:123456789012:parameter/{}-gateway-config", "s".repeat(40)),
+            }),
+        );
+        assert_eq!(boundary, expected);
+    }
+
+    /// Grants outside the stack's scope still count, and still fail with the actionable error.
+    #[test]
+    fn many_external_grants_still_fail_with_actionable_error() {
+        let references = (0..60)
+            .map(|index| {
+                inline_entry(
+                    "custom/partner-read",
+                    "Allow",
+                    &["s3:GetObject"],
+                    &[format!("arn:aws:s3:::partner-exports-{index}/*")],
+                    None,
+                )
+            })
+            .collect();
+        let stack = Stack::new("test".to_string())
+            .permission(
+                "application",
+                alien_core::PermissionProfile(indexmap::indexmap! {"*".to_string() => references}),
+            )
+            .build();
+        let error = aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context()))
+            .expect_err("external grants exceed the managed policy limit");
+        assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
+        assert!(!error.retryable);
+        assert!(error
+            .to_string()
+            .contains("Reduce custom runtime permissions"));
     }
 }
