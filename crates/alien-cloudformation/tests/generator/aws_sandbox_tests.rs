@@ -2345,27 +2345,26 @@ async fn the_bundle_bucket_and_its_guards_render_under_both_setup_modes() {
             );
         }
 
-        // Wherever stack-wide provision renders, it carries the guard on the bundle bucket's policy,
-        // lifted only for the management role.
-        let policy_guards: Vec<_> = statements
-            .iter()
-            .filter(|(_, s)| {
-                s["Effect"] == "Deny"
-                    && actions(s).iter().any(|a| a == "s3:PutBucketPolicy")
-                    && s["Resource"].to_string().contains("-sandbox-bundles*")
-            })
-            .collect();
-        assert!(
-            !policy_guards.is_empty(),
-            "{mode:?}: stack-wide provision cannot rewrite the bundle bucket's policy"
-        );
-        for (_, guard) in policy_guards {
+        // The workload's stack-wide provision grant comes with a Deny on the bundle bucket's policy.
+        // Under automatic management the runtime writes that role, so it is not in the template.
+        if mode == SetupManagement::Manual {
             assert!(
-                guard["Condition"]["ArnNotEquals"]["aws:PrincipalArn"]
-                    .to_string()
-                    .contains("-management"),
-                "{mode:?}: management keeps setting the policy: {guard}"
+                statements.iter().any(|(id, s)| {
+                    id.starts_with("ExecutionSa")
+                        && s["Effect"] == "Deny"
+                        && actions(s).iter().any(|a| a == "s3:PutBucketPolicy")
+                        && s["Resource"].to_string().contains("-sandbox-bundles*")
+                }),
+                "stack-wide provision cannot rewrite the bundle bucket's policy"
             );
         }
+        assert!(
+            !statements.iter().any(|(id, s)| {
+                id.starts_with("Management")
+                    && s["Effect"] == "Deny"
+                    && actions(s).iter().any(|a| a == "s3:PutBucketPolicy")
+            }),
+            "{mode:?}: management keeps setting the bundle bucket's policy"
+        );
     }
 }

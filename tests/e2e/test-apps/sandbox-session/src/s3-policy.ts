@@ -1,6 +1,5 @@
 // Reads a bucket's policy and writes it back unchanged, signed with this Worker's own role.
-// Bun's S3 client covers objects only, so the two bucket-policy calls are signed here (AWS
-// Signature Version 4).
+// Bun's S3 client covers objects only, so these calls are signed here (AWS Signature Version 4).
 
 const encoder = new TextEncoder()
 
@@ -20,13 +19,15 @@ async function hmac(key: ArrayBuffer | Uint8Array, data: string): Promise<ArrayB
   return crypto.subtle.sign("HMAC", cryptoKey, encoder.encode(data))
 }
 
-async function signedPolicyRequest(
+/** A signed request to `https://<host>/?<query>`; `query` is already in canonical order. */
+async function signedRequest(
+  service: "s3" | "sts",
+  host: string,
   method: "GET" | "PUT",
-  bucket: string,
+  query: string,
   body: string,
 ): Promise<Response> {
   const region = process.env.AWS_REGION ?? ""
-  const host = `${bucket}.s3.${region}.amazonaws.com`
   const now = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "")
   const date = now.slice(0, 8)
   const payloadHash = await sha256Hex(body)
@@ -36,27 +37,20 @@ async function signedPolicyRequest(
     "x-amz-date": now,
     "x-amz-security-token": process.env.AWS_SESSION_TOKEN ?? "",
   }
-  const signedHeaders = Object.keys(headers).sort().join(";")
-  const canonicalHeaders = Object.keys(headers)
-    .sort()
-    .map(name => `${name}:${headers[name]}\n`)
-    .join("")
-  const canonicalRequest = [
-    method,
-    "/",
-    "policy=",
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash,
-  ].join("\n")
-  const scope = `${date}/${region}/s3/aws4_request`
+  const names = Object.keys(headers).sort()
+  const signedHeaders = names.join(";")
+  const canonicalHeaders = names.map(name => `${name}:${headers[name]}\n`).join("")
+  const canonicalRequest = [method, "/", query, canonicalHeaders, signedHeaders, payloadHash].join(
+    "\n",
+  )
+  const scope = `${date}/${region}/${service}/aws4_request`
   const stringToSign = ["AWS4-HMAC-SHA256", now, scope, await sha256Hex(canonicalRequest)].join(
     "\n",
   )
   let key: ArrayBuffer | Uint8Array = encoder.encode(`AWS4${process.env.AWS_SECRET_ACCESS_KEY}`)
-  for (const part of [date, region, "s3", "aws4_request"]) key = await hmac(key, part)
+  for (const part of [date, region, service, "aws4_request"]) key = await hmac(key, part)
   const signature = Buffer.from(await hmac(key, stringToSign)).toString("hex")
-  return fetch(`https://${host}/?policy=`, {
+  return fetch(`https://${host}/?${query}`, {
     method,
     headers: {
       ...headers,
@@ -66,17 +60,37 @@ async function signedPolicyRequest(
   })
 }
 
+function xmlValue(text: string, tag: string): string | undefined {
+  return new RegExp(`<${tag}>([^<]+)</${tag}>`).exec(text)?.[1]
+}
+
 /** S3's error code from a failed response body, such as `AccessDenied`. */
 async function errorCode(response: Response): Promise<string> {
-  const text = await response.text()
-  return /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? `HTTP ${response.status}`
+  return xmlValue(await response.text(), "Code") ?? `HTTP ${response.status}`
+}
+
+/** The ARN this Worker signs in as: its role's assumed-role session. */
+async function callerArn(): Promise<string | undefined> {
+  const region = process.env.AWS_REGION ?? ""
+  const response = await signedRequest(
+    "sts",
+    `sts.${region}.amazonaws.com`,
+    "GET",
+    "Action=GetCallerIdentity&Version=2011-06-15",
+    "",
+  )
+  return xmlValue(await response.text(), "Arn")
 }
 
 export async function rewriteBucketPolicy(
   bucket: string,
-): Promise<{ rewritten: boolean; code?: string }> {
-  const current = await signedPolicyRequest("GET", bucket, "")
-  if (!current.ok) return { rewritten: false, code: await errorCode(current) }
-  const written = await signedPolicyRequest("PUT", bucket, await current.text())
-  return written.ok ? { rewritten: true } : { rewritten: false, code: await errorCode(written) }
+): Promise<{ rewritten: boolean; code?: string; callerArn?: string }> {
+  const host = `${bucket}.s3.${process.env.AWS_REGION}.amazonaws.com`
+  const caller = await callerArn()
+  const current = await signedRequest("s3", host, "GET", "policy=", "")
+  if (!current.ok) return { rewritten: false, code: await errorCode(current), callerArn: caller }
+  const written = await signedRequest("s3", host, "PUT", "policy=", await current.text())
+  return written.ok
+    ? { rewritten: true, callerArn: caller }
+    : { rewritten: false, code: await errorCode(written), callerArn: caller }
 }
