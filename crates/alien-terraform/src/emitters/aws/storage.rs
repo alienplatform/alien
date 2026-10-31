@@ -46,7 +46,11 @@ impl TfEmitter for AwsStorageEmitter {
         fragment
             .resource_blocks
             .push(public_access_block(label, !storage.public_read));
-        fragment.resource_blocks.push(bucket_policy(label, storage));
+        fragment.resource_blocks.push(bucket_policy(
+            label,
+            storage,
+            sandbox_bundle_writer(ctx, storage),
+        ));
 
         if !storage.cors_allowed_origins.is_empty() {
             fragment
@@ -209,7 +213,17 @@ fn public_access_block(label: &str, block_public: bool) -> Block {
     )
 }
 
-fn bucket_policy(label: &str, storage: &Storage) -> Block {
+/// The one principal that may write sandbox bundles: the management role the controller runs as.
+/// A bundle is what the next image is built from, so a workload able to write one could choose
+/// what a sandbox runs; its grants reach this bucket like any other of the stack's.
+fn sandbox_bundle_writer(ctx: &EmitContext<'_>, storage: &Storage) -> Option<Expression> {
+    (storage.id() == SANDBOX_BUNDLE_STORAGE_ID)
+        .then(|| remote_stack_management_label(ctx))
+        .flatten()
+        .map(|label| expr::traversal(["aws_iam_role", label, "arn"]))
+}
+
+fn bucket_policy(label: &str, storage: &Storage, bundle_writer: Option<Expression>) -> Block {
     let objects_arn = || expr::raw(format!("\"${{{}}}/*\"", bucket_path(label, "arn")));
 
     let mut statements = vec![expr::object([
@@ -246,6 +260,33 @@ fn bucket_policy(label: &str, storage: &Storage) -> Block {
             ("Principal", Expression::String("*".to_string())),
             ("Action", Expression::String("s3:GetObject".to_string())),
             ("Resource", objects_arn()),
+        ]));
+    }
+
+    if let Some(writer) = bundle_writer {
+        // An explicit Deny outranks every same-account Allow, including stack-wide grants. Only
+        // writes are held back: a delete can fail a build but not change what it builds, and
+        // setup teardown empties the bucket.
+        statements.push(expr::object([
+            (
+                "Sid",
+                Expression::String("OnlyManagementWritesBundles".to_string()),
+            ),
+            ("Effect", Expression::String("Deny".to_string())),
+            ("Principal", Expression::String("*".to_string())),
+            (
+                "Action",
+                Expression::Array(vec![
+                    Expression::String("s3:PutObject".to_string()),
+                    Expression::String("s3:PutObjectAcl".to_string()),
+                    Expression::String("s3:PutObjectTagging".to_string()),
+                ]),
+            ),
+            ("Resource", objects_arn()),
+            (
+                "Condition",
+                expr::object([("ArnNotEquals", expr::object([("aws:PrincipalArn", writer)]))]),
+            ),
         ]));
     }
 
@@ -422,7 +463,13 @@ pub(crate) fn emit_sandbox_bundle_read(
 fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let refs = storage_permission_refs(profile, ctx.resource_id);
+        // A workload's stack-wide sets do not reach the sandbox bundle Storage: its bundles decide
+        // what a sandbox runs, and only management writes them.
+        let refs = storage_permission_refs(
+            profile,
+            ctx.resource_id,
+            ctx.resource_id != SANDBOX_BUNDLE_STORAGE_ID,
+        );
         if refs.is_empty() {
             continue;
         }
@@ -434,7 +481,7 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
     }
 
     if let Some(profile) = ctx.stack.management().profile() {
-        let refs = storage_permission_refs(profile, ctx.resource_id);
+        let refs = storage_permission_refs(profile, ctx.resource_id, true);
         if !refs.is_empty() {
             if let Some(label) = remote_stack_management_label(ctx) {
                 owners.push((label.to_string(), refs));
@@ -457,6 +504,7 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
 fn storage_permission_refs(
     profile: &PermissionProfile,
     resource_id: &str,
+    stack_wide: bool,
 ) -> Vec<PermissionSetReference> {
     let mut refs = Vec::new();
     let mut seen_ids = std::collections::HashSet::new();
@@ -469,7 +517,7 @@ fn storage_permission_refs(
         }
     }
 
-    if let Some(wildcard_refs) = profile.0.get("*") {
+    if let Some(wildcard_refs) = profile.0.get("*").filter(|_| stack_wide) {
         for permission_ref in wildcard_refs
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("storage/"))

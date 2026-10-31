@@ -180,6 +180,7 @@ impl CfEmitter for AwsStorageEmitter {
                 bucket_id,
                 storage.public_read,
                 email_inbound_contribution(ctx).as_ref(),
+                sandbox_bundle_writer(ctx, storage).as_ref(),
             ),
         );
 
@@ -261,10 +262,21 @@ struct EmailInboundContribution {
     enabled_when: Option<String>,
 }
 
+/// The one principal that may write sandbox bundles: the management role the controller runs as.
+/// A bundle is what the next image is built from, so a workload able to write one could choose
+/// what a sandbox runs; its grants reach this bucket like any other of the stack's.
+fn sandbox_bundle_writer(ctx: &EmitContext<'_>, storage: &Storage) -> Option<CfExpression> {
+    (storage.id() == SANDBOX_BUNDLE_STORAGE_ID)
+        .then(|| remote_stack_management_role_id(ctx))
+        .flatten()
+        .map(|role_id| CfExpression::get_att(&role_id, "Arn"))
+}
+
 fn bucket_policy_document(
     bucket_id: &str,
     public_read: bool,
     ses_inbound: Option<&EmailInboundContribution>,
+    bundle_writer: Option<&CfExpression>,
 ) -> CfExpression {
     let bucket_arn = CfExpression::get_att(bucket_id, "Arn");
     let bucket_objects_arn =
@@ -295,6 +307,33 @@ fn bucket_policy_document(
             ("Principal", CfExpression::from("*")),
             ("Action", CfExpression::from("s3:GetObject")),
             ("Resource", bucket_objects_arn.clone()),
+        ]));
+    }
+
+    if let Some(writer) = bundle_writer {
+        // An explicit Deny outranks every same-account Allow, including stack-wide grants. Only
+        // writes are held back: a delete can fail a build but not change what it builds, and
+        // setup teardown empties the bucket.
+        statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("OnlyManagementWritesBundles")),
+            ("Effect", CfExpression::from("Deny")),
+            ("Principal", CfExpression::from("*")),
+            (
+                "Action",
+                CfExpression::list([
+                    CfExpression::from("s3:PutObject"),
+                    CfExpression::from("s3:PutObjectAcl"),
+                    CfExpression::from("s3:PutObjectTagging"),
+                ]),
+            ),
+            ("Resource", bucket_objects_arn.clone()),
+            (
+                "Condition",
+                CfExpression::object([(
+                    "ArnNotEquals",
+                    CfExpression::object([("aws:PrincipalArn", writer.clone())]),
+                )]),
+            ),
         ]));
     }
 
@@ -592,7 +631,13 @@ fn storage_permission_owners(
 ) -> Vec<(usize, (String, Vec<PermissionSetReference>))> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let refs = storage_permission_refs(profile, ctx.resource_id);
+        // A workload's stack-wide sets do not reach the sandbox bundle Storage: its bundles decide
+        // what a sandbox runs, and only management writes them.
+        let refs = storage_permission_refs(
+            profile,
+            ctx.resource_id,
+            ctx.resource_id != SANDBOX_BUNDLE_STORAGE_ID,
+        );
         if refs.is_empty() {
             continue;
         }
@@ -606,7 +651,7 @@ fn storage_permission_owners(
     }
 
     if let Some(profile) = ctx.stack.management().profile() {
-        let refs = storage_permission_refs(profile, ctx.resource_id);
+        let refs = storage_permission_refs(profile, ctx.resource_id, true);
         if !refs.is_empty() {
             if let Some(role_id) = remote_stack_management_role_id(ctx) {
                 owners.push((role_id, refs));
@@ -629,6 +674,7 @@ fn storage_permission_owners(
 fn storage_permission_refs(
     profile: &PermissionProfile,
     resource_id: &str,
+    stack_wide: bool,
 ) -> Vec<PermissionSetReference> {
     let mut refs = Vec::new();
     let mut seen_ids = std::collections::HashSet::new();
@@ -641,7 +687,7 @@ fn storage_permission_refs(
         }
     }
 
-    if let Some(wildcard_refs) = profile.0.get("*") {
+    if let Some(wildcard_refs) = profile.0.get("*").filter(|_| stack_wide) {
         for permission_ref in wildcard_refs
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("storage/"))

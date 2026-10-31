@@ -3,6 +3,7 @@
 //! This module provides unified functionality for resource controllers to apply
 //! resource-scoped permissions on AWS, GCP, and Azure platforms.
 
+use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use std::collections::HashSet;
 
 use crate::core::{
@@ -1509,6 +1510,11 @@ impl ResourcePermissionsHelper {
         let mut combined_refs: Vec<PermissionSetReference> = Vec::new();
         if let Some(permission_set_refs) = profile.0.get(resource_id) {
             combined_refs.extend(permission_set_refs.iter().cloned());
+        }
+        // A workload's stack-wide sets do not reach the sandbox bundle Storage: its bundles decide
+        // what a sandbox runs, and only management writes them.
+        if resource_id == SANDBOX_BUNDLE_STORAGE_ID {
+            return combined_refs;
         }
         if let Some(wildcard_refs) = profile.0.get("*") {
             combined_refs.extend(

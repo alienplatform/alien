@@ -70,6 +70,7 @@ on:
           - command-routing-ts
           - container-rust
           - runtime-less-mixed
+          - sandbox-session
       network_mode:
         description: "Cloud network mode"
         type: choice
@@ -284,6 +285,9 @@ jobs:
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
               PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-ts","test_filter":"push_aws_comprehensive_ts","needs_oidc":false,"resource_suffix":"awsct","bindings_arch":"aarch64","timeout_minutes":60}]')
             fi
+            if [ "$APP" = "All" ] || [ "$APP" = "sandbox-session" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-sandbox-session","test_filter":"push_aws_sandbox_session","needs_oidc":false,"resource_suffix":"awsss","bindings_arch":"aarch64","timeout_minutes":60}]')
+            fi
           fi
           if [ "$PUSH_GCP_CLI" = "true" ]; then
             if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
@@ -388,6 +392,13 @@ jobs:
           # providers in alien-terraform's generator tests. Only the applied
           # declined state is provider-specific, and proving it on GCP and Azure
           # too would triple this app's cloud cost.
+          # The sandbox bundle bucket is AWS-only: GCP and Azure sandboxes pull their image
+          # from the manager's registry.
+          if [ "$APP" = "All" ] || [ "$APP" = "sandbox-session" ]; then
+            if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-sandbox-session","test_filter":"terraform_aws_push_sandbox_session","needs_oidc":false,"resource_suffix":"tfawsss","bindings_arch":"aarch64"}]')
+            fi
+          fi
           if [ "$APP" = "All" ] || [ "$APP" = "enabled-demo" ]; then
             if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
               TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-enabled-demo","test_filter":"terraform_aws_push_enabled_demo","needs_oidc":false,"resource_suffix":"tfawsed","bindings_arch":"aarch64"}]')
@@ -452,6 +463,9 @@ jobs:
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
               CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-comprehensive-rust","test_filter":"cloudformation_aws_push_comprehensive_rust","needs_oidc":false,"resource_suffix":"cfawscr"}]')
             fi
+            if [ "$APP" = "All" ] || [ "$APP" = "sandbox-session" ]; then
+              CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-sandbox-session","test_filter":"cloudformation_aws_push_sandbox_session","needs_oidc":false,"resource_suffix":"cfawsss","bindings_arch":"aarch64"}]')
+            fi
           fi
 
           HAS_TERRAFORM=$([ "$(echo "$TERRAFORM_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
@@ -462,8 +476,8 @@ jobs:
           # runner cannot cross-build the x86_64 napi cdylib (or vice versa).
           NEEDS_BINDINGS_X86_64=false
           NEEDS_BINDINGS_AARCH64=false
-          if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" \
-            'any(($push + $terraform)[]; .bindings_arch? == "aarch64")' >/dev/null; then
+          if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" --argjson cloudformation "$CLOUDFORMATION_ENTRIES" \
+            'any(($push + $terraform + $cloudformation)[]; .bindings_arch? == "aarch64")' >/dev/null; then
             NEEDS_BINDINGS_AARCH64=true
           fi
           if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" \
@@ -1394,6 +1408,13 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v7
+
+      - name: Download TypeScript bindings addon (aarch64)
+        if: matrix.bindings_arch == 'aarch64'
+        uses: actions/download-artifact@v8
+        with:
+          name: alien-bindings-node-linux-arm64-gnu
+          path: crates/alien-bindings-node
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"

@@ -1,6 +1,6 @@
 //! Give a deployment's Live AWS sandboxes a bucket of its own to build their images from.
 
-use crate::error::Result;
+use crate::error::{ErrorData, Result};
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
@@ -8,15 +8,22 @@ use alien_core::{
     DeploymentConfig, Platform, RemoteStackManagement, Resource, ResourceEntry, ResourceLifecycle,
     ResourceRef, Sandbox, SandboxCode, Stack, StackState, Storage,
 };
+use alien_error::AlienError;
 use async_trait::async_trait;
 use tracing::info;
+
+/// The permission sets that grant changing a bucket's policy across the stack.
+const BUCKET_POLICY_SETS: [&str; 2] = ["storage/provision", "email/provision"];
+
+/// Lets management write and delete bundles in the bundle Storage, and in no other bucket.
+const SANDBOX_BUNDLE_WRITE: &str = "sandbox/bundle-write";
 
 /// Adds the Storage a Live AWS sandbox's controller renders its image-build bundle into.
 ///
 /// `CreateMicrovmImage` builds from a zip in S3 in the image's own region. A Live sandbox released
 /// as a container image has no zip, so its controller writes one, `FROM` the release's image, into
-/// this Storage, which every such sandbox depends on. Management may write it and each sandbox's
-/// build role may read it; the emitters render both from the permission sets.
+/// this Storage, which every such sandbox depends on. Management may write it (`sandbox/bundle-write`)
+/// and each sandbox's build role may read it (`storage/data-read`).
 ///
 /// The Storage is Frozen, created by setup, so management never creates or deletes a bucket. An
 /// installed deployment whose setup predates it would need setup to add it, so a runtime update of
@@ -45,6 +52,32 @@ impl StackMutation for SandboxBundleStorageMutation {
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         info!("Adding the sandbox bundle bucket");
+        // The bucket's policy lets only management write bundles. A workload holding a set that
+        // can rewrite bucket policies across the stack could lift that, so such a grant and a
+        // rendered sandbox cannot share a stack.
+        if let Some((profile, set)) =
+            stack
+                .permissions
+                .profiles
+                .iter()
+                .find_map(|(name, profile)| {
+                    profile.0.get("*").and_then(|sets| {
+                        sets.iter()
+                            .find(|set| BUCKET_POLICY_SETS.contains(&set.id()))
+                            .map(|set| (name.clone(), set.id().to_string()))
+                    })
+                })
+        {
+            return Err(AlienError::new(ErrorData::StackMutationFailed {
+                mutation_name: self.description().to_string(),
+                message: format!(
+                    "permission profile '{profile}' holds '{set}' stack-wide, which can rewrite \
+                     the policy that lets only management write sandbox image bundles; grant it \
+                     on the buckets that need it instead"
+                ),
+                resource_id: Some(SANDBOX_BUNDLE_STORAGE_ID.to_string()),
+            }));
+        }
         stack
             .resources
             .entry(SANDBOX_BUNDLE_STORAGE_ID.to_string())
@@ -78,13 +111,12 @@ impl StackMutation for SandboxBundleStorageMutation {
             ManagementPermissions::Extend(profile) => Some(profile.clone()),
             ManagementPermissions::Auto => Some(PermissionProfile::new()),
         };
+        // Stack-wide, because an automatically managed AWS setup cannot take a resource-scoped
+        // management grant; the set itself is bound to this bucket's name.
         if let Some(mut profile) = management.filter(|_| has_management) {
-            let grants = profile
-                .0
-                .entry(SANDBOX_BUNDLE_STORAGE_ID.to_string())
-                .or_default();
-            if !grants.iter().any(|set| set.id() == "storage/data-write") {
-                grants.push(PermissionSetReference::from_name("storage/data-write"));
+            let grants = profile.0.entry("*".to_string()).or_default();
+            if !grants.iter().any(|set| set.id() == SANDBOX_BUNDLE_WRITE) {
+                grants.push(PermissionSetReference::from_name(SANDBOX_BUNDLE_WRITE));
             }
             stack.permissions.management = ManagementPermissions::Extend(profile);
         }
@@ -223,12 +255,12 @@ mod tests {
         let ManagementPermissions::Extend(management) = &setup.permissions.management else {
             panic!("management keeps its automatic grants and gains the bucket's");
         };
-        assert_eq!(
-            management.0[SANDBOX_BUNDLE_STORAGE_ID]
-                .iter()
-                .map(|set| set.id())
-                .collect::<Vec<_>>(),
-            vec!["storage/data-write"]
+        assert!(management.0["*"]
+            .iter()
+            .any(|set| set.id() == SANDBOX_BUNDLE_WRITE));
+        assert!(
+            !management.0.contains_key(SANDBOX_BUNDLE_STORAGE_ID),
+            "an automatically managed AWS setup refuses resource-scoped management grants"
         );
 
         let update = prepared(release(RELEASED_NEXT, None), &installed(&setup)).await;
@@ -267,6 +299,39 @@ mod tests {
         let rerun = prepared(new_release, &StackState::new(Platform::Aws)).await;
         assert!(aws_sandbox_renders_bundle(&rerun, "agents"));
         assert!(!frozen_unchanged(&old_setup, &rerun).await);
+    }
+
+    /// An automatically managed AWS setup refuses any resource-scoped management grant, so the
+    /// bundle Storage must prepare under it too.
+    #[tokio::test]
+    async fn an_automatically_managed_setup_prepares_the_bundle_storage() {
+        let mut automatic = config();
+        automatic.stack_settings.setup_management = alien_core::SetupManagement::Automatic;
+        let setup = PreflightRunner::new()
+            .apply_mutations(
+                release(RELEASED, None),
+                &StackState::new(Platform::Aws),
+                &automatic,
+            )
+            .await
+            .expect("an automatic setup prepares the release");
+        assert!(aws_sandbox_renders_bundle(&setup, "agents"));
+    }
+
+    /// A workload able to rewrite bucket policies across the stack could lift the one that keeps
+    /// bundle writes to management.
+    #[tokio::test]
+    async fn a_workload_that_can_rewrite_bucket_policies_is_refused() {
+        let mut stack = release(RELEASED, None);
+        stack.permissions.profiles.insert(
+            "execution".to_string(),
+            PermissionProfile::new().resource("*", ["storage/provision"]),
+        );
+        let error = PreflightRunner::new()
+            .apply_mutations(stack, &StackState::new(Platform::Aws), &config())
+            .await
+            .expect_err("the grant could lift the bundle bucket's write guard");
+        assert!(error.to_string().contains("storage/provision"), "{error}");
     }
 
     /// A Frozen sandbox is built by setup from its published bundle and needs no bucket.

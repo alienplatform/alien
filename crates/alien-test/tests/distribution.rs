@@ -85,9 +85,14 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
             common::sandbox::check_session_runs_a_command(ctx)
                 .await
                 .expect("a sandbox session runs a command");
-            common::sandbox::check_bundle_in_deployment_bucket(ctx)
+            common::sandbox::check_workload_cannot_write_bundles(ctx)
                 .await
-                .expect("the bundle lives in the deployment's own bucket");
+                .expect("only management writes sandbox bundles");
+            if ctx.platform == alien_core::Platform::Aws {
+                common::sandbox::check_bundle_in_deployment_bucket(ctx)
+                    .await
+                    .expect("the bundle lives in the deployment's own bucket");
+            }
         }
         TestApp::AutomaticSetup => {
             let installed = ctx
@@ -919,24 +924,57 @@ async fn cloudformation_aws_push_comprehensive_rust(ctx: &mut CloudFormationAwsP
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 
-distribution_test_context!(
+/// A distribution test of the `sandbox-session` app that, after teardown, checks the bundle
+/// bucket went with the setup.
+macro_rules! sandbox_session_context {
+    ($name:ident, $flow:expr) => {
+        struct $name {
+            ctx: alien_test::TestContext,
+        }
+
+        impl test_context::AsyncTestContext for $name {
+            async fn setup() -> Self {
+                alien_test::e2e::init_tracing();
+                let ctx = alien_test::e2e::setup_distribution($flow, TestApp::SandboxSession)
+                    .await
+                    .expect(concat!(stringify!($name), " setup failed"));
+                Self { ctx }
+            }
+
+            async fn teardown(self) {
+                // Read before teardown, which removes the deployment that records it.
+                let bucket = common::sandbox::check_bundle_in_deployment_bucket(&self.ctx).await;
+                self.ctx
+                    .cleanup()
+                    .await
+                    .expect("distribution cleanup must reach a safe setup handoff");
+                common::sandbox::check_bundle_bucket_deleted(
+                    &bucket.expect("the deployment records its bundle bucket"),
+                )
+                .await
+                .expect("the bundle bucket goes with the setup");
+            }
+        }
+    };
+}
+
+sandbox_session_context!(
     CloudFormationAwsPushSandboxSession,
-    DistributionFlow::CloudFormationAwsPush,
-    TestApp::SandboxSession
+    DistributionFlow::CloudFormationAwsPush
 );
 
-/// A source-built Live sandbox installed by CloudFormation: a session runs a command, and the
-/// image-build bundle lives in the deployment's own bucket.
+/// A source-built Live sandbox installed by CloudFormation: a session runs a command, only
+/// management writes the image-build bundle, the bundle lives in the deployment's own bucket, and
+/// deleting the stack deletes the bucket.
 #[test_context(CloudFormationAwsPushSandboxSession)]
 #[tokio::test]
 async fn cloudformation_aws_push_sandbox_session(ctx: &mut CloudFormationAwsPushSandboxSession) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 
-distribution_test_context!(
+sandbox_session_context!(
     TerraformAwsPushSandboxSession,
-    DistributionFlow::TerraformAwsPush,
-    TestApp::SandboxSession
+    DistributionFlow::TerraformAwsPush
 );
 
 /// The same as `cloudformation_aws_push_sandbox_session`, installed by Terraform.
