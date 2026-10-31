@@ -22,7 +22,7 @@ use crate::{
             cf_from_json, required_logical_id, resource_config, service_account_role_id,
             stack_id_short_suffix, tags, uniquify_iam_statement_sids,
         },
-        service_account::permission_context,
+        service_account::stack_permission_context,
     },
     template::{CfExpression, CfResource},
 };
@@ -120,7 +120,7 @@ impl CfEmitter for AwsOpenSearchEmitter {
         if let Some(access_policy) = data_access_policy(ctx, search, &name, &owners) {
             resources.push(access_policy);
         }
-        resources.extend(api_access_iam_policies(search, logical_id, &owners)?);
+        resources.extend(api_access_iam_policies(ctx, search, logical_id, &owners)?);
 
         Ok(resources)
     }
@@ -361,14 +361,15 @@ fn data_access_policy(
 /// layers: IAM must allow `aoss:APIAccessAll` on the collection AND the
 /// data-access policy must list the caller as principal.
 fn api_access_iam_policies(
+    ctx: &EmitContext<'_>,
     search: &AwsOpenSearch,
     logical_id: &str,
     owners: &[(String, Vec<PermissionSetReference>)],
 ) -> Result<Vec<CfResource>> {
     let mut resources = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
-    let context =
-        permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", search.id()));
+    let context = stack_permission_context(ctx)
+        .with_resource_name(format!("${{AWS::StackName}}-{}", search.id()));
 
     for (owner_index, (role_id, permission_refs)) in owners.iter().enumerate() {
         for (permission_index, permission_ref) in permission_refs.iter().enumerate() {

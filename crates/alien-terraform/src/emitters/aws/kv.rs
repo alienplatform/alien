@@ -4,9 +4,8 @@ use crate::{
     block::{attr, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
-        emit_workload_resource_grants, nested_block, required_label, resource_prefix_template,
-        tags,
+        downcast, emit_iam_role_policy_for_target_with_label, emit_workload_resource_grants,
+        nested_block, required_label, resource_prefix_template, stack_permission_context, tags,
     },
     expr,
 };
@@ -91,7 +90,7 @@ impl TfEmitter for AwsKvEmitter {
                         ),
                     })
                 })?;
-                let context = aws_terraform_permission_context()
+                let context = stack_permission_context(ctx)
                     .with_resource_name(format!("${{aws_dynamodb_table.{label}.name}}"));
                 emit_iam_role_policy_for_target_with_label(
                     &mut fragment,

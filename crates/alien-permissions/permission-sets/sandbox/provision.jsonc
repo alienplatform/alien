@@ -176,23 +176,37 @@
         }
       },
       {
-        // The build runs under a role the call names, so CreateMicrovmImage — and the
-        // UpdateMicrovmImage roll, which restates it — are authorized as a pass of it too.
-        // Setup installs the role; neither the installer nor the controller creates it here.
-        // Name-scoped, like the session-time pass in sandbox/management:
-        // PassRole is evaluated against the role being passed, which carries no tag to bound it.
-        "label": "pass-sandbox-build-role",
+        // Image builds execute the supplied Dockerfile under this role. Keep both
+        // the role name and the consuming service restricted.
+        "label": "bounded-role-pass",
         "description": "Allow the sandbox image to be built under its build role.",
         "grant": {
-          // The image build runs a customer-authored Dockerfile under the role it is passed, so a
-          // stack-wide pass would make provisioning a path to every other role's data.
-          //
-          // Two things keep this narrow, and the name is only the first. `Build` also emits a
-          // `<prefix>-<id>-build` role, so the pattern is not exclusive; what stops that one being
-          // passed here is its trust policy, which names codebuild and not lambda — the image
-          // builder cannot assume a role that does not trust it. `iam:PassedToService` would say
-          // so directly, and is left out until the service an image build passes the role to is
-          // confirmed.
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-build"],
+            "condition": {
+              "StringEquals": {
+                "iam:PassedToService": "lambda.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-build"],
+            "condition": {
+              "StringEquals": {
+                "iam:PassedToService": "lambda.amazonaws.com"
+              }
+            }
+          }
+        }
+      },
+      // Setups without a boundary retain their existing role-passing grants.
+      {
+        "label": "legacy-role-pass",
+        "description": "Allow the sandbox image to be built under its build role.",
+        "grant": {
           "actions": ["iam:PassRole"]
         },
         "binding": {

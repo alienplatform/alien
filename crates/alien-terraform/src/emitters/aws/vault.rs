@@ -10,8 +10,8 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
-        iam_policy_name_sanitize, required_label,
+        downcast, emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize,
+        required_label, stack_permission_context,
     },
     expr,
 };
@@ -29,7 +29,7 @@ impl TfEmitter for AwsVaultEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let vault = downcast::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
         let mut fragment = TfFragment::default();
-        let context = aws_terraform_permission_context()
+        let context = stack_permission_context(ctx)
             .with_resource_name(format!("${{local.resource_prefix}}-{}", vault.id()));
 
         for (owner_label, permission_set_refs) in vault_permission_owners(ctx) {
@@ -153,15 +153,24 @@ fn emit_sandbox_gateway_replica_secret(fragment: &mut TfFragment, label: &str) {
                     "Sandbox egress gateway replica secret, readable only by the gateway".into(),
                 ),
             ),
-            attr("recovery_window_in_days", Expression::Number(hcl::Number::from(0i64))),
+            attr(
+                "recovery_window_in_days",
+                Expression::Number(hcl::Number::from(0i64)),
+            ),
         ],
     ));
     fragment.resource_blocks.push(resource_block(
         "aws_secretsmanager_secret_version",
         &name,
         [
-            attr("secret_id", expr::raw(format!("aws_secretsmanager_secret.{name}.id"))),
-            attr("secret_string", expr::raw(format!("random_password.{name}.result"))),
+            attr(
+                "secret_id",
+                expr::raw(format!("aws_secretsmanager_secret.{name}.id")),
+            ),
+            attr(
+                "secret_string",
+                expr::raw(format!("random_password.{name}.result")),
+            ),
         ],
     ));
 }

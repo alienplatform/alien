@@ -25,10 +25,11 @@ use alien_core::{
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
     Daemon, DeploymentModel, DomainSettings, ErrorData, ExposeProtocol, HeartbeatsMode, Key,
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
-    ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
-    StackInputKind, StackInputProvider, StackSettings, Storage, TelemetryMode, UpdatesMode, Worker,
-    WorkerCode, MANAGEMENT_EXTERNAL_ID_MAX_LENGTH, MANAGEMENT_EXTERNAL_ID_MIN_LENGTH,
-    MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN, MANAGEMENT_EXTERNAL_ID_REQUIRED_PARAMETER_PATTERN,
+    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
+    StackInputDefinition, StackInputKind, StackInputProvider, StackSettings, Storage,
+    TelemetryMode, UpdatesMode, Worker, WorkerCode, MANAGEMENT_EXTERNAL_ID_MAX_LENGTH,
+    MANAGEMENT_EXTERNAL_ID_MIN_LENGTH, MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN,
+    MANAGEMENT_EXTERNAL_ID_REQUIRED_PARAMETER_PATTERN,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -1543,16 +1544,22 @@ fn apply_resource_dependencies(
     emitted_resource_ids: &IndexMap<String, Vec<String>>,
     template: &mut CfTemplate,
 ) {
+    // Executor dependencies require the management identity, not all its grants.
+    // Grants can reference physical resources whose identities depend on management;
+    // waiting for those policies here would create a cycle through the boundary.
     let dependency_targets: IndexMap<String, Vec<String>> = emitted_resource_ids
         .iter()
         .map(|(resource_id, logical_ids)| {
             let targets = logical_ids
                 .iter()
                 .filter(|logical_id| {
-                    template
-                        .resources
-                        .get(*logical_id)
-                        .is_some_and(|resource| resource.condition.is_none())
+                    template.resources.get(*logical_id).is_some_and(|resource| {
+                        resource.condition.is_none()
+                            && !(stack.resources.get(resource_id).is_some_and(|entry| {
+                                entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+                            }) && resource.resource_type.starts_with("AWS::IAM::")
+                                && resource.resource_type != "AWS::IAM::Role")
+                    })
                 })
                 .cloned()
                 .collect();

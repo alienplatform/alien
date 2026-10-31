@@ -30,7 +30,7 @@ use crate::{
             cf_from_json, logical_id_for_ref, required_logical_id, resource_config,
             resource_permission_owners, stack_name, tags, uniquify_iam_statement_sids,
         },
-        service_account::permission_context,
+        service_account::stack_permission_context,
     },
     registry::CfRegistry,
     template::{CfExpression, CfResource},
@@ -692,8 +692,8 @@ fn email_iam_policies(
 ) -> Result<Vec<CfResource>> {
     let mut resources = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
-    let context =
-        permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", email.id()));
+    let context = stack_permission_context(ctx)
+        .with_resource_name(format!("${{AWS::StackName}}-{}", email.id()));
 
     for (owner_index, (role_id, permission_refs)) in
         resource_permission_owners(ctx, PERMISSION_SET_PREFIX)

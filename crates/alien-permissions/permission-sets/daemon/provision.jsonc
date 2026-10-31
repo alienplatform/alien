@@ -286,7 +286,7 @@
         "label": "import-tls-certificates",
         "description": "Import TLS certificates for daemon-owned HTTPS endpoints.",
         "grant": {
-          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+          "actions": ["acm:ImportCertificate"]
         },
         "binding": {
           "stack": {

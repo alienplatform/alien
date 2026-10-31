@@ -119,8 +119,8 @@ fn management_metadata_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfR
         CfExpression::list([CfExpression::ref_(&role_id)]),
     );
     let profile = ctx.stack.management().profile();
-    let context =
-        super::service_account::permission_context().with_resource_name("selected-key".to_string());
+    let context = super::service_account::stack_permission_context(ctx)
+        .with_resource_name("selected-key".to_string());
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let mut statements = Vec::new();
     for permission in profile

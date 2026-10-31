@@ -58,7 +58,7 @@
       },
       {
         "grant": {
-          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+          "actions": ["acm:ImportCertificate"]
         },
         "binding": {
           "stack": {

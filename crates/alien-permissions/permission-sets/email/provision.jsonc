@@ -16,9 +16,7 @@
             "ses:DeleteEmailIdentity",
             "ses:GetEmailIdentity",
             "ses:PutEmailIdentityDkimAttributes",
-            "ses:PutEmailIdentityConfigurationSetAttributes",
-            "ses:TagResource",
-            "ses:UntagResource"
+            "ses:PutEmailIdentityConfigurationSetAttributes"
           ]
         },
         "binding": {
@@ -39,9 +37,7 @@
             "ses:CreateConfigurationSetEventDestination",
             "ses:UpdateConfigurationSetEventDestination",
             "ses:DeleteConfigurationSetEventDestination",
-            "ses:GetConfigurationSetEventDestinations",
-            "ses:TagResource",
-            "ses:UntagResource"
+            "ses:GetConfigurationSetEventDestinations"
           ]
         },
         "binding": {
@@ -54,6 +50,37 @@
             "resources": [
               "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}"
             ]
+          }
+        }
+      },
+      {
+        // Domain identities have no stack-prefixed name. Tag changes must use
+        // existing deployment ownership, including the implicit creation check.
+        "grant": {
+          "actions": ["ses:TagResource", "ses:UntagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
           }
         }
       },
@@ -89,9 +116,7 @@
             "sns:GetTopicAttributes",
             "sns:SetTopicAttributes",
             "sns:Subscribe",
-            "sns:Unsubscribe",
-            "sns:TagResource",
-            "sns:UntagResource"
+            "sns:Unsubscribe"
           ]
         },
         "binding": {
@@ -100,6 +125,31 @@
           },
           "resource": {
             "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${resourceName}-*"]
+          }
+        }
+      },
+      {
+        // Resource bindings may use a physical topic name. Require deployment
+        // ownership before changing tags, including the creation-time check.
+        "grant": {
+          "actions": ["sns:TagResource", "sns:UntagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
           }
         }
       },

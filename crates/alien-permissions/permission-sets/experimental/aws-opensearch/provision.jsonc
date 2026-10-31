@@ -35,8 +35,6 @@
             "aoss:UpdateAccessPolicy",
             "aoss:DeleteAccessPolicy",
             "aoss:ListAccessPolicies",
-            "aoss:TagResource",
-            "aoss:UntagResource",
             "aoss:ListTagsForResource"
           ]
         },
@@ -46,6 +44,31 @@
           },
           "resource": {
             "resources": ["*"]
+          }
+        }
+      },
+      {
+        // Collection and group IDs are assigned by the service. Tag changes use
+        // existing deployment ownership, including setup-owned resources.
+        "grant": {
+          "actions": ["aoss:TagResource", "aoss:UntagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
           }
         }
       },

@@ -1,5 +1,12 @@
+mod common;
+mod iam_policy;
+
 use alien_core::{AwsBindingSpec, AwsPermissionEffect};
-use alien_permissions::{get_permission_set, list_permission_set_ids};
+use alien_permissions::{
+    generators::AwsRuntimePermissionsGenerator, get_permission_set, list_permission_set_ids,
+    BindingTarget,
+};
+use iam_policy::{evaluate, Decision, Request};
 
 const RUNTIME_AWS_PERMISSION_SETS: &[&str] = &[
     "artifact-registry/provision",
@@ -661,7 +668,8 @@ fn is_tag_absent_binding(binding: &AwsBindingSpec) -> bool {
     conditions.len() == 1
         && null.len() == 1
         && null.iter().all(|(key, value)| {
-            (key == "aws:ResourceTag/${stackTag}" || key == "lambda:FunctionArn") && value == "true"
+            (key == "aws:ResourceTag/${stackTag}" || key == "lambda:FunctionArn")
+                && value.as_string() == Some("true")
         })
 }
 
@@ -706,7 +714,11 @@ fn tag_absent_grants_are_reads_of_gone_objects() {
                 let uses_null = binding
                     .condition
                     .as_ref()
-                    .is_some_and(|conditions| conditions.contains_key("Null"));
+                    .and_then(|conditions| conditions.get("Null"))
+                    .is_some_and(|keys| {
+                        keys.keys()
+                            .any(|key| key != "autoscaling:LaunchConfigurationName")
+                    });
                 if !uses_null {
                     continue;
                 }
@@ -1354,54 +1366,52 @@ fn no_sandbox_set_can_pass_a_role_into_a_session() {
     assert!(inspected > 0, "no sandbox permission set was inspected");
 }
 
-/// IAM answers a call whose grant is conditioned on `aws:ResourceTag` with AccessDenied when the
-/// role does not exist, because a missing role has no tags to match. Container cleanup deletes
-/// the volume-backup roles earlier releases created at runtime whether or not they still exist,
-/// and only `NoSuchEntity` tells it a role is already gone. So every Allow on those roles must be
-/// scoped by name alone, and none may create, attach or pass one.
+// Legacy cleanup can discover an already-deleted role without matching resource tags.
+// Bounded cleanup must read the role first, then require ownership for any write.
 #[test]
 fn legacy_backup_role_cleanup_is_name_scoped_and_removal_only() {
-    const LEGACY_ROLES: &str = "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*";
-    let permission_set = get_permission_set("container/provision").expect("container/provision");
-    let aws_permissions = permission_set
-        .platforms
-        .aws
-        .as_ref()
-        .expect("container/provision has AWS permissions");
-    let mut granted = Vec::new();
-    for permission in aws_permissions {
-        if permission.effect == AwsPermissionEffect::Deny {
-            continue;
-        }
-        for binding in [
-            permission.binding.stack.as_ref(),
-            permission.binding.resource.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if !binding
-                .resources
-                .iter()
-                .any(|resource| resource == LEGACY_ROLES)
-            {
-                continue;
-            }
-            assert_eq!(binding.resources, [LEGACY_ROLES]);
-            assert!(
-                !has_condition_key(binding, "aws:ResourceTag/${stackTag}")
-                    && !has_condition_key(binding, "aws:ResourceTag/${resourceTag}")
-                    && !has_condition_key(binding, "aws:ResourceTag/${managedByTag}"),
-                "legacy role cleanup must not depend on the role's tags"
+    let context = common::create_test_context();
+    let set = get_permission_set("container/provision").unwrap();
+    let legacy = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(set, BindingTarget::Stack, &context)
+        .unwrap();
+    let bounded = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(
+            set,
+            BindingTarget::Stack,
+            &context.with_aws_permissions_boundary_arn(
+                "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary",
+            ),
+        )
+        .unwrap();
+    for (role, in_scope) in [("my-stack-dlm-old", true), ("other-dlm-old", false)] {
+        for action in [
+            "iam:GetRole",
+            "iam:DeleteRole",
+            "iam:DetachRolePolicy",
+            "iam:AttachRolePolicy",
+            "iam:CreateRole",
+            "iam:PassRole",
+        ] {
+            let request = Request::new(action, format!("arn:aws:iam::123456789012:role/{role}"))
+                .with(
+                    "iam:PolicyARN",
+                    "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole",
+                );
+            assert_eq!(
+                evaluate(&legacy.statement, &request) == Decision::Allowed,
+                in_scope
+                    && matches!(
+                        action,
+                        "iam:GetRole" | "iam:DeleteRole" | "iam:DetachRolePolicy"
+                    ),
+                "legacy {role}: {action}"
             );
-            granted.extend(permission.grant.actions.iter().flatten().cloned());
+            assert_eq!(
+                evaluate(&bounded.statement, &request) == Decision::Allowed,
+                in_scope && action == "iam:GetRole",
+                "bounded {role}: {action}"
+            );
         }
     }
-    granted.sort();
-    granted.dedup();
-    assert_eq!(
-        granted,
-        ["iam:DeleteRole", "iam:DetachRolePolicy", "iam:GetRole"],
-        "legacy backup roles may only be read and removed"
-    );
 }

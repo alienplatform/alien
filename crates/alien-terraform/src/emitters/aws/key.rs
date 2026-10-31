@@ -2,13 +2,13 @@ use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
-        iam_policy_name_sanitize, required_label, tags,
+        downcast, emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize,
+        required_label, stack_permission_context, tags,
     },
     expr,
 };
 use alien_core::{
-    Key, PermissionSetReference, RemoteBindings, RemoteStackManagement, Result, import::EmitContext,
+    import::EmitContext, Key, PermissionSetReference, RemoteBindings, RemoteStackManagement, Result,
 };
 use alien_permissions::BindingTarget;
 use hcl::{
@@ -109,7 +109,7 @@ impl TfEmitter for AwsKeyEmitter {
                             ),
                         })
                     })?;
-                let context = aws_terraform_permission_context()
+                let context = stack_permission_context(ctx)
                     .with_resource_name(format!("${{local.{label}_selected_key.arn}}"));
                 let suffix = iam_policy_name_sanitize(&permission_set.id);
                 emit_iam_role_policy_for_target_with_label(
@@ -132,7 +132,7 @@ impl TfEmitter for AwsKeyEmitter {
             if let Some(permission_set) =
                 permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
             {
-                let context = aws_terraform_permission_context()
+                let context = stack_permission_context(ctx)
                     .with_resource_name(format!("${{local.{label}_selected_key.arn}}"));
                 emit_iam_role_policy_for_target_with_label(
                     &mut fragment,

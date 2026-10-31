@@ -1601,6 +1601,18 @@ impl StackExecutor {
                     continue;
                 }
 
+                // A dependency change does not authorize runtime to rewrite setup-owned
+                // resources. Frozen resources with management operations still reconcile.
+                if self.initial_setup_authority != InitialSetupAuthority::DirectSetup
+                    && desired_config.lifecycle == ResourceLifecycle::Frozen
+                    && !ownership_policy_for_resource_type(
+                        desired_config.resource.resource_type().as_ref(),
+                    )
+                    .requires_management_permissions()
+                {
+                    continue;
+                }
+
                 // Check if this resource has any dependencies that are being updated or created
                 let has_dependency_change = desired_config.dependencies.iter().any(|dep_ref| {
                     current_updates.contains(dep_ref.id()) || current_creates.contains(dep_ref.id())
@@ -1829,6 +1841,20 @@ impl StackExecutor {
     })]
     async fn step_inner(&self, state: StackState, apply_plan: bool) -> Result<StepResult> {
         validate_stack_controller_state_versions(&state)?;
+
+        // Setup must be able to repair the installed ceiling. An empty desired stack
+        // only tears resources down and does not introduce new workload permissions.
+        #[cfg(feature = "aws")]
+        if self.initial_setup_authority != InitialSetupAuthority::DirectSetup
+            && !self.desired_stack.resources.is_empty()
+        {
+            super::aws_permissions_boundary::validate_installed_aws_permissions_boundary(
+                &self.desired_stack,
+                &state,
+                &self.client_config,
+                &self.deployment_config,
+            )?;
+        }
 
         let mut state = state;
         // Repair checkpoints written before interrupted controllers were settled, including

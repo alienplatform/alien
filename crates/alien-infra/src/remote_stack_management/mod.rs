@@ -195,8 +195,8 @@ mod tests {
             )
             .await;
             assert!(
-                !unchanged,
-                "{platform:?}: the applied revision is left alone"
+                unchanged == (platform == Platform::Aws),
+                "{platform:?}: AWS setup must also install its missing boundary"
             );
         }
     }

@@ -14,6 +14,10 @@ Small operational scripts used by root `package.json` commands and GitHub Action
 - **`select-e2e-targets.sh`** — Used by cloud test workflows after `gen-env-test.sh` to rewrite `.env.test` with canonical AWS, GCP, and Azure target aliases. Pass `--aws`, `--gcp`, and `--azure` to select non-default targets.
 - **`validate-test-config.sh`** — Local validation helper documented in `infra/README.md`. It sources `.env.test`, starts `alien-manager` with `alien-manager.test.toml`, waits for `/health`, and stops the manager.
 
+## AWS permissions boundary validation
+
+`python3 scripts/validate-aws-boundary.py --account ACCOUNT --region us-west-2` compiles the automatic management profile and runtime boundary from source, validates a CloudFormation template containing the boundary, and exercises role writes, adoption, and workload access across two prefixes on AWS. Requires boto3, Cargo, and administrative credentials for a disposable test account. The script verifies the account before creating randomly named resources and removes its roles, policies, buckets, function, and logs even when a check fails. Authorization checks reject unrelated API errors. Account-wide EC2 discovery is expected to remain allowed by the catalog’s volume-backup runtime grants. This tests the generated policies; it does not validate setup-package activation or handoff.
+
 ## Cloud E2E setup and cleanup
 
 - **`configure-e2e-provider-ingress.sh`** — Used by `.github/workflows/e2e-cloud.yml` after `infra/test` Terraform apply. It configures provider-native Kubernetes baseline objects for shared EKS, GKE, and AKS clusters, including ingress classes and default storage classes.

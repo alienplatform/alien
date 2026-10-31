@@ -12,6 +12,7 @@ mod generator {
     pub mod remote_kv_tests;
     pub mod remote_queue_tests;
 
+    pub mod boundary_tests;
     pub mod aws_compute_tests;
     pub mod aws_data_layer_tests;
     pub mod aws_full_stack_tests;

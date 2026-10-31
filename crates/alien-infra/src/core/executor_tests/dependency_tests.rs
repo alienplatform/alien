@@ -3,7 +3,16 @@
 use std::time::Duration;
 
 use super::helpers::*;
+#[cfg(feature = "aws")]
+use crate::core::StackExecutor;
 use crate::error::Result;
+#[cfg(feature = "aws")]
+use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt};
+#[cfg(feature = "aws")]
+use alien_core::{
+    ClientConfig, InitialSetupAuthority, Key, Platform, ServiceAccount, StackResourceState,
+    StackState, Vault,
+};
 use alien_core::{
     Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage, Worker,
 };
@@ -379,5 +388,83 @@ async fn test_dependency_not_ready_error() -> Result<()> {
         "Should fail when dependency is not ready"
     );
 
+    Ok(())
+}
+
+/// Dependency propagation must preserve setup ownership after an import while
+/// continuing to reconcile Live resources and Frozen resources with management.
+#[cfg(feature = "aws")]
+#[test]
+fn dependency_updates_respect_setup_authority() -> Result<()> {
+    for authority in [
+        InitialSetupAuthority::ImportedHandoff,
+        InitialSetupAuthority::DirectSetup,
+    ] {
+        let dependency = test_function_with_image("dependency", "new-image");
+        let dependents = [
+            (
+                Resource::new(ServiceAccount::new("identity".to_string()).build()),
+                ResourceLifecycle::Frozen,
+                false,
+            ),
+            (
+                Resource::new(Vault::new("secrets".to_string()).build()),
+                ResourceLifecycle::Frozen,
+                false,
+            ),
+            (
+                Resource::new(test_storage("frozen-storage")),
+                ResourceLifecycle::Frozen,
+                false,
+            ),
+            (
+                Resource::new(test_storage("live-storage")),
+                ResourceLifecycle::Live,
+                true,
+            ),
+            (
+                Resource::new(Key::new("key".to_string()).build()),
+                ResourceLifecycle::Frozen,
+                true,
+            ),
+        ];
+        let mut resources = vec![(Resource::new(dependency), ResourceLifecycle::Live, vec![])];
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert(
+            "dependency".to_string(),
+            create_running_function_state("dependency", "old-image"),
+        );
+        for (resource, lifecycle, _) in &dependents {
+            let dependencies = vec![ResourceRef::new(Worker::RESOURCE_TYPE, "dependency")];
+            resources.push((resource.clone(), *lifecycle, dependencies.clone()));
+            let mut saved = StackResourceState::new_pending(
+                resource.resource_type().to_string(),
+                resource.clone(),
+                Some(*lifecycle),
+                dependencies,
+            );
+            saved.status = ResourceStatus::Running;
+            state.resources.insert(resource.id().to_string(), saved);
+        }
+        let stack = build_stack_with_deps("dependency-handoff", resources);
+        let executor =
+            StackExecutor::builder(&stack, ClientConfig::Aws(Box::new(AwsClientConfig::mock())))
+                .deployment_config(&default_deployment_config())
+                .initial_setup_authority(authority)
+                .build()?;
+        let plan = executor.plan(&state)?;
+        assert!(plan.updates.contains_key("dependency"));
+        assert!(plan.creates.is_empty());
+        assert!(plan.deletes.is_empty());
+        assert!(plan.replaces.is_empty());
+        for (resource, _, runtime_management) in &dependents {
+            assert_eq!(
+                plan.updates.contains_key(resource.id()),
+                authority == InitialSetupAuthority::DirectSetup || *runtime_management,
+                "dependency update for {} with {authority:?}",
+                resource.id(),
+            );
+        }
+    }
     Ok(())
 }

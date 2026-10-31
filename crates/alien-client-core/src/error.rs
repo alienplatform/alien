@@ -46,6 +46,16 @@ pub enum ErrorData {
         resource_name: String,
     },
 
+    /// An existing cloud object does not belong to the runtime resource being written.
+    #[error(
+        code = "EXISTING_CLOUD_RESOURCE_NOT_OWNED",
+        message = "{object} is not managed by this deployment's runtime resource '{resource_id}'; reconcile ownership in setup before changing it.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    ExistingCloudResourceNotOwned { resource_id: String, object: String },
+
     /// Operation conflicts with current resource state (e.g., resource already exists, concurrent modifications, etag mismatch).
     #[error(
         code = "REMOTE_RESOURCE_CONFLICT",

@@ -1140,10 +1140,25 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
         1,
         "the management role may not rewrite itself: {statements:#?}"
     );
+    let (boundary_denies, denies): (Vec<_>, Vec<_>) = denies.into_iter().partition(|statement| {
+        statement["Action"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("iam:CreatePolicyVersion"))
+    });
+    assert_eq!(boundary_denies.len(), 1, "{statements:#?}");
+    assert_eq!(
+        boundary_denies[0]["Resource"],
+        serde_json::json!([
+            {"Ref": "ManagementPermissionsBoundary"},
+            {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*"}
+        ])
+    );
     assert_eq!(denies.len(), 1, "{statements:#?}");
     insta::assert_snapshot!(
         "aws_management_role_guards",
-        serde_json::to_string_pretty(&[own_role_denies[0], denies[0]]).expect("serializes")
+        serde_json::to_string_pretty(&[own_role_denies[0], denies[0], boundary_denies[0]])
+            .expect("serializes")
     );
     assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
     assert_eq!(

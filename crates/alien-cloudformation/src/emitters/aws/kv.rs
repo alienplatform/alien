@@ -7,7 +7,7 @@ use crate::{
             cf_from_json, required_logical_id, resource_config, resource_permission_owners, tags,
             uniquify_iam_statement_sids,
         },
-        service_account::permission_context,
+        service_account::stack_permission_context,
     },
     template::{CfExpression, CfResource},
 };
@@ -105,8 +105,8 @@ impl CfEmitter for AwsKvEmitter {
 fn kv_iam_policies(ctx: &EmitContext<'_>, kv: &Kv, table_id: &str) -> Result<Vec<CfResource>> {
     let mut resources = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
-    let context =
-        permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", kv.id()));
+    let context = stack_permission_context(ctx)
+        .with_resource_name(format!("${{AWS::StackName}}-{}", kv.id()));
 
     let mut owners = resource_permission_owners(ctx, PERMISSION_SET_PREFIX);
     if let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(ctx.resource) {

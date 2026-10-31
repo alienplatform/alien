@@ -161,10 +161,11 @@ mod tests {
     use super::RemoteStackManagementOutputs;
 
     #[test]
-    fn legacy_remote_bindings_output_remains_readable_but_is_not_reemitted() {
+    fn retired_outputs_remain_readable_but_are_not_reemitted() {
         let outputs: RemoteStackManagementOutputs = serde_json::from_value(serde_json::json!({
             "managementResourceId": "management",
             "accessConfiguration": "management-access",
+            "awsPermissionsBoundaryArn": "arn:aws:iam::123456789012:policy/test-boundary",
             "remoteBindingsAccess": {
                 "resourceId": "legacy-bindings",
                 "accessConfiguration": "legacy-access"
@@ -178,12 +179,13 @@ mod tests {
                 .map(|access| access.resource_id.as_str()),
             Some("legacy-bindings")
         );
-        assert!(
-            serde_json::to_value(outputs)
-                .expect("serialize")
-                .get("remoteBindingsAccess")
-                .is_none(),
-            "new state must not keep writing the legacy ownership slot"
+        assert_eq!(
+            serde_json::to_value(outputs).expect("serialize"),
+            serde_json::json!({
+                "managementResourceId": "management",
+                "accessConfiguration": "management-access"
+            }),
+            "new state must not keep writing retired output fields"
         );
     }
 }

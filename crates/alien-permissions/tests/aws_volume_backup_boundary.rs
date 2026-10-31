@@ -11,7 +11,10 @@ mod iam_policy;
 
 use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
 use alien_permissions::{
-    generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
+    generators::{
+        aws_permissions_boundary, aws_permissions_boundary_covers, aws_stack_permissions_boundary,
+        AwsCloudFormationPermissionsGenerator, AwsIamStatement, AwsRuntimePermissionsGenerator,
+    },
     get_permission_set, BindingTarget, PermissionContext,
 };
 use iam_policy::{evaluate, wildcard_match, Decision, Request};
@@ -114,56 +117,143 @@ fn management_cannot_make_or_rewrite_a_role_dlm_runs_as() {
 }
 
 #[test]
-fn management_passes_dlm_only_the_setup_role() {
-    let management = management();
-    // IAM doesn't evaluate a role's tags for PassRole, so the request carries none: a grant
-    // that relied on them would deny here as it does in AWS.
-    let pass = |role: &str, service: &str| {
-        evaluate(
-            &management,
-            &Request::new("iam:PassRole", role_arn(role)).with("iam:PassedToService", service),
-        )
-    };
-
-    // Whatever the cluster is called, its setup role stays clear of the legacy-role Deny,
-    // `app-dlm-*`, and of the legacy cleanup grants on the same names.
-    for cluster in ["compute", "dlm", "dlm-a", "volume-backups"] {
-        let setup_role = format!("app-volume-backups-{cluster}");
+fn bounded_container_grants_do_not_write_setup_backup_roles() {
+    let boundary = format!("arn:aws:iam::{ACCOUNT}:policy/{PREFIX}-deployment-management-boundary");
+    let context = legacy_context().with_aws_permissions_boundary_arn(&boundary);
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
+        let set = get_permission_set("container/provision").unwrap();
+        let runtime = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(set, target, &context)
+            .unwrap();
+        let cfn = AwsCloudFormationPermissionsGenerator::new()
+            .generate_policy(set, target, &context)
+            .unwrap();
         assert_eq!(
-            pass(&setup_role, "dlm.amazonaws.com"),
-            Decision::Allowed,
-            "{setup_role}"
+            runtime.statement.iter().map(|s| &s.sid).collect::<Vec<_>>(),
+            cfn.statement.iter().map(|s| &s.sid).collect::<Vec<_>>()
         );
-        assert_eq!(
+        for owner in ["setup", "runtime"] {
+            for action in [
+                "iam:CreateRole",
+                "iam:PutRolePolicy",
+                "iam:DeleteRolePolicy",
+                "iam:UpdateAssumeRolePolicy",
+                "iam:PutRolePermissionsBoundary",
+                "iam:TagRole",
+                "iam:DeleteRole",
+            ] {
+                let request = Request::new(action, role_arn("app-volume-backups-compute"))
+                    .with("iam:PermissionsBoundary", &boundary)
+                    .resource_tags(&[("managed-by", owner), ("deployment", PREFIX)])
+                    .request_tags(&[("managed-by", owner), ("deployment", PREFIX)]);
+                assert_eq!(
+                    evaluate(&runtime.statement, &request),
+                    Decision::NotAllowed,
+                    "{owner}: {action}"
+                );
+            }
+        }
+    }
+}
+
+fn legacy_context() -> PermissionContext {
+    context().with_resource_name("db").with_resource_id("db")
+}
+
+#[test]
+fn management_passes_dlm_only_the_setup_role() {
+    for bounded in [false, true] {
+        let mut permission_context = context();
+        if bounded {
+            permission_context = permission_context.with_aws_permissions_boundary_arn(
+                "arn:aws:iam::123456789012:policy/app-deployment-management-boundary",
+            );
+        }
+        let management: Vec<_> = [
+            "container/provision",
+            "compute-cluster/provision",
+            "compute-cluster/management",
+        ]
+        .into_iter()
+        .flat_map(|id| {
+            AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    get_permission_set(id).unwrap(),
+                    BindingTarget::Stack,
+                    &permission_context,
+                )
+                .unwrap()
+                .statement
+        })
+        .collect();
+        // IAM doesn't evaluate a role's tags for PassRole, so the request carries none: a grant
+        // that relied on them would deny here as it does in AWS.
+        let pass = |role: &str, service: &str| {
             evaluate(
                 &management,
-                &Request::new("iam:DeleteRole", role_arn(&setup_role))
-            ),
-            Decision::ExplicitlyDenied,
-            "{setup_role}"
+                &Request::new("iam:PassRole", role_arn(role)).with("iam:PassedToService", service),
+            )
+        };
+
+        // Whatever the cluster is called, its setup role stays clear of the legacy-role Deny,
+        // `app-dlm-*`, and of the legacy cleanup grants on the same names.
+        for cluster in ["compute", "dlm", "dlm-a", "volume-backups"] {
+            let setup_role = format!("app-volume-backups-{cluster}");
+            assert_eq!(
+                pass(&setup_role, "dlm.amazonaws.com"),
+                Decision::Allowed,
+                "{setup_role}"
+            );
+            for service in ["lambda.amazonaws.com", "codebuild.amazonaws.com"] {
+                assert_eq!(
+                    pass(&setup_role, service),
+                    if bounded {
+                        Decision::NotAllowed
+                    } else {
+                        Decision::Allowed
+                    },
+                    "bounded={bounded}: {setup_role} to {service}"
+                );
+            }
+            assert_eq!(
+                evaluate(
+                    &management,
+                    &Request::new("iam:DeleteRole", role_arn(&setup_role))
+                ),
+                if bounded {
+                    Decision::NotAllowed
+                } else {
+                    Decision::ExplicitlyDenied
+                },
+                "{setup_role}"
+            );
+        }
+        assert_eq!(
+            pass("app-compute-node", "ec2.amazonaws.com"),
+            Decision::Allowed
         );
-    }
-    // A role earlier releases made at runtime still carries the AWS managed DLM policy, which
-    // may share or copy any snapshot. The compute cluster's prefix-wide PassRole names it too.
-    assert_eq!(
-        pass("app-dlm-0123456789abcdef", "dlm.amazonaws.com"),
-        Decision::ExplicitlyDenied
-    );
-    for statement in &management {
-        let passes_role = statement
-            .action
-            .iter()
-            .any(|action| wildcard_match(&action.to_lowercase(), "iam:passrole"));
-        let uses_role_tags = statement.condition.iter().flatten().any(|(_, entries)| {
-            entries.keys().any(|key| {
-                key.starts_with("aws:ResourceTag/") || key.starts_with("iam:ResourceTag/")
-            })
-        });
-        assert!(
-            !(passes_role && uses_role_tags),
-            "{}: IAM doesn't evaluate role tags for PassRole",
-            statement.sid
+        // A role earlier releases made at runtime still carries the AWS managed DLM policy, which
+        // may share or copy any snapshot. The compute cluster's prefix-wide PassRole names it too.
+        assert_eq!(
+            pass("app-dlm-0123456789abcdef", "dlm.amazonaws.com"),
+            Decision::ExplicitlyDenied
         );
+        for statement in &management {
+            let passes_role = statement
+                .action
+                .iter()
+                .any(|action| wildcard_match(&action.to_lowercase(), "iam:passrole"));
+            let uses_role_tags = statement.condition.iter().flatten().any(|(_, entries)| {
+                entries.keys().any(|key| {
+                    key.starts_with("aws:ResourceTag/") || key.starts_with("iam:ResourceTag/")
+                })
+            });
+            assert!(
+                !(passes_role && uses_role_tags),
+                "{}: IAM doesn't evaluate role tags for PassRole",
+                statement.sid
+            );
+        }
     }
 }
 
@@ -254,6 +344,65 @@ fn the_execution_role_snapshots_only_stack_volumes_and_never_shares() {
 }
 
 #[test]
+fn workload_boundary_covers_volume_backups_only_with_ownership_conditions() {
+    let boundary =
+        aws_permissions_boundary(&context().with_managing_account_id("210987654321"), &[]).unwrap();
+    let required = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(
+            get_permission_set("container/volume-backups").unwrap(),
+            BindingTarget::Stack,
+            &context(),
+        )
+        .unwrap();
+    assert!(
+        aws_permissions_boundary_covers(&boundary, &serde_json::to_value(&required).unwrap())
+            .unwrap()
+    );
+
+    // Check the complete snapshot lifecycle, including conditions on both the source
+    // volume and the new snapshot. Describe-only coverage would not be sufficient.
+    for action in [
+        "ec2:CreateSnapshot",
+        "ec2:CreateTags",
+        "ec2:DeleteSnapshot",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeInstances",
+    ] {
+        assert!(required
+            .statement
+            .iter()
+            .any(|s| s.action.iter().any(|a| a == action)));
+    }
+
+    // The identity policy excludes sharing above; the boundary supplies stack isolation.
+    // Removing ownership conditions must still fail coverage.
+    for action in [
+        "ec2:CreateSnapshot",
+        "ec2:CreateSnapshots",
+        "ec2:CreateTags",
+        "ec2:DeleteSnapshot",
+        "ec2:ModifySnapshotAttribute",
+        "ec2:CopySnapshot",
+    ] {
+        for resource in [volume_arn("vol-foreign"), snapshot_arn("snap-foreign")] {
+            let unconditional = serde_json::json!({
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": action,
+                    "Resource": resource,
+                }],
+            });
+            assert!(
+                !aws_permissions_boundary_covers(&boundary, &unconditional).unwrap(),
+                "boundary must not allow unconditional {action} on {resource}"
+            );
+        }
+    }
+}
+
+#[test]
 fn wildcard_matching_follows_iam() {
     assert!(wildcard_match(
         "arn:aws:iam::1:role/app-*",
@@ -266,4 +415,107 @@ fn wildcard_matching_follows_iam() {
         "arn:aws:iam::1:role/app-dlm-1"
     ));
     assert!(!wildcard_match("app", "app-x"));
+}
+
+#[test]
+fn encrypted_volume_backup_grants_are_covered_without_an_application_profile() {
+    let key_arn = "arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab";
+    let container = alien_core::Container::new("db".to_string())
+        .cluster("compute".to_string())
+        .permissions("execution".to_string())
+        .code(alien_core::ContainerCode::Image {
+            image: "postgres:17".to_string(),
+        })
+        .cpu(alien_core::ResourceSpec {
+            min: "1".to_string(),
+            desired: "1".to_string(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "1Gi".to_string(),
+            desired: "1Gi".to_string(),
+        })
+        .persistent_storage(alien_core::PersistentStorage {
+            size: "10Gi".to_string(),
+            mount_path: "/data".to_string(),
+            encryption_key: Some(alien_core::ResourceRef::new("key".into(), "encryption")),
+            backups: alien_core::VolumeBackups::default(),
+        })
+        .build();
+    let mut second = container.clone();
+    second.id = "db-replica".to_string();
+    second.persistent_storage.as_mut().unwrap().backups.enabled = false;
+    let stack = alien_core::Stack::new("sample".to_string())
+        .add(container, alien_core::ResourceLifecycle::Live)
+        .add(second, alien_core::ResourceLifecycle::Live)
+        .add(
+            alien_core::Key::new("encryption".to_string()).build(),
+            alien_core::ResourceLifecycle::Frozen,
+        )
+        .build();
+    assert!(stack.permission_profiles().is_empty());
+    let context = context().with_managing_account_id("210987654321");
+    let mut resolutions = 0;
+    let boundary = aws_stack_permissions_boundary(&stack, &context, |owner, scope| {
+        resolutions += 1;
+        assert_eq!(owner, "execution");
+        assert_eq!(scope, "encryption");
+        Ok(context.clone().with_resource_name(key_arn))
+    })
+    .unwrap();
+    let key_policy = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(
+            get_permission_set("key/native-volume").unwrap(),
+            BindingTarget::Resource,
+            &context.clone().with_resource_name(key_arn),
+        )
+        .unwrap();
+    let mut backup_policy = rendered(&["container/volume-backups"]);
+    backup_policy.extend(key_policy.statement.clone());
+    assert!(
+        aws_permissions_boundary_covers(
+            &boundary,
+            &serde_json::json!({
+                "Version": "2012-10-17", "Statement": backup_policy,
+            })
+        )
+        .unwrap(),
+        "the complete encrypted backup policy must fit the generated ceiling"
+    );
+    assert_eq!(resolutions, 1, "shared volume keys should resolve once");
+    for mut grant in key_policy.statement {
+        let original = grant.clone();
+        grant.resource = vec![key_arn.replace("1234abcd", "9876abcd")];
+        assert!(
+            !aws_permissions_boundary_covers(
+                &boundary,
+                &serde_json::json!({
+                    "Version": "2012-10-17", "Statement": [grant],
+                })
+            )
+            .unwrap(),
+            "a sibling key must remain outside the ceiling"
+        );
+        let mut grant = original;
+        grant.condition = None;
+        // Other service restrictions stay in identity policies; key grants must be for AWS resources.
+        let creates_grants = grant
+            .action
+            .iter()
+            .any(|action| action == "kms:CreateGrant");
+        assert_eq!(
+            aws_permissions_boundary_covers(
+                &boundary,
+                &serde_json::json!({
+                    "Version": "2012-10-17", "Statement": [grant],
+                })
+            )
+            .unwrap(),
+            !creates_grants,
+            "the exact-key ceiling leaves service restrictions to identity policies"
+        );
+    }
+    assert!(
+        aws_stack_permissions_boundary(&stack, &context, |_, _| Ok(context.clone())).is_err(),
+        "a missing physical key ARN must not silently omit encryption grants"
+    );
 }

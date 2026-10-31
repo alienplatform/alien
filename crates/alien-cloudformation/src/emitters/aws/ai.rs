@@ -16,7 +16,7 @@ use crate::{
             cf_from_json, required_logical_id, resource_config, service_account_role_id,
             uniquify_iam_statement_sids,
         },
-        service_account::permission_context,
+        service_account::stack_permission_context,
     },
     template::{CfExpression, CfResource},
 };
@@ -49,7 +49,7 @@ fn ai_iam_policies(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
     let mut resources = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let logical_id = required_logical_id(ctx)?;
-    let context = permission_context();
+    let context = stack_permission_context(ctx).with_resource_name(ctx.resource_id);
 
     for (owner_index, (role_id, permission_refs)) in
         ai_permission_owners(ctx).into_iter().enumerate()

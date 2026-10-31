@@ -5,15 +5,59 @@
     "aws": [
       {
         "grant": {
-          // Bedrock access is grantless at the infrastructure level; provisioning
-          // consists of attaching/detaching the bedrock-invoke policy on the
-          // workload IAM role created for this resource.
-          "actions": [
-            "iam:PutRolePolicy",
-            "iam:GetRolePolicy",
-            "iam:DeleteRolePolicy",
-            "iam:ListRolePolicies"
-          ]
+          "actions": ["iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          }
+        },
+        "label": "legacy-role-1"
+      },
+      {
+        "grant": {
+          "actions": ["iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:PutRolePermissionsBoundary"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-write-1"
+      },
+      {
+        "grant": {
+          "actions": ["iam:GetRolePolicy", "iam:ListRolePolicies"]
         },
         "binding": {
           "stack": {

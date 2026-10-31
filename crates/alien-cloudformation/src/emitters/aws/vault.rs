@@ -13,7 +13,7 @@ use crate::{
             cf_from_json, required_logical_id, resource_config, service_account_role_id,
             uniquify_iam_statement_sids,
         },
-        service_account::permission_context,
+        service_account::stack_permission_context,
     },
     template::{CfExpression, CfResource},
 };
@@ -92,8 +92,8 @@ fn vault_iam_policies(ctx: &EmitContext<'_>, vault: &Vault) -> Result<Vec<CfReso
     let mut resources = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let logical_id = required_logical_id(ctx)?;
-    let context =
-        permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", vault.id()));
+    let context = stack_permission_context(ctx)
+        .with_resource_name(format!("${{AWS::StackName}}-{}", vault.id()));
 
     for (owner_index, (role_id, permission_refs)) in vault_permission_owners(ctx) {
         for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
@@ -170,8 +170,8 @@ fn management_vault_policy_document(
 ) -> Result<Option<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
-    let context =
-        permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", vault.id()));
+    let context = stack_permission_context(ctx)
+        .with_resource_name(format!("${{AWS::StackName}}-{}", vault.id()));
 
     for permission_set_ref in management_permission_refs(ctx) {
         let Some(permission_set) =

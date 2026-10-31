@@ -8,6 +8,8 @@ pub struct PermissionContext {
     // AWS variables
     pub aws_account_id: Option<String>,
     pub aws_region: Option<String>,
+    /// Setup-approved boundary ARN. Absent for deployments created without a boundary.
+    pub aws_permissions_boundary_arn: Option<String>,
 
     // GCP variables
     pub project_name: Option<String>,
@@ -49,6 +51,7 @@ impl PermissionContext {
         Self {
             aws_account_id: None,
             aws_region: None,
+            aws_permissions_boundary_arn: None,
             project_name: None,
             project_number: None,
             region: None,
@@ -75,6 +78,12 @@ impl PermissionContext {
     /// Builder pattern for AWS account ID
     pub fn with_aws_account_id(mut self, aws_account_id: impl Into<String>) -> Self {
         self.aws_account_id = Some(aws_account_id.into());
+        self
+    }
+
+    /// Use the permissions boundary recorded by setup.
+    pub fn with_aws_permissions_boundary_arn(mut self, arn: impl Into<String>) -> Self {
+        self.aws_permissions_boundary_arn = Some(arn.into());
         self
     }
 
@@ -220,6 +229,7 @@ impl PermissionContext {
         match key {
             "awsAccountId" => self.aws_account_id.as_deref(),
             "awsRegion" => self.aws_region.as_deref(),
+            "awsPermissionsBoundaryArn" => self.aws_permissions_boundary_arn.as_deref(),
             "projectName" => self.project_name.as_deref(),
             "projectNumber" => self.project_number.as_deref(),
             "region" => self.region.as_deref(),

@@ -758,6 +758,7 @@ dependencies = [
  "alien-local",
  "alien-manager-api",
  "alien-observer",
+ "alien-permissions",
  "alien-preflights",
  "async-trait",
  "chrono",

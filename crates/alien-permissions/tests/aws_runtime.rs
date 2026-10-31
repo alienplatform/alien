@@ -648,7 +648,9 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
                 .generate_policy(
                     get_permission_set(id).expect("permission set exists"),
                     target,
-                    &create_test_context(),
+                    &create_test_context().with_aws_permissions_boundary_arn(
+                        "arn:aws:iam::123456789012:policy/my-stack-deployment-management-boundary",
+                    ),
                 )
                 .expect("compute permissions should render");
             let serialized = serde_json::to_string(&generated).unwrap();
@@ -675,10 +677,20 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
                 assert_eq!(grant.action, [action]);
                 assert_eq!(grant.resource, [resource]);
                 assert!(grant.not_resource.is_empty());
-                assert!(grant.condition.is_none());
+                if action == "iam:PassRole" {
+                    assert_eq!(
+                        serde_json::to_value(&grant.condition).unwrap(),
+                        serde_json::json!({
+                            "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+                        }),
+                        "{id} / {target}: instance roles must only be passed to EC2"
+                    );
+                } else {
+                    assert!(grant.condition.is_none());
+                }
             }
             // Manual management still cannot write profiles. Provision additionally
-            // owns the runtime compute profiles; neither set gains role-policy writes.
+            // owns runtime compute profiles and removal of obsolete node policies.
             for action in policy
                 .statement
                 .iter()
@@ -702,6 +714,7 @@ fn test_compute_cluster_identity_metadata_reads_preserve_pass_role_scope() {
                                     | "iam:AddRoleToInstanceProfile"
                                     | "iam:RemoveRoleFromInstanceProfile"
                                     | "iam:DeleteInstanceProfile"
+                                    | "iam:DetachRolePolicy"
                             )),
                         "unexpected IAM action: {id} / {target} / {action}"
                     );
@@ -882,7 +895,7 @@ fn condition_equals(
         .as_ref()
         .and_then(|condition| condition.get("StringEquals"))
         .and_then(|values| values.get(key))
-        .is_some_and(|value| value == expected)
+        .is_some_and(|value| value.as_string() == Some(expected))
 }
 
 /// The guard only ever refuses, and only roles carrying the tags setup creates sandbox roles
@@ -954,7 +967,14 @@ fn the_management_role_guard_covers_every_role_write_that_reaches_the_management
     let management_role = "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management";
     let guard = get_permission_set(alien_permissions::MANAGEMENT_ROLE_GUARD)
         .expect("the guard is registered");
-    let guard_statement = &guard.platforms.aws.as_ref().expect("the guard is AWS")[0];
+    let guard_statement = guard
+        .platforms
+        .aws
+        .as_ref()
+        .expect("the guard is AWS")
+        .iter()
+        .find(|statement| statement.label.as_deref() == Some("deny-management-role-changes"))
+        .expect("management-role deny");
     assert!(!guard_statement.effect.is_allow());
     assert_eq!(
         guard_statement.binding.stack.as_ref().unwrap().resources,

@@ -12,7 +12,7 @@ use crate::{
         uniquify_iam_statement_sids, vpc_id_expr, CONDITION_NETWORK_MODE_CREATE,
         PARAM_PRIVATE_SUBNET_IDS,
     },
-    emitters::aws::service_account::permission_context,
+    emitters::aws::service_account::stack_permission_context,
     template::{CfExpression, CfResource},
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
@@ -399,7 +399,7 @@ fn remote_access_policy(ctx: &EmitContext<'_>) -> Result<Option<CfResource>> {
 
     // The bare resource id: the generator renders `${stackPrefix}` as `${AWS::StackName}`, which
     // is how this template already names the image.
-    let context = permission_context().with_resource_name(ctx.resource_id.to_string());
+    let context = stack_permission_context(ctx).with_resource_name(ctx.resource_id.to_string());
     let document = AwsCloudFormationPermissionsGenerator::new()
         .generate_policy(permission_set, BindingTarget::Resource, &context)
         .context(ErrorData::GenericError {
@@ -452,7 +452,7 @@ fn profile_policies(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Vec<CfRe
     let generator = AwsCloudFormationPermissionsGenerator::new();
     // The bare resource id, as in `remote_access_policy`: the sets name the image
     // `${stackPrefix}-${resourceName}`, and the generator renders the prefix as the stack name.
-    let context = permission_context().with_resource_name(sandbox.id().to_string());
+    let context = stack_permission_context(ctx).with_resource_name(sandbox.id().to_string());
 
     // The stack prefix as the CloudFormation generator renders it, so the stack-level and
     // per-image patterns compare as they are written.

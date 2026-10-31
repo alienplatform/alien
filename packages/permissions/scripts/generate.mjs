@@ -69,7 +69,7 @@ try {
         "rust:1.97.1-bookworm",
         "sh",
         "-c",
-        `rustup target add wasm32-unknown-unknown && cargo ${build.join(" ")}`,
+        `rustup target add --toolchain 1.97.1 wasm32-unknown-unknown && cargo ${build.join(" ")}`,
       ],
       { stdio: "inherit" },
     )

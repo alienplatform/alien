@@ -1,0 +1,1 @@
+{"oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}],"description":"An IAM condition accepts one string or a list of alternative string values.","x-readme-ref-name":"AwsConditionValue"}

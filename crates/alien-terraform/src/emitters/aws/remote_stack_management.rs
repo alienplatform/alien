@@ -15,9 +15,9 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_managed_policy_chunks,
-        ensure_unique_statement_sids, iam_role_name_template, jsonencode,
-        managing_role_trust_statement, policy_document_expr, required_label, tags,
+        downcast, emit_iam_managed_policy_chunks, ensure_unique_statement_sids,
+        iam_role_name_template, jsonencode, jsonencode_policy_value, managing_role_trust_statement,
+        policy_document_expr, required_label, stack_permission_context, tags,
     },
     expr,
 };
@@ -25,9 +25,12 @@ use alien_core::{
     import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference,
     RemoteStackManagement, ResourceLifecycle, Result, Worker,
 };
-use alien_error::Context;
+use alien_error::{AlienError, Context};
 use alien_permissions::{
-    generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
+    generators::{
+        aws_stack_permissions_boundary, validate_aws_boundary_size, AwsIamStatement,
+        AwsRuntimePermissionsGenerator,
+    },
     BindingTarget, PermissionContext,
 };
 use hcl::expr::Expression;
@@ -51,8 +54,19 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             ],
         ));
 
+        fragment.resource_blocks.push(resource_block(
+            "aws_iam_policy",
+            &format!("{label}_permissions_boundary"),
+            [
+                attr(
+                    "name",
+                    expr::template("${local.resource_prefix}-deployment-management-boundary"),
+                ),
+                attr("policy", boundary_document(ctx)?),
+            ],
+        ));
         let generator = AwsRuntimePermissionsGenerator::new();
-        let context = aws_terraform_permission_context();
+        let context = stack_permission_context(ctx);
         let stack_context = context.clone().with_resource_name("management".to_string());
         let mut statements = Vec::<AwsIamStatement>::new();
         // Keyed by gate input so resources sharing one input share a policy.
@@ -176,9 +190,175 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             ("roleName", expr::traversal(["aws_iam_role", label, "name"])),
             ("roleArn", expr::traversal(["aws_iam_role", label, "arn"])),
             ("managementPermissionsApplied", Expression::Bool(true)),
+            (
+                "permissionsBoundaryArn",
+                expr::traversal([
+                    "aws_iam_policy",
+                    &format!("{label}_permissions_boundary"),
+                    "arn",
+                ]),
+            ),
+            (
+                "permissionsBoundaryDocument",
+                expr::parse(&format!(
+                    "jsondecode(aws_iam_policy.{label}_permissions_boundary.policy)"
+                ))?,
+            ),
         ];
         Ok(expr::object(fields))
     }
+}
+
+fn boundary_document(ctx: &EmitContext<'_>) -> Result<Expression> {
+    let generate = |context: &PermissionContext| {
+        aws_stack_permissions_boundary(ctx.stack, context, |_, scope| {
+            boundary_grant_context(ctx, context, scope)
+        })
+        .context(ErrorData::GenericError {
+            message: "failed to generate AWS permissions boundary".to_string(),
+        })
+    };
+    validate_aws_boundary_size(ctx.stack).context(ErrorData::GenericError {
+        message: "failed to generate AWS permissions boundary".to_string(),
+    })?;
+    let context = PermissionContext::new()
+        .with_stack_prefix("${Prefix}")
+        .with_aws_region("${Region}")
+        .with_aws_account_id("${Account}")
+        .with_managing_account_id("${ManagingAccount}")
+        .with_managing_role_arn("${ManagingRole}");
+    let mut document = generate(&context)?;
+    let mut replacements = vec![
+        (
+            "${Prefix}".to_string(),
+            "${local.resource_prefix}".to_string(),
+        ),
+        (
+            "${Region}".to_string(),
+            "${data.aws_region.current.region}".to_string(),
+        ),
+        (
+            "${Account}".to_string(),
+            "${data.aws_caller_identity.current.account_id}".to_string(),
+        ),
+        (
+            "${ManagingAccount}".to_string(),
+            "${var.managing_account_id}".to_string(),
+        ),
+        (
+            "${ManagingRole}".to_string(),
+            "${var.managing_role_arn}".to_string(),
+        ),
+    ];
+    for (index, (id, entry)) in ctx.stack.resources.iter().enumerate() {
+        if entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE {
+            if let Some(label) = ctx.name_for(id) {
+                let key = format!("arn:aws:kms:${{Region}}:${{Account}}:key/${{Key{index}}}");
+                let value = if let Some(input) = &entry.enabled_when {
+                    if document["Statement"].as_array().is_some_and(|statements| {
+                        statements.iter().any(|statement| {
+                            statement["NotAction"] != "iam:*"
+                                && statement.to_string().contains(&key)
+                        })
+                    }) {
+                        return Err(AlienError::new(ErrorData::GenericError {
+                            message: format!("AWS permissions boundary key '{id}' used by inline grants must be unconditional"),
+                        }));
+                    }
+                    format!(
+                        "${{var.{} ? local.{label}_selected_key.arn : \"\"}}",
+                        crate::generator::stack_input_variable_name(input)
+                    )
+                } else {
+                    format!("${{local.{label}_selected_key.arn}}")
+                };
+                replacements.insert(0, (key, value));
+            }
+        }
+    }
+    replace_boundary_tokens(&mut document, &replacements);
+    let mut expression = jsonencode_policy_value(document);
+    // Disabled keys contribute no ARN, while the shared ceiling retains its
+    // unconditional stack-prefixed resources. Never dereference a disabled key.
+    if ctx.stack.resources.values().any(|entry| {
+        entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE
+            && entry.enabled_when.is_some()
+    }) {
+        if let Expression::FuncCall(call) = &mut expression {
+            if let Some(Expression::Object(fields)) = call.args.first_mut() {
+                if let Some(Expression::Array(statements)) =
+                    fields.get_mut(&hcl::Identifier::sanitized("Statement").into())
+                {
+                    for statement in statements {
+                        let Expression::Object(fields) = statement else {
+                            continue;
+                        };
+                        if fields.get(&hcl::Identifier::sanitized("NotAction").into())
+                            != Some(&Expression::String("iam:*".into()))
+                        {
+                            continue;
+                        }
+                        if let Some(resource @ Expression::Array(_)) =
+                            fields.get_mut(&hcl::Identifier::sanitized("Resource").into())
+                        {
+                            *resource = Expression::FuncCall(Box::new(
+                                hcl::expr::FuncCall::builder("compact")
+                                    .arg(std::mem::replace(resource, Expression::Null))
+                                    .build(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(expression)
+}
+
+fn replace_boundary_tokens(value: &mut serde_json::Value, replacements: &[(String, String)]) {
+    match value {
+        serde_json::Value::String(value) => {
+            for (from, to) in replacements {
+                *value = value.replace(from, to);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                replace_boundary_tokens(item, replacements);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for item in fields.values_mut() {
+                replace_boundary_tokens(item, replacements);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn boundary_grant_context(
+    ctx: &EmitContext<'_>,
+    base: &PermissionContext,
+    scope: &str,
+) -> alien_permissions::Result<PermissionContext> {
+    alien_permissions::generators::aws_boundary_scope_context(ctx.stack, base, scope, |scope| {
+        if ctx.stack.resources[scope].config.resource_type() != alien_core::Key::RESOURCE_TYPE {
+            return Ok(None);
+        }
+        let _label = ctx.name_for(scope).ok_or_else(|| {
+            AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+                message: format!("AWS permissions boundary key '{scope}' has no setup resource"),
+            })
+        })?;
+        let index = ctx.stack.resources.get_index_of(scope).ok_or_else(|| {
+            AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+                message: format!("AWS permissions boundary key '{scope}' is missing"),
+            })
+        })?;
+        Ok(Some(format!(
+            "arn:aws:kms:${{Region}}:${{Account}}:key/${{Key{index}}}"
+        )))
+    })
 }
 
 fn trust_policy() -> Expression {
@@ -264,7 +444,14 @@ fn kubernetes_cluster_name(cluster: &KubernetesCluster) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Resource, ResourceEntry, ResourceLifecycle, Storage, Worker, WorkerCode};
+    use crate::emitters::aws::helpers::aws_terraform_permission_context;
+    use alien_core::{
+        KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesHeartbeatMode, Network,
+        NetworkSettings, PermissionSet, Platform, Resource, ResourceEntry, ResourceLifecycle,
+        Stack, StackSettings, Storage, Worker, WorkerCode,
+    };
+    use hcl::eval::{Context, Evaluate};
+    use serde_json::json;
 
     fn live_worker_entry(id: &str) -> ResourceEntry {
         ResourceEntry {
@@ -283,6 +470,90 @@ mod tests {
             remote_access: false,
             enabled_when: None,
         }
+    }
+
+    #[test]
+    fn installed_boundary_matches_runtime_for_default_cluster_and_literal_grants() {
+        let grant = |resource: &str| -> PermissionSet {
+            serde_json::from_value(json!({
+                "id": "custom/read", "description": "Read the approved resource",
+                "platforms": {"aws": [{"grant": {"actions": ["eks:DescribeCluster"]},
+                    "binding": {"resource": {"resources": [resource]}}}]}
+            }))
+            .unwrap()
+        };
+        let stack = Stack::new("test".to_string())
+            .add(
+                KubernetesCluster::new("cluster".to_string())
+                    .provider(KubernetesClusterProvider::Eks)
+                    .ownership(KubernetesClusterOwnership::Managed)
+                    .namespace("workloads".to_string())
+                    .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApi)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Network::new("network".to_string())
+                    .settings(NetworkSettings::UseDefault)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .permission(
+                "reader",
+                PermissionProfile::new()
+                    .resource(
+                        "cluster",
+                        [grant(
+                            "arn:aws:eks:${awsRegion}:${awsAccountId}:cluster/${resourceName}",
+                        )],
+                    )
+                    .resource(
+                        "network",
+                        [grant("arn:aws:eks:us-east-1:123456789012:cluster/approved")],
+                    ),
+            )
+            .build();
+        let ctx = EmitContext {
+            stack: &stack,
+            resource: &stack.resources["cluster"],
+            resource_id: "cluster",
+            platform: Platform::Aws,
+            targets_kubernetes: true,
+            stack_settings: &StackSettings::default(),
+            names: &Default::default(),
+        };
+        let emitted = boundary_document(&ctx).unwrap();
+        let Expression::FuncCall(call) = emitted else {
+            panic!("expected jsonencode")
+        };
+        let mut evaluation = Context::new();
+        for (name, value) in [
+            ("local", json!({"resource_prefix": "app"})),
+            (
+                "data",
+                json!({"aws_region": {"current": {"region": "us-east-1"}}, "aws_caller_identity": {"current": {"account_id": "123456789012"}}}),
+            ),
+            (
+                "var",
+                json!({"managing_account_id": "210987654321", "managing_role_arn": "arn:aws:iam::210987654321:role/manager"}),
+            ),
+        ] {
+            evaluation.declare_var(name, hcl::to_value(value).unwrap());
+        }
+        let installed = serde_json::to_value(call.args[0].evaluate(&evaluation).unwrap()).unwrap();
+        let base = PermissionContext::new()
+            .with_stack_prefix("app")
+            .with_aws_region("us-east-1")
+            .with_aws_account_id("123456789012")
+            .with_managing_account_id("210987654321")
+            .with_managing_role_arn("arn:aws:iam::210987654321:role/manager");
+        let required = aws_stack_permissions_boundary(&stack, &base, |_, scope| {
+            alien_permissions::generators::aws_boundary_scope_context(&stack, &base, scope, |_| {
+                Ok(None)
+            })
+        })
+        .unwrap();
+        assert_eq!(installed, required);
     }
 
     #[test]

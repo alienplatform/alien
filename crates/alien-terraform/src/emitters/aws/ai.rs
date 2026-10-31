@@ -13,14 +13,14 @@
 use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
-        iam_policy_name_sanitize, required_label,
+        downcast, emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize,
+        required_label, stack_permission_context,
     },
     expr,
 };
 use alien_core::{
-    import::EmitContext, Ai, PermissionProfile, PermissionSetReference, RemoteBindings, Result,
-    ServiceAccount,
+    import::EmitContext, Ai, PermissionProfile, PermissionSetReference, RemoteBindings,
+    RemoteStackManagement, Result, ServiceAccount,
 };
 use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
@@ -33,8 +33,7 @@ impl TfEmitter for AwsAiEmitter {
         let ai = downcast::<Ai>(ctx, Ai::RESOURCE_TYPE)?;
         let mut fragment = TfFragment::empty();
 
-        let context = aws_terraform_permission_context()
-            .with_resource_name(format!("${{local.resource_prefix}}-{}", ai.id()));
+        let context = stack_permission_context(ctx).with_resource_name(ai.id());
 
         for (owner_label, permission_set_refs) in ai_permission_owners(ctx) {
             for (idx, permission_set_ref) in permission_set_refs.iter().enumerate() {
@@ -82,6 +81,25 @@ fn ai_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSet
         let service_account_id = format!("{profile_name}-sa");
         if let Some(label) = service_account_label(ctx, &service_account_id) {
             owners.push((label.to_string(), refs));
+        }
+    }
+    if let Some(profile) = ctx.stack.management().profile() {
+        if let Some(label) = ctx.stack.resources().find_map(|(id, entry)| {
+            (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+                .then(|| ctx.name_for(id))
+                .flatten()
+        }) {
+            let refs: Vec<_> = profile
+                .0
+                .get("*")
+                .into_iter()
+                .flatten()
+                .filter(|reference| reference.id().starts_with("ai/"))
+                .cloned()
+                .collect();
+            if !refs.is_empty() {
+                owners.push((label.to_string(), refs));
+            }
         }
     }
     if let (Some(definition), Some(label)) = (

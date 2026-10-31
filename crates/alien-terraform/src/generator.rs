@@ -1371,6 +1371,15 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             let addresses = fragment
                 .resource_blocks
                 .iter()
+                // Management policies may reference resources that depend on its identity.
+                // Preserve their own references without making all dependents wait for them.
+                .filter(|block| {
+                    !(stack.resources.get(resource_id).is_some_and(|entry| {
+                        entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+                    }) && block.labels().first().is_some_and(|label| {
+                        label.as_str().starts_with("aws_iam_") && label.as_str() != "aws_iam_role"
+                    }))
+                })
                 .filter_map(resource_address)
                 .collect();
             (resource_id.clone(), addresses)

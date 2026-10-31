@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
-use alien_permission_types::AwsPermissionEffect;
+use alien_permission_types::{AwsConditionValue, AwsPermissionEffect};
 use serde::{Deserialize, Serialize};
 
 pub const GCP_PROJECT_SCOPE: &str = "projects/${projectName}";
 pub const GCP_BUCKET_SCOPE: &str = "projects/${projectName}/buckets/${resourceName}";
-pub type AwsCondition = BTreeMap<String, BTreeMap<String, String>>;
+pub type AwsCondition = BTreeMap<String, BTreeMap<String, AwsConditionValue>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

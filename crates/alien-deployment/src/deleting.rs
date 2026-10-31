@@ -818,8 +818,8 @@ mod tests {
     };
     use alien_infra::{
         state_utils::{StackResourceStateExt, StackStateExt},
-        AwsServiceAccountController, DefaultPlatformServiceProvider, MockPlatformServiceProvider,
-        StackExecutor,
+        AwsRemoteStackManagementController, AwsServiceAccountController,
+        DefaultPlatformServiceProvider, MockPlatformServiceProvider, StackExecutor,
     };
 
     use super::{
@@ -1335,7 +1335,7 @@ mod tests {
 
     #[tokio::test]
     async fn automatic_cleanup_waits_for_role_deletion_before_setup_handoff() {
-        for (fail_delete, managed_pages, inline_pages, fail_cleanup) in [
+        for (bounded, (fail_delete, managed_pages, inline_pages, fail_cleanup)) in [
             (false, false, false, false),
             (true, false, false, false),
             (false, true, false, false),
@@ -1343,8 +1343,34 @@ mod tests {
             (false, true, true, false),
             (true, true, true, false),
             (false, false, false, true),
-        ] {
+        ]
+        .into_iter()
+        .flat_map(|case| [false, true].map(|bounded| (bounded, case)))
+        {
             let mut stack = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+            const BOUNDARY: &str =
+                "arn:aws:iam::123456789012:policy/test-deployment-management-boundary";
+            if bounded {
+                let mut management = resource_state(
+                    Resource::new(
+                        alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                    ),
+                    ResourceLifecycle::Frozen,
+                    ResourceStatus::Running,
+                );
+                let mut controller = serde_json::to_value(
+                    AwsRemoteStackManagementController::mock_ready("test-management"),
+                )
+                .unwrap();
+                controller["permissionsBoundaryArn"] = serde_json::json!(BOUNDARY);
+                management
+                    .set_internal_controller(Some(Box::new(
+                        serde_json::from_value::<AwsRemoteStackManagementController>(controller)
+                            .unwrap(),
+                    )))
+                    .unwrap();
+                stack.resources.insert("management".to_string(), management);
+            }
             let mut vault = resource_state(
                 Resource::new(Vault::new("secrets".to_string()).build()),
                 ResourceLifecycle::Frozen,
@@ -1374,6 +1400,26 @@ mod tests {
             .unwrap();
             stack.resources.insert("execution-sa".to_string(), role);
             let mut iam = MockIamApi::new();
+            if bounded {
+                // Each cleanup page and retried cleanup must recheck the installed boundary.
+                iam.expect_get_role()
+                    .withf(|name| name == "test-execution-sa")
+                    .times(1 + usize::from(managed_pages || inline_pages) + usize::from(fail_cleanup))
+                    .returning(|_| Ok(serde_json::from_value(serde_json::json!({
+                        "GetRoleResult": {"Role": {
+                            "Path": "/", "RoleName": "test-execution-sa", "RoleId": "runtime-role",
+                            "Arn": "arn:aws:iam::123456789012:role/test-execution-sa",
+                            "CreateDate": "2026-01-01",
+                            "PermissionsBoundary": {
+                                "PermissionsBoundaryType": "Policy",
+                                "PermissionsBoundaryArn": BOUNDARY
+                            },
+                            "Tags": {"member": alien_core::standard_resource_tags("test", "execution-sa")
+                                .into_iter().map(|(key, value)| serde_json::json!({"Key": key, "Value": value}))
+                                .collect::<Vec<_>>()}
+                        }}
+                    })).unwrap()));
+            }
             if fail_cleanup {
                 // Managed policy removal succeeds before inline cleanup is denied.
                 iam.expect_list_attached_role_policies()
