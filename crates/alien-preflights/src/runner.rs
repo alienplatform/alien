@@ -360,6 +360,7 @@ impl PreflightRunner {
                 results: summary.results,
             }));
         }
+        new_release_checks(stack, platform).await?;
         Ok(summary)
     }
 
@@ -391,6 +392,7 @@ impl PreflightRunner {
                 results: check_summary.results,
             }));
         }
+        new_release_checks(stack, platform).await?;
 
         Ok(check_summary)
     }
@@ -1870,6 +1872,19 @@ mod setup_update_authorization_tests {
 }
 
 /// Run stack checks that need no cloud access, logging each failure and warning.
+/// Checks that need the stack prepared as its setup packages prepare it, so they run only once
+/// the stack passed every other check. Like build-time checks, they apply to new releases and
+/// never to rendering a setup package for a stack released earlier.
+async fn new_release_checks(stack: &Stack, platform: Platform) -> Result<()> {
+    if platform == Platform::Aws {
+        crate::compile_time::aws_permissions_boundary_size::check_aws_permissions_boundary_size(
+            stack,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn run_stack_checks(
     checks: Vec<&dyn CompileTimeCheck>,
     stack: &Stack,

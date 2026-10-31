@@ -1,6 +1,9 @@
 //! The setup-owned ceiling for roles written by management.
 
-use std::{borrow::Cow, collections::BTreeSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use alien_core::{
     AwsBindingSpec, PermissionSet, PermissionSetReference, Stack, ALIEN_STACK_TAG_KEY,
@@ -102,7 +105,7 @@ fn stack_boundary(
 ) -> Result<Value> {
     let generator = AwsRuntimePermissionsGenerator::new();
     let mut statements = Vec::new();
-    let mut exact_resources = BTreeSet::new();
+    let mut exact_resources = BTreeMap::new();
     let mut inline_grants = Vec::new();
     for (profile_name, profile) in stack.permission_profiles() {
         for (scope, references) in &profile.0 {
@@ -122,6 +125,7 @@ fn stack_boundary(
                 if let Some(set) = resolved_boundary_set(reference) {
                     collect_resolved_grants(
                         reference,
+                        &grant_source(profile_name, scope, reference),
                         generator
                             .generate_policy(set, target, &grant_context)?
                             .statement,
@@ -163,6 +167,7 @@ fn stack_boundary(
                 if let Some(set) = resolved_boundary_set(reference) {
                     collect_resolved_grants(
                         reference,
+                        &grant_source(profile_name, resource_id, reference),
                         generator
                             .generate_policy(set, BindingTarget::Resource, &grant_context)?
                             .statement,
@@ -197,6 +202,12 @@ fn stack_boundary(
             })?;
             collect_resolved_grants(
                 &reference,
+                &format!(
+                    "container '{}' volume key '{}' ({})",
+                    container.id,
+                    key.id,
+                    reference.id()
+                ),
                 generator
                     .generate_policy(set, BindingTarget::Resource, &grant_context)?
                     .statement,
@@ -216,6 +227,41 @@ fn stack_boundary(
     )
 }
 
+/// A compiled grant and the grants it came from, which name the largest statements when the
+/// boundary does not fit.
+#[derive(Debug, Clone)]
+struct SourcedStatement {
+    statement: AwsIamStatement,
+    sources: BTreeSet<String>,
+    /// The grants each action came from, including the runtime catalog's.
+    action_sources: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl SourcedStatement {
+    fn new(statement: AwsIamStatement, source: String) -> Self {
+        let sources = BTreeSet::from([source]);
+        let action_sources = statement
+            .action
+            .iter()
+            .map(|action| (action.clone(), sources.clone()))
+            .collect();
+        Self {
+            statement,
+            sources,
+            action_sources,
+        }
+    }
+}
+
+fn grant_source(profile_name: &str, scope: &str, reference: &PermissionSetReference) -> String {
+    let scope = if scope == "*" {
+        "stack-wide".to_string()
+    } else {
+        format!("on '{scope}'")
+    };
+    format!("profile '{profile_name}' {scope} ({})", reference.id())
+}
+
 /// Which compiled grants `render_boundary` copies into the document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CopiedGrants {
@@ -229,10 +275,11 @@ enum CopiedGrants {
 
 fn collect_resolved_grants(
     reference: &PermissionSetReference,
+    source: &str,
     grants: Vec<AwsIamStatement>,
     resource_name: Option<&str>,
-    exact_resources: &mut BTreeSet<String>,
-    statements: &mut Vec<AwsIamStatement>,
+    exact_resources: &mut BTreeMap<String, BTreeSet<String>>,
+    statements: &mut Vec<SourcedStatement>,
     inline_grants: &mut Vec<AwsIamStatement>,
 ) {
     for mut grant in grants {
@@ -252,7 +299,10 @@ fn collect_resolved_grants(
         {
             grant.resource.retain(|resource| {
                 if Some(resource.as_str()) == resource_name {
-                    exact_resources.insert(resource.clone());
+                    exact_resources
+                        .entry(resource.clone())
+                        .or_default()
+                        .insert(source.to_string());
                     false
                 } else {
                     true
@@ -260,7 +310,7 @@ fn collect_resolved_grants(
             });
         }
         if !grant.resource.is_empty() || !grant.not_resource.is_empty() {
-            statements.push(grant);
+            statements.push(SourcedStatement::new(grant, source.to_string()));
         }
     }
 }
@@ -278,10 +328,24 @@ pub fn aws_permissions_boundary(
     context: &PermissionContext,
     custom_statements: &[AwsIamStatement],
 ) -> Result<Value> {
+    let sourced: Vec<_> = custom_statements
+        .iter()
+        .enumerate()
+        .map(|(index, statement)| {
+            SourcedStatement::new(
+                statement.clone(),
+                if statement.sid.is_empty() {
+                    format!("custom statement {index}")
+                } else {
+                    format!("custom statement '{}'", statement.sid)
+                },
+            )
+        })
+        .collect();
     render_boundary(
         context,
-        custom_statements,
-        BTreeSet::new(),
+        &sourced,
+        BTreeMap::new(),
         custom_statements,
         CopiedGrants::NotAdmitted,
     )
@@ -289,8 +353,8 @@ pub fn aws_permissions_boundary(
 
 fn render_boundary(
     context: &PermissionContext,
-    custom_statements: &[AwsIamStatement],
-    mut scoped_resources: BTreeSet<String>,
+    custom_statements: &[SourcedStatement],
+    exact_resources: BTreeMap<String, BTreeSet<String>>,
     exception_grants: &[AwsIamStatement],
     copied: CopiedGrants,
 ) -> Result<Value> {
@@ -300,6 +364,7 @@ fn render_boundary(
         })
     })?;
     let ownership_key = format!("aws:ResourceTag/{ALIEN_STACK_TAG_KEY}");
+    let mut scoped_resources: BTreeSet<String> = exact_resources.keys().cloned().collect();
     let mut catalog_context = context.clone();
     catalog_context.resource_name = Some(format!("{prefix}-*"));
     let mut statements = Vec::new();
@@ -372,7 +437,10 @@ fn render_boundary(
                     }
                     statement.resource = unprefixed;
                     if !statement.resource.is_empty() || !statement.not_resource.is_empty() {
-                        merge_statement(&mut statements, statement);
+                        merge_statement(
+                            &mut statements,
+                            SourcedStatement::new(statement, format!("{CATALOG_SOURCE} ({id})")),
+                        );
                     }
                 }
             }
@@ -393,14 +461,30 @@ fn render_boundary(
     // Copying a grant the scoped Allow already admits would only add size: least-privilege
     // grants on prefixed resources (such as one per secret input and consumer) would otherwise
     // grow the boundary with the stack. Denies stay, and still lift no exemptions below.
-    for statement in custom_statements {
+    for custom in custom_statements {
         let admitted = match copied {
-            CopiedGrants::NotAdmitted => admitted_by_scoped_allow(statement, &scoped_resources),
+            CopiedGrants::NotAdmitted => {
+                admitted_by_scoped_allow(&custom.statement, &scoped_resources)
+            }
             #[cfg(test)]
             CopiedGrants::All => false,
         };
         if !admitted {
-            merge_statement(&mut statements, statement.clone());
+            merge_statement(&mut statements, custom.clone());
+        }
+    }
+    // Rendered statements and resources that come from the stack's grants rather than the
+    // stack-independent ceiling are attributed to their sources, to name them on overflow.
+    let mut contributions = Contributions::default();
+    for resource in &scoped_resources {
+        if let Some(sources) = exact_resources.get(resource.as_str()) {
+            // The quoted resource and its separator.
+            contributions.add(
+                sources,
+                Added::ExactResource,
+                resource.chars().count() + 3,
+                resource,
+            );
         }
     }
     let mut rendered = vec![
@@ -412,7 +496,53 @@ fn render_boundary(
             "Condition": {"StringEquals": {ownership_key: prefix}},
         }),
     ];
-    rendered.extend(statements.iter().map(render_statement));
+    for sourced in &statements {
+        let statement = render_statement(&sourced.statement);
+        let example = sourced
+            .statement
+            .resource
+            .first()
+            .or(sourced.statement.not_resource.first())
+            .map_or("", String::as_str);
+        let from_catalog = |sources: &BTreeSet<String>| {
+            sources
+                .iter()
+                .any(|source| source.starts_with(CATALOG_SOURCE))
+        };
+        if !sourced.action_sources.values().any(from_catalog) {
+            // The statement and its separator.
+            contributions.add(
+                &sourced.sources,
+                Added::Statement,
+                minified_size(&statement) + 1,
+                example,
+            );
+        } else {
+            // Grants merged into a catalog statement add only the actions the catalog lacks.
+            // Each group of grants is charged what removing its actions saves; the charges add
+            // up to the statement's size beyond the catalog's.
+            let mut added: BTreeMap<&BTreeSet<String>, BTreeSet<&str>> = BTreeMap::new();
+            for (action, sources) in &sourced.action_sources {
+                if !from_catalog(sources) {
+                    added.entry(sources).or_default().insert(action);
+                }
+            }
+            let mut remaining = sourced.statement.clone();
+            for (sources, actions) in added {
+                let size = minified_size(&render_statement(&remaining));
+                remaining
+                    .action
+                    .retain(|action| !actions.contains(action.as_str()));
+                contributions.add(
+                    sources,
+                    Added::Actions,
+                    size - minified_size(&render_statement(&remaining)),
+                    example,
+                );
+            }
+        }
+        rendered.push(statement);
+    }
     // Denies are never dropped. Each is exempted only on the resources of grants that name its
     // action exactly; a wildcard action, a condition or NotResource never lifts it.
     let exempt = |action: &str| -> BTreeSet<&str> {
@@ -441,28 +571,155 @@ fn render_boundary(
         }
     }
     denies.sort();
+    let grant_exemptions = BTreeSet::from([EXEMPTED_DENIES.to_string()]);
+    let mut add_deny = |deny: Option<Value>, exempted: &BTreeSet<&str>| {
+        if let Some(deny) = deny {
+            if let Some(first) = exempted.first() {
+                contributions.add(
+                    &grant_exemptions,
+                    Added::Statement,
+                    minified_size(&deny) + 1,
+                    first,
+                );
+            }
+            rendered.push(deny);
+        }
+    };
     for (exempted, actions) in &denies {
-        rendered.extend(deny_statement(json!(actions), exempted, None));
+        add_deny(deny_statement(json!(actions), exempted, None), exempted);
     }
     // EC2 creates grants on stack keys to attach encrypted volumes.
-    rendered.extend(deny_statement(
-        json!(["kms:CreateGrant"]),
-        &exempt("kms:CreateGrant"),
-        Some(json!({"BoolIfExists": {"kms:GrantIsForAWSResource": "false"}})),
-    ));
+    let key_grants = exempt("kms:CreateGrant");
+    add_deny(
+        deny_statement(
+            json!(["kms:CreateGrant"]),
+            &key_grants,
+            Some(json!({"BoolIfExists": {"kms:GrantIsForAWSResource": "false"}})),
+        ),
+        &key_grants,
+    );
     let policy = json!({"Version": "2012-10-17", "Statement": rendered});
-    let size = policy
-        .to_string()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .count();
+    let size = minified_size(&policy);
     if size > MANAGED_POLICY_LIMIT {
         return Err(AlienError::new(ErrorData::PermissionsBoundaryTooLarge {
             size,
             limit: MANAGED_POLICY_LIMIT,
+            largest_contributors: contributions.describe(size),
         }));
     }
     Ok(policy)
+}
+
+/// Source label prefix of the stack-independent runtime catalog statements.
+const CATALOG_SOURCE: &str = "runtime catalog";
+
+/// Label for sharing Denies split out because grants name their actions exactly.
+const EXEMPTED_DENIES: &str = "sharing Denies lifted for grants naming their actions";
+
+/// Characters the stack's own grants add to the boundary, by grant source. Runtime catalog
+/// statements, the two base Allows and unexempted Denies are the stack-independent rest.
+#[derive(Default)]
+struct Contributions(BTreeMap<String, Contribution>);
+
+#[derive(Default)]
+struct Contribution {
+    statements: usize,
+    exact_resources: usize,
+    extended_catalog_statements: usize,
+    characters: usize,
+    example: String,
+}
+
+/// What a grant source adds to the rendered document.
+#[derive(Debug, Clone, Copy)]
+enum Added {
+    /// A statement of its own.
+    Statement,
+    /// An exact resource in the scoped Allow.
+    ExactResource,
+    /// Actions in a runtime catalog statement with the same resources and condition.
+    Actions,
+}
+
+impl Contributions {
+    fn add(&mut self, sources: &BTreeSet<String>, added: Added, characters: usize, example: &str) {
+        let label: Vec<_> = sources
+            .iter()
+            .filter(|source| !source.starts_with(CATALOG_SOURCE))
+            .map(String::as_str)
+            .collect();
+        if label.is_empty() {
+            return;
+        }
+        let entry = self.0.entry(label.join(", ")).or_default();
+        match added {
+            Added::Statement => entry.statements += 1,
+            Added::ExactResource => entry.exact_resources += 1,
+            Added::Actions => entry.extended_catalog_statements += 1,
+        }
+        entry.characters += characters;
+        if entry.example.is_empty() {
+            entry.example = example.to_string();
+        }
+    }
+
+    /// The largest contributors, then the stack-independent remainder of `size`.
+    fn describe(&self, size: usize) -> String {
+        const LISTED: usize = 5;
+        let mut largest: Vec<_> = self.0.iter().collect();
+        largest.sort_by(|(_, left), (_, right)| right.characters.cmp(&left.characters));
+        let attributed: usize = largest.iter().map(|(_, c)| c.characters).sum();
+        let mut described: Vec<_> = largest
+            .iter()
+            .take(LISTED)
+            .map(|(label, contribution)| {
+                let counted = |count: usize, one: &str, many: &str| match count {
+                    0 => None,
+                    1 => Some(format!("1 {one}")),
+                    count => Some(format!("{count} {many}")),
+                };
+                let parts: Vec<_> = [
+                    counted(contribution.statements, "statement", "statements"),
+                    counted(
+                        contribution.exact_resources,
+                        "exact resource in the scoped Allow",
+                        "exact resources in the scoped Allow",
+                    ),
+                    counted(
+                        contribution.extended_catalog_statements,
+                        "runtime catalog statement it adds actions to",
+                        "runtime catalog statements it adds actions to",
+                    ),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                format!(
+                    "{label}: {} characters in {}, e.g. '{}'",
+                    contribution.characters,
+                    parts.join(" and "),
+                    contribution.example
+                )
+            })
+            .collect();
+        if largest.len() > LISTED {
+            described.push(format!("{} more grant sources", largest.len() - LISTED));
+        }
+        described.push(format!(
+            "stack-independent statements: {} characters",
+            size.saturating_sub(attributed)
+        ));
+        described.join("; ")
+    }
+}
+
+/// Characters IAM counts against the managed-policy limit: the document without whitespace.
+fn minified_size(value: &Value) -> usize {
+    value
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .count()
 }
 
 /// Select legacy or bounded role grants using the installed setup boundary.
@@ -608,24 +865,42 @@ fn scoped_pattern_contains(scoped: &str, resource: &str) -> bool {
         && resource.starts_with(prefix)
 }
 
-fn merge_statement(statements: &mut Vec<AwsIamStatement>, mut statement: AwsIamStatement) {
+fn merge_statement(statements: &mut Vec<SourcedStatement>, sourced: SourcedStatement) {
+    let SourcedStatement {
+        mut statement,
+        sources,
+        action_sources,
+    } = sourced;
     statement.resource.sort();
     statement.resource.dedup();
     statement.not_resource.sort();
     statement.not_resource.dedup();
     if let Some(existing) = statements.iter_mut().find(|existing| {
+        let existing = &existing.statement;
         existing.effect == statement.effect
             && existing.resource == statement.resource
             && existing.not_resource == statement.not_resource
             && existing.condition == statement.condition
     }) {
-        existing.action.extend(statement.action);
-        existing.action.sort();
-        existing.action.dedup();
+        existing.statement.action.extend(statement.action);
+        existing.statement.action.sort();
+        existing.statement.action.dedup();
+        existing.sources.extend(sources);
+        for (action, sources) in action_sources {
+            existing
+                .action_sources
+                .entry(action)
+                .or_default()
+                .extend(sources);
+        }
     } else {
         statement.action.sort();
         statement.action.dedup();
-        statements.push(statement);
+        statements.push(SourcedStatement {
+            statement,
+            sources,
+            action_sources,
+        });
     }
 }
 
@@ -1786,7 +2061,10 @@ mod tests {
             format!(":parameter/{prefix}-secret-"),
             "sqs:SendMessage".into(),
         ] {
-            assert!(!text.contains(skipped.as_str()), "{skipped} was copied: {text}");
+            assert!(
+                !text.contains(skipped.as_str()),
+                "{skipped} was copied: {text}"
+            );
         }
         for kept in ["-gateway-config", KEY_ARN] {
             assert!(text.contains(kept), "{kept} is missing: {text}");
@@ -1908,7 +2186,7 @@ mod tests {
         )
         .expect_err("copied grants exceed the managed policy limit");
         assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
-        let Some(ErrorData::PermissionsBoundaryTooLarge { size, limit }) = &error.error else {
+        let Some(ErrorData::PermissionsBoundaryTooLarge { size, limit, .. }) = &error.error else {
             panic!("unexpected error {error:?}");
         };
         assert!(*size > *limit + 1_000, "{size}");
@@ -1956,8 +2234,86 @@ mod tests {
             .expect_err("external grants exceed the managed policy limit");
         assert_eq!(error.code, "PERMISSIONS_BOUNDARY_TOO_LARGE");
         assert!(!error.retryable);
+        let Some(ErrorData::PermissionsBoundaryTooLarge {
+            size,
+            limit,
+            largest_contributors,
+        }) = &error.error
+        else {
+            panic!("unexpected error {error:?}");
+        };
+        assert_eq!(*limit, MANAGED_POLICY_LIMIT);
+        // Every character beyond the stack-independent ceiling is attributed to the grant.
+        let ceiling = minified_size(&aws_permissions_boundary(&context(), &[]).unwrap());
+        let statement = minified_size(&json!({
+            "Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::partner-exports-10/*",
+        }));
+        // Sixty statements with their separators; ten of the indexes have one digit.
+        let grants = 60 * (statement + 1) - 10;
+        assert_eq!(*size, ceiling + grants);
+        assert_eq!(
+            largest_contributors,
+            &format!(
+                "profile 'application' stack-wide (custom/partner-read): {grants} characters in \
+                 60 statements, e.g. 'arn:aws:s3:::partner-exports-0/*'; \
+                 stack-independent statements: {ceiling} characters"
+            )
+        );
         assert!(error
             .to_string()
             .contains("Reduce custom runtime permissions"));
+        // A grant merged into a runtime catalog statement is charged only for what it adds,
+        // and one that adds nothing is not named.
+        let mut references = stack.permissions.profiles["application"].0["*"].clone();
+        references.push(inline_entry(
+            "custom/describe",
+            "Allow",
+            &["ec2:DescribeInstances", "ec2:DescribeImages"],
+            &["*".to_string()],
+            None,
+        ));
+        references.push(inline_entry(
+            "custom/instances",
+            "Allow",
+            &["ec2:DescribeInstances"],
+            &["*".to_string()],
+            None,
+        ));
+        let stack = Stack::new("test".to_string())
+            .permission(
+                "application",
+                alien_core::PermissionProfile(indexmap::indexmap! {"*".to_string() => references}),
+            )
+            .build();
+        let error = aws_stack_permissions_boundary(&stack, &context(), |_, _| Ok(context()))
+            .expect_err("external grants exceed the managed policy limit");
+        let Some(ErrorData::PermissionsBoundaryTooLarge {
+            size: merged_size,
+            largest_contributors,
+            ..
+        }) = &error.error
+        else {
+            panic!("unexpected error {error:?}");
+        };
+        // Only `ec2:DescribeImages` is new: the quoted action and its separator.
+        let added = r#""ec2:DescribeImages","#.len();
+        assert_eq!(*merged_size, *size + added);
+        assert!(
+            largest_contributors.contains(&format!(
+                "profile 'application' stack-wide (custom/describe): \
+                 {added} characters in 1 runtime catalog statement it adds actions to"
+            )),
+            "{largest_contributors}"
+        );
+        assert!(
+            !largest_contributors.contains("custom/instances"),
+            "{largest_contributors}"
+        );
+        assert!(
+            largest_contributors.ends_with(&format!(
+                "stack-independent statements: {ceiling} characters"
+            )),
+            "{largest_contributors}"
+        );
     }
 }
