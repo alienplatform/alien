@@ -43,6 +43,16 @@ Use `SingleControllerExecutor` for controller tests. Every controller needs: cre
 
 The executor triggers updates by comparing resource configs via `resource_eq()`. Values owned by management after setup should live in management config or controller state, not in Frozen resource config.
 
+## AWS IAM role write ownership
+
+Runtime create, retry, update and cleanup paths must use
+[`IamRoleWriter`](../alien-aws-clients/src/aws/iam/role_writer.rs); see the
+[boundary and adoption rules](../alien-permissions/README.md#aws-role-permissions-boundaries).
+Setup owns the management identity, scaffolding and boundary policy. Trace the
+actual credentials and teardown handoff: Frozen lifecycle or `DirectSetup`
+authority alone does not prove a handler has installer credentials. Test that
+failed adoption prevents the subsequent IAM write.
+
 ## AWS service-account teardown
 
 With automatic setup, runtime cleanup removes service-account roles created by

@@ -15,8 +15,7 @@
             "ec2:CreateRouteTable",
             "ec2:CreateNatGateway",
             "ec2:AllocateAddress",
-            "ec2:CreateSecurityGroup",
-            "ec2:CreateTags"
+            "ec2:CreateSecurityGroup"
           ]
         },
         "binding": {
@@ -32,6 +31,126 @@
             ],
             "condition": {
               "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Tag-on-create grants name the creation action; later tagging requires ownership.
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateVpc",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:internet-gateway/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateInternetGateway",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateSubnet",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:route-table/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateRouteTable",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:natgateway/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateNatGateway",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:elastic-ip/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "AllocateAddress",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
@@ -71,6 +190,7 @@
       {
         "grant": {
           "actions": [
+            "ec2:CreateTags",
             "ec2:DeleteVpc",
             "ec2:ModifyVpcAttribute",
             "ec2:DeleteInternetGateway",

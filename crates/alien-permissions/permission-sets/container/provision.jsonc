@@ -454,7 +454,8 @@
       },
       // Scheduled snapshots: one Data Lifecycle Manager policy per container.
       // AWS authorizes CreateLifecyclePolicy against no resource type, so only the
-      // request tags can bound it. Its implicit TagResource is authorized on the policy.
+      // request tags can bound it. Its implicit TagResource is authorized on the policy
+      // with the new resource tags, so the owned-policy grant also covers creation.
       {
         "grant": {
           "actions": ["dlm:CreateLifecyclePolicy"]
@@ -483,33 +484,8 @@
       },
       {
         "grant": {
-          "actions": ["dlm:TagResource"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
-            "condition": {
-              "StringEquals": {
-                "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          },
-          "resource": {
-            "resources": ["arn:aws:dlm:${awsRegion}:${awsAccountId}:policy/*"],
-            "condition": {
-              "StringEquals": {
-                "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${resourceTag}": "${resourceId}",
-                "aws:RequestTag/${managedByTag}": "runtime"
-              }
-            }
-          }
-        }
-      },
-      {
-        "grant": {
           "actions": [
+            "dlm:TagResource",
             "dlm:GetLifecyclePolicy",
             "dlm:UpdateLifecyclePolicy",
             "dlm:DeleteLifecyclePolicy"
@@ -537,11 +513,8 @@
           }
         }
       },
-      // Every DLM policy runs as the role setup creates for the stack's compute cluster,
-      // `${stackPrefix}-volume-backups-{cluster}`, from `container/volume-backups`: it can only
-      // snapshot this stack's volumes and can't share or copy a snapshot. The management identity
-      // never creates or changes an IAM role here; it may only pass that role to DLM. (IAM
-      // doesn't evaluate a role's tags for PassRole, so the name is the only scope.)
+      // Backup roles are setup-owned without a boundary and runtime-owned with one.
+      // PassRole uses names because IAM does not evaluate role tags for that action.
       {
         "grant": {
           "actions": ["iam:GetRole"]
@@ -609,7 +582,9 @@
       // at runtime, once their policy runs as the setup role. Only removal: the managed DLM
       // policy is detached and the role deleted, never created, attached or passed. Scoped by
       // name, not tags: IAM answers a tag-conditioned call on a missing role with AccessDenied,
-      // and cleanup must see NoSuchEntity to treat it as already gone.
+      // and cleanup must see NoSuchEntity to treat it as already gone. These roles predate the
+      // permissions boundary, and detaching only removes permissions, so the bounded detach
+      // needs ownership tags but not the boundary.
       //
       // Those roles still carry the AWS managed DLM policy, which may share and copy any
       // snapshot. The compute cluster's `${stackPrefix}-*` PassRole grant names them too, so
@@ -632,7 +607,7 @@
       },
       {
         "grant": {
-          "actions": ["iam:GetRole", "iam:DeleteRole"]
+          "actions": ["iam:GetRole"]
         },
         "binding": {
           "stack": {
@@ -642,6 +617,46 @@
             "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"]
           }
         }
+      },
+      {
+        "grant": {
+          "actions": ["iam:DeleteRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"]
+          }
+        },
+        "label": "legacy-role-24"
+      },
+      {
+        "grant": {
+          "actions": ["iam:DeleteRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-delete-24"
       },
       {
         "grant": {
@@ -664,7 +679,36 @@
               }
             }
           }
-        }
+        },
+        "label": "legacy-role-25"
+      },
+      {
+        "grant": {
+          "actions": ["iam:DetachRolePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-dlm-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-write-25"
       },
       {
         // AWS requires Resource: "*" for these read APIs.
@@ -845,7 +889,7 @@
       // ACM certificates for HTTPS containers
       {
         "grant": {
-          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+          "actions": ["acm:ImportCertificate"]
         },
         "binding": {
           "stack": {

@@ -21,6 +21,8 @@ use super::*;
 fn aws_remote_stack_management_import_preserves_setup_ownership() {
     let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
     let data = AwsRemoteStackManagementImportData {
+        permissions_boundary_arn: None,
+        permissions_boundary_document: None,
         role_arn: "arn:aws:iam::123456789012:role/alien-stack-mgmt".to_string(),
         role_name: "alien-stack-mgmt".to_string(),
         remote_bindings_role_arn: Some(
@@ -57,6 +59,191 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
         serde_json::Value::Null,
         "import must not claim setup-created grants are runtime-owned"
     );
+}
+
+#[test]
+fn aws_boundary_survives_import_and_controller_restore() {
+    let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
+    for (field, boundary) in [
+        ("permissionsBoundaryArn", None),
+        (
+            "permissionsBoundaryArn",
+            Some("arn:aws:iam::123456789012:policy/test-deployment-management-boundary"),
+        ),
+        (
+            "awsPermissionsBoundaryArn",
+            Some("arn:aws:iam::123456789012:policy/test-deployment-management-boundary"),
+        ),
+    ] {
+        let mut data = json!({
+            "roleName": "test-management",
+            "roleArn": "arn:aws:iam::123456789012:role/test-management",
+            "managementPermissionsApplied": true,
+            "futureSetupField": "ignored"
+        });
+        if let Some(arn) = boundary {
+            data[field] = json!(arn);
+            data["permissionsBoundaryDocument"] = installed_boundary_document();
+        }
+        let state = run_through_registry(
+            &RemoteStackManagement::RESOURCE_TYPE,
+            Platform::Aws,
+            data,
+            &entry,
+            "us-east-1",
+            &aws_management_config(),
+        );
+        assert_eq!(state.status, ResourceStatus::Running);
+        let outputs = state
+            .outputs
+            .as_ref()
+            .unwrap()
+            .downcast_ref::<RemoteStackManagementOutputs>()
+            .unwrap();
+        let controller =
+            alien_infra::deserialize_controller(internal_state(&state).clone()).unwrap();
+        let restored = controller.get_outputs().unwrap();
+        assert_eq!(
+            restored
+                .downcast_ref::<RemoteStackManagementOutputs>()
+                .unwrap(),
+            outputs
+        );
+        assert_eq!(
+            internal_state(&state)["permissionsBoundaryArn"],
+            json!(boundary)
+        );
+        let restored_state = alien_infra::serialize_controller(controller.as_ref()).unwrap();
+        assert_eq!(restored_state["permissionsBoundaryArn"], json!(boundary));
+        assert_eq!(
+            restored_state["permissionsBoundaryDocument"],
+            boundary
+                .map(|_| installed_boundary_document())
+                .unwrap_or_default()
+        );
+    }
+}
+
+fn installed_boundary_document() -> serde_json::Value {
+    alien_permissions::generators::aws_permissions_boundary(
+        &alien_permissions::PermissionContext::new()
+            .with_stack_prefix("test")
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-east-1")
+            .with_managing_account_id("210987654321"),
+        &[],
+    )
+    .unwrap()
+}
+
+#[test]
+fn rerunning_setup_replaces_the_installed_boundary_document() {
+    let entry = frozen_entry(RemoteStackManagement::new("rsm".to_string()).build());
+    let settings = settings();
+    let management = aws_management_config();
+    let ctx = ImportContext {
+        resource_id: "rsm",
+        platform: Platform::Aws,
+        region: "us-east-1",
+        stack_settings: &settings,
+        management_config: Some(&management),
+        resource: &entry,
+    };
+    let registry = ImporterRegistry::built_in();
+    let original = installed_boundary_document();
+    let mut expanded = original.clone();
+    expanded["Statement"].as_array_mut().unwrap().push(json!({
+        "Effect": "Allow", "Action": "s3:GetObject",
+        "Resource": "arn:aws:s3:::approved-external-bucket/*"
+    }));
+    let import = |document| {
+        registry.run(
+            &RemoteStackManagement::RESOURCE_TYPE,
+            Platform::Aws,
+            json!({
+                "roleName": "test-management",
+                "roleArn": "arn:aws:iam::123456789012:role/test-management",
+                "managementPermissionsApplied": true,
+                "permissionsBoundaryArn": "arn:aws:iam::123456789012:policy/test-deployment-management-boundary",
+                "permissionsBoundaryDocument": document,
+            }),
+            &ctx,
+        ).unwrap()
+    };
+    for (case, before, after) in [
+        ("expanded", &original, &expanded),
+        ("contracted", &expanded, &original),
+        ("unchanged", &original, &original),
+    ] {
+        let updated = registry
+            .merge_reimport(
+                &RemoteStackManagement::RESOURCE_TYPE,
+                Platform::Aws,
+                import(before),
+                import(after),
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(updated.status, ResourceStatus::Running, "{case}");
+        let restored =
+            alien_infra::deserialize_controller(internal_state(&updated).clone()).unwrap();
+        let restored_state = alien_infra::serialize_controller(restored.as_ref()).unwrap();
+        assert_eq!(
+            restored_state["permissionsBoundaryDocument"], *after,
+            "{case}"
+        );
+        assert_eq!(
+            restored_state["permissionsBoundaryArn"],
+            "arn:aws:iam::123456789012:policy/test-deployment-management-boundary",
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn aws_boundary_import_rejects_incomplete_or_unreadable_setup() {
+    let entry = frozen_entry(RemoteStackManagement::new("rsm".to_string()).build());
+    let settings = settings();
+    let management = aws_management_config();
+    let ctx = ImportContext {
+        resource_id: "rsm",
+        platform: Platform::Aws,
+        region: "us-east-1",
+        stack_settings: &settings,
+        management_config: Some(&management),
+        resource: &entry,
+    };
+    let registry = ImporterRegistry::built_in();
+    let arn = json!("arn:aws:iam::123456789012:policy/test-deployment-management-boundary");
+    for (boundary_arn, document) in [
+        (arn.clone(), serde_json::Value::Null),
+        (serde_json::Value::Null, installed_boundary_document()),
+        (arn.clone(), json!("unparsed policy text")),
+        (arn.clone(), json!({"Version": "2012-10-17"})),
+        (
+            arn,
+            json!({"Version": "2012-10-17", "Statement": [{
+                "Effect": "Allow", "Action": "s3:*", "Resource": "*", "Principal": "*"
+            }]}),
+        ),
+    ] {
+        let error = registry
+            .run(
+                &RemoteStackManagement::RESOURCE_TYPE,
+                Platform::Aws,
+                json!({
+                    "roleName": "test-management",
+                    "roleArn": "arn:aws:iam::123456789012:role/test-management",
+                    "managementPermissionsApplied": true,
+                    "permissionsBoundaryArn": boundary_arn,
+                    "permissionsBoundaryDocument": document,
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "IMPORT_DATA_INVALID");
+        assert!(!error.retryable);
+    }
 }
 
 #[test]

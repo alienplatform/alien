@@ -174,13 +174,19 @@ impl InfrastructureDependenciesMutation {
             ));
         }
 
-        if !is_infrastructure_resource {
+        // AWS workload roles need setup's boundary before create, and must be
+        // deleted before setup removes that policy.
+        if !is_infrastructure_resource
+            || (platform == Platform::Aws && resource_type.as_ref() == "service-account")
+        {
             if let Some(management_id) = remote_stack_management_id(stack) {
                 dependencies.push(ResourceRef::new(
                     RemoteStackManagement::RESOURCE_TYPE,
                     management_id,
                 ));
             }
+        }
+        if !is_infrastructure_resource {
             if remote_binding.is_some() {
                 if let Some(bindings_id) = remote_bindings_id(stack) {
                     dependencies.push(ResourceRef::new(
@@ -740,6 +746,41 @@ mod tests {
             alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
             "default-service-bus-namespace",
         )));
+    }
+
+    #[tokio::test]
+    async fn aws_workload_roles_wait_for_management_boundary() {
+        for platform in [Platform::Aws, Platform::Gcp] {
+            let stack = Stack::new("test-stack".to_string())
+                .add(
+                    RemoteStackManagement::new("management".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    alien_core::ServiceAccount::new("workload-sa".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let state = StackState::new(platform);
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let result = InfrastructureDependenciesMutation
+                .mutate(stack, &state, &config)
+                .await
+                .unwrap();
+            let dependency = ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
+            assert_eq!(
+                result.resources["workload-sa"]
+                    .dependencies
+                    .contains(&dependency),
+                platform == Platform::Aws
+            );
+            assert!(result.resources["management"].dependencies.is_empty());
+        }
     }
 
     #[tokio::test]

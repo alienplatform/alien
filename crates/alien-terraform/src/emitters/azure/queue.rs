@@ -17,13 +17,13 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, permission_context, remote_bindings_role_label, required_label,
-        resource_prefix_template,
+        resource_prefix_template, service_account_principal_id, setup_execution_role_label,
     },
     expr,
 };
 use alien_core::{
-    import::EmitContext, AzureServiceBusNamespace, ErrorData, Queue, RemoteBindings, Result,
-    Worker, WorkerTrigger,
+    import::EmitContext, AzureServiceBusNamespace, ErrorData, PermissionProfile, PermissionSet,
+    PermissionSetReference, Queue, RemoteBindings, Result, Worker, WorkerTrigger,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
@@ -55,7 +55,7 @@ impl TfEmitter for AzureQueueEmitter {
                 attr("partitioning_enabled", Expression::Bool(false)),
                 attr(
                     "lock_duration",
-                    Expression::String(format!("PT{}S", lock_duration)),
+                    Expression::String(iso8601_duration(lock_duration)),
                 ),
                 attr(
                     "default_message_ttl",
@@ -73,6 +73,7 @@ impl TfEmitter for AzureQueueEmitter {
         );
 
         let mut fragment = TfFragment::default().with_resource(q);
+        emit_profile_grants(ctx, &mut fragment, label)?;
         emit_remote_access(ctx, &mut fragment, label)?;
         Ok(fragment)
     }
@@ -131,6 +132,20 @@ fn parent_namespace_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
     }))
 }
 
+/// Azure stores Service Bus durations in canonical ISO 8601 form (`PT4M`, not `PT240S`)
+/// and the provider compares strings, so any other spelling is a change on every apply.
+fn iso8601_duration(seconds: u32) -> String {
+    let (minutes, seconds) = (seconds / 60, seconds % 60);
+    let mut duration = String::from("PT");
+    if minutes > 0 {
+        duration.push_str(&format!("{minutes}M"));
+    }
+    if seconds > 0 || minutes == 0 {
+        duration.push_str(&format!("{seconds}S"));
+    }
+    duration
+}
+
 /// Service Bus queue lock duration must be in `[5s, 5m]`. Use the
 /// max-consumer-function timeout × 2, clamped to the supported range.
 fn lock_duration_for(ctx: &EmitContext<'_>) -> u32 {
@@ -153,6 +168,151 @@ fn lock_duration_for(ctx: &EmitContext<'_>) -> u32 {
         return 30;
     }
     max_function_timeout.saturating_mul(2).clamp(5, 300)
+}
+
+/// Grants that permission profiles hold on this queue, for example a Worker identity's
+/// `queue/data-read`. Setup creates the queue, and an imported queue starts out Ready, so
+/// its controller never applies them at runtime; setup must, as it does for Storage.
+fn emit_profile_grants(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    label: &str,
+) -> Result<()> {
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let refs = queue_permission_refs(profile, ctx.resource_id);
+        if refs.is_empty() {
+            continue;
+        }
+        let Some(principal_id) = service_account_principal_id(ctx, profile_name) else {
+            continue;
+        };
+        for permission_set_ref in refs {
+            let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
+            if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
+            {
+                continue;
+            }
+            let grant_plan = AzureRuntimePermissionsGenerator::new()
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context(label).with_resource_name(format!(
+                        "${{local.resource_prefix}}-{}",
+                        ctx.resource_id
+                    )),
+                )
+                .context(ErrorData::GenericError {
+                    message: format!(
+                        "failed to generate Azure queue grants for '{}'",
+                        permission_set.id
+                    ),
+                })?;
+            for (index, binding) in grant_plan.bindings.iter().enumerate() {
+                let role_definition_id = match &binding.role_definition {
+                    AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                        expr::template(role_definition_id.clone())
+                    }
+                    AzureRoleDefinitionRef::Custom { key } => {
+                        let role_index = grant_plan
+                            .custom_roles
+                            .iter()
+                            .position(|role| &role.key == key)
+                            .ok_or_else(|| {
+                                AlienError::new(ErrorData::GenericError {
+                                    message: format!(
+                                        "Azure queue permission set '{}' references missing custom role '{key}'",
+                                        permission_set.id
+                                    ),
+                                })
+                            })?;
+                        let role_label = setup_execution_role_label(
+                            profile_name,
+                            &binding.role_name,
+                            role_index,
+                        );
+                        expr::traversal([
+                            "azurerm_role_definition",
+                            role_label.as_str(),
+                            "role_definition_resource_id",
+                        ])
+                    }
+                };
+                let role_label = sanitize_label(&binding.role_name);
+                fragment.resource_blocks.push(resource_block(
+                    "azurerm_role_assignment",
+                    &format!("{label}_{role_label}_{profile_name}_assignment_{index}"),
+                    [
+                        attr(
+                            "name",
+                            expr::raw(format!(
+                                "uuidv5(\"oid\", \"deployment:azure:queue-role-assign:${{local.resource_prefix}}:{}:{role_label}:{profile_name}:{index}\")",
+                                ctx.resource_id
+                            )),
+                        ),
+                        // A resource-scoped grant is on this queue; the permission set's
+                        // scope template assumes a per-queue namespace that setup does not use.
+                        attr(
+                            "scope",
+                            expr::traversal(["azurerm_servicebus_queue", label, "id"]),
+                        ),
+                        attr("role_definition_id", role_definition_id),
+                        attr("principal_id", principal_id.clone()),
+                    ],
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn queue_permission_refs<'a>(
+    profile: &'a PermissionProfile,
+    resource_id: &str,
+) -> Vec<&'a PermissionSetReference> {
+    let mut refs: Vec<&PermissionSetReference> = Vec::new();
+    let resource_refs = profile.0.get(resource_id).into_iter().flatten();
+    let wildcard_refs = profile
+        .0
+        .get("*")
+        .into_iter()
+        .flatten()
+        .filter(|permission_ref| permission_ref.id().starts_with("queue/"));
+    for permission_ref in resource_refs.chain(wildcard_refs) {
+        if !refs.iter().any(|seen| seen.id() == permission_ref.id()) {
+            refs.push(permission_ref);
+        }
+    }
+    refs
+}
+
+fn resolve_permission_set(
+    permission_set_ref: &PermissionSetReference,
+    resource_id: &str,
+) -> Result<PermissionSet> {
+    permission_set_ref
+        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "permission set '{}' referenced by Azure queue '{}' was not found",
+                    permission_set_ref.id(),
+                    resource_id
+                ),
+            })
+        })
+}
+
+fn sanitize_label(input: &str) -> String {
+    input
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn emit_remote_access(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
@@ -233,4 +393,57 @@ fn emit_remote_access(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iso8601_duration;
+
+    /// Values Azure returned for queues created with `PT{n}S` lock durations.
+    #[test]
+    fn durations_match_what_azure_stores() {
+        for (seconds, stored) in [
+            (5, "PT5S"),
+            (30, "PT30S"),
+            (61, "PT1M1S"),
+            (90, "PT1M30S"),
+            (240, "PT4M"),
+            (300, "PT5M"),
+        ] {
+            assert_eq!(iso8601_duration(seconds), stored);
+        }
+    }
+
+    /// Every lock duration the emitter can produce keeps its value and is canonical:
+    /// whole minutes are carried, and no component is zero unless the duration is.
+    #[test]
+    fn every_supported_lock_duration_is_canonical() {
+        for seconds in 5..=300u32 {
+            let duration = iso8601_duration(seconds);
+            let body = duration
+                .strip_prefix("PT")
+                .expect("duration starts with PT");
+            let (minutes, rest) = match body.split_once('M') {
+                Some((minutes, rest)) => (minutes.parse::<u32>().expect("minutes"), rest),
+                None => (0, body),
+            };
+            let secs = match rest.strip_suffix('S') {
+                Some(secs) => secs.parse::<u32>().expect("seconds"),
+                None => {
+                    assert!(rest.is_empty(), "{duration}: trailing {rest:?}");
+                    0
+                }
+            };
+            assert_eq!(minutes * 60 + secs, seconds, "{duration}");
+            assert!(secs < 60, "{duration}: seconds not carried into minutes");
+            assert!(
+                !body.starts_with("0M"),
+                "{duration}: zero minutes component"
+            );
+            assert!(
+                !rest.starts_with("0S"),
+                "{duration}: zero seconds component"
+            );
+        }
+    }
 }

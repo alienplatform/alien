@@ -1,9 +1,12 @@
-use std::fmt::Debug;
+mod role_writer;
+pub use role_writer::IamRoleWriter;
+
+use std::{collections::HashSet, fmt::Debug};
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
-use alien_error::ContextError;
+use alien_error::{AlienError, ContextError};
 use bon::Builder;
 use form_urlencoded;
 
@@ -21,6 +24,11 @@ pub trait IamApi: Send + Sync + Debug {
     // Role Operations
     async fn create_role(&self, request: CreateRoleRequest) -> Result<CreateRoleResponse>;
     async fn get_role(&self, role_name: &str) -> Result<GetRoleResponse>;
+    async fn put_role_permissions_boundary(
+        &self,
+        role_name: &str,
+        permissions_boundary: &str,
+    ) -> Result<()>;
     async fn delete_role(&self, role_name: &str) -> Result<()>;
     async fn put_role_policy(
         &self,
@@ -41,6 +49,7 @@ pub trait IamApi: Send + Sync + Debug {
         request: CreateOpenIdConnectProviderRequest,
     ) -> Result<CreateOpenIdConnectProviderResponse>;
     async fn delete_open_id_connect_provider(&self, arn: &str) -> Result<()>;
+    /// Lists all attached managed policies before returning any results.
     async fn list_attached_role_policies(
         &self,
         role_name: &str,
@@ -50,7 +59,9 @@ pub trait IamApi: Send + Sync + Debug {
         policy_name: &str,
         policy_document: &str,
         path: Option<String>,
+        description: Option<String>,
     ) -> Result<CreatePolicyResponse>;
+    async fn get_policy(&self, policy_arn: &str) -> Result<GetPolicyResponse>;
     async fn delete_policy(&self, policy_arn: &str) -> Result<()>;
     async fn create_policy_version(
         &self,
@@ -62,6 +73,7 @@ pub trait IamApi: Send + Sync + Debug {
     async fn list_policy_versions(&self, policy_arn: &str) -> Result<ListPolicyVersionsResponse>;
     async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
     async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
+    /// Lists all inline policies, following pagination before returning any results.
     async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse>;
 
     // Instance Profile Operations
@@ -149,6 +161,29 @@ impl IamClient {
         operation_name: &str,
         resource_name: &str,
     ) -> Result<T> {
+        self.send_xml(body, operation_name, resource_name, false)
+            .await
+    }
+
+    /// For a create IAM cannot make idempotent: only throttling is retried, so a lost response
+    /// reaches the caller instead of coming back as a conflict with the caller's own object.
+    async fn post_xml_retrying_throttling<T: DeserializeOwned + Send + 'static>(
+        &self,
+        body: String,
+        operation_name: &str,
+        resource_name: &str,
+    ) -> Result<T> {
+        self.send_xml(body, operation_name, resource_name, true)
+            .await
+    }
+
+    async fn send_xml<T: DeserializeOwned + Send + 'static>(
+        &self,
+        body: String,
+        operation_name: &str,
+        resource_name: &str,
+        throttling_only: bool,
+    ) -> Result<T> {
         self.credentials.ensure_fresh().await?;
         let base_url = self.get_base_url();
         let url = format!("{}/", base_url.trim_end_matches('/'));
@@ -159,8 +194,15 @@ impl IamClient {
             .content_type_form()
             .body(body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        let result = if throttling_only {
+            crate::aws::aws_request_utils::sign_send_xml_retrying_throttling(
+                builder,
+                &self.sign_config(),
+            )
+            .await
+        } else {
+            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await
+        };
 
         match result {
             Ok(v) => Ok(v),
@@ -183,6 +225,50 @@ impl IamClient {
                     }
                 } else {
                     Err(e)
+                }
+            }
+        }
+    }
+
+    // Return only complete inventories: adoption and cleanup must not act on a partial list.
+    async fn list_role_policy_pages<T: DeserializeOwned + Send + 'static, Item>(
+        &self,
+        action: &str,
+        role_name: &str,
+        page: impl Fn(T) -> (Vec<Item>, Option<bool>, Option<String>),
+    ) -> Result<Vec<Item>> {
+        let mut marker = None;
+        let mut seen_markers = HashSet::new();
+        let mut items = Vec::new();
+        loop {
+            let mut params = vec![("RoleName".to_string(), role_name.to_string())];
+            if let Some(marker) = marker.take() {
+                params.push(("Marker".to_string(), marker));
+            }
+            let body = Self::build_form_body(action, "2010-05-08", params);
+            let (members, is_truncated, next) = page(self.post_xml(body, action, role_name).await?);
+            items.extend(members);
+            match is_truncated {
+                Some(false) => return Ok(items),
+                Some(true) => {
+                    let next = next.filter(|value| !value.is_empty()).ok_or_else(|| {
+                        AlienError::new(ErrorData::GenericError {
+                            message: format!("{action} for '{role_name}' returned a truncated page without a continuation marker"),
+                        })
+                    })?;
+                    if !seen_markers.insert(next.clone()) {
+                        return Err(AlienError::new(ErrorData::GenericError {
+                            message: format!(
+                                "{action} for '{role_name}' repeated a continuation marker"
+                            ),
+                        }));
+                    }
+                    marker = Some(next);
+                }
+                None => {
+                    return Err(AlienError::new(ErrorData::GenericError {
+                        message: format!("{action} for '{role_name}' omitted IsTruncated; cannot verify the policy list is complete"),
+                    }));
                 }
             }
         }
@@ -367,6 +453,10 @@ impl IamApi for IamClient {
             params.push(("MaxSessionDuration".to_string(), max_session.to_string()));
         }
 
+        if let Some(ref boundary) = request.permissions_boundary {
+            params.push(("PermissionsBoundary".to_string(), boundary.clone()));
+        }
+
         // Handle tags array
         if let Some(ref tags) = request.tags {
             for (i, tag) in tags.iter().enumerate() {
@@ -383,6 +473,23 @@ impl IamApi for IamClient {
         let params = vec![("RoleName".to_string(), role_name.to_string())];
         let body = Self::build_form_body("GetRole", "2010-05-08", params);
         self.post_xml(body, "GetRole", role_name).await
+    }
+
+    async fn put_role_permissions_boundary(
+        &self,
+        role_name: &str,
+        permissions_boundary: &str,
+    ) -> Result<()> {
+        let params = vec![
+            ("RoleName".to_string(), role_name.to_string()),
+            (
+                "PermissionsBoundary".to_string(),
+                permissions_boundary.to_string(),
+            ),
+        ];
+        let body = Self::build_form_body("PutRolePermissionsBoundary", "2010-05-08", params);
+        self.post_no_response(body, "PutRolePermissionsBoundary", role_name)
+            .await
     }
 
     async fn delete_role(&self, role_name: &str) -> Result<()> {
@@ -491,10 +598,30 @@ impl IamApi for IamClient {
         &self,
         role_name: &str,
     ) -> Result<ListAttachedRolePoliciesResponse> {
-        let params = vec![("RoleName".to_string(), role_name.to_string())];
-        let body = Self::build_form_body("ListAttachedRolePolicies", "2010-05-08", params);
-        self.post_xml(body, "ListAttachedRolePolicies", role_name)
-            .await
+        let member = self
+            .list_role_policy_pages(
+                "ListAttachedRolePolicies",
+                role_name,
+                |response: ListAttachedRolePoliciesResponse| {
+                    let result = response.list_attached_role_policies_result;
+                    (
+                        result
+                            .attached_policies
+                            .map(|policies| policies.member)
+                            .unwrap_or_default(),
+                        result.is_truncated,
+                        result.marker,
+                    )
+                },
+            )
+            .await?;
+        Ok(ListAttachedRolePoliciesResponse {
+            list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                attached_policies: Some(AttachedPolicies { member }),
+                is_truncated: Some(false),
+                marker: None,
+            },
+        })
     }
 
     async fn create_policy(
@@ -502,6 +629,7 @@ impl IamApi for IamClient {
         policy_name: &str,
         policy_document: &str,
         path: Option<String>,
+        description: Option<String>,
     ) -> Result<CreatePolicyResponse> {
         let mut params = vec![
             ("PolicyName".to_string(), policy_name.to_string()),
@@ -510,8 +638,18 @@ impl IamApi for IamClient {
         if let Some(path) = path {
             params.push(("Path".to_string(), path));
         }
+        if let Some(description) = description {
+            params.push(("Description".to_string(), description));
+        }
         let body = Self::build_form_body("CreatePolicy", "2010-05-08", params);
-        self.post_xml(body, "CreatePolicy", policy_name).await
+        self.post_xml_retrying_throttling(body, "CreatePolicy", policy_name)
+            .await
+    }
+
+    async fn get_policy(&self, policy_arn: &str) -> Result<GetPolicyResponse> {
+        let params = vec![("PolicyArn".to_string(), policy_arn.to_string())];
+        let body = Self::build_form_body("GetPolicy", "2010-05-08", params);
+        self.post_xml(body, "GetPolicy", policy_arn).await
     }
 
     async fn delete_policy(&self, policy_arn: &str) -> Result<()> {
@@ -565,9 +703,30 @@ impl IamApi for IamClient {
     }
 
     async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse> {
-        let params = vec![("RoleName".to_string(), role_name.to_string())];
-        let body = Self::build_form_body("ListRolePolicies", "2010-05-08", params);
-        self.post_xml(body, "ListRolePolicies", role_name).await
+        let member = self
+            .list_role_policy_pages(
+                "ListRolePolicies",
+                role_name,
+                |response: ListRolePoliciesResponse| {
+                    let result = response.list_role_policies_result;
+                    (
+                        result
+                            .policy_names
+                            .map(|names| names.member)
+                            .unwrap_or_default(),
+                        result.is_truncated,
+                        result.marker,
+                    )
+                },
+            )
+            .await?;
+        Ok(ListRolePoliciesResponse {
+            list_role_policies_result: ListRolePoliciesResult {
+                policy_names: Some(PolicyNames { member }),
+                is_truncated: Some(false),
+                marker: None,
+            },
+        })
     }
 
     async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()> {
@@ -721,6 +880,7 @@ struct IamErrorDetails {
 pub struct CreateRoleRequest {
     pub role_name: String,
     pub assume_role_policy_document: String,
+    pub permissions_boundary: Option<String>,
     pub path: Option<String>,
     pub description: Option<String>,
     pub max_session_duration: Option<i32>,
@@ -859,11 +1019,24 @@ pub struct Policy {
     pub policy_id: Option<String>,
     pub arn: String,
     pub path: Option<String>,
+    pub description: Option<String>,
     pub default_version_id: Option<String>,
     pub attachment_count: Option<i32>,
     pub is_attachable: Option<bool>,
     pub create_date: Option<String>,
     pub update_date: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct GetPolicyResponse {
+    pub get_policy_result: GetPolicyResult,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct GetPolicyResult {
+    pub policy: Policy,
 }
 
 #[derive(Deserialize, Debug)]

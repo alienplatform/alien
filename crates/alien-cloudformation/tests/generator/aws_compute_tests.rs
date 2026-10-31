@@ -126,7 +126,9 @@ fn aws_remote_stack_management_skips_live_provision_sets() {
     );
 
     assert!(yaml.contains("lambda:InvokeFunction"));
-    assert!(!yaml.contains("lambda:CreateFunction"));
+    assert!(!yaml
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == ':'))
+        .any(|word| word == "lambda:CreateFunction"));
 }
 
 #[test]

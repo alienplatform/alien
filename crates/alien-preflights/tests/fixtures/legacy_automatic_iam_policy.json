@@ -1,0 +1,301 @@
+[
+  {
+    "Sid": "AiProvision",
+    "Effect": "Allow",
+    "Action": [
+      "iam:PutRolePolicy",
+      "iam:GetRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:ListRolePolicies"
+    ],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"]
+  },
+  {
+    "Sid": "ArtifactRegistryManagementIamGetRolePermissions",
+    "Effect": "Allow",
+    "Action": [
+      "iam:GetRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:PutRolePolicy",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:DeleteRolePolicy",
+      "iam:ListAttachedRolePolicies",
+      "iam:DetachRolePolicy",
+      "iam:DeleteRole"
+    ],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"]
+  },
+  {
+    "Sid": "ArtifactRegistryProvisionIamCreateRolePermissions",
+    "Effect": "Allow",
+    "Action": [
+      "iam:CreateRole",
+      "iam:GetRole",
+      "iam:TagRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:PutRolePolicy",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:DeleteRolePolicy",
+      "iam:ListAttachedRolePolicies",
+      "iam:DetachRolePolicy",
+      "iam:DeleteRole"
+    ],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"]
+  },
+  {
+    "Sid": "BuildProvisionIamPassRole",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*-sa"]
+  },
+  {
+    "Sid": "ComputeClusterManagementIamCreateServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": [
+      "arn:aws:iam::123456789012:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "autoscaling.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "ComputeClusterManagementIamGetInstanceProfile",
+    "Effect": "Allow",
+    "Action": ["iam:GetInstanceProfile"],
+    "Resource": ["arn:aws:iam::123456789012:instance-profile/*"]
+  },
+  {
+    "Sid": "ComputeClusterManagementIamGetRole",
+    "Effect": "Allow",
+    "Action": ["iam:GetRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"]
+  },
+  {
+    "Sid": "ComputeClusterManagementIamPassRole",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"]
+  },
+  {
+    "Sid": "ComputeClusterProvisionIamCreateServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": [
+      "arn:aws:iam::123456789012:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "autoscaling.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "ManageRuntimeComputeInstanceProfiles",
+    "Effect": "Allow",
+    "Action": [
+      "iam:CreateInstanceProfile",
+      "iam:TagInstanceProfile",
+      "iam:ListInstanceProfileTags",
+      "iam:AddRoleToInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:DeleteInstanceProfile"
+    ],
+    "Resource": ["arn:aws:iam::123456789012:instance-profile/sample-*-profile"]
+  },
+  {
+    "Sid": "ComputeClusterProvisionIamGetInstanceProfile",
+    "Effect": "Allow",
+    "Action": ["iam:GetInstanceProfile"],
+    "Resource": ["arn:aws:iam::123456789012:instance-profile/*"]
+  },
+  {
+    "Sid": "ComputeClusterProvisionIamGetRole",
+    "Effect": "Allow",
+    "Action": ["iam:GetRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"]
+  },
+  {
+    "Sid": "ComputeClusterProvisionIamPassRole",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"]
+  },
+  {
+    "Sid": "ContainerProvisionIamGetRole",
+    "Effect": "Allow",
+    "Action": ["iam:GetRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-volume-backups-*"]
+  },
+  {
+    "Sid": "ContainerProvisionIamPassRole",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-volume-backups-*"],
+    "Condition": {
+      "StringEquals": {
+        "iam:PassedToService": "dlm.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "DenyVolumeBackupRoleChanges",
+    "Effect": "Deny",
+    "Action": [
+      "iam:DeleteRole",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:AttachRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:PutRolePermissionsBoundary",
+      "iam:DeleteRolePermissionsBoundary",
+      "iam:UpdateRole",
+      "iam:TagRole",
+      "iam:UntagRole"
+    ],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-volume-backups-*"]
+  },
+  {
+    "Sid": "DenyPassingLegacyVolumeBackupRoles",
+    "Effect": "Deny",
+    "Action": ["iam:PassRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-dlm-*"]
+  },
+  {
+    "Sid": "ContainerProvisionIamGetRolePermissions",
+    "Effect": "Allow",
+    "Action": ["iam:GetRole", "iam:DeleteRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-dlm-*"]
+  },
+  {
+    "Sid": "ContainerProvisionIamDetachRolePolicy",
+    "Effect": "Allow",
+    "Action": ["iam:DetachRolePolicy"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-dlm-*"],
+    "Condition": {
+      "StringEquals": {
+        "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+      }
+    }
+  },
+  {
+    "Sid": "ContainerProvisionIamCreateServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "CreateElbServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": ["*"],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "CreateRdsServiceLinkedRole",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole"],
+    "Resource": [
+      "arn:aws:iam::123456789012:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "rds.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "PassSandboxBuildRole",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*-build"]
+  },
+  {
+    "Sid": "ServiceAccountHeartbeat",
+    "Effect": "Allow",
+    "Action": ["iam:GetRole", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"]
+  },
+  {
+    "Sid": "ServiceAccountManagement",
+    "Effect": "Allow",
+    "Action": [
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListRoleTags"
+    ],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"]
+  },
+  {
+    "Sid": "ServiceAccountProvision",
+    "Effect": "Allow",
+    "Action": [
+      "iam:CreateRole",
+      "iam:PutRolePolicy",
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies",
+      "iam:TagRole"
+    ],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"]
+  },
+  {
+    "Sid": "PassLambdaExecutionRoles",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*-sa"]
+  },
+  {
+    "Sid": "PassLambdaExecutionRoles",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*-sa"]
+  },
+  {
+    "Sid": "AttachLambdaRuntimePolicies",
+    "Effect": "Allow",
+    "Action": ["iam:PutRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies"],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/deployment": "sample",
+        "aws:ResourceTag/managed-by": "runtime"
+      }
+    }
+  },
+  {
+    "Sid": "DenyManagementRoleChanges",
+    "Effect": "Deny",
+    "Action": [
+      "iam:DeleteRole",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:AttachRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:PutRolePermissionsBoundary",
+      "iam:DeleteRolePermissionsBoundary",
+      "iam:UpdateRole",
+      "iam:TagRole",
+      "iam:UntagRole"
+    ],
+    "Resource": ["arn:aws:iam::123456789012:role/sample-management"]
+  }
+]

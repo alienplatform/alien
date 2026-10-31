@@ -69,6 +69,13 @@ impl AwsCloudFormationPermissionsGenerator {
 
         // Process each AWS platform permission in the permission set
         for platform_permission in aws_platform_permissions {
+            if !super::aws_boundary::include_role_statement(
+                permission_set,
+                platform_permission.label.as_deref(),
+                context,
+            ) {
+                continue;
+            }
             let actions = platform_permission.grant.actions.as_ref().ok_or_else(|| {
                 alien_error::AlienError::new(ErrorData::GeneratorError {
                     platform: "aws".to_string(),
@@ -99,11 +106,14 @@ impl AwsCloudFormationPermissionsGenerator {
                     })?,
             };
 
+            let (binding_spec, actions) =
+                super::aws_boundary::role_write_binding(binding_spec, actions, context);
+
             let resources =
                 self.interpolate_cloudformation_resources(&binding_spec.resources, context)?;
             let not_resources =
                 self.interpolate_cloudformation_resources(&binding_spec.not_resources, context)?;
-            let conditions = self.extract_cloudformation_conditions(binding_spec, context)?;
+            let conditions = self.extract_cloudformation_conditions(&binding_spec, context)?;
 
             let statement_id = self.statement_id(
                 permission_set,
@@ -140,6 +150,31 @@ impl AwsCloudFormationPermissionsGenerator {
         })
     }
 
+    /// Render a compiled IAM document using CloudFormation substitutions.
+    ///
+    /// This also supports documents containing NotAction, such as permissions
+    /// boundaries. Setup inputs must use CloudFormation pseudo parameters or
+    /// `${managingAccountId}` / `${ManagingRoleArn}`. Request-time IAM variables
+    /// remain literal through template evaluation.
+    pub fn render_document(&self, document: &JsonValue) -> Result<JsonValue> {
+        match document {
+            JsonValue::String(value) => {
+                self.interpolate_cloudformation_string(value, &PermissionContext::new())
+            }
+            JsonValue::Array(values) => values
+                .iter()
+                .map(|value| self.render_document(value))
+                .collect::<Result<Vec<_>>>()
+                .map(JsonValue::Array),
+            JsonValue::Object(values) => values
+                .iter()
+                .map(|(key, value)| Ok((key.clone(), self.render_document(value)?)))
+                .collect::<Result<serde_json::Map<_, _>>>()
+                .map(JsonValue::Object),
+            value => Ok(value.clone()),
+        }
+    }
+
     /// Interpolate CloudFormation resource ARNs with intrinsic functions
     fn interpolate_cloudformation_resources(
         &self,
@@ -174,8 +209,11 @@ impl AwsCloudFormationPermissionsGenerator {
         let template = template.replace("arn:aws:", "arn:${AWS::Partition}:");
 
         // Check if the template contains CloudFormation variables or regular variables
-        let contains_cf_vars = template.contains("${AWS::") || template.contains("${!");
+        let contains_cf_vars = template.contains("${AWS::")
+            || template.contains("${ManagingRoleArn}")
+            || template.contains("${!");
         let contains_regular_vars = [
+            "${awsPermissionsBoundaryArn}",
             "${stackPrefix}",
             "${resourceId}",
             "${resourceName}",
@@ -193,6 +231,19 @@ impl AwsCloudFormationPermissionsGenerator {
         if contains_regular_vars {
             // Template contains our custom variables that need to be replaced.
             let mut result = template;
+            if result.contains("${awsPermissionsBoundaryArn}") {
+                let arn = context
+                    .aws_permissions_boundary_arn
+                    .as_deref()
+                    .ok_or_else(|| {
+                        alien_error::AlienError::new(ErrorData::VariableNotFound {
+                            variable: "awsPermissionsBoundaryArn".to_string(),
+                        })
+                    })?;
+                result = result
+                    .replace("${awsPermissionsBoundaryArn}", arn)
+                    .replace("arn:aws:", "arn:${AWS::Partition}:");
+            }
             if let Some(stack_prefix) = context.stack_prefix.as_ref() {
                 if stack_prefix.is_empty() {
                     // Empty stack prefix means just use the stack name
@@ -245,7 +296,7 @@ impl AwsCloudFormationPermissionsGenerator {
                 // Use Fn::Sub with variable map to extract account ID from role ARN
                 return Ok(json!({
                     "Fn::Sub": [
-                        result,
+                        escape_iam_variables(&result),
                         {
                             "ManagingAccountId": {
                                 "Fn::Select": [4, {"Fn::Split": [":", {"Ref": "ManagingRoleArn"}]}]
@@ -260,7 +311,7 @@ impl AwsCloudFormationPermissionsGenerator {
             // and other CloudFormation references (${!...})
             if result.contains("${") {
                 Ok(json!({
-                    "Fn::Sub": result
+                    "Fn::Sub": escape_iam_variables(&result)
                 }))
             } else {
                 // Just a plain string after substitution
@@ -269,7 +320,7 @@ impl AwsCloudFormationPermissionsGenerator {
         } else if contains_cf_vars {
             // Template already contains CloudFormation variables, wrap in Fn::Sub
             Ok(json!({
-                "Fn::Sub": template
+                "Fn::Sub": escape_iam_variables(&template)
             }))
         } else {
             // No variables, just return as plain string
@@ -304,8 +355,17 @@ impl AwsCloudFormationPermissionsGenerator {
                     let interpolated_value_key =
                         crate::VariableInterpolator::interpolate_variables(value_key, context)?;
                     let value_template = &condition_values[value_key];
-                    let interpolated_value =
-                        self.interpolate_cloudformation_string(value_template, context)?;
+                    let interpolated_value = match value_template {
+                        alien_core::AwsConditionValue::String(value) => {
+                            self.interpolate_cloudformation_string(value, context)?
+                        }
+                        alien_core::AwsConditionValue::List(values) => JsonValue::Array(
+                            values
+                                .iter()
+                                .map(|value| self.interpolate_cloudformation_string(value, context))
+                                .collect::<Result<Vec<_>>>()?,
+                        ),
+                    };
                     interpolated_values.insert(interpolated_value_key, interpolated_value);
                 }
 
@@ -364,4 +424,27 @@ impl Default for AwsCloudFormationPermissionsGenerator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// Fn::Sub must leave request-time IAM variables intact, including defaults and
+// literal escapes. Existing CloudFormation escapes already have their leading !.
+fn escape_iam_variables(template: &str) -> String {
+    let mut result = String::with_capacity(template.len());
+    let mut remaining = template;
+    while let Some((literal, rest)) = remaining.split_once("${") {
+        result.push_str(literal);
+        result.push_str("${");
+        let Some((variable, suffix)) = rest.split_once('}') else {
+            result.push_str(rest);
+            return result;
+        };
+        if crate::variables::is_iam_policy_variable(variable) {
+            result.push('!');
+        }
+        result.push_str(variable);
+        result.push('}');
+        remaining = suffix;
+    }
+    result.push_str(remaining);
+    result
 }

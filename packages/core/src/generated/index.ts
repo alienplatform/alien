@@ -26,6 +26,7 @@ export type { AwsBuildImportData } from "./zod/aws-build-import-data-schema.js";
 export type { AwsCodeBuildHeartbeatData } from "./zod/aws-code-build-heartbeat-data-schema.js";
 export type { AwsComputeClusterHeartbeatData } from "./zod/aws-compute-cluster-heartbeat-data-schema.js";
 export type { AwsComputeClusterImportData } from "./zod/aws-compute-cluster-import-data-schema.js";
+export type { AwsConditionValue } from "./zod/aws-condition-value-schema.js";
 export type { AwsCustomCertificateConfig } from "./zod/aws-custom-certificate-config-schema.js";
 export type { AwsDaemonHeartbeatData } from "./zod/aws-daemon-heartbeat-data-schema.js";
 export type { AwsDynamoDbKeySchemaElement } from "./zod/aws-dynamo-db-key-schema-element-schema.js";
@@ -553,6 +554,7 @@ export { AwsBuildImportDataSchema } from "./zod/aws-build-import-data-schema.js"
 export { AwsCodeBuildHeartbeatDataSchema } from "./zod/aws-code-build-heartbeat-data-schema.js";
 export { AwsComputeClusterHeartbeatDataSchema } from "./zod/aws-compute-cluster-heartbeat-data-schema.js";
 export { AwsComputeClusterImportDataSchema } from "./zod/aws-compute-cluster-import-data-schema.js";
+export { AwsConditionValueSchema } from "./zod/aws-condition-value-schema.js";
 export { AwsCustomCertificateConfigSchema } from "./zod/aws-custom-certificate-config-schema.js";
 export { AwsDaemonHeartbeatDataSchema } from "./zod/aws-daemon-heartbeat-data-schema.js";
 export { AwsDynamoDbKeySchemaElementSchema } from "./zod/aws-dynamo-db-key-schema-element-schema.js";

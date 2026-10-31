@@ -14,7 +14,7 @@
 //! produced:
 //!
 //! - literals serialize as JSON, and objects and lists keep their order;
-//! - a `Ref` to a list parameter becomes a JSON array of strings, and any other
+//! - a `Ref` to a list parameter or `Fn::Split` becomes a JSON array of strings; any other
 //!   `Ref`, `Fn::GetAtt`, `Fn::Sub`, `Fn::Join`, `Fn::Select` or `Fn::FindInMap`
 //!   becomes a JSON string, numbers included (the transform renders a `Number`
 //!   parameter as `"2"` too);
@@ -30,12 +30,12 @@
 //! producing JSON that registration cannot parse.
 
 use crate::{
-    inline_policy::expression_references,
+    dependencies::collect_references,
     template::{CfExpression, CfParameter, CfTemplate},
 };
 use alien_core::{ErrorData, Result};
 use alien_error::AlienError;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 
 const TO_JSON_STRING: &str = "Fn::ToJsonString";
 
@@ -220,7 +220,7 @@ impl Lowering<'_> {
             "Ref" if intrinsic == CfExpression::no_value() => {
                 parts.push(Part::Text("null".to_string()));
             }
-            "Ref" if self.is_list_parameter(arguments) => {
+            function if function == "Fn::Split" || (function == "Ref" && self.is_list_parameter(arguments)) => {
                 self.require_json_safe(&intrinsic)?;
                 parts.push(Part::Text("[\"".to_string()));
                 parts.push(Part::Value(CfExpression::join("\",\"", intrinsic)));
@@ -262,8 +262,12 @@ impl Lowering<'_> {
     /// Refuses a value that reads a parameter able to hold a character JSON text
     /// would need escaped.
     fn require_json_safe(&self, value: &CfExpression) -> std::result::Result<(), String> {
+        // Fn::Sub variables can shadow parameters; only the values they read
+        // must satisfy the parameter constraints. Plain text is not a reference.
+        let mut references = IndexSet::new();
+        collect_references(value, &mut references);
         match self.parameters.iter().find(|(name, parameter)| {
-            expression_references(value, name) && !is_json_safe(parameter)
+            references.contains(*name) && !is_json_safe(parameter)
         }) {
             Some((name, _)) => Err(format!(
                 "parameter '{name}' is inserted into JSON text without escaping, so it needs AllowedValues, a Number type, or an AllowedPattern that excludes double quotes, backslashes and control characters"
@@ -394,6 +398,53 @@ mod tests {
                         .map(|item| item.as_str().expect("string element").to_string())
                         .collect();
                     Value::String(items.join(delimiter))
+                }
+                Some((function, arguments)) if function == "Fn::Sub" => {
+                    let (text, variables) = match arguments {
+                        CfExpression::String(text) => (text, None),
+                        CfExpression::List(arguments) => match &arguments[..] {
+                            [CfExpression::String(text), CfExpression::Object(variables)] => {
+                                (text, Some(variables))
+                            }
+                            _ => panic!("substitution arguments"),
+                        },
+                        _ => panic!("substitution arguments"),
+                    };
+                    let variables: HashMap<_, _> = variables
+                        .into_iter()
+                        .flat_map(|v| v.iter())
+                        .map(|(name, value)| (name.as_str(), evaluate(value, deploy).unwrap()))
+                        .collect();
+                    let pattern = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
+                    Value::String(
+                        pattern
+                            .replace_all(text, |captures: &regex::Captures<'_>| {
+                                let name = &captures[1];
+                                if let Some(literal) = name.strip_prefix('!') {
+                                    format!("${{{literal}}}")
+                                } else if let Some(value) = variables.get(name) {
+                                    value.as_str().unwrap().to_string()
+                                } else {
+                                    deploy.strings[name].to_string()
+                                }
+                            })
+                            .into_owned(),
+                    )
+                }
+                Some((function, CfExpression::List(arguments))) if function == "Fn::Split" => {
+                    let delimiter = evaluate(&arguments[0], deploy).unwrap();
+                    let text = evaluate(&arguments[1], deploy).unwrap();
+                    text.as_str()
+                        .unwrap()
+                        .split(delimiter.as_str().unwrap())
+                        .map(Value::from)
+                        .collect()
+                }
+                Some((function, CfExpression::List(arguments))) if function == "Fn::Select" => {
+                    let CfExpression::Integer(index) = arguments[0] else {
+                        panic!("select index")
+                    };
+                    evaluate(&arguments[1], deploy).unwrap()[index as usize].clone()
                 }
                 _ => panic!("unexpected expression {expression:?}"),
             },
@@ -545,22 +596,61 @@ mod tests {
                 "String",
                 CfExpression::sub("arn:aws:iam::${AWS::AccountId}:role/${Free}"),
             ),
+            (
+                "String",
+                CfExpression::sub_with("${Local}", [("Local", CfExpression::ref_("Free"))]),
+            ),
+            (
+                "String",
+                CfExpression::sub_with("${Free}", [("Free", CfExpression::ref_("Free"))]),
+            ),
+            (
+                "String",
+                CfExpression::sub_with("${Free}/${Other}", [("Other", CfExpression::from("safe"))]),
+            ),
+            (
+                "String",
+                CfExpression::sub_with("${Local}", [("Local", CfExpression::sub("${Free}"))]),
+            ),
+            (
+                "String",
+                CfExpression::sub_with(
+                    "${Local}",
+                    [(
+                        "Local",
+                        CfExpression::if_(
+                            "Enabled",
+                            CfExpression::from("safe"),
+                            CfExpression::ref_("Free"),
+                        ),
+                    )],
+                ),
+            ),
         ] {
-            let mut template = CfTemplate::default();
-            template
-                .parameters
-                .insert("Free".to_string(), parameter(parameter_type, None));
-            template.outputs.insert(
-                "Json".to_string(),
-                CfOutput {
-                    value: CfExpression::to_json_string(CfExpression::object([("v", value)])),
-                    description: None,
-                    export: None,
-                },
-            );
-            let error = lower_json_strings(&mut template)
-                .expect_err("an unconstrained parameter must not be inserted unescaped");
-            assert!(error.to_string().contains("'Free'"), "{error}");
+            for value in [
+                value.clone(),
+                CfExpression::object([("v", value.clone())]),
+                CfExpression::list([value]),
+            ] {
+                let mut template = CfTemplate::default();
+                template
+                    .parameters
+                    .insert("Free".to_string(), parameter(parameter_type, None));
+                template.outputs.insert(
+                    "Json".to_string(),
+                    CfOutput {
+                        value: CfExpression::to_json_string(value.clone()),
+                        description: None,
+                        export: None,
+                    },
+                );
+                let error = lower_json_strings(&mut template)
+                    .expect_err("an unconstrained parameter must not be inserted unescaped");
+                assert!(
+                    error.to_string().contains("'Free'"),
+                    "{parameter_type}: {value:?}: {error}"
+                );
+            }
         }
 
         let mut template = CfTemplate::default();
@@ -577,6 +667,137 @@ mod tests {
         );
         lower_json_strings(&mut template)
             .expect_err("an allowed value that needs escaping is not safe");
+    }
+
+    #[test]
+    fn boundary_document_json_uses_the_substitution_map_on_parameter_updates() {
+        let context = alien_permissions::PermissionContext::new()
+            .with_stack_prefix("${AWS::StackName}")
+            .with_aws_region("${AWS::Region}")
+            .with_aws_account_id("${AWS::AccountId}")
+            .with_managing_account_id("${managingAccountId}");
+        let document =
+            alien_permissions::generators::aws_permissions_boundary(&context, &[]).unwrap();
+        let rendered = alien_permissions::generators::AwsCloudFormationPermissionsGenerator::new()
+            .render_document(&document)
+            .unwrap();
+        let expression: CfExpression = serde_json::from_value(rendered).unwrap();
+        let mut template = CfTemplate {
+            aws_template_format_version: "2010-09-09".into(),
+            ..CfTemplate::default()
+        };
+        template
+            .parameters
+            .insert("ManagingAccountId".into(), parameter("String", None));
+        template.parameters.insert(
+            "ManagingRoleArn".into(),
+            parameter("String", Some(JSON_SAFE_TEXT_PATTERN)),
+        );
+        template.outputs.insert(
+            "Boundary".into(),
+            CfOutput {
+                value: CfExpression::to_json_string(expression.clone()),
+                description: None,
+                export: None,
+            },
+        );
+        // The same-named parameter is legal in a plain output; the local substitution
+        // variable must not read it when serializing the boundary into JSON.
+        template.outputs.insert(
+            "AccountInput".into(),
+            CfOutput {
+                value: CfExpression::ref_("ManagingAccountId"),
+                description: None,
+                export: None,
+            },
+        );
+        let mut policy = crate::template::CfResource::new(
+            "BoundaryPolicy".into(),
+            "AWS::IAM::ManagedPolicy".into(),
+        );
+        policy
+            .properties
+            .insert("PolicyDocument".into(), expression);
+        template.resources.insert(policy.logical_id.clone(), policy);
+        lower_json_strings(&mut template).unwrap();
+        crate::test_utils::cfn_lint(&crate::to_yaml(&template).unwrap())
+            .assert_ok("boundary JSON with a shadowed parameter");
+        for (role, account) in [
+            ("arn:aws:iam::210987654321:role/manager", "210987654321"),
+            (
+                "arn:aws:iam::109876543210:role/other-manager",
+                "109876543210",
+            ),
+        ] {
+            let deploy = Deploy {
+                strings: HashMap::from([
+                    ("ManagingRoleArn", role),
+                    ("ManagingAccountId", "unsafe\"input"),
+                    ("AWS::Partition", "aws"),
+                    ("AWS::AccountId", "123456789012"),
+                    ("AWS::Region", "ap-southeast-7"),
+                    ("AWS::StackName", "example"),
+                ]),
+                lists: HashMap::new(),
+                conditions: HashMap::new(),
+            };
+            let text = evaluate(&template.outputs["Boundary"].value, &deploy).unwrap();
+            let actual: serde_json::Value = serde_json::from_str(text.as_str().unwrap()).unwrap();
+            let expected = alien_permissions::generators::aws_permissions_boundary(
+                &alien_permissions::PermissionContext::new()
+                    .with_stack_prefix("example")
+                    .with_aws_region("ap-southeast-7")
+                    .with_aws_account_id("123456789012")
+                    .with_managing_account_id(account),
+                &[],
+            )
+            .unwrap();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn literal_and_escaped_parameter_names_remain_literal_in_json() {
+        for (value, expected) in [
+            (
+                CfExpression::join("", CfExpression::list([CfExpression::from("Free")])),
+                "Free",
+            ),
+            (CfExpression::sub("${!Free}"), "${Free}"),
+            (
+                CfExpression::sub_with("${Free}", [("Free", CfExpression::from("${Free}"))]),
+                "${Free}",
+            ),
+            (
+                CfExpression::sub_with(
+                    "${Free.Arn}",
+                    [("Free.Arn", CfExpression::from("literal"))],
+                ),
+                "literal",
+            ),
+        ] {
+            let mut template = CfTemplate::default();
+            template
+                .parameters
+                .insert("Free".into(), parameter("String", None));
+            template.outputs.insert(
+                "Json".into(),
+                CfOutput {
+                    value: CfExpression::to_json_string(value),
+                    description: None,
+                    export: None,
+                },
+            );
+            lower_json_strings(&mut template).unwrap();
+            let deploy = Deploy {
+                strings: HashMap::new(),
+                lists: HashMap::new(),
+                conditions: HashMap::new(),
+            };
+            let text = evaluate(&template.outputs["Json"].value, &deploy).unwrap();
+            let actual: serde_json::Value = serde_json::from_str(text.as_str().unwrap()).unwrap();
+            assert_eq!(actual, expected);
+        }
     }
 
     /// The patterns accept every legitimate value of the parameters they guard,

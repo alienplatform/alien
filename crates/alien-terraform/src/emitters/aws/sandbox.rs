@@ -8,10 +8,10 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
-        iam_policy_name_sanitize, iam_role_block, iam_role_policy_block, jsonencode, nested_block,
-        private_subnet_ids_expr, required_label, resource_prefix_template,
-        service_assume_role_policy, tags, vpc_id_expr,
+        downcast, emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize,
+        iam_role_block, iam_role_policy_block, jsonencode, nested_block, private_subnet_ids_expr,
+        required_label, resource_prefix_template, service_assume_role_policy,
+        stack_permission_context, tags, vpc_id_expr,
     },
     expr,
 };
@@ -797,8 +797,7 @@ fn emit_remote_bindings_policy(ctx: &EmitContext<'_>, fragment: &mut TfFragment)
         return Ok(());
     };
 
-    let context =
-        aws_terraform_permission_context().with_resource_name(ctx.resource_id.to_string());
+    let context = stack_permission_context(ctx).with_resource_name(ctx.resource_id.to_string());
     emit_iam_role_policy_for_target_with_label(
         fragment,
         access_label,
@@ -825,8 +824,7 @@ fn emit_remote_bindings_policy(ctx: &EmitContext<'_>, fragment: &mut TfFragment)
 /// these a Worker holding `sandbox/management` on the sandbox is denied its first `RunMicrovm`.
 fn emit_profile_policies(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
     // The bare resource id, as in `emit_remote_bindings_policy`.
-    let context =
-        aws_terraform_permission_context().with_resource_name(ctx.resource_id.to_string());
+    let context = stack_permission_context(ctx).with_resource_name(ctx.resource_id.to_string());
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let Some(role_label) = service_account_label(ctx, profile_name) else {
             continue;

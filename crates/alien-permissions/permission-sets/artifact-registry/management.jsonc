@@ -38,15 +38,74 @@
       {
         "grant": {
           "actions": [
-            "iam:GetRole",
             "iam:UpdateAssumeRolePolicy",
             "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:DetachRolePolicy",
+            "iam:PutRolePermissionsBoundary"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          }
+        },
+        "label": "legacy-role-3"
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:UpdateAssumeRolePolicy",
+            "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:DetachRolePolicy",
+            "iam:PutRolePermissionsBoundary"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-write-3"
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:GetRole",
             "iam:GetRolePolicy",
             "iam:ListRolePolicies",
-            "iam:DeleteRolePolicy",
-            "iam:ListAttachedRolePolicies",
-            "iam:DetachRolePolicy",
-            "iam:DeleteRole"
+            "iam:ListAttachedRolePolicies"
           ]
         },
         "binding": {
@@ -57,6 +116,46 @@
             "resources": ["arn:aws:iam::${awsAccountId}:role/${resourceName}-*"]
           }
         }
+      },
+      {
+        "grant": {
+          "actions": ["iam:DeleteRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${resourceName}-*"]
+          }
+        },
+        "label": "legacy-role-4"
+      },
+      {
+        "grant": {
+          "actions": ["iam:DeleteRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${resourceName}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-delete-4"
       }
     ],
     "gcp": [

@@ -30,3 +30,6 @@ mod failure_tests;
 mod stress_tests;
 
 mod progress_tests;
+
+#[cfg(feature = "aws")]
+mod aws_boundary_tests;

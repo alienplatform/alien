@@ -717,6 +717,16 @@ expression: schemas
         "description": "Whether the management inline policy was attached by the generated stack.",
         "type": "boolean"
       },
+      "permissionsBoundaryArn": {
+        "description": "Setup-owned permissions boundary for roles written by management. Absent in older setups.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "permissionsBoundaryDocument": {
+        "description": "Installed boundary document with setup template parameters resolved. Required with its ARN."
+      },
       "remoteBindingsRoleArn": {
         "description": "Setup-owned role used only for opted-in remote binding data access.",
         "type": [

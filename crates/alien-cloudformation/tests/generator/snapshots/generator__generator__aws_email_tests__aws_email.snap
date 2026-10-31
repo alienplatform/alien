@@ -1,5 +1,6 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_email_tests.rs
+assertion_line: 221
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -127,6 +128,172 @@ Resources:
         Value: management
       - Key: resource-type
         Value: management
+  ManagementPermissionsBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName:
+        Fn::Sub: ${AWS::StackName}-deployment-management-boundary
+      PolicyDocument:
+        Statement:
+        - Effect: Allow
+          NotAction: iam:*
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-*:*
+          - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
+          - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
+        - Condition:
+            StringEquals:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+          Effect: Allow
+          NotAction: iam:*
+          Resource: '*'
+        - Action:
+          - bedrock-mantle:CreateInference
+          - bedrock:InvokeModel
+          - bedrock:InvokeModelWithResponseStream
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:bedrock-mantle:*:${AWS::AccountId}:project/default
+          - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
+          - Fn::Sub: arn:${AWS::Partition}:bedrock:*::foundation-model/*
+        - Action:
+          - ec2:AssignPrivateIpAddresses
+          - ec2:CreateNetworkInterface
+          - ec2:DeleteNetworkInterface
+          - ec2:DescribeInstances
+          - ec2:DescribeNetworkInterfaces
+          - ec2:DescribeSnapshots
+          - ec2:DescribeTags
+          - ec2:DescribeVolumes
+          - ec2:UnassignPrivateIpAddresses
+          - ecr:GetAuthorizationToken
+          - elasticloadbalancing:DescribeTargetHealth
+          - ses:ListEmailIdentities
+          Effect: Allow
+          Resource: '*'
+        - Action:
+          - ecr:BatchGetImage
+          - ecr:GetDownloadUrlForLayer
+          Effect: Allow
+          Resource:
+            Fn::Sub:
+            - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
+            - ManagingAccountId:
+                Fn::Select:
+                - 4
+                - Fn::Split:
+                  - ':'
+                  - Ref: ManagingRoleArn
+        - Action: ec2:CreateSnapshot
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: runtime
+          Effect: Allow
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
+        - Action: ec2:CreateTags
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: runtime
+              ec2:CreateAction: CreateSnapshot
+          Effect: Allow
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
+        - Action:
+          - ses:CreateEmailIdentity
+          - ses:DeleteEmailIdentity
+          - ses:GetEmailIdentity
+          - ses:PutEmailIdentityConfigurationSetAttributes
+          - ses:PutEmailIdentityDkimAttributes
+          - ses:PutEmailIdentityFeedbackAttributes
+          - ses:PutEmailIdentityMailFromAttributes
+          - ses:SendEmail
+          - ses:SendRawEmail
+          Effect: Allow
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+        - Action: aoss:APIAccessAll
+          Effect: Allow
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+        - Action: lambda:PassNetworkConnector
+          Effect: Allow
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:*
+        - Action:
+          - aoss:*AccessPolicy
+          - aoss:*SecurityPolicy
+          - backup:PutBackupVaultAccessPolicy
+          - codebuild:PutResourcePolicy
+          - dlm:*LifecyclePolicy
+          - dynamodb:PutResourcePolicy
+          - ec2:CopySnapshot
+          - ec2:CreateVpcPeeringConnection
+          - ec2:Modify*ImageAttribute
+          - ec2:ModifySnapshotAttribute
+          - ec2:ModifyVpcEndpointServicePermissions
+          - ecr:*RepositoryCreationTemplate
+          - ecr:PutRegistryPolicy
+          - ecr:PutReplicationConfiguration
+          - ecr:SetRepositoryPolicy
+          - elasticfilesystem:PutFileSystemPolicy
+          - es:Create*Domain
+          - es:Update*DomainConfig
+          - events:PutPermission
+          - glacier:SetVaultAccessPolicy
+          - glue:PutResourcePolicy
+          - kinesis:PutResourcePolicy
+          - kms:PutKeyPolicy
+          - lambda:Add*Permission
+          - lambda:CreateFunctionUrlConfig
+          - lambda:UpdateFunctionUrlConfig
+          - logs:PutDe*Policy
+          - logs:PutResourcePolicy
+          - logs:PutSubscriptionFilter
+          - ram:*
+          - rds:ModifyDB*SnapshotAttribute
+          - s3:*BucketPolicy
+          - s3:Put*PublicAccessBlock
+          - s3:PutAccessPointPolicy*
+          - s3:PutBucketAcl
+          - s3:PutBucketOwnershipControls
+          - s3:PutMultiRegionAccessPointPolicy
+          - s3:PutReplicationConfiguration
+          - secretsmanager:PutResourcePolicy
+          - ses:*IdentityPolicy
+          - sns:AddPermission
+          - sns:CreateTopic
+          - sns:SetTopicAttributes
+          - sqs:AddPermission
+          - sqs:CreateQueue
+          - sqs:SetQueueAttributes
+          Effect: Deny
+          Resource: '*'
+        - Action:
+          - kms:CreateGrant
+          Condition:
+            BoolIfExists:
+              kms:GrantIsForAWSResource: 'false'
+          Effect: Deny
+          Resource: '*'
+        Version: 2012-10-17
   ManagementRoleManagementPolicy1:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -539,7 +706,7 @@ Outputs:
         - Ref: HeartbeatsMode
         - '","network":null}'
     Description: Deployment registration settings JSON.
-  DeploymentResources:
+  DeploymentResources0:
     Value:
       Fn::Join:
       - ''
@@ -549,7 +716,76 @@ Outputs:
         - Fn::GetAtt:
           - ManagementRole
           - Arn
-        - '","managementPermissionsApplied":true}},{"id":"mailbox","type":"storage","importData":{"bucketName":"'
+        - '","managementPermissionsApplied":true,"permissionsBoundaryArn":"'
+        - Ref: ManagementPermissionsBoundary
+        - '","permissionsBoundaryDocument":{"Statement":[{"Effect":"Allow","NotAction":"iam:*","Resource":["'
+        - Fn::Sub: arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-*:*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
+        - '"]},{"Condition":{"StringEquals":{"aws:ResourceTag/deployment":"'
+        - Fn::Sub: ${AWS::StackName}
+        - '"}},"Effect":"Allow","NotAction":"iam:*","Resource":"*"},{"Action":["bedrock-mantle:CreateInference","bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Effect":"Allow","Resource":["'
+        - Fn::Sub: arn:${AWS::Partition}:bedrock-mantle:*:${AWS::AccountId}:project/default
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
+        - '","'
+        - Fn::Sub: arn:${AWS::Partition}:bedrock:*::foundation-model/*
+        - '"]},{"Action":["ec2:AssignPrivateIpAddresses","ec2:CreateNetworkInterface","ec2:DeleteNetworkInterface","ec2:DescribeInstances","ec2:DescribeNetworkInterfaces","ec2:DescribeSnapshots","ec2:DescribeTags","ec2:DescribeVolumes","ec2:UnassignPrivateIpAddresses","ecr:GetAuthorizationToken","elasticloadbalancing:DescribeTargetHealth","ses:ListEmailIdentities"],"Effect":"Allow","Resource":"*"},{"Action":["ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"],"Effect":"Allow","Resource":"'
+        - Fn::Sub:
+          - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
+          - ManagingAccountId:
+              Fn::Select:
+              - 4
+              - Fn::Split:
+                - ':'
+                - Ref: ManagingRoleArn
+        - '"},{"Action":"ec2:CreateSnapshot","Condition":{"StringEquals":{"aws:RequestTag/deployment":"'
+        - Fn::Sub: ${AWS::StackName}
+        - '","aws:RequestTag/managed-by":"runtime"}},"Effect":"Allow","Resource":"'
+        - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
+        - '"},{"Action":"ec2:CreateTags","Condition":{"StringEquals":{"aws:RequestTag/deployment":"'
+        - Fn::Sub: ${AWS::StackName}
+        - '","aws:RequestTag/managed-by":"runtime","ec2:CreateAction":"CreateSnapshot"}},"Effect":"Allow","Resource":"'
+        - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*
+        - '"},{"Action":["ses:CreateEmailIdentity","ses:DeleteEmailIdentity","ses:GetEmailIdentity","ses:PutEmailIdentityConfigurationSetAttributes","ses:PutEmailIdentityDkimAttributes","ses:PutEmailIdentityFeedbackAttributes","ses:PutEmailIdentityMailFromAttributes","ses:SendEmail","ses:SendRawEmail"],"Effect":"Allow","Resource":"'
+        - Fn::Sub: arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*
+        - '"},{"Action":"aoss:APIAccessAll","Effect":"Allow","Resource":"'
+        - Fn::Sub: arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+        - '"},{"Action":"lambda:PassNetworkConnector","Effect":"Allow","Resource":"'
+        - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:*
+        - '"},{"Action":["aoss:*AccessPolicy","aoss:*SecurityPolicy","backup:PutBackupVaultAccessPolicy","codebuild:PutResourcePolicy","dlm:*LifecyclePolicy","dynamodb:PutResourcePolicy","ec2:CopySnapshot","ec2:CreateVpcPeeringConnection","ec2:Modify*ImageAttribute","ec2:ModifySnapshotAttribute","ec2:ModifyVpcEndpointServicePermissions","ecr:*RepositoryCreationTemplate","ecr:PutRegistryPolicy","ecr:PutReplicationConfiguration","ecr:SetRepositoryPolicy","elasticfilesystem:PutFileSystemPolicy","es:Create*Domain","es:Update*DomainConfig","events:PutPermission","glacier:SetVaultAccessPolicy","glue:PutResourcePolicy","kinesis:PutResourcePolicy","kms:PutKeyPolicy","lambda:Add*Permission","lambda:CreateFunctionUrlConfig","lambda:UpdateFunctionUrlConfig","logs:PutDe*Policy","logs:PutResourcePolicy","logs:PutSubscriptionFilter","ram:*","rds:ModifyDB*SnapshotAttribute","s3:*BucketPolicy","s3:Put*PublicAccessBlock","s3:PutAccessPointPolicy*","s3:PutBucketAcl","s3:PutBucketOwnershipControls","s3:PutMultiRegionAccessPointPolicy","s3:PutReplicationConfiguration","secretsmanager:PutResourcePolicy","ses:*IdentityPolicy","sns:AddPermission","sns:CreateTopic","sns:SetTopicAttributes","sqs:AddPermission","sqs:CreateQueue","sqs:SetQueueAttributes"],"Effect":"Deny","Resource":"*"},{"Action":["kms:CreateGrant"],"Condition":{"BoolIfExists":{"kms:GrantIsForAWSResource":"false"}},"Effect":"Deny","Resource":"*"}],"Version":"2012-10-17"}}}]'
+    Description: Deployment registration resources JSON chunk. Reassemble chunks in numeric suffix order.
+  DeploymentResources1:
+    Value:
+      Fn::Join:
+      - ''
+      - - '[{"id":"mailbox","type":"storage","importData":{"bucketName":"'
         - Ref: Mailbox
         - '","bucketArn":"'
         - Fn::GetAtt:
@@ -618,4 +854,4 @@ Outputs:
         - '"}]}},"ruleSetName":"'
         - Ref: MailerRuleSet
         - '"}}]'
-    Description: Deployment registration resources JSON.
+    Description: Deployment registration resources JSON chunk. Reassemble chunks in numeric suffix order.

@@ -249,10 +249,33 @@
         }
       },
       {
-        // iam:PassRole remains name-scoped. AWS PassRole is evaluated against
-        // the role being passed and does not give us the same reliable
-        // resource-tag boundary as EC2/ELB/Lambda resources.
-        "label": "pass-lambda-execution-roles",
+        "label": "bounded-role-pass",
+        "description": "Allow Lambda to use application-owned IAM execution roles.",
+        "grant": {
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"],
+            "condition": {
+              "StringEquals": {
+                "iam:PassedToService": "lambda.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"],
+            "condition": {
+              "StringEquals": {
+                "iam:PassedToService": "lambda.amazonaws.com"
+              }
+            }
+          }
+        }
+      },
+      // Setups without a boundary retain their existing role-passing grants.
+      {
+        "label": "legacy-role-pass",
         "description": "Allow Lambda to use application-owned IAM execution roles.",
         "grant": {
           "actions": ["iam:PassRole"]
@@ -267,14 +290,40 @@
         }
       },
       {
-        // Live workers are created by the management role, but their
-        // resource-scoped execution and management policies are attached to
-        // setup-created stack roles after the worker exists. Keep this
-        // limited to Alien stack roles by name.
+        // Live workers attach their policies to setup-created stack roles.
         "label": "attach-lambda-runtime-policies",
         "description": "Attach application-owned runtime policies to IAM roles used by Lambda functions.",
         "grant": {
-          "actions": ["iam:PutRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies"]
+          "actions": ["iam:PutRolePolicy", "iam:PutRolePermissionsBoundary"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "read-lambda-runtime-policies",
+        "description": "Attach application-owned runtime policies to IAM roles used by Lambda functions.",
+        "grant": {
+          "actions": ["iam:GetRolePolicy", "iam:ListRolePolicies"]
         },
         "binding": {
           "stack": {
@@ -342,7 +391,7 @@
         "label": "import-tls-certificates",
         "description": "Import TLS certificates for application-owned HTTPS endpoints.",
         "grant": {
-          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+          "actions": ["acm:ImportCertificate"]
         },
         "binding": {
           "stack": {
@@ -452,15 +501,14 @@
         "label": "create-http-api-endpoints",
         "description": "Create API Gateway HTTP (V2) and REST (V1) APIs and custom domain names for application-owned public endpoints.",
         "grant": {
-          "actions": ["apigateway:POST", "apigateway:PUT"]
+          "actions": ["apigateway:POST"]
         },
         "binding": {
           "stack": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis",
               "arn:aws:apigateway:${awsRegion}::/restapis",
-              "arn:aws:apigateway:${awsRegion}::/domainnames",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
+              "arn:aws:apigateway:${awsRegion}::/domainnames"
             ],
             "condition": {
               "StringEquals": {
@@ -473,8 +521,7 @@
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis",
               "arn:aws:apigateway:${awsRegion}::/restapis",
-              "arn:aws:apigateway:${awsRegion}::/domainnames",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
+              "arn:aws:apigateway:${awsRegion}::/domainnames"
             ],
             "condition": {
               "StringEquals": {
@@ -528,22 +575,16 @@
         }
       },
       {
-        // API Gateway V1/V2 tagged creates can perform implicit TagResource calls.
+        // REST tagging also checks PATCH on the underlying owned resource.
+        // The /tags path itself does not expose ResourceTag condition keys.
         "label": "tag-http-api-endpoints",
-        "description": "Apply deployment tags to API Gateway HTTP (V2) and REST (V1) API resources created for public endpoints.",
+        "description": "Apply deployment tags to API Gateway endpoints with ownership-scoped update permission.",
         "grant": {
-          "actions": ["apigateway:TagResource", "apigateway:PUT"]
+          "actions": ["apigateway:POST", "apigateway:PUT"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:apigateway:${awsRegion}::/apis/*",
-              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
-              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
-              "arn:aws:apigateway:${awsRegion}::/restapis/*",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
-            ],
+            "resources": ["arn:aws:apigateway:${awsRegion}::/tags/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -552,14 +593,7 @@
             }
           },
           "resource": {
-            "resources": [
-              "arn:aws:apigateway:${awsRegion}::/apis/*",
-              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
-              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
-              "arn:aws:apigateway:${awsRegion}::/restapis/*",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*",
-              "arn:aws:apigateway:${awsRegion}::/tags/*"
-            ],
+            "resources": ["arn:aws:apigateway:${awsRegion}::/tags/*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -575,7 +609,13 @@
         "label": "manage-http-api-endpoints",
         "description": "Read, update, and delete API Gateway HTTP (V2) and REST (V1) APIs, custom domain names, and mappings owned by this application.",
         "grant": {
-          "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"]
+          "actions": [
+            "apigateway:GET",
+            "apigateway:DELETE",
+            "apigateway:PATCH",
+            "apigateway:PUT",
+            "apigateway:TagResource"
+          ]
         },
         "binding": {
           "stack": {

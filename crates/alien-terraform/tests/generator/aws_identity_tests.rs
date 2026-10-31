@@ -85,7 +85,9 @@ fn aws_remote_stack_management_skips_live_provision_sets() {
     }
 
     assert!(rendered.contains("lambda:InvokeFunction"));
-    assert!(!rendered.contains("lambda:CreateFunction"));
+    assert!(!rendered
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == ':'))
+        .any(|word| word == "lambda:CreateFunction"));
     assert_terraform_valid(
         &module,
         "aws_remote_stack_management_skips_live_provision_sets",
@@ -925,7 +927,9 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
             hcl::parse(contents).unwrap_or_else(|error| panic!("{file} parses: {error}"));
         for kind in ["aws_iam_policy", "aws_iam_role_policy"] {
             for block in resource_blocks(&body, kind) {
-                if block.labels()[1].as_str().starts_with("management") {
+                // The boundary caps the roles management writes; it is not attached to management.
+                let label = block.labels()[1].as_str();
+                if label.starts_with("management") && label != "management_permissions_boundary" {
                     collect_denies(jsonencoded(block_attribute(block, "policy")), &mut denies);
                 }
             }
@@ -950,11 +954,25 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
         1,
         "the management role may not rewrite itself"
     );
+    let (boundary_denies, denies): (Vec<_>, Vec<_>) = denies.into_iter().partition(|statement| {
+        statement["Action"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("iam:CreatePolicyVersion"))
+    });
+    assert_eq!(boundary_denies.len(), 1);
+    assert_eq!(
+        boundary_denies[0]["Resource"],
+        serde_json::json!([
+            format!("arn:{PARITY_PARTITION}:iam::{PARITY_ACCOUNT}:policy/{PARITY_PREFIX}-deployment-management-boundary"),
+            format!("arn:aws:iam::{PARITY_ACCOUNT}:role/{PARITY_PREFIX}-*")
+        ])
+    );
     assert_eq!(denies.len(), 1, "{denies:#?}");
     // Typed, so the snapshot keeps field order whether or not a workspace build turns on
     // serde_json's `preserve_order`, which reorders the raw `Value`'s keys.
     let guards: Vec<alien_permissions::generators::AwsIamStatement> =
-        [&own_role_denies[0], &denies[0]]
+        [&own_role_denies[0], &denies[0], &boundary_denies[0]]
             .into_iter()
             .map(|deny| serde_json::from_value(deny.clone()).expect("a deny is an IAM statement"))
             .collect();
@@ -1046,6 +1064,10 @@ fn collect_denies(expression: &hcl::Expression, denies: &mut Vec<serde_json::Val
 fn evaluate_policy_expression(expression: &hcl::Expression) -> serde_json::Value {
     let resolve_template = |text: &str| {
         let resolved = text
+            .replace(
+                "${aws_iam_policy.management_permissions_boundary.arn}",
+                &format!("arn:{PARITY_PARTITION}:iam::{PARITY_ACCOUNT}:policy/{PARITY_PREFIX}-deployment-management-boundary"),
+            )
             .replace("${local.resource_prefix}", PARITY_PREFIX)
             .replace("${data.aws_partition.current.partition}", PARITY_PARTITION)
             .replace("${data.aws_region.current.region}", PARITY_REGION)

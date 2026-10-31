@@ -32,7 +32,7 @@
       // instance profile, security group, and surrounding network remain setup-owned.
       {
         "grant": {
-          "actions": ["ec2:CreateLaunchTemplate", "ec2:CreateTags"]
+          "actions": ["ec2:CreateLaunchTemplate"]
         },
         "binding": {
           "stack": {
@@ -57,7 +57,38 @@
       },
       {
         "grant": {
-          "actions": ["ec2:CreateLaunchTemplateVersion", "ec2:DeleteLaunchTemplate"]
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateLaunchTemplate",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateLaunchTemplate",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "ec2:CreateLaunchTemplateVersion",
+            "ec2:DeleteLaunchTemplate",
+            "ec2:CreateTags"
+          ]
         },
         "binding": {
           "stack": {
@@ -254,8 +285,9 @@
           }
         }
       },
-      // ASG creation must include boundary tags in the create request.
+      // Numeric versions keep role passing checked when an ASG changes templates.
       {
+        "label": "legacy-role-asg-create",
         "grant": {
           "actions": ["autoscaling:CreateAutoScalingGroup"]
         },
@@ -284,14 +316,135 @@
           }
         }
       },
-      // Existing ASGs are managed only when they carry the Alien boundary tags.
       {
+        "label": "bounded-role-asg-create",
+        "grant": {
+          "actions": ["autoscaling:CreateAutoScalingGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "Bool": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "Bool": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "legacy-role-asg-management",
         "grant": {
           "actions": [
             "autoscaling:DeleteAutoScalingGroup",
             "autoscaling:UpdateAutoScalingGroup",
             "autoscaling:SetDesiredCapacity",
             "autoscaling:StartInstanceRefresh",
+            "autoscaling:TerminateInstanceInAutoScalingGroup"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Capacity-only updates omit the version key; template changes supply it.
+      {
+        "label": "bounded-role-asg-update",
+        "grant": {
+          "actions": ["autoscaling:UpdateAutoScalingGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "BoolIfExists": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "BoolIfExists": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Instance refresh can select another template without a version condition.
+      // Runtime rolling updates use UpdateAutoScalingGroup instead.
+      {
+        "label": "bounded-role-asg-management",
+        "grant": {
+          "actions": [
+            "autoscaling:DeleteAutoScalingGroup",
+            "autoscaling:SetDesiredCapacity",
             "autoscaling:TerminateInstanceInAutoScalingGroup"
           ]
         },
@@ -436,20 +589,36 @@
           }
         }
       },
-      // iam:PassRole remains stack-prefix scoped. CloudFormation role names are
-      // based on logical IDs and generated suffixes, so they do not reliably end
-      // in a fixed role suffix.
+      // Only EC2 can receive these stack-prefixed instance roles. CloudFormation
+      // names use logical IDs and generated suffixes, so they do not reliably
+      // end in a fixed role suffix.
       {
+        "label": "bounded-role-pass",
         "grant": {
           "actions": ["iam:PassRole"]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+            }
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+            }
           }
+        }
+      },
+      // Setups without a boundary retain their existing role-passing grants.
+      {
+        "label": "legacy-role-pass",
+        "grant": { "actions": ["iam:PassRole"] },
+        "binding": {
+          "stack": { "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"] },
+          "resource": { "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"] }
         }
       },
       // Read-only inspection. AWS requires Resource: "*" for these Describe APIs.

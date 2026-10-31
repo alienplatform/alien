@@ -3,10 +3,10 @@ use std::collections::HashSet;
 use crate::{
     error::{ErrorData, Result},
     generators::labels::{entry_pascal_label, has_explicit_label},
-    variables::VariableInterpolator,
+    variables::{interpolate_aws_variables, VariableInterpolator},
     BindingTarget, PermissionContext,
 };
-use alien_core::{PermissionGrant, PermissionSet};
+use alien_core::{AwsConditionValue, PermissionGrant, PermissionSet};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +28,7 @@ pub struct AwsIamStatement {
     pub not_resource: Vec<String>,
     /// Optional conditions
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition: Option<IndexMap<String, IndexMap<String, String>>>,
+    pub condition: Option<IndexMap<String, IndexMap<String, AwsConditionValue>>>,
 }
 
 /// AWS IAM policy document
@@ -114,6 +114,13 @@ impl AwsRuntimePermissionsGenerator {
 
         // Process each AWS platform permission in the permission set
         for platform_permission in aws_platform_permissions {
+            if !super::aws_boundary::include_role_statement(
+                permission_set,
+                platform_permission.label.as_deref(),
+                context,
+            ) {
+                continue;
+            }
             let actions = platform_permission.grant.actions.as_ref().ok_or_else(|| {
                 alien_error::AlienError::new(ErrorData::GeneratorError {
                     platform: "aws".to_string(),
@@ -144,13 +151,20 @@ impl AwsRuntimePermissionsGenerator {
                     })?,
             };
 
-            let resources =
-                VariableInterpolator::interpolate_string_list(&binding_spec.resources, context)?;
-            let not_resources = VariableInterpolator::interpolate_string_list(
-                &binding_spec.not_resources,
-                context,
-            )?;
-            let conditions = self.extract_conditions(binding_spec, context)?;
+            let (binding_spec, actions) =
+                super::aws_boundary::role_write_binding(binding_spec, actions, context);
+
+            let resources = binding_spec
+                .resources
+                .iter()
+                .map(|value| interpolate_aws_variables(value, context))
+                .collect::<Result<Vec<_>>>()?;
+            let not_resources = binding_spec
+                .not_resources
+                .iter()
+                .map(|value| interpolate_aws_variables(value, context))
+                .collect::<Result<Vec<_>>>()?;
+            let conditions = self.extract_conditions(&binding_spec, context)?;
 
             let statement_id = self.statement_id(
                 permission_set,
@@ -162,7 +176,7 @@ impl AwsRuntimePermissionsGenerator {
             let statement = AwsIamStatement {
                 sid: statement_id,
                 effect: platform_permission.effect.as_str().to_string(),
-                action: actions.clone(),
+                action: actions.into_owned(),
                 resource: resources,
                 not_resource: not_resources,
                 condition: if conditions.is_empty() {
@@ -186,7 +200,7 @@ impl AwsRuntimePermissionsGenerator {
         &self,
         binding_spec: &alien_core::AwsBindingSpec,
         context: &PermissionContext,
-    ) -> Result<IndexMap<String, IndexMap<String, String>>> {
+    ) -> Result<IndexMap<String, IndexMap<String, AwsConditionValue>>> {
         if let Some(condition_template) = &binding_spec.condition {
             let mut interpolated_conditions = IndexMap::new();
 
@@ -198,8 +212,17 @@ impl AwsRuntimePermissionsGenerator {
                 for (value_key, value_template) in condition_values {
                     let value_key =
                         VariableInterpolator::interpolate_variables(value_key, context)?;
-                    let interpolated_value =
-                        VariableInterpolator::interpolate_variables(value_template, context)?;
+                    let interpolated_value = match value_template {
+                        AwsConditionValue::String(value) => {
+                            AwsConditionValue::String(interpolate_aws_variables(value, context)?)
+                        }
+                        AwsConditionValue::List(values) => AwsConditionValue::List(
+                            values
+                                .iter()
+                                .map(|value| interpolate_aws_variables(value, context))
+                                .collect::<Result<Vec<_>>>()?,
+                        ),
+                    };
                     interpolated_values.insert(value_key, interpolated_value);
                 }
 
@@ -291,7 +314,10 @@ mod tests {
             .iter()
             .map(|statement| statement.sid.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(sids, ["DuplicateSid", "DuplicateSid2", "Other", "DuplicateSid3"]);
+        assert_eq!(
+            sids,
+            ["DuplicateSid", "DuplicateSid2", "Other", "DuplicateSid3"]
+        );
     }
 
     #[test]
@@ -306,7 +332,10 @@ mod tests {
 
         assert_eq!(
             statements,
-            [statement("ListEventSourceMappings", "*"), statement("Other", "*")]
+            [
+                statement("ListEventSourceMappings", "*"),
+                statement("Other", "*")
+            ]
         );
     }
 

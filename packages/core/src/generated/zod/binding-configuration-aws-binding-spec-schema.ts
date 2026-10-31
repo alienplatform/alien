@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { AwsConditionValueSchema } from "./aws-condition-value-schema.js";
 
 /**
  * @description Generic binding configuration for permissions
@@ -14,7 +15,7 @@ export const BindingConfigurationAwsBindingSpecSchema = z.object({
     
     }).catchall(z.object({
     
-    }).catchall(z.string())).describe("Optional condition for additional filtering (rare)").nullish(),
+    }).catchall(z.lazy(() => AwsConditionValueSchema).describe("An IAM condition accepts one string or a list of alternative string values."))).describe("Optional condition for additional filtering (rare)").nullish(),
 "notResources": z.optional(z.array(z.string()).describe("ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a\ntag-on-create grant whose implied check AWS authorizes against no resource; the build\nrefuses it anywhere else.")),
 "resources": z.array(z.string()).describe("Resource ARNs to bind to")
     }).describe("AWS-specific binding specification")),
@@ -23,7 +24,7 @@ export const BindingConfigurationAwsBindingSpecSchema = z.object({
     
     }).catchall(z.object({
     
-    }).catchall(z.string())).describe("Optional condition for additional filtering (rare)").nullish(),
+    }).catchall(z.lazy(() => AwsConditionValueSchema).describe("An IAM condition accepts one string or a list of alternative string values."))).describe("Optional condition for additional filtering (rare)").nullish(),
 "notResources": z.optional(z.array(z.string()).describe("ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a\ntag-on-create grant whose implied check AWS authorizes against no resource; the build\nrefuses it anywhere else.")),
 "resources": z.array(z.string()).describe("Resource ARNs to bind to")
     }).describe("AWS-specific binding specification"))

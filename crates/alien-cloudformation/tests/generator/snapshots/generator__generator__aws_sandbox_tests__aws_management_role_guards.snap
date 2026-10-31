@@ -1,6 +1,6 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_sandbox_tests.rs
-expression: "serde_json::to_string_pretty(&[own_role_denies[0],\ndenies[0]]).expect(\"serializes\")"
+expression: "serde_json::to_string_pretty(&[own_role_denies[0], denies[0],\nboundary_denies[0]]).expect(\"serializes\")"
 ---
 [
   {
@@ -50,5 +50,26 @@ expression: "serde_json::to_string_pretty(&[own_role_denies[0],\ndenies[0]]).exp
       "*"
     ],
     "Sid": "DenySandboxSetupRoleChanges"
+  },
+  {
+    "Action": [
+      "iam:CreatePolicyVersion",
+      "iam:DeletePolicy",
+      "iam:DeletePolicyVersion",
+      "iam:DeleteRolePermissionsBoundary",
+      "iam:SetDefaultPolicyVersion",
+      "iam:TagPolicy",
+      "iam:UntagPolicy"
+    ],
+    "Effect": "Deny",
+    "Resource": [
+      {
+        "Ref": "ManagementPermissionsBoundary"
+      },
+      {
+        "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+      }
+    ],
+    "Sid": "BoundedRoleProtectBoundary"
   }
 ]

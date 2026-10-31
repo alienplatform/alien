@@ -114,20 +114,16 @@ delivery.
 
 ### Indirect infrastructure privileges
 
-This boundary covers direct value access. Infrastructure management still has
-powers that can change IAM or deploy code using a workload identity:
+The restrictions above cover direct value access. Infrastructure management
+can still deploy code using a workload identity; the available IAM changes
+depend on the cloud and the installed setup:
 
-- AWS management can create/update compute using stack roles and `iam:PassRole`.
-  Management is explicitly denied `sts:AssumeRole` on stack roles, including
-  a self-trusting role it creates; this prevents role chaining without compute.
-  Automatic setup keeps data access to ordinary Live vaults added later, while
-  the explicit reserved-vault deny overrides its stack-wide Allow.
-  The reserved-vault deny applies to management itself, including parameter
-  tags and resource policies; it does not follow a workload role. CloudTrail
-  records `AssumeRole`, `CreateRole`, `CreateFunction`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`,
-  `RunInstances`, and IAM `PutRolePolicy` / `UpdateAssumeRolePolicy` changes.
-  `PassRole` is a permission check, not a separate CloudTrail event; inspect the
-  role in the compute API event. KMS decrypt alone does not authorize SSM reads.
+- AWS setup installs a permissions boundary on roles management creates or changes;
+  setup-owned roles remain setup-owned. Older setups retain their behavior until
+  setup runs again. Management can still deploy code with permitted workload roles,
+  and its own data-access denials do not follow those roles. See
+  [AWS role permissions boundaries](../alien-permissions/README.md#aws-role-permissions-boundaries)
+  for the ceiling, adoption rules, resource-policy limits and installer requirements.
 - GCP management, after a Terraform setup, holds no permission that changes
   IAM in a way that reaches the secrets vaults: no project, service-account or
   secret `setIamPolicy`, and no custom-role edits. It cannot grant itself a
@@ -164,8 +160,9 @@ powers that can change IAM or deploy code using a workload identity:
   `Microsoft.Authorization/roleDefinitions/write`,
   `Microsoft.KeyVault/vaults/write`, and `Microsoft.KeyVault/vaults/delete`.
 
-These are accepted infrastructure privileges, not a hard boundary against a
-compromised infrastructure manager. Customer-owned deny policies (for example,
+These controls limit IAM changes while preserving the workload deployment
+powers described above. They do not prevent management from running code with
+a permitted workload identity. Customer-owned deny policies (for example,
 GCP IAM deny policies) and separately controlled provisioning identities are
 possible follow-up work. On GCP/Azure, custom inline management permissions are
 refused while native slots exist because they can embed arbitrary payload roles

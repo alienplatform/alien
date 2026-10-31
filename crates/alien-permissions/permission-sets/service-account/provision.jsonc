@@ -5,14 +5,109 @@
     "aws": [
       {
         "grant": {
+          "actions": ["iam:CreateRole", "iam:PutRolePolicy", "iam:PutRolePermissionsBoundary"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}"
+              }
+            }
+          }
+        },
+        "label": "legacy-role-1"
+      },
+      {
+        "grant": {
+          "actions": ["iam:CreateRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              },
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": [
+                  "${managedByTag}",
+                  "${stackTag}",
+                  "${resourceTag}",
+                  "resource-type",
+                  "Name"
+                ]
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              },
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": [
+                  "${managedByTag}",
+                  "${stackTag}",
+                  "${resourceTag}",
+                  "resource-type",
+                  "Name"
+                ]
+              }
+            }
+          }
+        },
+        "label": "bounded-role-create-1"
+      },
+      {
+        "grant": {
+          "actions": ["iam:PutRolePolicy", "iam:PutRolePermissionsBoundary"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "iam:PermissionsBoundary": "${awsPermissionsBoundaryArn}",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-write-1"
+      },
+      {
+        "grant": {
           "actions": [
-            "iam:CreateRole",
-            "iam:PutRolePolicy",
             "iam:GetRole",
             "iam:GetRolePolicy",
             "iam:ListRolePolicies",
-            "iam:ListAttachedRolePolicies",
-            "iam:TagRole"
+            "iam:ListAttachedRolePolicies"
           ]
         },
         "binding": {
@@ -23,6 +118,68 @@
             "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
           }
         }
+      },
+      {
+        "grant": {
+          "actions": ["iam:TagRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
+          }
+        },
+        "label": "legacy-role-2"
+      },
+      {
+        "grant": {
+          "actions": ["iam:TagRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              },
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": [
+                  "${managedByTag}",
+                  "${stackTag}",
+                  "${resourceTag}",
+                  "resource-type",
+                  "Name"
+                ]
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}"
+              },
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": [
+                  "${managedByTag}",
+                  "${stackTag}",
+                  "${resourceTag}",
+                  "resource-type",
+                  "Name"
+                ]
+              }
+            }
+          }
+        },
+        "label": "bounded-role-tag-2"
       }
     ],
     "gcp": [

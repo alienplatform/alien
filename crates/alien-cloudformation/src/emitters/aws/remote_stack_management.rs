@@ -23,7 +23,11 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    generators::AwsCloudFormationPermissionsGenerator, BindingTarget, PermissionContext,
+    generators::{
+        aws_stack_permissions_boundary, validate_aws_boundary_size,
+        AwsCloudFormationPermissionsGenerator,
+    },
+    BindingTarget, PermissionContext,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -46,8 +50,17 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
         );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
+        let boundary_id = boundary_logical_id(logical_id);
+        let mut boundary = CfResource::new(boundary_id, "AWS::IAM::ManagedPolicy".to_string());
+        boundary.properties.insert(
+            "ManagedPolicyName".to_string(),
+            CfExpression::sub("${AWS::StackName}-deployment-management-boundary"),
+        );
+        boundary
+            .properties
+            .insert("PolicyDocument".to_string(), boundary_document(ctx)?);
         let policy_documents = remote_management_policy_documents(ctx)?;
-        let mut resources = vec![role];
+        let mut resources = vec![role, boundary];
         resources.extend(management_policy_resources(&role_id, policy_documents));
 
         Ok(resources)
@@ -61,9 +74,130 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
             ("roleName", CfExpression::ref_(&role_id)),
             ("roleArn", CfExpression::get_att(&role_id, "Arn")),
             ("managementPermissionsApplied", CfExpression::from(true)),
+            (
+                "permissionsBoundaryArn",
+                CfExpression::ref_(boundary_logical_id(logical_id)),
+            ),
+            ("permissionsBoundaryDocument", boundary_document(ctx)?),
         ];
         Ok(CfExpression::object(fields))
     }
+}
+
+fn boundary_logical_id(resource_logical_id: &str) -> String {
+    format!("{resource_logical_id}PermissionsBoundary")
+}
+
+fn boundary_document(ctx: &EmitContext<'_>) -> Result<CfExpression> {
+    let generate = |context: &PermissionContext| {
+        aws_stack_permissions_boundary(ctx.stack, context, |_, scope| {
+            boundary_grant_context(ctx, context, scope)
+        })
+        .context(ErrorData::GenericError {
+            message: "failed to generate AWS permissions boundary".to_string(),
+        })
+    };
+    validate_aws_boundary_size(ctx.stack).context(ErrorData::GenericError {
+        message: "failed to generate AWS permissions boundary".to_string(),
+    })?;
+    let document = generate(
+        &PermissionContext::new()
+            .with_stack_prefix("${AWS::StackName}")
+            .with_aws_region("${AWS::Region}")
+            .with_aws_account_id("${AWS::AccountId}")
+            .with_managing_role_arn("${ManagingRoleArn}")
+            .with_managing_account_id("${managingAccountId}")
+            .with_aws_permissions_boundary_arn(
+                "arn:aws:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary",
+            ),
+    )?;
+    let rendered = AwsCloudFormationPermissionsGenerator::new()
+        .render_document(&document)
+        .context(ErrorData::GenericError {
+            message: "failed to render AWS permissions boundary".to_string(),
+        })?;
+    let mut rendered = cf_from_json(rendered)?;
+    for (id, entry) in ctx.stack.resources() {
+        if entry.config.resource_type() != alien_core::Key::RESOURCE_TYPE {
+            continue;
+        }
+        if let Some(logical_id) = ctx.name_for(id) {
+            let key = format!("${{{logical_id}}}");
+            if entry.enabled_when.is_some()
+                && document["Statement"].as_array().is_some_and(|statements| {
+                    statements.iter().any(|statement| {
+                        statement["NotAction"] != "iam:*" && statement.to_string().contains(&key)
+                    })
+                })
+            {
+                return Err(AlienError::new(ErrorData::GenericError {
+                    message: format!("AWS permissions boundary key '{id}' used by inline grants must be unconditional"),
+                }));
+            }
+            replace_expression(
+                &mut rendered,
+                &CfExpression::sub(format!("arn:${{AWS::Partition}}:kms:${{AWS::Region}}:${{AWS::AccountId}}:key/${{{logical_id}}}")),
+                &crate::emitters::enabled::when_enabled(
+                    entry.enabled_when.as_deref(),
+                    CfExpression::get_att(logical_id, "Arn"),
+                    CfExpression::no_value(),
+                ),
+            );
+        }
+    }
+    // Resolve conditional ARN elements before JSON registration serialization:
+    // ToJsonString would otherwise preserve NoValue as a literal null.
+    if ctx.stack.resources.values().any(|entry| {
+        entry.config.resource_type() == alien_core::Key::RESOURCE_TYPE
+            && entry.enabled_when.is_some()
+    }) {
+        if let CfExpression::Object(fields) = &mut rendered {
+            if let Some(CfExpression::List(statements)) = fields.get_mut("Statement") {
+                for statement in statements {
+                    let CfExpression::Object(fields) = statement else {
+                        continue;
+                    };
+                    if fields.get("NotAction") != Some(&CfExpression::from("iam:*")) {
+                        continue;
+                    }
+                    if let Some(resources @ CfExpression::List(_)) = fields.get_mut("Resource") {
+                        let list = std::mem::replace(resources, CfExpression::Null);
+                        *resources = CfExpression::object([(
+                            "Fn::Split",
+                            CfExpression::list([
+                                CfExpression::from(","),
+                                CfExpression::join(",", list),
+                            ]),
+                        )]);
+                    }
+                }
+            }
+        }
+    }
+    Ok(rendered)
+}
+
+fn boundary_grant_context(
+    ctx: &EmitContext<'_>,
+    base: &PermissionContext,
+    scope: &str,
+) -> alien_permissions::Result<PermissionContext> {
+    alien_permissions::generators::aws_boundary_scope_context(ctx.stack, base, scope, |scope| {
+        if ctx.stack.resources[scope].config.resource_type() != alien_core::Key::RESOURCE_TYPE {
+            return Ok(None);
+        }
+        let logical_id = ctx.name_for(scope).ok_or_else(|| {
+            AlienError::new(alien_permissions::ErrorData::InvalidPermissionSet {
+                message: format!("AWS permissions boundary key '{scope}' has no setup resource"),
+            })
+        })?;
+        // Ref returns the generated key ID. Use that exact ID, never the stack prefix.
+        Ok(Some(format!(
+            "arn:aws:kms:{}:{}:key/${{{logical_id}}}",
+            base.aws_region.as_deref().unwrap_or_default(),
+            base.aws_account_id.as_deref().unwrap_or_default(),
+        )))
+    })
 }
 
 fn role_logical_id(resource_logical_id: &str) -> String {
@@ -111,7 +245,8 @@ fn remote_management_trust_policy(ctx: &EmitContext<'_>) -> CfExpression {
 fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
-    let context = permission_context();
+    let boundary_arn = "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary";
+    let context = permission_context().with_aws_permissions_boundary_arn(boundary_arn);
 
     if let Some(profile) = ctx.stack.management().profile() {
         for permission_set_ref in global_permission_refs(ctx, profile) {
@@ -204,7 +339,37 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
         ),
     ]));
 
-    chunk_managed_policy_statements(uniquify_iam_statement_sids(statements))
+    // Chunk against the complete expanded ARN before replacing it with a short Ref.
+    let mut documents = chunk_managed_policy_statements(uniquify_iam_statement_sids(statements))?;
+    let boundary_id = boundary_logical_id(required_logical_id(ctx)?);
+    for document in &mut documents {
+        replace_expression(
+            document,
+            &CfExpression::sub(boundary_arn),
+            &CfExpression::ref_(&boundary_id),
+        );
+    }
+    Ok(documents)
+}
+
+fn replace_expression(value: &mut CfExpression, from: &CfExpression, to: &CfExpression) {
+    if value == from {
+        *value = to.clone();
+        return;
+    }
+    match value {
+        CfExpression::List(values) => {
+            for value in values {
+                replace_expression(value, from, to);
+            }
+        }
+        CfExpression::Object(values) => {
+            for value in values.values_mut() {
+                replace_expression(value, from, to);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn management_policy_resources(

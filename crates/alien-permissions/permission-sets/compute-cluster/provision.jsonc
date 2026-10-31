@@ -3,6 +3,125 @@
   "description": "Allows creating and managing ComputeCluster compute infrastructure. Derived from AwsComputeClusterController, GcpComputeClusterController, AzureComputeClusterController API calls.",
   "platforms": {
     "aws": [
+      // Remove obsolete node agents' AWS managed policies. Detaching only removes
+      // permissions, so the role need not carry the boundary yet; ownership tags still apply.
+      // No attachment or other policy removal is authorized by these grants.
+      {
+        "grant": {
+          "actions": ["iam:DetachRolePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-role",
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-isolation-v1-role"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+              }
+            }
+          }
+        },
+        "label": "legacy-role-1"
+      },
+      {
+        "grant": {
+          "actions": ["iam:DetachRolePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-role",
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-isolation-v1-role"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-write-1"
+      },
+      {
+        "grant": {
+          "actions": ["iam:DetachRolePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-role",
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-isolation-v1-role"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+              }
+            }
+          }
+        },
+        "label": "legacy-role-2"
+      },
+      {
+        "grant": {
+          "actions": ["iam:DetachRolePolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-role",
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-isolation-v1-role"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:PolicyARN": "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+                "aws:ResourceTag/${managedByTag}": "runtime",
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        },
+        "label": "bounded-role-write-2"
+      },
       // Applied EC2 quota values and public instance-type hardware metadata.
       {
         "grant": { "actions": ["servicequotas:GetServiceQuota", "ec2:DescribeInstanceTypes"] },
@@ -29,7 +148,7 @@
       // Launch template creation must include Alien boundary tags in the request.
       {
         "grant": {
-          "actions": ["ec2:CreateLaunchTemplate", "ec2:CreateTags"]
+          "actions": ["ec2:CreateLaunchTemplate"]
         },
         "binding": {
           "stack": {
@@ -52,10 +171,37 @@
           }
         }
       },
-      // Existing launch templates can be deleted only when they carry Alien boundary tags.
       {
         "grant": {
-          "actions": ["ec2:DeleteLaunchTemplate"]
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateLaunchTemplate",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "CreateLaunchTemplate",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Existing launch templates must already carry runtime ownership tags.
+      {
+        "grant": {
+          "actions": ["ec2:DeleteLaunchTemplate", "ec2:CreateTags"]
         },
         "binding": {
           "stack": {
@@ -230,8 +376,9 @@
           }
         }
       },
-      // ASG creation is name-scoped and must include Alien boundary tags.
+      // Numeric versions keep role passing checked when an ASG changes templates.
       {
+        "label": "legacy-role-asg-create",
         "grant": {
           "actions": ["autoscaling:CreateAutoScalingGroup"]
         },
@@ -260,14 +407,129 @@
           }
         }
       },
-      // Existing ASGs can be changed only when they carry Alien boundary tags.
       {
+        "label": "bounded-role-asg-create",
+        "grant": {
+          "actions": ["autoscaling:CreateAutoScalingGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "Bool": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "Bool": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "legacy-role-asg-management",
         "grant": {
           "actions": [
             "autoscaling:DeleteAutoScalingGroup",
             "autoscaling:UpdateAutoScalingGroup",
             "autoscaling:SetDesiredCapacity"
           ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Capacity-only updates omit the version key; template changes supply it.
+      {
+        "label": "bounded-role-asg-update",
+        "grant": {
+          "actions": ["autoscaling:UpdateAutoScalingGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "BoolIfExists": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "BoolIfExists": {
+                "autoscaling:LaunchTemplateVersionSpecified": "true"
+              },
+              "Null": {
+                "autoscaling:LaunchConfigurationName": "true"
+              },
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "bounded-role-asg-management",
+        "grant": {
+          "actions": ["autoscaling:DeleteAutoScalingGroup", "autoscaling:SetDesiredCapacity"]
         },
         "binding": {
           "stack": {
@@ -400,20 +662,36 @@
           }
         }
       },
-      // iam:PassRole — scoped to stack-prefixed IAM roles created by setup.
+      // Only EC2 can receive these stack-prefixed instance roles.
       // CloudFormation role names are based on logical IDs and generated
       // suffixes, so they do not reliably end in a fixed role suffix.
       {
+        "label": "bounded-role-pass",
         "grant": {
           "actions": ["iam:PassRole"]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+            }
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
+            }
           }
+        }
+      },
+      // Setups without a boundary retain their existing role-passing grants.
+      {
+        "label": "legacy-role-pass",
+        "grant": { "actions": ["iam:PassRole"] },
+        "binding": {
+          "stack": { "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"] },
+          "resource": { "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"] }
         }
       }
     ],

@@ -5,6 +5,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The generated boundary exceeds the AWS managed-policy size limit.
+    #[error(
+        code = "PERMISSIONS_BOUNDARY_TOO_LARGE",
+        message = "AWS permissions boundary is {size} characters; the limit is {limit}. Reduce custom runtime permissions before rerunning setup.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    PermissionsBoundaryTooLarge { size: usize, limit: usize },
+
     /// An operation requests permissions outside its reviewed capability or installer scope.
     #[error(
         code = "OPERATION_PERMISSION_INVALID",

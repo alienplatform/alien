@@ -79,7 +79,7 @@ pub fn create_aws_storage_data_read_permission_set() -> PermissionSet {
 pub fn create_aws_storage_data_read_permission_set_with_condition() -> PermissionSet {
     let mut condition = IndexMap::new();
     let mut string_equals = IndexMap::new();
-    string_equals.insert("sts:ExternalId".to_string(), "${externalId}".to_string());
+    string_equals.insert("sts:ExternalId".to_string(), "${externalId}".into());
     condition.insert("StringEquals".to_string(), string_equals);
 
     PermissionSet {
@@ -406,7 +406,7 @@ pub fn create_aws_cloudformation_permission_set() -> PermissionSet {
 pub fn create_aws_lambda_permission_set() -> PermissionSet {
     let mut condition = IndexMap::new();
     let mut string_equals = IndexMap::new();
-    string_equals.insert("sts:ExternalId".to_string(), "${externalId}".to_string());
+    string_equals.insert("sts:ExternalId".to_string(), "${externalId}".into());
     condition.insert("StringEquals".to_string(), string_equals);
 
     PermissionSet {

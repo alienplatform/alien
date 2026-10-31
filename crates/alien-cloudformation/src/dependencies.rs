@@ -93,7 +93,7 @@ pub(crate) fn validate_acyclic(template: &CfTemplate) -> Result<()> {
     }
 }
 
-fn collect_references(expression: &CfExpression, references: &mut IndexSet<String>) {
+pub(crate) fn collect_references(expression: &CfExpression, references: &mut IndexSet<String>) {
     match expression {
         CfExpression::Object(values) => {
             if let (1, Some(CfExpression::String(target))) = (values.len(), values.get("Ref")) {

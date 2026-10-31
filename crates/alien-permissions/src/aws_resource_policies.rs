@@ -614,7 +614,7 @@ mod tests {
             statement.condition = Some(
                 [(
                     "StringEquals".to_string(),
-                    [("aws:ResourceTag/owner".to_string(), "x".to_string())].into(),
+                    [("aws:ResourceTag/owner".to_string(), "x".into())].into(),
                 )]
                 .into(),
             );

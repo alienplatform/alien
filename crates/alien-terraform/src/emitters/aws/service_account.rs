@@ -11,9 +11,9 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy,
-        emit_iam_role_policy_for_target_with_label, iam_role_name_template, jsonencode,
-        required_label, service_assume_role_policy, tags,
+        downcast, emit_iam_role_policy, emit_iam_role_policy_for_target_with_label,
+        iam_role_name_template, jsonencode, required_label, service_assume_role_policy,
+        stack_permission_context, tags,
     },
     expr,
 };
@@ -50,8 +50,7 @@ impl TfEmitter for AwsServiceAccountEmitter {
             ],
         ));
 
-        let context =
-            aws_terraform_permission_context().with_resource_name(service_account.id.clone());
+        let context = stack_permission_context(ctx).with_resource_name(service_account.id.clone());
         for (index, permission_set) in service_account.stack_permission_sets.iter().enumerate() {
             emit_iam_role_policy(&mut fragment, label, permission_set, index, &context)?;
         }
@@ -60,7 +59,7 @@ impl TfEmitter for AwsServiceAccountEmitter {
             let Some(target_id) = ServiceAccount::impersonation_target(ctx.stack, target) else {
                 continue;
             };
-            let context = aws_terraform_permission_context().with_resource_name(target_id.clone());
+            let context = stack_permission_context(ctx).with_resource_name(target_id.clone());
             for (index, set) in sets
                 .iter()
                 .enumerate()
