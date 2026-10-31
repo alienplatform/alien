@@ -1037,17 +1037,23 @@ fn resource_image_references(
     let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
         return Vec::new();
     };
-    let code_image = match &sandbox.code {
-        SandboxCode::Image { image, .. } => Some(image.as_str()),
-        SandboxCode::Source { .. } => None,
+    let (code_image, bundled_from) = match &sandbox.code {
+        SandboxCode::Image {
+            image,
+            bundled_from,
+        } => (Some(image.as_str()), bundled_from.as_deref()),
+        SandboxCode::Source { .. } => (None, None),
     };
     match sandbox_source {
         SandboxImageSource::None => Vec::new(),
         SandboxImageSource::Code => code_image.map(|image| (image, true)).into_iter().collect(),
+        // A release that carries a publisher's bundle in `code.image` names the image it was built
+        // from in `bundledFrom`, which a deployment with its own bundle Storage renders from.
         SandboxImageSource::CodeOrPrivateBaseImage => code_image
             .filter(|image| !image.starts_with("s3://"))
-            .map(|image| (image, true))
             .into_iter()
+            .chain(bundled_from)
+            .map(|image| (image, true))
             .chain(
                 sandbox
                     .private_base_image
@@ -3376,8 +3382,9 @@ mod tests {
     }
 
     /// A sandbox whose controller renders its own bundle builds `FROM` its released image, so
-    /// that image's repository is granted. A release that also names a published bundle keeps its
-    /// base granted too, for the setups that still build from the published bundle.
+    /// that image's repository is granted. A release that names a published bundle in
+    /// `code.image` keeps the released image in `bundledFrom`, granted the same, and its base
+    /// granted too, for the setups that still build from the published bundle.
     #[test]
     fn an_aws_sandbox_rendering_its_bundle_has_its_released_image_granted() {
         let released = format!(
@@ -3391,7 +3398,18 @@ mod tests {
         );
 
         let base = format!("{RENAMED_HOST}/sandbox-acme/acme-artifacts-{PROJECT}:v1");
-        let state = aws_state_with_stack(sandbox_stack_with_code(&released, Some(&base)));
+        let mut published = sandbox_stack(Some(&base));
+        let mut sandbox = published.resources["agents"]
+            .config
+            .downcast_ref::<Sandbox>()
+            .expect("a sandbox")
+            .clone();
+        sandbox.code = SandboxCode::Image {
+            image: STORED_BUNDLE_URI.to_string(),
+            bundled_from: Some(released.clone()),
+        };
+        published.resources["agents"].config = alien_core::Resource::new(sandbox);
+        let state = aws_state_with_stack(published);
         let mut granted = repository_ids_for_access(&RenamedRegistry, &state, PROJECT);
         granted.sort();
         assert_eq!(
