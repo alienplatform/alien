@@ -375,10 +375,12 @@ impl CredentialResolver for ImpersonationCredentialResolver {
 pub const PREVIOUS_MANAGEMENT_BINDING: &str = "previous-management";
 
 /// Impersonate the management identity a deployment's stack trusts: the AWS role its management
-/// config names, which is either the current `management` binding or the
-/// [`PREVIOUS_MANAGEMENT_BINDING`]. A deployment with no recorded role, or on another platform,
-/// uses the current binding. A recorded role neither binding holds is refused before any
-/// AssumeRole, so it surfaces as a configuration error rather than an access denial.
+/// config names, which is either the manager's current identity or the
+/// [`PREVIOUS_MANAGEMENT_BINDING`]. Manager stacks bind the current identity as `management`, or
+/// as `management-sa` when there is no `management` binding. A deployment with no recorded role,
+/// or on another platform, uses the `management` binding. A recorded role no binding holds is
+/// refused before any AssumeRole, so it surfaces as a configuration error rather than an access
+/// denial.
 pub async fn impersonate_management_sa_trusted_by(
     bindings_provider: &dyn BindingsProviderApi,
     platform: Platform,
@@ -389,12 +391,16 @@ pub async fn impersonate_management_sa_trusted_by(
         (Some(ManagementConfig::Aws(config)), Platform::Aws) => &config.managing_role_arn,
         _ => return impersonate_management_sa(bindings_provider, platform).await,
     };
-    if management_role_arn(bindings_provider, "management", platform)
-        .await?
-        .as_ref()
-        == Some(trusted_role)
-    {
-        return impersonate_service_account(bindings_provider, "management", platform).await;
+    let (current_binding, current_role) =
+        match management_role_arn(bindings_provider, "management", platform).await? {
+            Some(role) => ("management", Some(role)),
+            None => (
+                "management-sa",
+                management_role_arn(bindings_provider, "management-sa", platform).await?,
+            ),
+        };
+    if current_role.as_ref() == Some(trusted_role) {
+        return impersonate_service_account(bindings_provider, current_binding, platform).await;
     }
     if management_role_arn(bindings_provider, PREVIOUS_MANAGEMENT_BINDING, platform)
         .await?
@@ -1235,6 +1241,20 @@ mod tests {
 
     /// A resolver holding the current management role and the previous one.
     fn aws_resolver_with_previous_role(sts_url: String) -> ImpersonationCredentialResolver {
+        aws_resolver_holding(
+            sts_url,
+            &[
+                ("management", AWS_MANAGEMENT_ROLE),
+                (PREVIOUS_MANAGEMENT_BINDING, AWS_PREVIOUS_MANAGEMENT_ROLE),
+            ],
+        )
+    }
+
+    /// A resolver whose manager binds each `(binding, role ARN)` pair.
+    fn aws_resolver_holding(
+        sts_url: String,
+        roles: &[(&str, &str)],
+    ) -> ImpersonationCredentialResolver {
         let base_config = ClientConfig::Aws(Box::new(AwsClientConfig {
             account_id: "123456789012".to_string(),
             region: "us-east-2".to_string(),
@@ -1247,20 +1267,15 @@ mod tests {
                 endpoints: HashMap::from([("sts".to_string(), sts_url)]),
             }),
         }));
-        let binding = |name: &str, arn: &str| {
-            serde_json::to_value(ServiceAccountBinding::aws_iam(name, arn))
-                .expect("management binding should serialize")
-        };
-        let bindings = HashMap::from([
-            (
-                "management".to_string(),
-                binding("manager-management", AWS_MANAGEMENT_ROLE),
-            ),
-            (
-                PREVIOUS_MANAGEMENT_BINDING.to_string(),
-                binding("manager-management-previous", AWS_PREVIOUS_MANAGEMENT_ROLE),
-            ),
-        ]);
+        let bindings = roles
+            .iter()
+            .map(|(binding, arn)| {
+                let role_name = arn.rsplit('/').next().expect("role ARN has a name");
+                let value = serde_json::to_value(ServiceAccountBinding::aws_iam(role_name, *arn))
+                    .expect("management binding should serialize");
+                (binding.to_string(), value)
+            })
+            .collect::<HashMap<_, _>>();
         let provider: Arc<dyn BindingsProviderApi> = Arc::new(
             BindingsProvider::new(base_config, bindings)
                 .expect("AWS management bindings provider should be valid"),
@@ -1322,6 +1337,44 @@ mod tests {
             management.assert_async().await;
             customer.assert_async().await;
         }
+    }
+
+    /// A manager stack that binds its current role as `management-sa`, with no `management`
+    /// binding, reaches the deployments that trust that role.
+    #[tokio::test]
+    async fn a_current_role_bound_as_management_sa_reaches_deployments_trusting_it() {
+        let server = httpmock::MockServer::start_async().await;
+        let management = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).body_contains(format!(
+                    "RoleArn={}",
+                    urlencoding::encode(AWS_MANAGEMENT_ROLE)
+                ));
+                then.status(200)
+                    .header("content-type", "text/xml")
+                    .body(aws_assume_role_xml(AWS_MANAGEMENT_ROLE, "ASIAMANAGER"));
+            })
+            .await;
+        let customer = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .body_contains(format!("RoleArn={}", urlencoding::encode(AWS_TARGET_ROLE)));
+                then.status(200)
+                    .header("content-type", "text/xml")
+                    .body(aws_assume_role_xml(AWS_TARGET_ROLE, "ASIACUSTOMER"));
+            })
+            .await;
+
+        aws_resolver_holding(server.base_url(), &[("management-sa", AWS_MANAGEMENT_ROLE)])
+            .resolve_from_env(
+                &aws_deployment_trusting(Some(AWS_MANAGEMENT_ROLE)),
+                HashMap::new(),
+            )
+            .await
+            .expect("the role the stack trusts is the manager's current identity");
+
+        management.assert_async().await;
+        customer.assert_async().await;
     }
 
     /// A previous binding that is present but unusable reports why, rather than reading as a
