@@ -27,9 +27,7 @@ use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
 use crate::error::ErrorData;
 use crate::ids;
-use crate::loops::deployment::{
-    parse_status, target_release_stack, ManagementIdentityUse, RunnerConfigSources,
-};
+use crate::loops::deployment::{target_release_stack, ManagementRenderer, RunnerConfigSources};
 use crate::traits::{
     CreateDeploymentParams, CreateTokenParams, DeploymentAcquireMode, DeploymentFilter,
     DeploymentRecord, ReconcileData, ReconcileInput, ReleaseRecord, TokenType,
@@ -573,9 +571,11 @@ async fn acquired_deployment_response(
         Some(release_id) => target_release_stack(release_store, record, release_id).await?,
         None => None,
     };
-    let management_config = crate::loops::deployment::resolve_runner_management_config(
+    let management_config = crate::loops::deployment::resolve_deployment_management_config(
         sources.credential_resolver,
         record,
+        record.platform,
+        ManagementRenderer::Runner,
     )
     .await?;
     let config = sources
@@ -3395,7 +3395,7 @@ fn resolve_pull_input_environment(
 
 /// The management identity a pull deployment's target renders with; see
 /// [`crate::loops::deployment::resolve_deployment_management_config`] and
-/// [`ManagementIdentityUse::for_pull_target`].
+/// [`ManagementRenderer::PullTarget`].
 pub(crate) async fn pull_management_config(
     state: &AppState,
     deployment: &DeploymentRecord,
@@ -3404,7 +3404,7 @@ pub(crate) async fn pull_management_config(
         state.credential_resolver.as_ref(),
         deployment,
         management_platform(deployment.platform, deployment.base_platform),
-        ManagementIdentityUse::for_pull_target(parse_status(&deployment.status)),
+        ManagementRenderer::PullTarget,
     )
     .await
 }
