@@ -16,6 +16,10 @@ import {
 
 export type StatusReport = {
   /**
+   * Approved configuration revision confirmed Running by the site.
+   */
+  appliedConfigurationRevision?: string | null | undefined;
+  /**
    * Resource observations captured by the Operator alongside this state.
    */
   heartbeats?: Array<ResourceHeartbeat> | undefined;
@@ -35,6 +39,7 @@ export type StatusReport = {
 
 /** @internal */
 export type StatusReport$Outbound = {
+  appliedConfigurationRevision?: string | null | undefined;
   heartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   state: { [k: string]: any };
   telemetry?: Array<ReportedTelemetry$Outbound> | undefined;
@@ -46,6 +51,7 @@ export const StatusReport$outboundSchema: z.ZodType<
   StatusReport$Outbound,
   StatusReport
 > = z.object({
+  appliedConfigurationRevision: z.nullable(z.string()).optional(),
   heartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   state: z.record(z.string(), z.any()),
   telemetry: z.array(ReportedTelemetry$outboundSchema).optional(),

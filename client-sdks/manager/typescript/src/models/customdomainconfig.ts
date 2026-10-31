@@ -22,9 +22,13 @@ export type CustomDomainConfig = {
    */
   certificate: CustomCertificateConfig;
   /**
-   * Fully qualified domain name to use.
+   * Fully qualified domain name for a supplied certificate.
    */
-  domain: string;
+  domain?: string | undefined;
+  /**
+   * Hostnames keyed by endpoint name for a managed certificate.
+   */
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 /** @internal */
@@ -33,12 +37,14 @@ export const CustomDomainConfig$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   certificate: CustomCertificateConfig$inboundSchema,
-  domain: z.string(),
+  domain: z.string().optional(),
+  endpoints: z.record(z.string(), z.string()).optional(),
 });
 /** @internal */
 export type CustomDomainConfig$Outbound = {
   certificate: CustomCertificateConfig$Outbound;
-  domain: string;
+  domain?: string | undefined;
+  endpoints?: { [k: string]: string } | undefined;
 };
 
 /** @internal */
@@ -47,7 +53,8 @@ export const CustomDomainConfig$outboundSchema: z.ZodType<
   CustomDomainConfig
 > = z.object({
   certificate: CustomCertificateConfig$outboundSchema,
-  domain: z.string(),
+  domain: z.string().optional(),
+  endpoints: z.record(z.string(), z.string()).optional(),
 });
 
 export function customDomainConfigToJSON(

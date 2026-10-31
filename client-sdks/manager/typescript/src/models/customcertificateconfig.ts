@@ -30,6 +30,12 @@ import {
   KubernetesCustomCertificateConfig$Outbound,
   KubernetesCustomCertificateConfig$outboundSchema,
 } from "./kubernetescustomcertificateconfig.js";
+import {
+  ManagedCustomCertificateConfig,
+  ManagedCustomCertificateConfig$inboundSchema,
+  ManagedCustomCertificateConfig$Outbound,
+  ManagedCustomCertificateConfig$outboundSchema,
+} from "./managedcustomcertificateconfig.js";
 
 /**
  * Platform-specific certificate references for custom domains.
@@ -39,6 +45,7 @@ export type CustomCertificateConfig = {
   azure?: AzureCustomCertificateConfig | null | undefined;
   gcp?: GcpCustomCertificateConfig | null | undefined;
   kubernetes?: KubernetesCustomCertificateConfig | null | undefined;
+  managed?: ManagedCustomCertificateConfig | null | undefined;
 };
 
 /** @internal */
@@ -51,6 +58,7 @@ export const CustomCertificateConfig$inboundSchema: z.ZodType<
   gcp: z.nullable(GcpCustomCertificateConfig$inboundSchema).optional(),
   kubernetes: z.nullable(KubernetesCustomCertificateConfig$inboundSchema)
     .optional(),
+  managed: z.nullable(ManagedCustomCertificateConfig$inboundSchema).optional(),
 });
 /** @internal */
 export type CustomCertificateConfig$Outbound = {
@@ -58,6 +66,7 @@ export type CustomCertificateConfig$Outbound = {
   azure?: AzureCustomCertificateConfig$Outbound | null | undefined;
   gcp?: GcpCustomCertificateConfig$Outbound | null | undefined;
   kubernetes?: KubernetesCustomCertificateConfig$Outbound | null | undefined;
+  managed?: ManagedCustomCertificateConfig$Outbound | null | undefined;
 };
 
 /** @internal */
@@ -70,6 +79,7 @@ export const CustomCertificateConfig$outboundSchema: z.ZodType<
   gcp: z.nullable(GcpCustomCertificateConfig$outboundSchema).optional(),
   kubernetes: z.nullable(KubernetesCustomCertificateConfig$outboundSchema)
     .optional(),
+  managed: z.nullable(ManagedCustomCertificateConfig$outboundSchema).optional(),
 });
 
 export function customCertificateConfigToJSON(
