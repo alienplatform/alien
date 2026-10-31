@@ -251,8 +251,8 @@ fn a_config_change_with_new_edges_is_still_an_update() {
     assert_eq!(plan.updates.keys().collect::<Vec<_>>(), ["objects"]);
 }
 
-/// Deletion ordering reads recorded edges. When a release drops a setup-owned resource's edge
-/// along with the resource it pointed to, recording the removal is what lets that delete start.
+/// Deletes wait on recorded edges. When a release drops a setup-owned resource's edge along with
+/// the resource it pointed to, recording the removal is what lets that delete start.
 #[tokio::test]
 async fn recording_a_removed_edge_releases_the_old_dependency_for_deletion() {
     let (stack, mut state) = release_adding_an_edge(setup_owned_subjects());
@@ -271,24 +271,23 @@ async fn recording_a_removed_edge_releases_the_old_dependency_for_deletion() {
 
     let executor = executor(&stack, InitialSetupAuthority::ImportedHandoff);
     let plan = executor.plan(&state).unwrap();
-    assert!(
-        plan.deletes.is_empty(),
-        "cache is still recorded as a dependency"
-    );
+    assert_eq!(plan.deletes, ["cache"]);
+    assert!(plan.updates.is_empty());
     let mut recorded = plan.dependency_records.clone();
     recorded.sort();
     assert_eq!(recorded, ["execution-sa", "objects"]);
 
-    // This step only records: the deletes were planned before it, and there were none.
+    // The first step checks the delete against the edges recorded before it, so cache waits.
     let next = executor.step(state).await.unwrap().next_state;
     for id in ["execution-sa", "objects"] {
         assert!(next.resources[id].dependencies.is_empty(), "{id}");
+        assert_eq!(next.resources[id].status, ResourceStatus::Running, "{id}");
     }
-    assert_eq!(
-        executor.plan(&next).unwrap().deletes,
-        ["cache"],
-        "with the removal recorded, nothing holds cache"
-    );
+    assert_eq!(next.resources["cache"].status, ResourceStatus::Running);
+
+    // With the removal recorded, nothing holds cache.
+    let next = executor.step(next).await.unwrap().next_state;
+    assert_eq!(next.resources["cache"].status, ResourceStatus::Deleting);
 }
 
 /// A setup-owned resource already exists, so its new edge waits for nothing: it is recorded even
