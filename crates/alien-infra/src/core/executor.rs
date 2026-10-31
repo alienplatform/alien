@@ -2225,13 +2225,9 @@ impl StackExecutor {
                                     );
                                     let failed_state = resource_state.with_failure(
                                         ResourceStatus::DeleteFailed,
-                                        AlienError::new(
-                                            ErrorData::ResourceStateSerializationFailed {
-                                                resource_id: resource_id.clone(),
-                                                message: "Missing controller state for non-external resource deletion"
-                                                    .to_string(),
-                                            },
-                                        )
+                                        AlienError::new(ErrorData::ResourceProvenanceUnknown {
+                                            resource_id: resource_id.clone(),
+                                        })
                                         .into_generic(),
                                     );
                                     *resource_state = failed_state;

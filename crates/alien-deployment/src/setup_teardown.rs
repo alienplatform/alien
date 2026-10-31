@@ -2338,20 +2338,21 @@ mod tests {
         assert!(released.error.is_none());
     }
 
-    /// A record written before adoption was recorded can't be told apart from a resource that
-    /// lost its controller. Teardown fails, and a retry fails again rather than reading the
-    /// failed delete as never created and dropping a database that still exists.
+    /// The false erase: a record written before adoption was recorded can't be told apart from
+    /// a resource that lost its controller. Teardown must fail on every attempt and keep the
+    /// database in the record. Before, the second attempt read the failed delete as never
+    /// created, dropped the record and reported the deployment erased while the database was
+    /// still running.
     #[tokio::test]
     async fn erase_of_a_controllerless_resource_not_recorded_as_bound_fails_on_every_attempt() {
         let mut state = erase_handoff_with_site_bound_database().await;
-        state
-            .stack_state
-            .as_mut()
+        // The record as an operator without adoption recording wrote it.
+        let mut legacy = serde_json::to_value(state.stack_state.as_ref().unwrap()).unwrap();
+        legacy["resources"]["database"]
+            .as_object_mut()
             .unwrap()
-            .resources
-            .get_mut("database")
-            .unwrap()
-            .external_binding = false;
+            .remove("externalBinding");
+        state.stack_state = Some(serde_json::from_value(legacy).unwrap());
 
         let recorded_config = state.stack_state.as_ref().unwrap().resources["database"]
             .config
@@ -2368,7 +2369,7 @@ mod tests {
             assert_eq!(
                 state.status,
                 DeploymentStatus::TeardownFailed,
-                "attempt {attempt}"
+                "attempt {attempt} must not report the deployment erased"
             );
             let database = &state.stack_state.as_ref().unwrap().resources["database"];
             assert_eq!(
@@ -2380,11 +2381,14 @@ mod tests {
                 database.config, recorded_config,
                 "attempt {attempt} must keep the database in the record"
             );
-            assert_eq!(
-                database.error.as_ref().map(|error| error.code.as_str()),
-                Some("RESOURCE_STATE_SERIALIZATION_FAILED"),
-                "attempt {attempt}"
-            );
         }
+
+        let error = state.stack_state.as_ref().unwrap().resources["database"]
+            .error
+            .as_ref()
+            .expect("the database names why it can't be deleted");
+        assert_eq!(error.code, "RESOURCE_PROVENANCE_UNKNOWN");
+        assert!(error.message.contains("'database'"), "{}", error.message);
+        assert!(!error.internal, "the operator must see why");
     }
 }
