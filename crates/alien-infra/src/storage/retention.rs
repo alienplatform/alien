@@ -1,6 +1,6 @@
 //! Protect retained storage before removing runtime access.
 
-use alien_aws_clients::s3::S3Api;
+use alien_aws_clients::s3::{QueueConfiguration, S3Api};
 use alien_azure_clients::azure::models::blob::{
     BlobContainer, ContainerProperties, ContainerPropertiesPublicAccess,
 };
@@ -20,15 +20,15 @@ use crate::{
     StackResourceStateExt,
 };
 
-/// ARNs of the queues a Storage notifies, now or before its last update, read from the
-/// installed queue state.
-fn notified_queue_arns(
+/// The S3 queue configurations setup wrote for a Storage's rules, now or before its last
+/// update, with queue ARNs read from the installed queue state.
+fn setup_written_rules(
     state: &StackState,
     resource: &StackResourceState,
     config: &AwsClientConfig,
     id: &str,
-) -> Result<Vec<String>> {
-    let mut arns = Vec::new();
+) -> Result<Vec<QueueConfiguration>> {
+    let mut rules = Vec::new();
     for storage in std::iter::once(&resource.config)
         .chain(resource.previous_config.iter())
         .filter_map(|config| config.downcast_ref::<Storage>())
@@ -45,13 +45,14 @@ fn notified_queue_arns(
                     "A notified queue has no recorded name in installed state",
                 )
             })?;
-            let arn = format!("arn:aws:sqs:{}:{}:{name}", config.region, config.account_id);
-            if !arns.contains(&arn) {
-                arns.push(arn);
-            }
+            rules.push(super::aws_notifications::queue_configuration(
+                notification,
+                format!("arn:aws:sqs:{}:{}:{name}", config.region, config.account_id),
+                None,
+            ));
         }
     }
-    Ok(arns)
+    Ok(rules)
 }
 
 /// Stop S3/GCS lifecycle actions and revoke declared public reads on retained storage.
@@ -180,9 +181,8 @@ pub async fn protect_retained_storage(
                         .and_then(|previous| previous.downcast_ref::<Storage>())
                         .is_some_and(|previous| !previous.notifications.is_empty())
                 {
-                    let setup_queue_arns = if resource.lifecycle == Some(ResourceLifecycle::Frozen)
-                    {
-                        notified_queue_arns(state, resource, config, id)?
+                    let setup_rules = if resource.lifecycle == Some(ResourceLifecycle::Frozen) {
+                        setup_written_rules(state, resource, config, id)?
                     } else {
                         Vec::new()
                     };
@@ -191,7 +191,7 @@ pub async fn protect_retained_storage(
                         &state.resource_prefix,
                         name,
                         id,
-                        &setup_queue_arns,
+                        &setup_rules,
                     )
                     .await?;
                 }
@@ -661,21 +661,31 @@ mod tests {
         .unwrap());
     }
 
-    /// CloudFormation can't put an Id on a queue configuration, so S3 assigns one. Retaining
-    /// a setup-owned bucket must still remove the entry, or it keeps pointing at the
-    /// deployment's deleted queue; entries for other destinations stay.
+    /// CloudFormation can't put an Id on a queue configuration; S3 assigns a random one.
+    /// Retaining a setup-owned bucket must still remove exactly the entries setup wrote, or
+    /// they keep pointing at the deployment's deleted queue. Hand-made entries stay, even
+    /// one to the same queue with another filter.
     #[tokio::test]
-    async fn s3_retention_of_setup_owned_bucket_removes_entries_for_its_notified_queues() {
-        let entry = |id: &str, queue: &str| QueueConfiguration {
+    async fn s3_retention_of_setup_owned_bucket_removes_exactly_the_rules_setup_wrote() {
+        let entry = |id: &str, queue: &str, prefix: &str| QueueConfiguration {
             id: Some(id.into()),
             queue_arn: format!("arn:aws:sqs:us-east-1:123456789012:{queue}"),
             events: vec!["s3:ObjectCreated:*".into()],
-            filter: None,
+            filter: Some(alien_aws_clients::s3::NotificationFilter {
+                key: alien_aws_clients::s3::S3KeyFilter {
+                    filter_rules: vec![alien_aws_clients::s3::FilterRule {
+                        name: "Prefix".into(),
+                        value: prefix.into(),
+                    }],
+                },
+            }),
         };
+        let ours = "owned-jobs-Jobs-8Ox1f1kjoMGG";
         let document = NotificationConfiguration {
             queue_configurations: vec![
-                entry("NjM1ZmM0YzEtYjA3", "owned-jobs-Jobs-8Ox1f1kjoMGG"),
-                entry("manual", "elsewhere"),
+                entry("ZDI2MTI4NmYtM2ExYy00MDg2LWIy", ours, "in/"),
+                entry("manual-same-queue", ours, "manual/"),
+                entry("manual", "elsewhere", "in/"),
             ],
             lambda_function_configurations: vec![LambdaFunctionConfiguration {
                 id: Some("worker".into()),
@@ -765,7 +775,10 @@ mod tests {
             if let Some(remaining) = written.first() {
                 assert_eq!(
                     remaining.queue_configurations,
-                    [entry("manual", "elsewhere")]
+                    [
+                        entry("manual-same-queue", ours, "manual/"),
+                        entry("manual", "elsewhere", "in/")
+                    ]
                 );
                 assert_eq!(
                     remaining.lambda_function_configurations,

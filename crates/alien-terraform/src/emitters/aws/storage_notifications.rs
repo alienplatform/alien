@@ -79,6 +79,10 @@ pub(super) fn emit(
         &format!("{label}_notifications"),
         body,
     ));
+    // Destroying it writes an empty document. When the bucket is retained, retention has
+    // already removed exactly the entries setup wrote, so detach it with the bucket and
+    // keep every entry someone else added.
+    fragment.retain_state(|kind, _| kind == "aws_s3_bucket_notification");
     Ok(())
 }
 

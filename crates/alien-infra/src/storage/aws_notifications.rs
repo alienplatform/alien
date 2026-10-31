@@ -14,7 +14,7 @@ use alien_aws_clients::s3::{
 use alien_client_core::ErrorData as ClientError;
 use alien_core::{
     storage_notifications::{aws_notification_id, aws_notification_id_prefix},
-    Storage,
+    Storage, StorageNotification,
 };
 use alien_error::{AlienError, ContextError};
 
@@ -49,32 +49,50 @@ fn desired_configurations(
                 dependency_id: notification.queue.id.clone(),
             })
         })?;
-        let filter_rules: Vec<FilterRule> = [
-            ("prefix", &notification.prefix),
-            ("suffix", &notification.suffix),
-        ]
-        .into_iter()
-        .filter_map(|(name, value)| {
-            value.as_ref().map(|value| FilterRule {
-                name: name.into(),
-                value: value.clone(),
-            })
-        })
-        .collect();
-        configurations.push(QueueConfiguration {
-            id: Some(aws_notification_id(ctx.resource_prefix, &storage.id, index)),
-            queue_arn: format!("arn:aws:sqs:{}:{}:{queue_name}", cfg.region, cfg.account_id),
-            events: vec![CREATED.into()],
-            filter: (!filter_rules.is_empty()).then(|| NotificationFilter {
-                key: S3KeyFilter { filter_rules },
-            }),
-        });
+        configurations.push(queue_configuration(
+            notification,
+            format!("arn:aws:sqs:{}:{}:{queue_name}", cfg.region, cfg.account_id),
+            Some(aws_notification_id(ctx.resource_prefix, &storage.id, index)),
+        ));
     }
     Ok(configurations)
 }
 
+/// The S3 queue configuration a rule becomes, as setup and the controller write it.
+pub(super) fn queue_configuration(
+    notification: &StorageNotification,
+    queue_arn: String,
+    id: Option<String>,
+) -> QueueConfiguration {
+    let filter_rules: Vec<FilterRule> = [
+        ("prefix", &notification.prefix),
+        ("suffix", &notification.suffix),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| {
+        value.as_ref().map(|value| FilterRule {
+            name: name.into(),
+            value: value.clone(),
+        })
+    })
+    .collect();
+    QueueConfiguration {
+        id,
+        queue_arn,
+        events: vec![CREATED.into()],
+        filter: (!filter_rules.is_empty()).then(|| NotificationFilter {
+            key: S3KeyFilter { filter_rules },
+        }),
+    }
+}
+
 /// S3 returns filter names as `Prefix`/`Suffix` and may reorder rules and events.
 fn normalized(configuration: &QueueConfiguration) -> impl PartialEq + std::fmt::Debug {
+    (configuration.id.clone(), rule_of(configuration))
+}
+
+/// What an entry delivers, without its Id.
+fn rule_of(configuration: &QueueConfiguration) -> impl PartialEq + std::fmt::Debug {
     let mut events = configuration.events.clone();
     events.sort();
     let mut filters: Vec<(String, String)> = configuration
@@ -84,22 +102,19 @@ fn normalized(configuration: &QueueConfiguration) -> impl PartialEq + std::fmt::
         .map(|rule| (rule.name.to_ascii_lowercase(), rule.value.clone()))
         .collect();
     filters.sort();
-    (
-        configuration.id.clone(),
-        configuration.queue_arn.clone(),
-        events,
-        filters,
-    )
+    (configuration.queue_arn.clone(), events, filters)
 }
 
 /// Which queue configurations a Storage owns: those whose Id starts with the owner
-/// prefix, and on retention of a setup-owned bucket also those delivering to one of the
-/// queues it notified. CloudFormation can't set an Id on a queue configuration, so S3
-/// assigns one, and those queues are deleted with the deployment: an entry left pointing
-/// at one would make every later write of the document fail S3's destination check.
+/// prefix, and on retention of a setup-owned bucket also those that are exactly one of
+/// the rules setup wrote. CloudFormation can't set an Id on a queue configuration, and S3
+/// gives each entry a random Id that changes on every stack update, so only the rule
+/// identifies those entries. S3 rejects two entries that can match the same key, so a
+/// document holds at most one entry with a given rule. Hand-made entries, including
+/// ones to the same queue with other filters, are never owned.
 struct Owned<'a> {
     prefix: &'a str,
-    setup_queue_arns: &'a [String],
+    setup_rules: &'a [QueueConfiguration],
 }
 
 impl Owned<'_> {
@@ -108,7 +123,10 @@ impl Owned<'_> {
             .id
             .as_deref()
             .is_some_and(|id| id.starts_with(self.prefix))
-            || self.setup_queue_arns.contains(&configuration.queue_arn)
+            || self
+                .setup_rules
+                .iter()
+                .any(|rule| rule_of(rule) == rule_of(configuration))
     }
 }
 
@@ -160,7 +178,7 @@ pub(super) async fn reconcile(
         s3.as_ref(),
         &Owned {
             prefix: &aws_notification_id_prefix(ctx.resource_prefix, &storage.id),
-            setup_queue_arns: &[],
+            setup_rules: &[],
         },
         bucket,
         &storage.id,
@@ -171,20 +189,25 @@ pub(super) async fn reconcile(
 }
 
 /// Retention keeps the bucket and its data but removes this Storage's entries.
-/// `setup_queue_arns` are the queues a setup-owned Storage notified (see [`Owned`]); a
+/// `setup_rules` are the entries setup wrote for a setup-owned Storage (see [`Owned`]); a
 /// Live Storage passes none, because its controller wrote an Id on every entry.
+///
+/// S3 validates every destination left in the document. Retention runs before setup
+/// teardown deletes the queues, so this Storage's entries go while their queue exists. A
+/// kept entry whose destination is already gone makes the write fail; that is reported,
+/// and the entry is never dropped.
 pub(super) async fn remove_owned(
     client: &dyn S3Api,
     prefix: &str,
     bucket: &str,
     id: &str,
-    setup_queue_arns: &[String],
+    setup_rules: &[QueueConfiguration],
 ) -> Result<()> {
     write_owned(
         client,
         &Owned {
             prefix: &aws_notification_id_prefix(prefix, id),
-            setup_queue_arns,
+            setup_rules,
         },
         bucket,
         id,
@@ -217,6 +240,15 @@ async fn write_owned(
     {
         Ok(()) => Ok(()),
         Err(error) if removing && missing(&error) => Ok(()),
+        Err(error) if removing => Err(error.context(ErrorData::CloudPlatformError {
+            resource_id: Some(id.into()),
+            message: format!(
+                "Remove this Storage's queue notifications from bucket '{bucket}'. S3 validates \
+                 every destination left in the document, and entries this deployment didn't \
+                 create are kept: if one points at a queue, topic or function that no longer \
+                 exists, fix or remove it, then retry"
+            ),
+        })),
         Err(error) => Err(error.context(cloud_error(id, "Write", bucket))),
     }
 }
