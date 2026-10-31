@@ -16,14 +16,14 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        downcast, permission_context, remote_bindings_role_label, required_label,
-        resource_prefix_template, service_account_principal_id, setup_execution_role_label,
+        downcast, emit_profile_grants, permission_context, remote_bindings_role_label,
+        required_label, resource_prefix_template, ProfileGrants,
     },
     expr,
 };
 use alien_core::{
-    import::EmitContext, AzureServiceBusNamespace, ErrorData, PermissionProfile, PermissionSet,
-    PermissionSetReference, Queue, RemoteBindings, Result, Worker, WorkerTrigger,
+    import::EmitContext, AzureServiceBusNamespace, ErrorData, Queue, RemoteBindings, Result,
+    Worker, WorkerTrigger,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
@@ -73,7 +73,19 @@ impl TfEmitter for AzureQueueEmitter {
         );
 
         let mut fragment = TfFragment::default().with_resource(q);
-        emit_profile_grants(ctx, &mut fragment, label)?;
+        // A resource-scoped grant is on this queue; the permission sets' scope template
+        // assumes a per-queue namespace that setup does not use.
+        emit_profile_grants(
+            ctx,
+            &mut fragment,
+            label,
+            ProfileGrants {
+                resource_type: "queue",
+                context: permission_context(label)
+                    .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id)),
+                scope: Some(expr::traversal(["azurerm_servicebus_queue", label, "id"])),
+            },
+        )?;
         emit_remote_access(ctx, &mut fragment, label)?;
         Ok(fragment)
     }
@@ -168,151 +180,6 @@ fn lock_duration_for(ctx: &EmitContext<'_>) -> u32 {
         return 30;
     }
     max_function_timeout.saturating_mul(2).clamp(5, 300)
-}
-
-/// Grants that permission profiles hold on this queue, for example a Worker identity's
-/// `queue/data-read`. Setup creates the queue, and an imported queue starts out Ready, so
-/// its controller never applies them at runtime; setup must, as it does for Storage.
-fn emit_profile_grants(
-    ctx: &EmitContext<'_>,
-    fragment: &mut TfFragment,
-    label: &str,
-) -> Result<()> {
-    for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let refs = queue_permission_refs(profile, ctx.resource_id);
-        if refs.is_empty() {
-            continue;
-        }
-        let Some(principal_id) = service_account_principal_id(ctx, profile_name) else {
-            continue;
-        };
-        for permission_set_ref in refs {
-            let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
-            if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
-            {
-                continue;
-            }
-            let grant_plan = AzureRuntimePermissionsGenerator::new()
-                .generate_grant_plan(
-                    &permission_set,
-                    BindingTarget::Resource,
-                    &permission_context(label).with_resource_name(format!(
-                        "${{local.resource_prefix}}-{}",
-                        ctx.resource_id
-                    )),
-                )
-                .context(ErrorData::GenericError {
-                    message: format!(
-                        "failed to generate Azure queue grants for '{}'",
-                        permission_set.id
-                    ),
-                })?;
-            for (index, binding) in grant_plan.bindings.iter().enumerate() {
-                let role_definition_id = match &binding.role_definition {
-                    AzureRoleDefinitionRef::Predefined { role_definition_id } => {
-                        expr::template(role_definition_id.clone())
-                    }
-                    AzureRoleDefinitionRef::Custom { key } => {
-                        let role_index = grant_plan
-                            .custom_roles
-                            .iter()
-                            .position(|role| &role.key == key)
-                            .ok_or_else(|| {
-                                AlienError::new(ErrorData::GenericError {
-                                    message: format!(
-                                        "Azure queue permission set '{}' references missing custom role '{key}'",
-                                        permission_set.id
-                                    ),
-                                })
-                            })?;
-                        let role_label = setup_execution_role_label(
-                            profile_name,
-                            &binding.role_name,
-                            role_index,
-                        );
-                        expr::traversal([
-                            "azurerm_role_definition",
-                            role_label.as_str(),
-                            "role_definition_resource_id",
-                        ])
-                    }
-                };
-                let role_label = sanitize_label(&binding.role_name);
-                fragment.resource_blocks.push(resource_block(
-                    "azurerm_role_assignment",
-                    &format!("{label}_{role_label}_{profile_name}_assignment_{index}"),
-                    [
-                        attr(
-                            "name",
-                            expr::raw(format!(
-                                "uuidv5(\"oid\", \"deployment:azure:queue-role-assign:${{local.resource_prefix}}:{}:{role_label}:{profile_name}:{index}\")",
-                                ctx.resource_id
-                            )),
-                        ),
-                        // A resource-scoped grant is on this queue; the permission set's
-                        // scope template assumes a per-queue namespace that setup does not use.
-                        attr(
-                            "scope",
-                            expr::traversal(["azurerm_servicebus_queue", label, "id"]),
-                        ),
-                        attr("role_definition_id", role_definition_id),
-                        attr("principal_id", principal_id.clone()),
-                    ],
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn queue_permission_refs<'a>(
-    profile: &'a PermissionProfile,
-    resource_id: &str,
-) -> Vec<&'a PermissionSetReference> {
-    let mut refs: Vec<&PermissionSetReference> = Vec::new();
-    let resource_refs = profile.0.get(resource_id).into_iter().flatten();
-    let wildcard_refs = profile
-        .0
-        .get("*")
-        .into_iter()
-        .flatten()
-        .filter(|permission_ref| permission_ref.id().starts_with("queue/"));
-    for permission_ref in resource_refs.chain(wildcard_refs) {
-        if !refs.iter().any(|seen| seen.id() == permission_ref.id()) {
-            refs.push(permission_ref);
-        }
-    }
-    refs
-}
-
-fn resolve_permission_set(
-    permission_set_ref: &PermissionSetReference,
-    resource_id: &str,
-) -> Result<PermissionSet> {
-    permission_set_ref
-        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::GenericError {
-                message: format!(
-                    "permission set '{}' referenced by Azure queue '{}' was not found",
-                    permission_set_ref.id(),
-                    resource_id
-                ),
-            })
-        })
-}
-
-fn sanitize_label(input: &str) -> String {
-    input
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 fn emit_remote_access(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {

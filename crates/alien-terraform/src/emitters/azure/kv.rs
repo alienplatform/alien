@@ -9,7 +9,8 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        downcast, permission_context, remote_bindings_role_label, required_label,
+        downcast, emit_profile_grants, permission_context, remote_bindings_role_label,
+        required_label, ProfileGrants,
     },
     expr,
 };
@@ -45,6 +46,26 @@ impl TfEmitter for AzureKvEmitter {
         );
         fragment.resource_blocks.push(table);
 
+        emit_profile_grants(
+            ctx,
+            &mut fragment,
+            label,
+            ProfileGrants {
+                resource_type: "kv",
+                context: permission_context(label)
+                    .with_resource_name(format!("${{azurerm_storage_table.{label}.name}}"))
+                    .with_storage_account_name(format!(
+                        "${{azurerm_storage_account.{parent_label}.name}}"
+                    )),
+                // The controller grants `kv/data-*` on the whole storage account, where a
+                // second KV granting the same profile would render a duplicate assignment that
+                // Azure rejects. The binding only touches its table's entities, so setup grants
+                // on the table, as it does for remote access.
+                scope: Some(expr::template(format!(
+                    "/subscriptions/${{var.azure_subscription_id}}/resourceGroups/${{var.azure_resource_group_name}}/providers/Microsoft.Storage/storageAccounts/${{azurerm_storage_account.{parent_label}.name}}/tableServices/default/tables/${{azurerm_storage_table.{label}.name}}"
+                ))),
+            },
+        )?;
         emit_remote_access(ctx, &mut fragment, label, &parent_label)?;
         fragment.retain_resources(|kind, _| kind == "azurerm_storage_table");
         Ok(fragment)
