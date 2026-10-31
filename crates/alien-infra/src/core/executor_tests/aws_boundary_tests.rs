@@ -491,9 +491,11 @@ async fn template_installed_service_accounts_take_the_management_edge_without_ia
             .collect::<std::collections::BTreeSet<_>>(),
         ["build-execution-sa", "execution-sa"].into(),
     );
-    let state = super::helpers::run_steps(&executor, state, 10)
-        .await
-        .unwrap();
+    // `is_synced` compares configs only, so step as the deployment's update does.
+    let mut state = state;
+    for _ in 0..3 {
+        state = executor.step(state).await.unwrap().next_state;
+    }
     assert!(executor.is_synced(&state));
     for id in ["execution-sa", "build-execution-sa"] {
         let account = &state.resources[id];
