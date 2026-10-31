@@ -4,7 +4,7 @@ expression: buf
 ---
 === versions.tf ===
 terraform {
-  required_version = ">= 1.11.1"
+  required_version = ">= 1.7.0"
 
   required_providers {
     azurerm = {
@@ -128,12 +128,6 @@ variable "heartbeats_mode" {
 variable "azure_storage_import_existing_policy" {
   type        = bool
   description = "Import the existing account management policy when upgrading an older installation. Legacy container policy addresses are forgotten without deleting the remote policy. Leave false for a new account."
-  default     = false
-}
-
-variable "azure_kv_import_existing_tables" {
-  type        = bool
-  description = "Import the existing KV tables when upgrading an installation whose package managed them as `azurerm_storage_table`. Their old state entries are forgotten without deleting the tables or their data. Leave false for a new installation."
   default     = false
 }
 
@@ -534,6 +528,100 @@ if __name__ == '__main__':
         raise SystemExit('TF_CLI must be terraform or tofu')
     main()
 
+=== import-kv-tables.py ===
+#!/usr/bin/env python3
+"""Move KV tables an earlier package declared as azurerm_storage_table to azapi_resource.
+
+Run once after replacing an installed package with this one, before the next apply.
+Each existing table is imported at its new address, then its old address is forgotten.
+Nothing in Azure changes, and the table keeps its data. Without --apply, only the moves
+are printed. Rerunning is safe: a finished move is skipped.
+"""
+import argparse
+import json
+import os
+import subprocess
+
+API_VERSION = '2024-01-01'
+
+
+def tf(*args):
+    return subprocess.check_output([CLI, *args], text=True)
+
+
+def address(resource, instance):
+    base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+    return base + ('[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else '')
+
+
+def moves(state, module):
+    resources = [
+        resource for resource in state.get('resources', [])
+        if resource.get('mode') == 'managed' and resource.get('module', '') == module
+    ]
+    accounts = {}
+    for resource in resources:
+        if resource['type'] == 'azurerm_storage_account':
+            for instance in resource.get('instances', []):
+                attributes = instance['attributes']
+                accounts[attributes['name'].lower()] = attributes['id']
+    managed = {
+        address(resource, instance)
+        for resource in resources if resource['type'] == 'azapi_resource'
+        for instance in resource.get('instances', [])
+    }
+    planned = []
+    for resource in resources:
+        if resource['type'] != 'azurerm_storage_table':
+            continue
+        target = dict(resource, type='azapi_resource')
+        for instance in resource.get('instances', []):
+            if instance.get('deposed'):
+                raise RuntimeError('A deposed table is in state: ' + address(resource, instance) + '; nothing changed')
+            attributes = instance['attributes']
+            # AzureRM keeps storage_account_id null when the table uses storage_account_name.
+            account = attributes.get('storage_account_id') or accounts.get((attributes.get('storage_account_name') or '').lower())
+            if not account or not attributes.get('name'):
+                raise RuntimeError('Cannot identify the storage account of ' + address(resource, instance) + '; nothing changed')
+            planned.append({
+                'from': address(resource, instance),
+                'to': address(target, instance),
+                'id': account + '/tableServices/default/tables/' + attributes['name'] + '?api-version=' + API_VERSION,
+                'imported': address(target, instance) in managed,
+            })
+    return planned
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--apply', action='store_true', help='import and forget the tables; without it, only print the moves')
+    parser.add_argument('--module-address', default='', help='exact installed child module address')
+    args = parser.parse_args()
+    # A failed or empty read must abort, never masquerade as an installation without tables.
+    pulled = tf('state', 'pull')
+    if not pulled.strip():
+        raise RuntimeError('No Terraform state found; run this where the installation was applied. Nothing changed')
+    state = json.loads(pulled)
+    if state.get('version') != 4 or not state.get('lineage'):
+        raise RuntimeError('Unsupported or incomplete Terraform state; nothing changed')
+    planned = moves(state, args.module_address)
+    print(json.dumps(planned, indent=2))
+    if not args.apply:
+        return
+    # Import before forgetting, so an interrupted run leaves every table tracked at least once.
+    for move in planned:
+        if not move['imported']:
+            subprocess.run([CLI, 'import', '-input=false', move['to'], move['id']], check=True)
+        subprocess.run([CLI, 'state', 'rm', move['from']], check=True)
+    print('Moved ' + str(len(planned)) + ' table(s). Run and review a plan before applying.')
+
+
+if __name__ == '__main__':
+    CLI = os.environ.get('TF_CLI', 'terraform')
+    if CLI not in ('terraform', 'tofu'):
+        raise SystemExit('TF_CLI must be terraform or tofu')
+    main()
+
 === default_resource_group.tf ===
 resource "azurerm_resource_group" "default_resource_group" {
   name     = var.azure_resource_group_name
@@ -636,12 +724,6 @@ removed {
   lifecycle {
     destroy = false
   }
-}
-
-import {
-  for_each = var.azure_kv_import_existing_tables ? toset(["existing"]) : toset([])
-  to       = azapi_resource.metadata
-  id       = format("%s/tableServices/default/tables/%s?api-version=2024-01-01", azurerm_storage_account.default_storage_account.id, substr(lower(replace("kv${local.resource_prefix}metadata", "/[^A-Za-z0-9]/", "")), 0, 63))
 }
 
 resource "azapi_resource" "metadata" {
@@ -826,15 +908,14 @@ Azure settings:
 
 KV tables are created through the `azapi` provider at `Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01`, the same Azure Resource Manager resource the runtime manages. Earlier packages declared them as `azurerm_storage_table`, whose table access-policy calls Azure Table storage now rejects with `415 Unsupported Media Type`, so those installations can no longer plan.
 
-To upgrade such an installation, apply this module once with `azure_kv_import_existing_tables = true`. The plan forgets each `azurerm_storage_table` without deleting it and imports the same table, with its data, as an `azapi_resource`. A table left tainted by a failed apply needs no `terraform untaint` first.
-
-OpenTofu reads a resource before forgetting it, and that read fails with the same 415. With OpenTofu, first drop the old entries from state, which deletes nothing in Azure:
+To upgrade such an installation, replace its package with this one and, before the next apply, move each table to its new address. This imports the same table, with its data, and forgets the old address; nothing in Azure changes:
 
 ```bash
-tofu state list | grep '^azurerm_storage_table\.' | xargs tofu state rm
+python3 ./import-kv-tables.py          # print the moves
+python3 ./import-kv-tables.py --apply
 ```
 
-The variable can stay `true` afterwards; an import into a resource Terraform already manages does nothing. Leave it `false` for a new installation, which has no table to import.
+Set `TF_CLI=tofu` for OpenTofu, and pass `--module-address` when this module is wrapped. The next plan then only updates `terraform_data.retention_inventory` to the new addresses. A table left tainted by a failed apply needs no `terraform untaint` first. If you apply without moving the tables, nothing is deleted: Terraform forgets them and then fails to create them because they exist (run the helper, then apply again), and OpenTofu fails on the 415 before changing anything.
 
 ## Run
 

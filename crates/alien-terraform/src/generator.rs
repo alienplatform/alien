@@ -573,15 +573,13 @@ fn generate_terraform_module_internal(
                     .iter()
                     .any(|block| block.identifier.as_str() == "removed")
             }),
-            per_resource.values().any(|fragment| {
-                fragment.moved_blocks.iter().any(|block| {
-                    block.identifier.as_str() == "import"
-                        && block
-                            .body
-                            .attributes()
-                            .any(|attribute| attribute.key.as_str() == "for_each")
-                })
-            }),
+            target == TerraformTarget::Azure
+                && stack.resources().any(|(_, entry)| {
+                    entry
+                        .config
+                        .downcast_ref::<alien_core::Storage>()
+                        .is_some_and(|storage| !storage.lifecycle_rules.is_empty())
+                }),
             stack_inputs.iter().any(|input| input.when.is_some()),
         ))?,
     );
@@ -603,7 +601,6 @@ fn generate_terraform_module_internal(
             &stack_inputs,
             alien_core::restricts_network_mode(stack, target.is_kubernetes()),
             !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack),
-            emits_azure_kv_tables,
             profile,
         )?)?,
     );
@@ -691,6 +688,10 @@ fn generate_terraform_module_internal(
                 &setup_notification_markers(stack, &labels),
             )?,
         );
+    }
+
+    if emits_azure_kv_tables {
+        files.insert("import-kv-tables.py".into(), import_kv_tables_helper()?);
     }
 
     let resource_inventory = resource_inventory(stack, &per_resource);
@@ -1813,12 +1814,12 @@ fn versions_body(
     include_google_beta_provider: bool,
     include_ephemeral: bool,
     include_removed: bool,
-    include_conditional_import: bool,
+    include_azure_lifecycle: bool,
     include_input_conditions: bool,
 ) -> Body {
     // Conditional imports need a patched OpenTofu reader (1.11.0 rejects
     // variables in import.for_each). Keep one minimum for both setup CLIs.
-    let required_version = if include_conditional_import {
+    let required_version = if include_azure_lifecycle {
         ">= 1.11.1"
     } else if include_ephemeral {
         ">= 1.11.0"
@@ -2166,7 +2167,6 @@ fn variables_body(
     stack_inputs: &[StackInputDefinition],
     needs_named_subnets: bool,
     needs_gateway_subnets: bool,
-    emits_azure_kv_tables: bool,
     profile: alien_core::SetupConfigurationProfile,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
@@ -2425,13 +2425,6 @@ fn variables_body(
             "Import the existing account management policy when upgrading an older installation. Legacy container policy addresses are forgotten without deleting the remote policy. Leave false for a new account.",
             Some(false),
         )));
-        if emits_azure_kv_tables {
-            blocks.push(nested(bool_variable_block(
-                crate::emitters::azure::kv::IMPORT_EXISTING_TABLES_VARIABLE,
-                "Import the existing KV tables when upgrading an installation whose package managed them as `azurerm_storage_table`. Their old state entries are forgotten without deleting the tables or their data. Leave false for a new installation.",
-                Some(false),
-            )));
-        }
         blocks.push(nested(bool_variable_block(
             "azure_storage_live_lifecycle_enabled",
             "Explicitly activate lifecycle expiry for Live containers, including existing objects. Older packages ignored these declarations. Review all Live lifecycle rules before enabling; setup owns this shared account policy.",
@@ -5075,12 +5068,9 @@ fn readme_md(
         ""
     };
     let azure_kv_note = if emits_azure_kv_tables {
-        format!(
-            "## KV tables\n\nKV tables are created through the `azapi` provider at `Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01`, the same Azure Resource Manager resource the runtime manages. Earlier packages declared them as `azurerm_storage_table`, whose table access-policy calls Azure Table storage now rejects with `415 Unsupported Media Type`, so those installations can no longer plan.\n\nTo upgrade such an installation, apply this module once with `{var} = true`. The plan forgets each `azurerm_storage_table` without deleting it and imports the same table, with its data, as an `azapi_resource`. A table left tainted by a failed apply needs no `terraform untaint` first.\n\nOpenTofu reads a resource before forgetting it, and that read fails with the same 415. With OpenTofu, first drop the old entries from state, which deletes nothing in Azure:\n\n```bash\ntofu state list | grep '^azurerm_storage_table\\.' | xargs tofu state rm\n```\n\nThe variable can stay `true` afterwards; an import into a resource Terraform already manages does nothing. Leave it `false` for a new installation, which has no table to import.\n\n",
-            var = crate::emitters::azure::kv::IMPORT_EXISTING_TABLES_VARIABLE
-        )
+        "## KV tables\n\nKV tables are created through the `azapi` provider at `Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01`, the same Azure Resource Manager resource the runtime manages. Earlier packages declared them as `azurerm_storage_table`, whose table access-policy calls Azure Table storage now rejects with `415 Unsupported Media Type`, so those installations can no longer plan.\n\nTo upgrade such an installation, replace its package with this one and, before the next apply, move each table to its new address. This imports the same table, with its data, and forgets the old address; nothing in Azure changes:\n\n```bash\npython3 ./import-kv-tables.py          # print the moves\npython3 ./import-kv-tables.py --apply\n```\n\nSet `TF_CLI=tofu` for OpenTofu, and pass `--module-address` when this module is wrapped. The next plan then only updates `terraform_data.retention_inventory` to the new addresses. A table left tainted by a failed apply needs no `terraform untaint` first. If you apply without moving the tables, nothing is deleted: Terraform forgets them and then fails to create them because they exist (run the helper, then apply again), and OpenTofu fails on the 415 before changing anything.\n\n"
     } else {
-        String::new()
+        ""
     };
     let inputs = input_sections.join("\n\n");
     format!(
@@ -5341,6 +5331,23 @@ fn setup_notification_markers(
 
 /// The retention helper. Packages that retain an S3 bucket notification also remove the
 /// entries setup wrote before detaching it; every other package keeps the helper unchanged.
+/// The upgrade helper that moves `azurerm_storage_table` KV tables to `azapi_resource`, pinned
+/// to the API version the table resource declares.
+fn import_kv_tables_helper() -> Result<String> {
+    let helper = include_str!("templates/import-kv-tables.py");
+    let placeholder = "__TABLE_API_VERSION__";
+    if helper.matches(placeholder).count() != 1 {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "The KV table import helper template lost its API version placeholder".into(),
+        }));
+    }
+    Ok(helper.replacen(
+        placeholder,
+        crate::emitters::azure::kv::TABLE_API_VERSION,
+        1,
+    ))
+}
+
 fn retain_data_helper(
     retained_data_addresses: &[String],
     markers: &BTreeMap<String, String>,

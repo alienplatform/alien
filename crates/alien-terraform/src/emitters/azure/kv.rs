@@ -20,10 +20,7 @@ use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
     BindingTarget,
 };
-use hcl::{
-    expr::{Expression, FuncCall},
-    Identifier,
-};
+use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureKvEmitter;
@@ -59,7 +56,7 @@ impl TfEmitter for AzureKvEmitter {
             ],
         );
         fragment.resource_blocks.push(table);
-        emit_table_migration(&mut fragment, kv.id(), label, &parent_label)?;
+        emit_table_migration(&mut fragment, label);
 
         emit_profile_grants(
             ctx,
@@ -134,10 +131,7 @@ impl TfEmitter for AzureKvEmitter {
 
 /// The ARM type and API version `AzureKvController` creates tables with.
 const TABLE_TYPE: &str = "Microsoft.Storage/storageAccounts/tableServices/tables";
-const TABLE_API_VERSION: &str = "2024-01-01";
-
-/// Variable an upgrade sets to adopt tables an earlier package created as `azurerm_storage_table`.
-pub(crate) const IMPORT_EXISTING_TABLES_VARIABLE: &str = "azure_kv_import_existing_tables";
+pub(crate) const TABLE_API_VERSION: &str = "2024-01-01";
 
 fn table_service_id_expr(parent_label: &str) -> Expression {
     expr::template(format!(
@@ -145,16 +139,11 @@ fn table_service_id_expr(parent_label: &str) -> Expression {
     ))
 }
 
-/// Hand a table an earlier package managed as `azurerm_storage_table` over to the
-/// `azapi_resource`: forget the old address without deleting the table, and import it when the
-/// deployer upgrades. The import is opt-in because a new installation has no table to import,
-/// and Terraform cannot tell the two apart from configuration alone.
-fn emit_table_migration(
-    fragment: &mut TfFragment,
-    kv_id: &str,
-    label: &str,
-    parent_label: &str,
-) -> Result<()> {
+/// Forget a table an earlier package managed as `azurerm_storage_table` without deleting it.
+/// `import-kv-tables.py` moves it to the `azapi_resource` address. An `import` block can't:
+/// Terraform before 1.15 and OpenTofu reject one in a child module, even with an empty
+/// `for_each`, and this module may be wrapped.
+fn emit_table_migration(fragment: &mut TfFragment, label: &str) {
     fragment.moved_blocks.push(block(
         "removed",
         [
@@ -165,34 +154,6 @@ fn emit_table_migration(
             )),
         ],
     ));
-    // The API version pins the imported state to the type the resource declares.
-    let id = Expression::FuncCall(Box::new(
-        FuncCall::builder(Identifier::sanitized("format"))
-            .arg(Expression::from(format!(
-                "%s/tableServices/default/tables/%s?api-version={TABLE_API_VERSION}"
-            )))
-            .arg(expr::traversal([
-                "azurerm_storage_account",
-                parent_label,
-                "id",
-            ]))
-            .arg(table_name_expr(kv_id))
-            .build(),
-    ));
-    fragment.moved_blocks.push(block(
-        "import",
-        [
-            attr(
-                "for_each",
-                expr::parse(&format!(
-                    "var.{IMPORT_EXISTING_TABLES_VARIABLE} ? toset([\"existing\"]) : toset([])"
-                ))?,
-            ),
-            attr("to", expr::traversal(["azapi_resource", label])),
-            attr("id", id),
-        ],
-    ));
-    Ok(())
 }
 
 /// Find the auxiliary Azure Storage Account required by Azure KV.

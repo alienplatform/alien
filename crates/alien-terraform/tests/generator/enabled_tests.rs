@@ -238,10 +238,6 @@ fn a_gated_azure_resource_renders_the_table_conditionally() {
         ),
         "the table must be created only when the deployer says yes:\n{main}"
     );
-    assert!(
-        main.contains("import { for_each = var.input_store_enabled ? (var.azure_kv_import_existing_tables ? toset([\"existing\"]) : toset([])) : toset([]) to = azapi_resource.store[0]"),
-        "an upgrade imports the table only into the instance the gate declares:\n{main}"
-    );
     assert_terraform_valid(&module, "gated azure kv stack");
 }
 

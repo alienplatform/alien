@@ -25,7 +25,7 @@ use hcl::{
 /// Mirrors `terraform_stack_input_variable_name`; the compile-time check
 /// guarantees the input is a non-null boolean, so the expressions below never
 /// need a null guard.
-pub(crate) fn gate_variable(input_id: &str) -> String {
+fn gate_variable(input_id: &str) -> String {
     format!(
         "var.{}",
         crate::generator::stack_input_variable_name(input_id)
