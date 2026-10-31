@@ -89,7 +89,7 @@ impl Observation {
                     self.queue()?.queue_name
                 );
                 // Native S3 delivery: each rule is a queue configuration on its bucket.
-                for (id, rules) in [("objects", 2), ("second", 1), ("results", 0)] {
+                for (id, rules) in [("objects", 3), ("second", 1), ("results", 0)] {
                     let bucket = self.bucket(id)?;
                     let notifications = s3.get_bucket_notification_configuration(bucket).await;
                     if present {
@@ -170,6 +170,7 @@ impl Observation {
                     let bucket = self.bucket(id)?;
                     check_presence(gcs.get_bucket(bucket.into()).await, present, bucket)?;
                     if present && id != "results" {
+                        // The two `other/` rules on `objects` share one config.
                         let notifications = gcs.list_notifications(bucket.into()).await?;
                         ensure!(
                             notifications.items.len() == if id == "objects" { 2 } else { 1 },

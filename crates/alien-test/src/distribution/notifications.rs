@@ -32,8 +32,8 @@ fn change_rule(stack: &mut Stack) -> anyhow::Result<()> {
         .downcast_mut::<Storage>()
         .context("Expected Storage")?;
     ensure!(
-        storage.notifications.len() == 2,
-        "Fixture must have two source rules"
+        storage.notifications.len() == 3,
+        "Fixture must have three source rules"
     );
     storage.notifications[0].prefix = Some("changed/".into());
     Ok(())

@@ -1,8 +1,9 @@
 # Storage notification qualification
 
-This fixture has two Frozen source buckets, three filtered notification rules
-sharing one Frozen queue, and a separately built TypeScript Worker with a
-10-message / 5-second queue batch trigger. The Worker uses
+This fixture has two Frozen source buckets and four filtered notification rules
+sharing one Frozen queue (two of them share the `other/` prefix with different
+suffixes), plus a separately built TypeScript Worker with a 10-message / 5-second
+queue batch trigger. The Worker uses
 `storageEventFromMessage` and saves every invocation in a separate object in
 `results`; duplicate deliveries cannot disappear behind an overwritten result.
 

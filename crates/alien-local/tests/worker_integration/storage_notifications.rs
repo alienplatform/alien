@@ -18,7 +18,10 @@ use tokio::time::{sleep, timeout};
 
 fn sources() -> Vec<Storage> {
     [
-        ("objects", vec![("in/", ".json"), ("other/", ".data")]),
+        (
+            "objects",
+            vec![("in/", ".json"), ("other/", ".data"), ("other/", ".csv")],
+        ),
         ("second", vec![("shared/", ".json")]),
     ]
     .into_iter()
@@ -183,6 +186,7 @@ async fn compiled_worker_consumes_notifications_after_cold_restart() {
     for (source, key) in [
         ("objects", "in/quote\"é*%.json"),
         ("objects", "other/b.data"),
+        ("objects", "other/d.csv"),
         ("second", "shared/c.json"),
     ] {
         expected.insert((source.into(), key.into(), 7), 1);

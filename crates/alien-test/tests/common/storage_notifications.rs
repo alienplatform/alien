@@ -117,6 +117,7 @@ fn matching_objects(phase: &str, prefix: &str) -> Vec<(&'static str, String)> {
     let mut objects = vec![
         ("objects", format!("{prefix}{phase}quote\"é*%.json")),
         ("objects", format!("other/{phase}b.data")),
+        ("objects", format!("other/{phase}d.csv")),
         ("second", format!("shared/{phase}c.json")),
     ];
     objects.extend((0..24).map(|index| ("objects", format!("{prefix}{phase}bulk-{index}.json"))));
