@@ -179,16 +179,42 @@ jobs:
       network_mode: ${{ steps.set.outputs.network_mode }}
     steps:
       - id: set
+        # Values come in through the environment: a run script holding expressions is evaluated
+        # as one expression, and this one would pass GitHub's 21000-character limit.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_FROM_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          PR_HAS_RUN_E2E_LABEL: ${{ contains(join(github.event.pull_request.labels.*.name, ','), 'run-e2e') }}
+          INPUT_RUN_PUSH_AWS_CLI: ${{ inputs.run_push_aws_cli }}
+          INPUT_RUN_PUSH_GCP_CLI: ${{ inputs.run_push_gcp_cli }}
+          INPUT_RUN_PUSH_AZURE_CLI: ${{ inputs.run_push_azure_cli }}
+          INPUT_RUN_PUSH_AWS_CLOUDFORMATION: ${{ inputs.run_push_aws_cloudformation }}
+          INPUT_RUN_PUSH_AWS_TERRAFORM: ${{ inputs.run_push_aws_terraform }}
+          INPUT_RUN_PUSH_GCP_TERRAFORM: ${{ inputs.run_push_gcp_terraform }}
+          INPUT_RUN_PUSH_AZURE_TERRAFORM: ${{ inputs.run_push_azure_terraform }}
+          INPUT_RUN_KUBERNETES_AWS_TERRAFORM_HELM: ${{ inputs.run_kubernetes_aws_terraform_helm }}
+          INPUT_RUN_KUBERNETES_GCP_TERRAFORM_HELM: ${{ inputs.run_kubernetes_gcp_terraform_helm }}
+          INPUT_RUN_KUBERNETES_AZURE_TERRAFORM_HELM: ${{ inputs.run_kubernetes_azure_terraform_helm }}
+          INPUT_RUN_LOCAL_LINUX_AGENT: ${{ inputs.run_local_linux_agent }}
+          INPUT_RUN_LOCAL_MACOS_AGENT: ${{ inputs.run_local_macos_agent }}
+          INPUT_RUN_LOCAL_WINDOWS_AGENT: ${{ inputs.run_local_windows_agent }}
+          INPUT_APP: ${{ inputs.app }}
+          INPUT_NETWORK_MODE: ${{ inputs.network_mode }}
+          INPUT_BUILD_IMAGES: ${{ inputs.build_images }}
+          INPUT_BASE_IMAGE_OVERRIDE: ${{ inputs.base_image_override }}
+          INPUT_OPERATOR_IMAGE_OVERRIDE: ${{ inputs.operator_image_override }}
+          INPUT_SKIP_CLEANUP: ${{ inputs.skip_cleanup }}
+          INPUT_TEST_FILTER: ${{ inputs.test_filter }}
         run: |
           # Determine whether tests should run at all based on event type
           SHOULD_RUN=false
-          case "${{ github.event_name }}" in
+          case "$EVENT_NAME" in
             workflow_dispatch|merge_group)
               SHOULD_RUN=true
               ;;
             pull_request)
-              IS_FORK="${{ github.event.pull_request.head.repo.fork }}"
-              HAS_LABEL="${{ contains(join(github.event.pull_request.labels.*.name, ','), 'run-e2e') }}"
+              IS_FORK="$PR_FROM_FORK"
+              HAS_LABEL="$PR_HAS_RUN_E2E_LABEL"
               if [ "$IS_FORK" = "false" ] && [ "$HAS_LABEL" = "true" ]; then
                 SHOULD_RUN=true
               fi
@@ -219,27 +245,27 @@ jobs:
 
           # For workflow_dispatch, use explicit checkboxes for the product
           # flows.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            PUSH_AWS_CLI="${{ inputs.run_push_aws_cli }}"
-            PUSH_GCP_CLI="${{ inputs.run_push_gcp_cli }}"
-            PUSH_AZURE_CLI="${{ inputs.run_push_azure_cli }}"
-            PUSH_AWS_CLOUDFORMATION="${{ inputs.run_push_aws_cloudformation }}"
-            PUSH_AWS_TERRAFORM="${{ inputs.run_push_aws_terraform }}"
-            PUSH_GCP_TERRAFORM="${{ inputs.run_push_gcp_terraform }}"
-            PUSH_AZURE_TERRAFORM="${{ inputs.run_push_azure_terraform }}"
-            KUBERNETES_AWS_TERRAFORM_HELM="${{ inputs.run_kubernetes_aws_terraform_helm }}"
-            KUBERNETES_GCP_TERRAFORM_HELM="${{ inputs.run_kubernetes_gcp_terraform_helm }}"
-            KUBERNETES_AZURE_TERRAFORM_HELM="${{ inputs.run_kubernetes_azure_terraform_helm }}"
-            LOCAL_LINUX_AGENT="${{ inputs.run_local_linux_agent }}"
-            LOCAL_MACOS_AGENT="${{ inputs.run_local_macos_agent }}"
-            LOCAL_WINDOWS_AGENT="${{ inputs.run_local_windows_agent }}"
-            APP="${{ inputs.app }}"
-            NETWORK_MODE="${{ inputs.network_mode }}"
-            BUILD_IMAGES="${{ inputs.build_images }}"
-            BASE_IMAGE_OVERRIDE="${{ inputs.base_image_override }}"
-            OPERATOR_IMAGE_OVERRIDE="${{ inputs.operator_image_override }}"
-            SKIP_CLEANUP="${{ inputs.skip_cleanup }}"
-            TEST_FILTER="${{ inputs.test_filter }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            PUSH_AWS_CLI="$INPUT_RUN_PUSH_AWS_CLI"
+            PUSH_GCP_CLI="$INPUT_RUN_PUSH_GCP_CLI"
+            PUSH_AZURE_CLI="$INPUT_RUN_PUSH_AZURE_CLI"
+            PUSH_AWS_CLOUDFORMATION="$INPUT_RUN_PUSH_AWS_CLOUDFORMATION"
+            PUSH_AWS_TERRAFORM="$INPUT_RUN_PUSH_AWS_TERRAFORM"
+            PUSH_GCP_TERRAFORM="$INPUT_RUN_PUSH_GCP_TERRAFORM"
+            PUSH_AZURE_TERRAFORM="$INPUT_RUN_PUSH_AZURE_TERRAFORM"
+            KUBERNETES_AWS_TERRAFORM_HELM="$INPUT_RUN_KUBERNETES_AWS_TERRAFORM_HELM"
+            KUBERNETES_GCP_TERRAFORM_HELM="$INPUT_RUN_KUBERNETES_GCP_TERRAFORM_HELM"
+            KUBERNETES_AZURE_TERRAFORM_HELM="$INPUT_RUN_KUBERNETES_AZURE_TERRAFORM_HELM"
+            LOCAL_LINUX_AGENT="$INPUT_RUN_LOCAL_LINUX_AGENT"
+            LOCAL_MACOS_AGENT="$INPUT_RUN_LOCAL_MACOS_AGENT"
+            LOCAL_WINDOWS_AGENT="$INPUT_RUN_LOCAL_WINDOWS_AGENT"
+            APP="$INPUT_APP"
+            NETWORK_MODE="$INPUT_NETWORK_MODE"
+            BUILD_IMAGES="$INPUT_BUILD_IMAGES"
+            BASE_IMAGE_OVERRIDE="$INPUT_BASE_IMAGE_OVERRIDE"
+            OPERATOR_IMAGE_OVERRIDE="$INPUT_OPERATOR_IMAGE_OVERRIDE"
+            SKIP_CLEANUP="$INPUT_SKIP_CLEANUP"
+            TEST_FILTER="$INPUT_TEST_FILTER"
           else
             PUSH_AWS_CLI=true
             PUSH_GCP_CLI=false
