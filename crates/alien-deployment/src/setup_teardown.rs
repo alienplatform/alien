@@ -2219,4 +2219,172 @@ mod tests {
             "{state:?}"
         );
     }
+
+    /// The chart's in-cluster database, as only the site's executor receives it.
+    fn site_bindings() -> alien_core::ExternalBindings {
+        serde_json::from_value(serde_json::json!({
+            "database": {
+                "type": "postgres",
+                "service": "external",
+                "host": "release-pg-database.site.svc",
+                "port": 5432,
+                "database": "database",
+                "username": "postgres",
+                "password": {"secretKeyRef": {"name": "release-pg-database", "key": "password"}},
+                "sslMode": "disable"
+            }
+        }))
+        .unwrap()
+    }
+
+    fn deployment_config(bindings: alien_core::ExternalBindings) -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(bindings)
+            .allow_frozen_changes(false)
+            .build()
+    }
+
+    /// An erase handed to setup teardown after the site's executor adopted `database` from a
+    /// binding that never left the site. The record goes through JSON, as it does through the
+    /// manager.
+    async fn erase_handoff_with_site_bound_database() -> DeploymentState {
+        let stack = alien_core::Stack::new("site".to_string())
+            .add(
+                alien_core::Postgres::new("database".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let site = StackExecutor::builder(&stack, ClientConfig::Test)
+            .deployment_config(&deployment_config(site_bindings()))
+            .build()
+            .unwrap();
+        let installed = site
+            .run_until_synced(StackState::new(Platform::Test))
+            .await
+            .into_result()
+            .unwrap();
+        let stack_state: StackState =
+            serde_json::from_value(serde_json::to_value(&installed).unwrap()).unwrap();
+        DeploymentState {
+            status: DeploymentStatus::TeardownRequired,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                deletion_policy: alien_core::DeletionPolicy::Erase,
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// Setup teardown as the deploy CLI runs it: its config holds only what the manager
+    /// stores, which never includes the site's bindings.
+    async fn erase_without_site_bindings(
+        state: &mut DeploymentState,
+    ) -> Result<Option<RunnerResult>> {
+        run_setup_teardown_after_handoff(
+            state,
+            &mut deployment_config(alien_core::ExternalBindings::default()),
+            &ClientConfig::Test,
+            "dep_test",
+            &RunnerPolicy {
+                operation: LoopOperation::Delete,
+                delay_strategy: DelayStrategy::Inline,
+                ..Default::default()
+            },
+            &RecordingTransport::default(),
+            None,
+        )
+        .await
+    }
+
+    /// The site's executor records the adoption, so a teardown that never saw the binding
+    /// releases the database instead of failing on its missing controller.
+    #[tokio::test]
+    async fn erase_releases_a_database_bound_at_the_site() {
+        let mut state = erase_handoff_with_site_bound_database().await;
+        let adopted = &state.stack_state.as_ref().unwrap().resources["database"];
+        assert_eq!(adopted.status, ResourceStatus::Running);
+        assert!(adopted.internal_state.is_none());
+        assert!(adopted.external_binding, "adoption must be recorded");
+
+        let result = erase_without_site_bindings(&mut state)
+            .await
+            .expect("teardown")
+            .expect("teardown ran");
+
+        assert_eq!(
+            result.loop_result.outcome,
+            LoopOutcome::Success,
+            "{state:?}"
+        );
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert!(state.error.is_none());
+        let released = &state.stack_state.as_ref().unwrap().resources["database"];
+        assert_eq!(released.status, ResourceStatus::Deleted);
+        assert!(released.internal_state.is_none());
+        assert!(released.outputs.is_none());
+        assert!(released.error.is_none());
+    }
+
+    /// A record written before adoption was recorded can't be told apart from a resource that
+    /// lost its controller. Teardown fails, and a retry fails again rather than reading the
+    /// failed delete as never created and dropping a database that still exists.
+    #[tokio::test]
+    async fn erase_of_a_controllerless_resource_not_recorded_as_bound_fails_on_every_attempt() {
+        let mut state = erase_handoff_with_site_bound_database().await;
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("database")
+            .unwrap()
+            .external_binding = false;
+
+        let recorded_config = state.stack_state.as_ref().unwrap().resources["database"]
+            .config
+            .clone();
+
+        for attempt in 1..=2 {
+            let result = erase_without_site_bindings(&mut state).await;
+            let failed = match result {
+                Ok(Some(result)) => result.loop_result.outcome == LoopOutcome::Failure,
+                Ok(None) => false,
+                Err(_) => true,
+            };
+            assert!(failed, "attempt {attempt} must fail: {state:?}");
+            assert_eq!(
+                state.status,
+                DeploymentStatus::TeardownFailed,
+                "attempt {attempt}"
+            );
+            let database = &state.stack_state.as_ref().unwrap().resources["database"];
+            assert_eq!(
+                database.status,
+                ResourceStatus::DeleteFailed,
+                "attempt {attempt}"
+            );
+            assert_eq!(
+                database.config, recorded_config,
+                "attempt {attempt} must keep the database in the record"
+            );
+            assert_eq!(
+                database.error.as_ref().map(|error| error.code.as_str()),
+                Some("RESOURCE_STATE_SERIALIZATION_FAILED"),
+                "attempt {attempt}"
+            );
+        }
+    }
 }

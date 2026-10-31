@@ -269,6 +269,13 @@ impl StackResourceStateExt for StackResourceState {
                     return Ok(true);
                 }
 
+                // A delete fails without a controller only when the resource exists but nothing
+                // here can delete it. Pending would read as never created, and the next delete
+                // would drop the record of a resource that still exists.
+                if self.status == ResourceStatus::DeleteFailed {
+                    return Ok(false);
+                }
+
                 // No last failed state — the resource was interrupted before its controller was
                 // initialized (i.e. it was in Pending when the deployment stopped). Reset it to
                 // Pending so it starts fresh on the next deployment attempt.

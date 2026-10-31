@@ -1451,6 +1451,7 @@ mod tests {
                 dependencies: vec![],
                 last_failed_state: None,
                 remote_binding_params: None,
+                external_binding: false,
             },
         );
         state.stack_state = Some(stack);

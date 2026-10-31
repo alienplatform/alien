@@ -337,6 +337,14 @@ pub struct StackResourceState {
     /// Populated by controllers during provisioning using get_binding_params().
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_binding_params: Option<serde_json::Value>,
+
+    /// Whether this resource was adopted from an external binding instead of provisioned.
+    /// The binding may exist only where the adopting executor ran (a Helm value or a
+    /// chart-created database), so the record carries it: deleting the resource releases it
+    /// and never touches what the binding points at.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[builder(default)]
+    pub external_binding: bool,
 }
 
 impl StackResourceState {
@@ -364,6 +372,7 @@ impl StackResourceState {
             dependencies,
             last_failed_state: None,
             remote_binding_params: None,
+            external_binding: false,
         }
     }
 
@@ -660,6 +669,7 @@ mod tests {
             last_failed_state: None,
             remote_binding_params: None,
             controller_platform: None,
+            external_binding: false,
         };
 
         stack_state
@@ -679,6 +689,27 @@ mod tests {
             .url;
 
         assert_eq!(worker_url, "https://test.lambda-url.us-east-1.on.aws/");
+    }
+
+    /// Records written before adoption was recorded read as not bound, and a record that isn't
+    /// bound serializes exactly as before, so its synced state and hashes don't change.
+    #[test]
+    fn binding_adoption_is_recorded_without_changing_unbound_records() {
+        let written_before = serde_json::json!({
+            "type": "postgres",
+            "status": "running",
+            "config": {"type": "postgres", "id": "database", "version": "17", "storage": "20Gi", "highAvailability": false},
+            "lifecycle": "frozen"
+        });
+        let mut state: StackResourceState = serde_json::from_value(written_before.clone()).unwrap();
+        assert!(!state.external_binding);
+        assert_eq!(serde_json::to_value(&state).unwrap(), written_before);
+
+        state.external_binding = true;
+        let recorded = serde_json::to_value(&state).unwrap();
+        assert_eq!(recorded["externalBinding"], serde_json::json!(true));
+        let read_back: StackResourceState = serde_json::from_value(recorded).unwrap();
+        assert!(read_back.external_binding);
     }
 
     // Tests for StackStatus computation - ported from TypeScript
