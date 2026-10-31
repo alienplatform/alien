@@ -293,6 +293,7 @@ async fn many_secret_consumers_fit_the_boundary_in_both_setup_packages() {
         &prepared,
         CloudFormationOptions {
             registry: &cf_registry,
+            source_stack: &stack(),
             target: CloudFormationTarget::Aws,
             stack_settings: settings(),
             setup_target: "aws".to_string(),
