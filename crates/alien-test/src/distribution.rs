@@ -1972,11 +1972,7 @@ async fn prepare_terraform_erasure(workdir: &Path, env: &[(String, String)]) -> 
         );
         let state = String::from_utf8(output.stdout)
             .context("terraform state list printed invalid UTF-8")?;
-        let targets = erasable
-            .iter()
-            .filter(|address| state.lines().any(|line| line == address.as_str()))
-            .map(|address| format!("-target={address}"))
-            .collect::<Vec<_>>();
+        let targets = erasable_targets(&erasable, &state);
         if !targets.is_empty() {
             let mut apply = Command::new("terraform");
             apply
@@ -1988,6 +1984,22 @@ async fn prepare_terraform_erasure(workdir: &Path, env: &[(String, String)]) -> 
         }
     }
     Ok(())
+}
+
+/// `-target` arguments for the erasable resources `terraform state list` holds. A resource
+/// with `count` or `for_each` (a gated Storage, say) is listed per instance, as `type.label[0]`
+/// or `type.label["key"]`; targeting `type.label` applies every instance.
+fn erasable_targets(erasable: &[String], state_list: &str) -> Vec<String> {
+    erasable
+        .iter()
+        .filter(|address| {
+            state_list.lines().any(|line| {
+                line.strip_prefix(address.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('['))
+            })
+        })
+        .map(|address| format!("-target={address}"))
+        .collect()
 }
 
 /// Setup protects the data resources it owns: they carry `prevent_destroy`, and buckets
@@ -4373,6 +4385,66 @@ mod tests {
                 "{target:?}: only the bucket needs an apply before destroy"
             );
         }
+    }
+
+    /// Gated setup data is count-indexed, so `terraform state list` names its instances,
+    /// never the bare address. Uses Terraform's real state listing of a module whose
+    /// resources are plain, `count`-ed, `for_each`-ed, gated off, or only share a prefix.
+    #[test]
+    fn erase_prep_targets_count_and_for_each_instances_from_real_state() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            workdir.path().join("main.tf"),
+            r#"resource "terraform_data" "plain" {}
+resource "terraform_data" "gated" { count = 1 }
+resource "terraform_data" "keyed" { for_each = toset(["a"]) }
+resource "terraform_data" "gated_off" { count = 0 }
+resource "terraform_data" "gate_keeper" {}
+"#,
+        )
+        .expect("module");
+        let terraform = |args: &[&str]| {
+            let output = std::process::Command::new("terraform")
+                .current_dir(workdir.path())
+                .args(args)
+                .output()
+                .expect("terraform should run");
+            assert!(
+                output.status.success(),
+                "terraform {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).expect("UTF-8")
+        };
+        terraform(&["init", "-input=false", "-no-color"]);
+        terraform(&["apply", "-auto-approve", "-input=false", "-no-color"]);
+        let state = terraform(&["state", "list"]);
+        assert_eq!(
+            state.lines().collect::<Vec<_>>(),
+            [
+                "terraform_data.gate_keeper",
+                "terraform_data.gated[0]",
+                "terraform_data.keyed[\"a\"]",
+                "terraform_data.plain",
+            ]
+        );
+
+        let erasable = [
+            "terraform_data.plain",
+            "terraform_data.gated",
+            "terraform_data.keyed",
+            "terraform_data.gated_off",
+            "terraform_data.gate",
+        ]
+        .map(String::from);
+        assert_eq!(
+            erasable_targets(&erasable, &state),
+            [
+                "-target=terraform_data.plain",
+                "-target=terraform_data.gated",
+                "-target=terraform_data.keyed",
+            ]
+        );
     }
 
     fn empty_test_config() -> TestConfig {
