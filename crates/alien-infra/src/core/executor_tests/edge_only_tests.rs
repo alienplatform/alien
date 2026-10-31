@@ -221,3 +221,18 @@ async fn recording_a_removed_edge_releases_the_old_dependency_for_deletion() {
         "with the removal recorded, nothing holds cache"
     );
 }
+
+/// A setup-owned resource already exists, so its new edge waits for nothing: it is recorded even
+/// while the dependency it points to is still updating.
+#[test]
+fn a_new_edge_is_recorded_while_its_dependency_is_still_settling() {
+    let (stack, mut state) = release_adding_an_edge(setup_owned_subjects());
+    state.resources.get_mut("cache").unwrap().status = ResourceStatus::Updating;
+    let plan = executor(&stack, InitialSetupAuthority::ImportedHandoff)
+        .plan(&state)
+        .unwrap();
+    assert!(plan.updates.is_empty(), "{:?}", plan.updates.keys());
+    let mut recorded = plan.dependency_records.clone();
+    recorded.sort();
+    assert_eq!(recorded, ["execution-sa", "objects"]);
+}

@@ -1337,14 +1337,15 @@ impl StackExecutor {
                                 // controller reads them. When nothing else changed on a resource
                                 // runtime may not write, recording them is the whole change, and
                                 // running its update would ask runtime to rewrite what setup owns.
+                                // The resource already exists, so a new edge has nothing to wait
+                                // for: recording it only makes deletion ordering respect it.
                                 let edges_only = desired_config.resource
                                     == current_resource_state.config
                                     && !self.external_binding_drifted(
                                         resource_id,
                                         current_resource_state,
                                     )?;
-                                if new_dependencies_ready
-                                    && edges_only
+                                if edges_only
                                     && current_resource_state.lifecycle
                                         == Some(ResourceLifecycle::Frozen)
                                     && self.setup_owns_writes(desired_config)
