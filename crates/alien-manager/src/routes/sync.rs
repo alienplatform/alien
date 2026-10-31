@@ -27,7 +27,9 @@ use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
 use crate::error::ErrorData;
 use crate::ids;
-use crate::loops::deployment::{target_release_stack, RunnerConfigSources};
+use crate::loops::deployment::{
+    parse_status, target_release_stack, ManagementIdentityUse, RunnerConfigSources,
+};
 use crate::traits::{
     CreateDeploymentParams, CreateTokenParams, DeploymentAcquireMode, DeploymentFilter,
     DeploymentRecord, ReconcileData, ReconcileInput, ReleaseRecord, TokenType,
@@ -575,6 +577,7 @@ async fn acquired_deployment_response(
         sources.credential_resolver,
         record,
         record.platform,
+        ManagementIdentityUse::for_runner(parse_status(&record.status)),
     )
     .await?;
     let config = sources
@@ -1213,6 +1216,34 @@ mod tests {
         }
     }
 
+    /// The Azure management identity a complete `[impersonation.azure]` resolves to.
+    fn azure_management_identity() -> alien_core::ManagementConfig {
+        alien_core::ManagementConfig::Azure(alien_core::AzureManagementConfig {
+            managing_tenant_id: "managing-tenant".to_string(),
+            oidc_issuer: "https://issuer.example.com".to_string(),
+            oidc_subject: "manager".to_string(),
+        })
+    }
+
+    struct ResolvedManagementIdentity;
+
+    #[async_trait::async_trait]
+    impl crate::traits::CredentialResolver for ResolvedManagementIdentity {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn resolve_management_config(
+            &self,
+            _: Platform,
+        ) -> Result<Option<alien_core::ManagementConfig>, AlienError> {
+            Ok(Some(azure_management_identity()))
+        }
+    }
+
     /// What a pull sync did on a manager whose management identity doesn't resolve.
     struct UnresolvableManagementSync {
         status: StatusCode,
@@ -1224,7 +1255,14 @@ mod tests {
     /// An Operator that supports execution claims syncs `record` (whose target is
     /// the release this creates) and the control plane grants it a claim.
     async fn sync_without_management_identity(
+        record: DeploymentRecord,
+    ) -> UnresolvableManagementSync {
+        sync_with_management_resolver(record, Arc::new(UnresolvableManagementIdentity)).await
+    }
+
+    async fn sync_with_management_resolver(
         mut record: DeploymentRecord,
+        credential_resolver: Arc<dyn crate::traits::CredentialResolver>,
     ) -> UnresolvableManagementSync {
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
@@ -1299,7 +1337,7 @@ mod tests {
             temp.path(),
             Arc::new(store),
             release_store,
-            Arc::new(UnresolvableManagementIdentity),
+            credential_resolver,
             db,
         )
         .await;
@@ -1443,6 +1481,64 @@ mod tests {
             sync.reconciled[0].state.status,
             DeploymentStatus::UpdateFailed
         );
+    }
+
+    /// A target delivered to a Running or RefreshFailed Operator carries the management
+    /// identity, as it did before the identity became required: the Operator turns the target
+    /// into an update (`accept_target_release`), whose RemoteStackManagement mutation renders
+    /// the management resource from it, and keeps its config for later refreshes. Without the
+    /// identity the sync saves the failure instead of delivering a target that drops it.
+    #[tokio::test]
+    async fn a_running_pull_target_carries_the_management_identity() {
+        for (status, recorded, failed) in [
+            (
+                "running",
+                DeploymentStatus::Running,
+                DeploymentStatus::RefreshFailed,
+            ),
+            (
+                "refresh-failed",
+                DeploymentStatus::RefreshFailed,
+                DeploymentStatus::RefreshFailed,
+            ),
+        ] {
+            let sync = sync_with_management_resolver(
+                deployment_record_with_state(status, None),
+                Arc::new(ResolvedManagementIdentity),
+            )
+            .await;
+            assert_eq!(sync.status, StatusCode::OK, "{status}: {}", sync.response);
+            let target = sync.response.get("target").expect("target");
+            assert_eq!(
+                target["config"]["managementConfig"],
+                serde_json::to_value(azure_management_identity()).unwrap(),
+                "{status}: {target}"
+            );
+            assert!(
+                sync.reconciled
+                    .iter()
+                    .all(|data| data.state.status == recorded && data.state.error.is_none()),
+                "{status}: no failure saved"
+            );
+
+            let sync =
+                sync_without_management_identity(deployment_record_with_state(status, None)).await;
+            assert_eq!(
+                sync.status,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{status}: {}",
+                sync.response
+            );
+            assert!(sync.response.get("target").is_none(), "{}", sync.response);
+            assert_eq!(sync.reconciled.len(), 1, "{status}: one failure checkpoint");
+            let saved = &sync.reconciled[0].state;
+            assert_eq!(saved.status, failed, "{status}");
+            assert_eq!(
+                saved.error.as_ref().expect("saved cause").message,
+                "Failed to resolve the azure management identity for deployment dep_test"
+            );
+            assert_eq!(sync.released.len(), 1, "{status}: the claim is given back");
+        }
     }
 
     /// Deleting a pull deployment never renders setup, so the Operator gets its delete
@@ -3300,7 +3396,8 @@ fn resolve_pull_input_environment(
 }
 
 /// The management identity a pull deployment's target renders with; see
-/// [`crate::loops::deployment::resolve_deployment_management_config`].
+/// [`crate::loops::deployment::resolve_deployment_management_config`] and
+/// [`ManagementIdentityUse::for_pull_target`].
 pub(crate) async fn pull_management_config(
     state: &AppState,
     deployment: &DeploymentRecord,
@@ -3309,6 +3406,7 @@ pub(crate) async fn pull_management_config(
         state.credential_resolver.as_ref(),
         deployment,
         management_platform(deployment.platform, deployment.base_platform),
+        ManagementIdentityUse::for_pull_target(parse_status(&deployment.status)),
     )
     .await
 }

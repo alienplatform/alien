@@ -29,7 +29,7 @@ use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy,
 use alien_error::{AlienError, Context, GenericError};
 use alien_infra::DefaultPlatformServiceProvider;
 use alien_local::{LocalBindingsProvider, LocalContainerManager};
-use alien_preflights::mutations::remote_stack_management::operator_in_existing_cluster;
+use alien_preflights::mutations::remote_stack_management::stack_renders_management_identity;
 
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
@@ -1069,6 +1069,7 @@ impl DeploymentLoop {
             self.credential_resolver.as_ref(),
             &deployment,
             deployment.platform,
+            ManagementIdentityUse::for_runner(status),
         )
         .await
         {
@@ -1464,55 +1465,79 @@ pub(crate) struct RunnerConfigSources<'a> {
     pub target_bindings_providers: &'a HashMap<Platform, Arc<dyn BindingsProviderApi>>,
 }
 
-/// Whether the next operation in `status` renders the stack and creates or updates its
-/// resources, so it needs the management identity. Deletion and teardown remove what is
-/// installed and a Running refresh observes the prepared stack; no handler they run reads the
-/// identity.
-pub(crate) fn operation_renders_setup(status: DeploymentStatus) -> bool {
-    match status {
-        DeploymentStatus::Pending
-        | DeploymentStatus::PreflightsFailed
-        | DeploymentStatus::InitialSetup
-        | DeploymentStatus::InitialSetupFailed
-        | DeploymentStatus::Provisioning
-        | DeploymentStatus::WaitingForMachines
-        | DeploymentStatus::WaitingForSecrets
-        | DeploymentStatus::ProvisioningFailed
-        | DeploymentStatus::UpdatePending
-        | DeploymentStatus::Updating
-        | DeploymentStatus::UpdateFailed => true,
-        DeploymentStatus::Running
-        | DeploymentStatus::RefreshFailed
-        | DeploymentStatus::DeletePending
-        | DeploymentStatus::Deleting
-        | DeploymentStatus::DeleteFailed
-        | DeploymentStatus::TeardownRequired
-        | DeploymentStatus::TeardownFailed
-        | DeploymentStatus::RetentionRequired
-        | DeploymentStatus::Retained
-        | DeploymentStatus::Deleted
-        | DeploymentStatus::Error => false,
+/// What the next operation of a deployment does with its management identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagementIdentityUse {
+    /// The operation renders the stack and creates or updates its resources. Without the
+    /// identity the stack renders without its setup-owned 'management' resource, so a
+    /// resolution failure fails the operation.
+    RendersSetup,
+    /// A Running refresh: it observes the prepared stack and renders no setup, but its
+    /// executor still reads the identity (the AWS permissions-boundary check), so it gets it as
+    /// it always did. A resolution failure is logged and the refresh runs without it, as before.
+    Refresh,
+    /// Deletion and teardown remove what is installed; no handler they run reads the identity,
+    /// so it isn't resolved and a manager that can't render setup can still delete.
+    Unused,
+}
+
+impl ManagementIdentityUse {
+    /// The use for the operation this manager (or a runner acquiring from it) runs next.
+    pub(crate) fn for_runner(status: DeploymentStatus) -> Self {
+        match status {
+            DeploymentStatus::Pending
+            | DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetup
+            | DeploymentStatus::InitialSetupFailed
+            | DeploymentStatus::Provisioning
+            | DeploymentStatus::WaitingForMachines
+            | DeploymentStatus::WaitingForSecrets
+            | DeploymentStatus::ProvisioningFailed
+            | DeploymentStatus::UpdatePending
+            | DeploymentStatus::Updating
+            | DeploymentStatus::UpdateFailed => Self::RendersSetup,
+            DeploymentStatus::Running | DeploymentStatus::RefreshFailed => Self::Refresh,
+            DeploymentStatus::DeletePending
+            | DeploymentStatus::Deleting
+            | DeploymentStatus::DeleteFailed
+            | DeploymentStatus::TeardownRequired
+            | DeploymentStatus::TeardownFailed
+            | DeploymentStatus::RetentionRequired
+            | DeploymentStatus::Retained
+            | DeploymentStatus::Deleted
+            | DeploymentStatus::Error => Self::Unused,
+        }
+    }
+
+    /// The use for a target delivered to a pull Operator (sync or air-gapped bundle). An
+    /// Operator that is Running or RefreshFailed turns a delivered target into an update
+    /// (`accept_target_release` in alien-operator's sync loop) and keeps its config for later
+    /// refreshes, so such a target renders setup like any update.
+    pub(crate) fn for_pull_target(status: DeploymentStatus) -> Self {
+        match Self::for_runner(status) {
+            Self::Refresh => Self::RendersSetup,
+            other => other,
+        }
     }
 }
 
 /// The management identity a deployment's stack renders with: the deployment record's own (set
 /// by a control plane, e.g. for private managers), else the one the credential resolver derives
-/// from `platform`'s management binding. A failure is fatal for an operation that renders setup:
-/// without the identity the stack renders without its setup-owned 'management' resource, which
-/// then reads as removed and makes every update of an imported setup fail with
-/// DEPLOYMENT_SETUP_REQUIRED. Other operations (see [`operation_renders_setup`]) never consult
-/// the resolver, so a manager that can't render a platform's setup can still delete and refresh
-/// its deployments. An Operator in an existing cluster renders no management resource, so for
-/// it a failure renders without the identity.
+/// from `platform`'s management binding. How a resolution failure is handled follows `use_`
+/// (see [`ManagementIdentityUse`]). A stack with no setup-owned management resource, e.g. an
+/// Operator's in an existing cluster, renders the same without the identity, so for it a failure
+/// is logged and the render goes on without it, as before. Which stacks have one is
+/// [`stack_renders_management_identity`], the predicate the RemoteStackManagement mutation uses.
 pub(crate) async fn resolve_deployment_management_config(
     credential_resolver: &dyn CredentialResolver,
     deployment: &DeploymentRecord,
     platform: Platform,
+    use_: ManagementIdentityUse,
 ) -> Result<Option<ManagementConfig>, AlienError> {
     if let Some(config) = &deployment.management_config {
         return Ok(Some(config.clone()));
     }
-    if !operation_renders_setup(parse_status(&deployment.status)) {
+    if use_ == ManagementIdentityUse::Unused {
         return Ok(None);
     }
     let resolved = credential_resolver
@@ -1525,11 +1550,17 @@ pub(crate) async fn resolve_deployment_management_config(
             ),
         });
     match resolved {
-        // An Operator in an existing cluster gets no setup-owned management resource, so its
-        // render doesn't depend on the identity.
+        Err(error) if use_ == ManagementIdentityUse::Refresh => {
+            warn!(
+                deployment_id = %deployment.id,
+                %error,
+                "Refreshing without the management identity; the refresh renders no setup"
+            );
+            Ok(None)
+        }
         Err(error)
             if deployment.stack_settings.as_ref().is_some_and(|settings| {
-                operator_in_existing_cluster(
+                !stack_renders_management_identity(
                     deployment.platform,
                     deployment.base_platform,
                     settings,
@@ -1539,7 +1570,7 @@ pub(crate) async fn resolve_deployment_management_config(
             warn!(
                 deployment_id = %deployment.id,
                 %error,
-                "Rendering an existing-cluster Operator's target without the management identity, which its setup doesn't use"
+                "Rendering without the management identity, which this deployment's stack doesn't use"
             );
             Ok(None)
         }
@@ -1968,8 +1999,9 @@ mod tests {
         has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, resolve_deployment_management_config,
         retryable_failed_statuses, should_wait_for_credential_handoff, supplied_release_stacks,
-        worker_commands_push_env_vars, DeploymentLoop, ProcessOptions, RunnerConfigSources,
-        CREDENTIAL_ERROR_GRACE_PERIOD,
+        worker_commands_push_env_vars, DeploymentLoop, ManagementIdentityUse,
+        ManagementIdentityUse::{Refresh, RendersSetup, Unused},
+        ProcessOptions, RunnerConfigSources, CREDENTIAL_ERROR_GRACE_PERIOD,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
@@ -5201,52 +5233,127 @@ mod tests {
         }
     }
 
+    struct ResolvedManagementIdentity;
+
+    #[async_trait]
+    impl CredentialResolver for ResolvedManagementIdentity {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn resolve_management_config(
+            &self,
+            _: alien_core::Platform,
+        ) -> Result<Option<alien_core::ManagementConfig>, AlienError> {
+            Ok(Some(alien_core::ManagementConfig::Azure(
+                alien_core::AzureManagementConfig {
+                    managing_tenant_id: "resolved-tenant".to_string(),
+                    oidc_issuer: "https://resolved.example.com".to_string(),
+                    oidc_subject: "manager".to_string(),
+                },
+            )))
+        }
+    }
+
     /// Rendering without the management identity would drop the setup-owned 'management'
     /// resource, so a failure to resolve it stops a setup render instead of rendering without it.
-    /// Deletion, teardown and refresh never read the identity, so they don't depend on it.
+    /// A Running refresh gets the identity as before (its executor reads it), and runs without it
+    /// when it doesn't resolve. Deletion and teardown never read it. A pull Operator turns any
+    /// target it receives while Running into an update, so a pull target always renders setup.
     #[tokio::test]
     async fn the_management_identity_is_required_only_to_render_setup() {
-        for (status, renders_setup) in [
-            (DeploymentStatus::Pending, true),
-            (DeploymentStatus::PreflightsFailed, true),
-            (DeploymentStatus::InitialSetup, true),
-            (DeploymentStatus::InitialSetupFailed, true),
-            (DeploymentStatus::Provisioning, true),
-            (DeploymentStatus::WaitingForMachines, true),
-            (DeploymentStatus::WaitingForSecrets, true),
-            (DeploymentStatus::ProvisioningFailed, true),
-            (DeploymentStatus::UpdatePending, true),
-            (DeploymentStatus::Updating, true),
-            (DeploymentStatus::UpdateFailed, true),
-            (DeploymentStatus::Running, false),
-            (DeploymentStatus::RefreshFailed, false),
-            (DeploymentStatus::DeletePending, false),
-            (DeploymentStatus::Deleting, false),
-            (DeploymentStatus::DeleteFailed, false),
-            (DeploymentStatus::TeardownRequired, false),
-            (DeploymentStatus::TeardownFailed, false),
-            (DeploymentStatus::RetentionRequired, false),
-            (DeploymentStatus::Retained, false),
-            (DeploymentStatus::Deleted, false),
-            (DeploymentStatus::Error, false),
+        for (status, runner, pull_target) in [
+            (DeploymentStatus::Pending, RendersSetup, RendersSetup),
+            (
+                DeploymentStatus::PreflightsFailed,
+                RendersSetup,
+                RendersSetup,
+            ),
+            (DeploymentStatus::InitialSetup, RendersSetup, RendersSetup),
+            (
+                DeploymentStatus::InitialSetupFailed,
+                RendersSetup,
+                RendersSetup,
+            ),
+            (DeploymentStatus::Provisioning, RendersSetup, RendersSetup),
+            (
+                DeploymentStatus::WaitingForMachines,
+                RendersSetup,
+                RendersSetup,
+            ),
+            (
+                DeploymentStatus::WaitingForSecrets,
+                RendersSetup,
+                RendersSetup,
+            ),
+            (
+                DeploymentStatus::ProvisioningFailed,
+                RendersSetup,
+                RendersSetup,
+            ),
+            (DeploymentStatus::UpdatePending, RendersSetup, RendersSetup),
+            (DeploymentStatus::Updating, RendersSetup, RendersSetup),
+            (DeploymentStatus::UpdateFailed, RendersSetup, RendersSetup),
+            (DeploymentStatus::Running, Refresh, RendersSetup),
+            (DeploymentStatus::RefreshFailed, Refresh, RendersSetup),
+            (DeploymentStatus::DeletePending, Unused, Unused),
+            (DeploymentStatus::Deleting, Unused, Unused),
+            (DeploymentStatus::DeleteFailed, Unused, Unused),
+            (DeploymentStatus::TeardownRequired, Unused, Unused),
+            (DeploymentStatus::TeardownFailed, Unused, Unused),
+            (DeploymentStatus::RetentionRequired, Unused, Unused),
+            (DeploymentStatus::Retained, Unused, Unused),
+            (DeploymentStatus::Deleted, Unused, Unused),
+            (DeploymentStatus::Error, Unused, Unused),
         ] {
-            let deployment = deployment_record(status, None);
-            assert_eq!(parse_status(&deployment.status), status);
+            assert_eq!(
+                ManagementIdentityUse::for_runner(status),
+                runner,
+                "{status:?}"
+            );
+            assert_eq!(
+                ManagementIdentityUse::for_pull_target(status),
+                pull_target,
+                "{status:?}"
+            );
+        }
+
+        let deployment = deployment_record(DeploymentStatus::Running, None);
+        for use_ in [RendersSetup, Refresh, Unused] {
+            let resolved = resolve_deployment_management_config(
+                &ResolvedManagementIdentity,
+                &deployment,
+                deployment.platform,
+                use_,
+            )
+            .await
+            .expect("resolves");
+            assert_eq!(
+                resolved.map(
+                    |config| serde_json::to_value(config).unwrap()["managingTenantId"].clone()
+                ),
+                (use_ != Unused).then(|| serde_json::json!("resolved-tenant")),
+                "{use_:?}"
+            );
+
             let resolved = resolve_deployment_management_config(
                 &UnresolvableManagementIdentity,
                 &deployment,
                 deployment.platform,
+                use_,
             )
             .await;
-            if renders_setup {
+            if use_ == RendersSetup {
                 let error = resolved.expect_err("a setup render needs the management identity");
                 assert_eq!(
                     error.message,
                     format!(
                         "Failed to resolve the {} management identity for deployment {}",
                         deployment.platform, deployment.id
-                    ),
-                    "{status:?}"
+                    )
                 );
                 assert_eq!(
                     error.source.as_ref().expect("resolver error").message,
@@ -5254,8 +5361,8 @@ mod tests {
                 );
             } else {
                 assert!(
-                    resolved.expect("no resolver call").is_none(),
-                    "{status:?} must not resolve the management identity"
+                    resolved.expect("not fatal").is_none(),
+                    "{use_:?} runs without the identity"
                 );
             }
         }
@@ -5272,6 +5379,7 @@ mod tests {
             &UnresolvableManagementIdentity,
             &deployment,
             deployment.platform,
+            RendersSetup,
         )
         .await
         .expect("the recorded identity needs no resolver");
@@ -5488,7 +5596,7 @@ fn deployment_record_error(error: &Option<serde_json::Value>) -> Option<AlienErr
 }
 
 /// Parse a status string (kebab-case, as stored in the DB) to `DeploymentStatus`.
-fn parse_status(status: &str) -> DeploymentStatus {
+pub(crate) fn parse_status(status: &str) -> DeploymentStatus {
     match status {
         "pending" => DeploymentStatus::Pending,
         "preflights-failed" => DeploymentStatus::PreflightsFailed,

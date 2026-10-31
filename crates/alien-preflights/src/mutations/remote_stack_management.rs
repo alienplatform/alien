@@ -36,7 +36,7 @@ fn is_cloud_backed_kubernetes_pull(
 /// operator is installed into an existing cluster. That operator already has its
 /// workload identity, so the stack gets no setup-owned management identity to
 /// provision or import.
-pub fn operator_in_existing_cluster(
+fn operator_in_existing_cluster(
     platform: Platform,
     base_platform: Option<Platform>,
     stack_settings: &StackSettings,
@@ -47,6 +47,29 @@ pub fn operator_in_existing_cluster(
             .as_ref()
             .and_then(|settings| settings.cluster.as_ref())
             .is_some_and(|cluster| cluster.ownership != KubernetesClusterOwnership::Managed)
+}
+
+/// Whether a deployment's stack has a setup-owned management resource that is
+/// rendered from the manager's management identity: cross-account cloud stacks
+/// (and test), and Kubernetes stacks on a cloud, except an Operator installed
+/// into an existing cluster. Without the identity such a stack renders without
+/// the resource, so the manager must not render it then.
+pub fn stack_renders_management_identity(
+    platform: Platform,
+    base_platform: Option<Platform>,
+    stack_settings: &StackSettings,
+) -> bool {
+    // Kubernetes setup can also need a cloud management identity for Helm pull
+    // mode; in that case the cloud is carried as the base platform.
+    let cross_account = matches!(
+        platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test
+    ) || (platform == Platform::Kubernetes
+        && matches!(
+            base_platform.unwrap_or(platform),
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ));
+    cross_account && !operator_in_existing_cluster(platform, base_platform, stack_settings)
 }
 
 #[async_trait]
@@ -63,29 +86,16 @@ impl StackMutation for RemoteStackManagementMutation {
     ) -> bool {
         let platform = stack_state.platform;
 
-        // Only add RemoteStackManagement for cross-account platforms (and test
-        // for development). Kubernetes setup can also need a cloud management
-        // identity for Helm pull mode; in that case the cloud is carried as the
-        // deployment config's base platform.
-        let base_platform = config.base_platform.unwrap_or(platform);
-        if !matches!(
+        if !stack_renders_management_identity(
             platform,
-            Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test
-        ) && !(platform == Platform::Kubernetes
-            && matches!(
-                base_platform,
-                Platform::Aws | Platform::Gcp | Platform::Azure
-            ))
-        {
+            config.base_platform,
+            &config.stack_settings,
+        ) {
             return false;
         }
 
         let cloud_backed_kubernetes_pull =
             is_cloud_backed_kubernetes_pull(platform, config.base_platform, &config.stack_settings);
-
-        if operator_in_existing_cluster(platform, config.base_platform, &config.stack_settings) {
-            return false;
-        }
 
         // Push-mode cloud stacks need an external manager management config.
         // Cloud-backed Kubernetes pull stacks still need this setup-owned
