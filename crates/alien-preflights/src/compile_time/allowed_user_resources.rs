@@ -1,5 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
+use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
 use alien_core::{
     Platform, Sandbox, SandboxEgress, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID,
@@ -84,6 +85,14 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             ) {
                 errors.push(format!(
                     "Resource ID '{resource_id}' is reserved for deployment secret delivery. Choose a different ID for the application resource"
+                ));
+                continue;
+            }
+
+            // The bundle bucket's grants and its write guard are bound to this name as a prefix.
+            if resource_id.starts_with(SANDBOX_BUNDLE_STORAGE_ID) {
+                errors.push(format!(
+                    "Resource ID '{resource_id}' starts with '{SANDBOX_BUNDLE_STORAGE_ID}', which is reserved for the bucket sandbox images are built from. Choose a different ID for the application resource"
                 ));
                 continue;
             }
@@ -269,6 +278,27 @@ mod tests {
         assert!(!result.success);
         assert!(!result.errors.is_empty());
         assert!(result.errors[0].contains("network"));
+    }
+
+    #[tokio::test]
+    async fn rejects_ids_in_the_sandbox_bundle_namespace() {
+        // The bundle bucket's management grant and its write guard match this prefix, so an
+        // application bucket under it would share both.
+        for (id, rejected) in [
+            ("sandbox-bundles", true),
+            ("sandbox-bundles-archive", true),
+            ("bundles", false),
+        ] {
+            let storage = alien_core::Storage::new(id.to_string()).build();
+            let stack = Stack::new("test-stack".to_string())
+                .add(storage, ResourceLifecycle::Frozen)
+                .build();
+            let result = AllowedUserResourcesCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .expect("reserved-id validation should run");
+            assert_eq!(!result.success, rejected, "{id}: {:?}", result.errors);
+        }
     }
 
     #[tokio::test]

@@ -1062,12 +1062,30 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-        if let Some((bucket, _)) = self.written_bundle_uri.as_deref().and_then(split_s3_uri) {
+        // The bucket the bundles went to, or the deployment's bundle Storage: a write that failed
+        // after S3 accepted the object leaves no record of it.
+        let bucket = match self.written_bundle_uri.as_deref().and_then(split_s3_uri) {
+            Some((bucket, _)) => Some(bucket.to_string()),
+            None if ctx
+                .desired_stack
+                .resources
+                .contains_key(SANDBOX_BUNDLE_STORAGE_ID) =>
+            {
+                ctx.require_dependency::<crate::storage::AwsStorageController>(&ResourceRef::new(
+                    Storage::RESOURCE_TYPE,
+                    SANDBOX_BUNDLE_STORAGE_ID,
+                ))?
+                .bucket_name
+                .clone()
+            }
+            None => None,
+        };
+        if let Some(bucket) = bucket {
             let client = ctx
                 .service_provider
                 .get_aws_s3_client(ctx.get_aws_config()?)
                 .await?;
-            super::aws_bundle::delete_all(client.as_ref(), bucket, &config.id).await?;
+            super::aws_bundle::delete_all(client.as_ref(), &bucket, &config.id).await?;
         }
         self.written_bundle_uri = None;
         Ok(HandlerAction::Continue {

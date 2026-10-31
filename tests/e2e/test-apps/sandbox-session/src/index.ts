@@ -1,5 +1,6 @@
 import { sandbox } from "@alienplatform/sdk"
 import { Hono } from "hono"
+import { rewriteBucketPolicy } from "./s3-policy"
 
 // Bun's built-in S3 client, which the Worker runtime provides.
 declare const Bun: {
@@ -71,6 +72,19 @@ app.post("/write-object", async c => {
   } catch (error) {
     return c.json({ written: false, code: (error as { code?: string }).code ?? String(error) })
   }
+})
+
+// Reads a bucket's policy and writes it back unchanged with this Worker's credentials, which hold
+// a stack-wide storage provision grant. The bundle bucket's policy is what keeps workloads from
+// writing bundles, so the grant must not reach it.
+app.post("/rewrite-bucket-policy", async c => {
+  const deploymentId = process.env.ALIEN_DEPLOYMENT_ID
+  if (!deploymentId) return c.json({ error: "ALIEN_DEPLOYMENT_ID is not set" }, 503)
+  if (c.req.header("authorization") !== `Bearer ${deploymentId}`) {
+    return c.json({ error: "unauthorized" }, 401)
+  }
+  const { bucket } = (await c.req.json()) as { bucket: string }
+  return c.json(await rewriteBucketPolicy(bucket))
 })
 
 export default app
