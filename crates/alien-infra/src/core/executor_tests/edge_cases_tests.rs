@@ -1,7 +1,7 @@
 //! Tests for edge cases and special state handling.
 
 use super::helpers::*;
-use crate::core::StackExecutor;
+use crate::core::{state_utils::StackStateExt, StackExecutor};
 use crate::error::Result;
 use alien_core::{
     bindings::ExternalAiBinding, Ai, ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
@@ -976,5 +976,108 @@ async fn test_external_binding_resource_deletes_without_controller() -> Result<(
         "Deleted external binding should be considered synced"
     );
 
+    Ok(())
+}
+
+/// A record adopted before adoption was recorded learns it from the next executor that still
+/// holds the binding, so a later teardown without the binding can release the resource.
+#[tokio::test]
+async fn test_executor_holding_the_binding_records_an_earlier_adoption() -> Result<()> {
+    let stack = Stack::new("external-binding-backfill-test".to_owned())
+        .add(test_storage("external-store"), ResourceLifecycle::Frozen)
+        .build();
+    let deployment_config = external_storage_config("external-store");
+    let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&deployment_config)
+        .build()?;
+    let mut state = run_to_synced(&executor, new_test_state()).await?;
+    let adopted = state.resources.get_mut("external-store").unwrap();
+    assert!(adopted.external_binding, "adoption must be recorded");
+    adopted.external_binding = false;
+
+    let refreshed = executor.refresh(state).await?.next_state;
+
+    let store = &refreshed.resources["external-store"];
+    assert!(store.external_binding);
+    assert_eq!(store.status, ResourceStatus::Running);
+    assert!(store.internal_state.is_none());
+
+    let teardown = StackExecutor::for_deletion(
+        ClientConfig::Test,
+        &DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::new())
+            .allow_frozen_changes(false)
+            .build(),
+        None,
+    )?;
+    let deleted = run_to_synced(&teardown, refreshed).await?;
+    assert_eq!(
+        deleted.resources["external-store"].status,
+        ResourceStatus::Deleted
+    );
+    Ok(())
+}
+
+/// A change to a resource adopted from a binding, planned by an executor that never received
+/// the binding (a setup rerun of a deployment whose binding was supplied at the site), fails
+/// naming the missing binding, and a later teardown without the binding still releases it.
+#[tokio::test]
+async fn test_update_without_the_binding_of_an_adopted_resource_fails_and_teardown_releases_it(
+) -> Result<()> {
+    let stack = Stack::new("external-binding-update-test".to_owned())
+        .add(test_storage("external-store"), ResourceLifecycle::Frozen)
+        .build();
+    let site = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&external_storage_config("external-store"))
+        .build()?;
+    let adopted = run_to_synced(&site, new_test_state()).await?;
+    assert!(adopted.resources["external-store"].external_binding);
+
+    let changed = Stack::new("external-binding-update-test".to_owned())
+        .add(
+            test_storage_with_public_read("external-store", true),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let without_binding = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(ExternalBindings::new())
+        .allow_frozen_changes(true)
+        .build();
+    let setup = StackExecutor::builder(&changed, ClientConfig::Test)
+        .deployment_config(&without_binding)
+        .build()?;
+    let mut state = setup.step(adopted).await?.next_state;
+
+    let store = &state.resources["external-store"];
+    assert_eq!(store.status, ResourceStatus::UpdateFailed);
+    assert!(store.internal_state.is_none());
+    let error = store.error.as_ref().expect("the failed update says why");
+    assert_eq!(error.code, "EXTERNAL_BINDING_MISSING");
+    assert!(
+        error.message.contains("'external-store'"),
+        "{}",
+        error.message
+    );
+
+    let prepared = state.prepare_for_destroy()?;
+    assert_eq!(prepared, vec!["external-store".to_string()]);
+    let teardown = StackExecutor::for_deletion(ClientConfig::Test, &without_binding, None)?;
+    let deleted = run_to_synced(&teardown, state).await?;
+    let store = &deleted.resources["external-store"];
+    assert_eq!(store.status, ResourceStatus::Deleted);
+    assert!(store.outputs.is_none());
+    assert!(store.error.is_none());
     Ok(())
 }

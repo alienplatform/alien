@@ -269,6 +269,13 @@ impl StackResourceStateExt for StackResourceState {
                     return Ok(true);
                 }
 
+                // A delete fails without a controller only when the resource exists but nothing
+                // here can delete it. Pending would read as never created, and the next delete
+                // would drop the record of a resource that still exists.
+                if self.status == ResourceStatus::DeleteFailed {
+                    return Ok(false);
+                }
+
                 // No last failed state — the resource was interrupted before its controller was
                 // initialized (i.e. it was in Pending when the deployment stopped). Reset it to
                 // Pending so it starts fresh on the next deployment attempt.
@@ -478,6 +485,35 @@ pub(super) fn prepare_for_destroy_matching(
 
     for (resource_id, resource_state) in &mut stack_state.resources {
         if !should_prepare(resource_state)? {
+            continue;
+        }
+
+        // A resource without a controller has no failed step to resume, so a retry runs its
+        // delete again from the state it was adopted in. The delete releases it if it was
+        // adopted from a binding, and refuses it again otherwise. That covers a delete that
+        // failed before adoption was recorded, and a resource recorded as bound whose update
+        // failed for want of its binding.
+        let controllerless =
+            resource_state.internal_state.is_none() && resource_state.last_failed_state.is_none();
+        let failed_without_controller = resource_state.status == ResourceStatus::DeleteFailed
+            || (resource_state.external_binding
+                && matches!(
+                    resource_state.status,
+                    ResourceStatus::ProvisionFailed
+                        | ResourceStatus::UpdateFailed
+                        | ResourceStatus::RefreshFailed
+                ));
+        if controllerless && failed_without_controller {
+            tracing::info!(
+                resource_id = %resource_id,
+                failed_status = ?resource_state.status,
+                "Restoring a failed resource without a controller as adopted so its delete runs again"
+            );
+            resource_state.status = ResourceStatus::Running;
+            resource_state.progress = None;
+            resource_state.retry_attempt = 0;
+            resource_state.error = None;
+            prepared_resource_ids.push(resource_id.clone());
             continue;
         }
 

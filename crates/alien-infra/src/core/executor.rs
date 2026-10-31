@@ -958,6 +958,14 @@ impl StackExecutor {
             && current_resource_state.internal_state.is_none()
     }
 
+    /// Whether this resource is an external binding, known either from this executor's
+    /// bindings or from the record of an executor that adopted it. Bindings set at the site
+    /// (Helm values, chart-created databases) reach only the site's executor, so a later
+    /// teardown elsewhere knows them only through the record.
+    fn is_bound_resource(&self, resource_id: &str, resource_state: &StackResourceState) -> bool {
+        self.is_external_binding_resource(resource_id) || resource_state.external_binding
+    }
+
     fn resource_lifecycle(
         &self,
         resource_id: &str,
@@ -1932,6 +1940,15 @@ impl StackExecutor {
                 resource.settle_failed_controller()?;
             }
         }
+        // Records written before adoption was recorded learn it from the executor that
+        // still holds the binding, so a later teardown without it can release the resource.
+        for (id, resource) in &mut state.resources {
+            if resource.status != ResourceStatus::Deleted
+                && self.adopted_external_binding(id, resource)
+            {
+                resource.external_binding = true;
+            }
+        }
         if apply_plan && self.resume_unchanged_failed_resources {
             for (resource_id, resource_state) in &mut state.resources {
                 if !matches!(
@@ -2019,6 +2036,7 @@ impl StackExecutor {
                     desired_config.dependencies.clone(),
                 );
                 resource_state.status = ResourceStatus::Running;
+                resource_state.external_binding = true;
 
                 // Seeded through the same helper the planner diffs against, so a create
                 // cannot land in a state the next plan immediately calls drifted. External
@@ -2190,10 +2208,10 @@ impl StackExecutor {
                                 }
                             }
                             Ok(None) => {
-                                if self.is_external_binding_resource(resource_id) {
+                                if self.is_bound_resource(resource_id, resource_state) {
                                     info!(
                                         resource_id = %resource_id,
-                                        "Marking external binding resource as deleted"
+                                        "Releasing external binding resource"
                                     );
                                     resource_state.status = ResourceStatus::Deleted;
                                     resource_state.outputs = None;
@@ -2207,13 +2225,9 @@ impl StackExecutor {
                                     );
                                     let failed_state = resource_state.with_failure(
                                         ResourceStatus::DeleteFailed,
-                                        AlienError::new(
-                                            ErrorData::ResourceStateSerializationFailed {
-                                                resource_id: resource_id.clone(),
-                                                message: "Missing controller state for non-external resource deletion"
-                                                    .to_string(),
-                                            },
-                                        )
+                                        AlienError::new(ErrorData::ResourceProvenanceUnknown {
+                                            resource_id: resource_id.clone(),
+                                        })
                                         .into_generic(),
                                     );
                                     *resource_state = failed_state;
@@ -2406,8 +2420,25 @@ impl StackExecutor {
                                 state.retry_attempt = 0;
                                 state.error = None;
                                 state.last_failed_state = None;
+                                state.external_binding = true;
                             });
                             initial_transitions.insert(resource_id.clone(), updated_state);
+                        } else if current_state.external_binding {
+                            // Adopted where its binding was supplied (a Helm value or the
+                            // chart's database), which this executor didn't receive. Only the
+                            // binding says what the new config means for it.
+                            error!(
+                                "Cannot update '{}': it was adopted from a binding this executor doesn't have",
+                                resource_id
+                            );
+                            let failed_update_state = current_state.with_failure(
+                                ResourceStatus::UpdateFailed,
+                                AlienError::new(ErrorData::ExternalBindingMissing {
+                                    resource_id: resource_id.clone(),
+                                })
+                                .into_generic(),
+                            );
+                            initial_transitions.insert(resource_id.clone(), failed_update_state);
                         } else {
                             error!(
                                 "Cannot start update transition for '{}' from state {:?}: no controller state",
@@ -3272,7 +3303,7 @@ impl StackExecutor {
                 ) {
                     return true;
                 }
-                if self.is_external_binding_resource(resource_id) {
+                if self.is_bound_resource(resource_id, view) {
                     if self.resources.contains_key(resource_id) {
                         return view.status == ResourceStatus::Running;
                     }

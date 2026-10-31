@@ -4,7 +4,7 @@ use crate::deployment_tracking::{DeploymentTracker, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
 use alien_core::embedded_config::DeployCliConfig;
-use alien_core::{ClientConfig, Platform};
+use alien_core::{ClientConfig, Platform, StackState};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use clap::Parser;
@@ -192,6 +192,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
             })
         })?;
     let platform = validate_remote_platform(tracked_platform.as_deref(), remote_platform)?;
+    let site_bound = site_bound_resource_ids(&deployment_json)?;
 
     if let Some(source) = &import_source {
         if !args.force_delete_record {
@@ -353,13 +354,46 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     finish_tracked_deletion(tracker.as_mut(), args.name.as_deref(), args.erase_data)?;
 
     output::step(total_steps, total_steps, "Done!");
-    if args.erase_data {
+    if args.erase_data && site_bound.is_empty() {
         output::success("Deployment and its durable data erased successfully.");
+    } else if args.erase_data {
+        output::success("Deployment and the durable data Alien created erased successfully.");
     } else {
         output::success("Deployment stopped. Durable data and recovery tracking retained; use --erase-data to erase later.");
     }
+    if !site_bound.is_empty() {
+        output::info(&format!(
+            "Released, not erased: {}. These were supplied where the deployment was installed (for example Helm values or the chart's database); remove them there.",
+            site_bound.join(", ")
+        ));
+    }
 
     Ok(())
+}
+
+/// Resources the record shows as adopted from a binding supplied at the site. Teardown
+/// releases them and leaves whatever they point at in place, so one already `deleted` by an
+/// earlier retain or partial erase was released too, and still isn't erased.
+fn site_bound_resource_ids(deployment: &serde_json::Value) -> Result<Vec<String>> {
+    let Some(stack_state) = deployment
+        .get("stackState")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(Vec::new());
+    };
+    let stack_state: StackState = serde_json::from_value(stack_state.clone())
+        .into_alien_error()
+        .context(ErrorData::DeploymentFailed {
+            operation: "decode deployment stack state".to_string(),
+        })?;
+    let mut ids: Vec<String> = stack_state
+        .resources
+        .into_iter()
+        .filter(|(_, resource)| resource.external_binding)
+        .map(|(id, _)| id)
+        .collect();
+    ids.sort();
+    Ok(ids)
 }
 
 /// Retained data still needs its original credentials and local state directory
@@ -560,6 +594,52 @@ mod tests {
 
         assert_eq!(args.deployment_id.as_deref(), Some("dep_recovery"));
         assert!(args.name.is_none());
+    }
+
+    /// A database released by an earlier attempt (a retain, or an erase that failed on another
+    /// resource) is still the site's, so a later erase must keep saying it wasn't erased.
+    #[test]
+    fn released_bindings_stay_named_after_an_earlier_attempt() {
+        let postgres = |status: &str| {
+            serde_json::json!({
+                "type": "postgres",
+                "status": status,
+                "config": {"type": "postgres", "id": "database", "version": "17", "storage": "20Gi", "highAvailability": false},
+                "lifecycle": "frozen",
+                "externalBinding": true
+            })
+        };
+        let deployment = |database: serde_json::Value| {
+            serde_json::json!({
+                "stackState": {
+                    "platform": "kubernetes",
+                    "resourcePrefix": "site",
+                    "resources": {
+                        "database": database,
+                        "uploads": {
+                            "type": "storage",
+                            "status": "delete-failed",
+                            "config": {"type": "storage", "id": "uploads"},
+                            "lifecycle": "frozen"
+                        }
+                    }
+                }
+            })
+        };
+
+        for status in ["running", "deleted"] {
+            assert_eq!(
+                site_bound_resource_ids(&deployment(postgres(status))).unwrap(),
+                vec!["database".to_string()],
+                "a {status} binding"
+            );
+        }
+
+        let mut unbound = postgres("running");
+        unbound.as_object_mut().unwrap().remove("externalBinding");
+        assert!(site_bound_resource_ids(&deployment(unbound))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
