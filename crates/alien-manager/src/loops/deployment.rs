@@ -1065,38 +1065,34 @@ impl DeploymentLoop {
         //    deployment get the same config from the acquire route. Without
         //    its management identity a setup render can't proceed; that is
         //    saved as the deployment's failure, like a credential failure.
-        let management_config = match resolve_deployment_management_config(
-            self.credential_resolver.as_ref(),
-            &deployment,
-            deployment.platform,
-            ManagementIdentityUse::for_runner(status),
-        )
-        .await
-        {
-            Ok(management_config) => management_config,
-            Err(error) => {
-                warn!(
-                    deployment_id = %deployment_id,
-                    status = ?status,
-                    platform = ?deployment.platform,
-                    error = %error,
-                    "Management identity unavailable for a setup render"
-                );
-                return self
-                    .checkpoint_phase_failure(PhaseFailure {
-                        deployment: &deployment,
-                        status,
-                        deployment_stack: deployment_stack.as_ref(),
-                        target_release_id,
-                        current_release,
-                        had_credential_retry,
-                        error,
-                        session,
-                        execution_claim,
-                    })
-                    .await;
-            }
-        };
+        let management_config =
+            match resolve_runner_management_config(self.credential_resolver.as_ref(), &deployment)
+                .await
+            {
+                Ok(management_config) => management_config,
+                Err(error) => {
+                    warn!(
+                        deployment_id = %deployment_id,
+                        status = ?status,
+                        platform = ?deployment.platform,
+                        error = %error,
+                        "Management identity unavailable for a setup render"
+                    );
+                    return self
+                        .checkpoint_phase_failure(PhaseFailure {
+                            deployment: &deployment,
+                            status,
+                            deployment_stack: deployment_stack.as_ref(),
+                            target_release_id,
+                            current_release,
+                            had_credential_retry,
+                            error,
+                            session,
+                            execution_claim,
+                        })
+                        .await;
+                }
+            };
         let mut config = RunnerConfigSources {
             config: &self.config,
             credential_resolver: self.credential_resolver.as_ref(),
@@ -1578,6 +1574,31 @@ pub(crate) async fn resolve_deployment_management_config(
     }
 }
 
+/// The management identity a runner (this manager's loop, or one acquiring from it) renders with.
+/// A control plane's supplied config can carry its own, which
+/// [`RunnerConfigSources::deployment_config`] keeps over any other, so the resolver isn't
+/// consulted and can't fail the render then. Pull targets don't use the supplied config; they
+/// resolve with [`resolve_deployment_management_config`] directly.
+pub(crate) async fn resolve_runner_management_config(
+    credential_resolver: &dyn CredentialResolver,
+    deployment: &DeploymentRecord,
+) -> Result<Option<ManagementConfig>, AlienError> {
+    if let Some(supplied) = deployment
+        .deployment_config
+        .as_ref()
+        .and_then(|config| config.management_config.clone())
+    {
+        return Ok(Some(supplied));
+    }
+    resolve_deployment_management_config(
+        credential_resolver,
+        deployment,
+        deployment.platform,
+        ManagementIdentityUse::for_runner(parse_status(&deployment.status)),
+    )
+    .await
+}
+
 impl RunnerConfigSources<'_> {
     /// The deployment config a runner applies to this deployment.
     ///
@@ -1588,7 +1609,7 @@ impl RunnerConfigSources<'_> {
     ///
     /// `deployment_stack` is the target release's stack; `None` when the
     /// deployment has none yet, so no resource receives command variables.
-    /// `management_config` comes from [`resolve_deployment_management_config`].
+    /// `management_config` comes from [`resolve_runner_management_config`].
     pub(crate) async fn deployment_config(
         &self,
         deployment: &DeploymentRecord,
@@ -1998,8 +2019,9 @@ mod tests {
         credential_error_retry_remaining, get_or_create_local_bindings_provider,
         has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, resolve_deployment_management_config,
-        retryable_failed_statuses, should_wait_for_credential_handoff, supplied_release_stacks,
-        worker_commands_push_env_vars, DeploymentLoop, ManagementIdentityUse,
+        resolve_runner_management_config, retryable_failed_statuses,
+        should_wait_for_credential_handoff, supplied_release_stacks, worker_commands_push_env_vars,
+        DeploymentLoop, ManagementIdentityUse,
         ManagementIdentityUse::{Refresh, RendersSetup, Unused},
         ProcessOptions, RunnerConfigSources, CREDENTIAL_ERROR_GRACE_PERIOD,
     };
@@ -5386,6 +5408,61 @@ mod tests {
         assert_eq!(
             serde_json::to_value(resolved).unwrap(),
             serde_json::to_value(Some(recorded)).unwrap()
+        );
+    }
+
+    /// A control plane that supplies the deployment's config can carry the management identity
+    /// in it. The runner renders with that identity, so a manager whose own resolution fails
+    /// still renders the update, and doesn't call the resolver.
+    #[tokio::test]
+    async fn a_supplied_management_identity_renders_without_the_resolver() {
+        let supplied = alien_core::ManagementConfig::Azure(alien_core::AzureManagementConfig {
+            managing_tenant_id: "supplied-tenant".to_string(),
+            oidc_issuer: "https://control-plane.example.com".to_string(),
+            oidc_subject: "control-plane".to_string(),
+        });
+        let mut deployment = deployment_record(DeploymentStatus::UpdatePending, None);
+        deployment.deployment_config = Some(
+            DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .management_config(supplied.clone())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build(),
+        );
+
+        let management_config =
+            resolve_runner_management_config(&UnresolvableManagementIdentity, &deployment)
+                .await
+                .expect("the supplied identity needs no resolver");
+        let manager_config = crate::config::ManagerConfig::default();
+        let config = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &UnresolvableManagementIdentity,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
+        }
+        .deployment_config(&deployment, None, management_config)
+        .await
+        .expect("runner config");
+        assert_eq!(
+            serde_json::to_value(config.management_config).unwrap(),
+            serde_json::to_value(Some(supplied)).unwrap()
+        );
+
+        // Without a supplied identity the runner resolves, and an update fails without one.
+        deployment.deployment_config = None;
+        let error = resolve_runner_management_config(&UnresolvableManagementIdentity, &deployment)
+            .await
+            .expect_err("an update needs the identity");
+        assert_eq!(
+            error.source.expect("resolver error").message,
+            "AZURE_MANAGEMENT_OIDC_ISSUER is not set"
         );
     }
 

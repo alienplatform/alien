@@ -573,11 +573,9 @@ async fn acquired_deployment_response(
         Some(release_id) => target_release_stack(release_store, record, release_id).await?,
         None => None,
     };
-    let management_config = crate::loops::deployment::resolve_deployment_management_config(
+    let management_config = crate::loops::deployment::resolve_runner_management_config(
         sources.credential_resolver,
         record,
-        record.platform,
-        ManagementIdentityUse::for_runner(parse_status(&record.status)),
     )
     .await?;
     let config = sources
