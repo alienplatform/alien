@@ -1,0 +1,902 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 136
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.7.0"
+
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = ">= 4.75, < 5.0"
+    }
+    azapi = {
+      source  = "Azure/azapi"
+      version = ">= 2.6, < 3.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.7.2"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
+}
+
+variable "name" {
+  type        = string
+  description = "Deployment name, unique within the deployment group: 2-100 lowercase letters, numbers, and single hyphens. Shown in setup and cloud IAM review metadata."
+
+  validation {
+    condition     = length(var.name) >= 2 && length(var.name) <= 100 && can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.name)) && !startswith(var.name, "ag-")
+    error_message = "name must be 2-100 characters of lowercase letters, numbers, and single hyphens; start and end with a letter or number; and not start with \"ag-\"."
+  }
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+  sensitive   = true
+}
+
+variable "management_url" {
+  type        = string
+  description = "Optional management endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "deployment_model" {
+  type        = string
+  description = "How runtime updates are delivered after setup."
+  default     = "push"
+
+  validation {
+    condition     = contains(["push", "pull"], var.deployment_model)
+    error_message = "deployment_model must be one of: push, pull."
+  }
+}
+
+variable "advanced_settings_json" {
+  type        = string
+  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "advanced_settings_overlay_json" {
+  type        = string
+  description = "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "endpoint_access" {
+  type        = string
+  description = "Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup."
+  default     = "internet"
+
+  validation {
+    condition     = contains(["internet", "private"], var.endpoint_access)
+    error_message = "endpoint_access must be one of: internet, private."
+  }
+}
+
+variable "updates_mode" {
+  type        = string
+  description = "How application updates are delivered after setup."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "approval-required"], var.updates_mode)
+    error_message = "updates_mode must be one of: auto, approval-required."
+  }
+}
+
+variable "telemetry_mode" {
+  type        = string
+  description = "How logs, metrics, and traces are collected."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
+    error_message = "telemetry_mode must be one of: off, auto, approval-required."
+  }
+}
+
+variable "heartbeats_mode" {
+  type        = string
+  description = "Whether runtime health checks are enabled."
+  default     = "on"
+
+  validation {
+    condition     = contains(["off", "on"], var.heartbeats_mode)
+    error_message = "heartbeats_mode must be one of: off, on."
+  }
+}
+
+variable "azure_storage_import_existing_policy" {
+  type        = bool
+  description = "Import the existing account management policy when upgrading an older installation. Legacy container policy addresses are forgotten without deleting the remote policy. Leave false for a new account."
+  default     = false
+}
+
+variable "azure_storage_live_lifecycle_enabled" {
+  type        = bool
+  description = "Explicitly activate lifecycle expiry for Live containers, including existing objects. Older packages ignored these declarations. Review all Live lifecycle rules before enabling; setup owns this shared account policy."
+  default     = false
+}
+
+variable "azure_storage_lifecycle_enabled" {
+  type        = bool
+  description = "Enable declared Blob lifecycle rules. Set false and apply before retaining storage during uninstall."
+  default     = true
+}
+
+variable "azure_location" {
+  type        = string
+  description = "Azure location."
+  default     = "eastus"
+}
+
+variable "azure_subscription_id" {
+  type        = string
+  description = "Azure subscription ID hosting the stack."
+}
+
+variable "azure_resource_group_name" {
+  type        = string
+  description = "Azure resource group name."
+}
+
+=== providers.tf ===
+provider "azurerm" {
+  resource_provider_registrations = "none"
+
+  features {
+    persist_id_on_create_before_polling_for_completion = true
+
+    resource_group {
+      prevent_deletion_if_contains_resources = true
+    }
+  }
+}
+
+provider "azapi" {}
+
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
+=== locals.tf ===
+locals {
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "azure"
+  deployment_target            = "azure"
+  deployment_region            = var.azure_location
+  deployment_management_config = null
+  advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access })
+  deployment_resources = [
+    {
+      id   = "default-resource-group"
+      type = "azure_resource_group"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = azurerm_resource_group.default_resource_group.name
+        location       = azurerm_resource_group.default_resource_group.location
+      }
+    },
+    {
+      id   = "default-storage-account"
+      type = "azure_storage_account"
+      importData = {
+        subscriptionId     = var.azure_subscription_id
+        resourceGroup      = var.azure_resource_group_name
+        storageAccountName = azurerm_storage_account.default_storage_account.name
+        resourceId         = azurerm_storage_account.default_storage_account.id
+        blobEndpoint       = azurerm_storage_account.default_storage_account.primary_blob_endpoint
+        fileEndpoint       = azurerm_storage_account.default_storage_account.primary_file_endpoint
+        queueEndpoint      = azurerm_storage_account.default_storage_account.primary_queue_endpoint
+        tableEndpoint      = azurerm_storage_account.default_storage_account.primary_table_endpoint
+      }
+    },
+    {
+      id   = "metadata"
+      type = "kv"
+      importData = {
+        subscriptionId     = var.azure_subscription_id
+        resourceGroup      = var.azure_resource_group_name
+        storageAccountName = azurerm_storage_account.default_storage_account.name
+        tableName          = azapi_resource.metadata.name
+        tableEndpoint      = azurerm_storage_account.default_storage_account.primary_table_endpoint
+      }
+    }
+  ]
+}
+
+=== retained-data.json ===
+[
+  "azurerm_resource_group.default_resource_group",
+  "azurerm_storage_account.default_storage_account",
+  "azapi_resource.metadata"
+]
+
+=== retain-data.py ===
+#!/usr/bin/env python3
+"""Detach the generated retention inventory, keeping a recovery receipt.
+
+AWS Aurora and its network are excluded by the generator and remain managed
+for destroy. KMS keys remain in the inventory.
+"""
+import argparse
+import json
+import os
+import re
+from pathlib import Path
+import subprocess
+import tempfile
+
+
+def tf(*args):
+    return subprocess.check_output([CLI, *args], text=True)
+
+
+def save(path, value):
+    # Publish only a complete, durable record, without replacing an earlier one.
+    # An interrupted write must not leave an empty intent that cannot be recovered.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(value, output, indent=2)
+            output.flush()
+            os.fsync(output.fileno())
+        os.link(temporary, path)
+        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if temporary is not None:
+            temporary.unlink()
+
+
+
+def protect_dynamodb_ttl(state, selected):
+    """Use the installer's AWS credentials; never detach while TTL can still run."""
+    addresses = {item['address'] for item in selected}
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed' or resource.get('type') != 'aws_dynamodb_table':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            if base + suffix not in addresses:
+                continue
+            attributes = instance.get('attributes', {})
+            arn = attributes.get('arn', '')
+            match = re.fullmatch(r'arn:(aws(?:-us-gov|-cn)?):dynamodb:([a-z0-9-]+):([0-9]{12}):table/([a-zA-Z0-9_.-]+)', arn)
+            if not match or attributes.get('id') != match[4]:
+                raise RuntimeError('Refresh the exact DynamoDB table ARN before retention; nothing detached')
+            def aws(operation, *arguments):
+                try:
+                    result = subprocess.run(
+                        ['aws', 'dynamodb', operation, '--region', match[2], '--table-name', arn,
+                         *arguments, '--output', 'json', '--no-cli-pager'],
+                        capture_output=True, text=True)
+                except FileNotFoundError as error:
+                    raise RuntimeError('DynamoDB retention requires AWS CLI with the installer credentials; nothing detached') from error
+                if result.returncode != 0:
+                    message = result.stderr.strip()
+                    # DynamoDB rejects a TTL change while the previous one, including the one at
+                    # table creation, is still processing, which takes up to an hour.
+                    if 'Time to live has been modified multiple times within a fixed interval' in message:
+                        raise RuntimeError('DynamoDB is still processing an earlier TTL change on this table, which takes up to an hour. Wait and rerun this retention command; nothing detached')
+                    raise RuntimeError(f'DynamoDB {operation} failed: {message}. Retention needs the installer credentials with DescribeTable, DescribeTimeToLive and UpdateTimeToLive permissions; nothing detached')
+                return json.loads(result.stdout)
+            observed = aws('describe-table').get('Table', {})
+            if observed.get('TableArn') != arn:
+                raise RuntimeError('DynamoDB account/table identity changed; nothing detached')
+            ttl = aws('describe-time-to-live').get('TimeToLiveDescription', {})
+            if ttl.get('TimeToLiveStatus') == 'ENABLED':
+                attribute = ttl.get('AttributeName')
+                if not isinstance(attribute, str) or not attribute:
+                    raise RuntimeError('DynamoDB TTL attribute is unknown; nothing detached')
+                aws('update-time-to-live', '--time-to-live-specification',
+                    json.dumps({'Enabled': False, 'AttributeName': attribute}))
+                ttl = aws('describe-time-to-live').get('TimeToLiveDescription', {})
+            if ttl.get('TimeToLiveStatus') != 'DISABLED':
+                raise RuntimeError('DynamoDB TTL is not confirmed DISABLED. Wait for its transition and rerun this retention command; nothing detached')
+
+
+def installed_inventory(state, module):
+    markers = [resource for resource in state.get('resources', [])
+               if resource.get('mode') == 'managed'
+               and resource.get('type') == 'terraform_data'
+               and resource.get('name') == 'retention_inventory'
+               and resource.get('module', '') == module]
+    if len(markers) != 1 or len(markers[0].get('instances', [])) != 1:
+        raise RuntimeError('Installed retention inventory is unavailable. Upgrade the original resource configuration in place before whole-setup teardown; nothing detached')
+    instance = markers[0]['instances'][0]
+    inventory = instance.get('attributes', {}).get('input', {}).get('value')
+    if (instance.get('deposed') or not isinstance(inventory, dict)
+            or inventory.get('version') != 1
+            or not isinstance(inventory.get('addresses'), list)
+            or not all(isinstance(address, str) for address in inventory['addresses'])):
+        raise RuntimeError('Invalid installed retention inventory; nothing detached')
+    return inventory['addresses']
+
+
+def verify_installed_inventory(state, manifest, module):
+    if installed_inventory(state, module) != manifest:
+        raise RuntimeError('Generated manifest does not match the installed retention inventory; nothing detached')
+
+
+def azure_expiry_guard(state, selected):
+    """Only delete actions that may affect detached blob data block retention."""
+    accounts = set()
+    containers = {}
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            if base + suffix not in selected:
+                continue
+            attributes = instance['attributes']
+            if resource['type'] == 'azurerm_storage_account':
+                accounts.add(attributes['id'].lower())
+            elif resource['type'] == 'azurerm_storage_container':
+                account = attributes.get('storage_account_id')
+                name = attributes.get('name')
+                if not account:
+                    # AzureRM keeps storage_account_id null when the installed
+                    # resource uses storage_account_name. Its resource_manager_id
+                    # still contains the complete account and container identity.
+                    identity = re.fullmatch(
+                        r'(/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Storage/storageAccounts/[^/]+)/blobServices/default/containers/([^/]+)',
+                        attributes.get('resource_manager_id') or '', re.IGNORECASE)
+                    if (identity and identity[2] == name
+                            and identity[1].rsplit('/', 1)[1].lower()
+                            == (attributes.get('storage_account_name') or '').lower()):
+                        account = identity[1]
+                if not account or not name:
+                    raise RuntimeError('Cannot identify retained Azure container account/name; refresh or upgrade the installed package before detachment')
+                containers.setdefault(account.lower(), set()).add(name)
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed' or resource['type'] != 'azurerm_storage_management_policy':
+            continue
+        for instance in resource.get('instances', []):
+            attributes = instance['attributes']
+            account = attributes.get('storage_account_id', '').lower()
+            if account not in accounts and account not in containers:
+                continue
+            for rule in attributes.get('rule', []):
+                if not rule.get('enabled', True):
+                    continue
+                filters = rule.get('filters') or []
+                prefixes = [prefix for entry in filters for prefix in entry.get('prefix_match') or []]
+                if (account not in accounts and prefixes
+                        and not any(prefix.startswith(name + '/') or (name + '/').startswith(prefix)
+                                    for name in containers[account] for prefix in prefixes)):
+                    continue
+                # Provider state uses -1/null for unset age fields. Tag filters
+                # cannot prove safety: retained blobs may acquire matching tags.
+                actions = rule.get('actions')
+                if not isinstance(actions, list) or not actions:
+                    raise RuntimeError('Unknown applicable Azure lifecycle action; nothing detached')
+                for action in actions:
+                    for kind, blocks in action.items():
+                        if kind not in ('base_blob', 'snapshot', 'version'):
+                            raise RuntimeError('Unknown applicable Azure lifecycle action; nothing detached')
+                        for block in blocks or []:
+                            if any(key.startswith('delete') and value is not None and value != -1
+                                   for key, value in block.items()):
+                                raise RuntimeError('Disable Azure storage lifecycle delete rules affecting retained data, apply; nothing detached')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--detach', action='store_true', help='confirm detachment before whole-setup teardown')
+    parser.add_argument('--module-address', default='', help='exact installed child module address')
+    parser.add_argument('--receipt-dir', type=Path, required=True, help='private recovery directory outside the module')
+    args = parser.parse_args()
+    if os.name != "posix":
+        raise RuntimeError("Use Linux, macOS, or a WSL Linux filesystem for private recovery receipts; native Windows is not supported")
+    manifest_path = Path(__file__).with_name('retained-data.json')
+    manifest = json.loads(manifest_path.read_text())
+    if not isinstance(manifest, list) or not all(isinstance(address, str) for address in manifest):
+        raise RuntimeError('Invalid recovery inventory; nothing detached')
+    prefix = args.module_address + '.' if args.module_address else ''
+    addresses = {prefix + address for address in manifest}
+    # A failed read must abort, never masquerade as an empty installation.
+    state = json.loads(tf('state', 'pull'))
+    if state.get('version') != 4 or not state.get('lineage') or not isinstance(state.get('serial'), int):
+        raise RuntimeError('Unsupported or incomplete Terraform state; nothing detached')
+    verify_installed_inventory(state, manifest, args.module_address)
+    selected = []
+    for resource in state.get('resources', []):
+        if resource.get('mode') != 'managed':
+            continue
+        base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+        if base not in addresses:
+            continue
+        for instance in resource.get('instances', []):
+            suffix = '[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else ''
+            resource_id = instance['attributes'].get('id')
+            if not resource_id:
+                raise RuntimeError('Cannot detach a resource without a recovery ID: ' + base + suffix)
+            if resource['type'] == 'google_storage_bucket':
+                rules = instance['attributes'].get('lifecycle_rule') or []
+                if any(action.get('type') == 'Delete' for rule in rules for action in rule.get('action', [])):
+                    raise RuntimeError('Remove Cloud Storage delete lifecycle rules and apply before retaining ' + base + suffix + '; nothing detached')
+            if resource['type'] == 'azurerm_storage_container':
+                if instance['attributes'].get('container_access_type') != 'private':
+                    raise RuntimeError('Set Azure container publicRead=false and apply before retaining ' + base + suffix + '; nothing detached')
+            selected.append({'address': base + suffix, 'id': resource_id})
+    azure_expiry_guard(state, {item['address'] for item in selected})
+    print(json.dumps(selected, indent=2))
+    if not args.detach:
+        return
+    os.umask(0o077)
+    args.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if args.receipt_dir.stat().st_mode & 0o077:
+        raise RuntimeError('Receipt directory must be private (mode 0700)')
+    # One immutable receipt per attempt preserves IDs across partial failures/retries.
+    attempt = Path(tempfile.mkdtemp(prefix='detach-', dir=args.receipt_dir))
+    save(attempt / 'state-before.json', state)
+    save(attempt / 'retained.json', selected)
+    save(attempt / 'manifest.json', manifest)
+    save(attempt / 'source.json', {'directory': str(Path.cwd()), 'lineage': state.get('lineage'), 'serial': state.get('serial'), 'module': args.module_address})
+    # Keep the exact inventory before touching cloud expiry, and stop before any state
+    # removal until every selected table confirms DISABLED. A retry re-reads AWS.
+    protect_dynamodb_ttl(state, selected)
+    # Check for a concurrent writer between inventory and mutation. Terraform locks
+    # the state mutation itself. Operators must serialize this entire teardown with
+    # other Terraform runs, just as they do for a multi-command import procedure.
+    current = json.loads(tf('state', 'pull'))
+    if (current.get('lineage'), current.get('serial')) != (state.get('lineage'), state.get('serial')):
+        raise RuntimeError('Terraform state changed; no resources detached. Retry after the other run finishes.')
+    if selected:
+        subprocess.run([CLI, 'state', 'rm', '-lock-timeout=60s', *[item['address'] for item in selected]], check=True)
+    save(attempt / 'state-after.json', json.loads(tf('state', 'pull')))
+    print('Recovery receipt: ' + str(attempt))
+    print('Data is retained. Access has NOT yet been revoked. Run and review terraform plan -destroy, then apply that destroy plan. Do not run an ordinary apply after detaching.')
+
+
+if __name__ == '__main__':
+    CLI = os.environ.get('TF_CLI', 'terraform')
+    if CLI not in ('terraform', 'tofu'):
+        raise SystemExit('TF_CLI must be terraform or tofu')
+    main()
+
+=== import-kv-tables.py ===
+#!/usr/bin/env python3
+"""Move KV tables an earlier package declared as azurerm_storage_table to azapi_resource.
+
+Run once after replacing an installed package with this one, before the next apply.
+Each existing table is imported at its new address, then its old address is forgotten.
+Nothing in Azure changes, and the table keeps its data. Without --apply, only the moves
+are printed. Rerunning is safe: a finished move is skipped.
+
+If an apply already forgot the old addresses and then failed because the tables exist, the
+tables the plan would create are imported instead. A table that doesn't exist fails its
+import and nothing changes.
+"""
+import argparse
+import json
+import os
+import subprocess
+import tempfile
+
+API_VERSION = '2024-01-01'
+TABLE_TYPE = 'Microsoft.Storage/storageAccounts/tableServices/tables@' + API_VERSION
+
+
+def tf(*args):
+    return subprocess.check_output([CLI, *args], text=True)
+
+
+def address(resource, instance):
+    base = '.'.join(filter(None, [resource.get('module'), resource['type'], resource['name']]))
+    return base + ('[' + json.dumps(instance['index_key']) + ']' if 'index_key' in instance else '')
+
+
+def moves(state, module):
+    resources = [
+        resource for resource in state.get('resources', [])
+        if resource.get('mode') == 'managed' and resource.get('module', '') == module
+    ]
+    accounts = {}
+    for resource in resources:
+        if resource['type'] == 'azurerm_storage_account':
+            for instance in resource.get('instances', []):
+                attributes = instance['attributes']
+                accounts[attributes['name'].lower()] = attributes['id']
+    managed = {
+        address(resource, instance)
+        for resource in resources if resource['type'] == 'azapi_resource'
+        for instance in resource.get('instances', [])
+    }
+    planned = []
+    for resource in resources:
+        if resource['type'] != 'azurerm_storage_table':
+            continue
+        target = dict(resource, type='azapi_resource')
+        for instance in resource.get('instances', []):
+            if instance.get('deposed'):
+                raise RuntimeError('A deposed table is in state: ' + address(resource, instance) + '; nothing changed')
+            attributes = instance['attributes']
+            # AzureRM keeps storage_account_id null when the table uses storage_account_name.
+            account = attributes.get('storage_account_id') or accounts.get((attributes.get('storage_account_name') or '').lower())
+            if not account or not attributes.get('name'):
+                raise RuntimeError('Cannot identify the storage account of ' + address(resource, instance) + '; nothing changed')
+            planned.append({
+                'from': address(resource, instance),
+                'to': address(target, instance),
+                'id': account + '/tableServices/default/tables/' + attributes['name'] + '?api-version=' + API_VERSION,
+                'imported': address(target, instance) in managed,
+            })
+    return planned
+
+
+def planned_tables(module, configuration_args):
+    """Tables the plan would create in this module, read without refreshing remote objects."""
+    with tempfile.TemporaryDirectory() as directory:
+        plan_file = os.path.join(directory, 'tables.tfplan')
+        subprocess.run(
+            [CLI, 'plan', '-input=false', '-refresh=false', '-out=' + plan_file, *configuration_args],
+            check=True, stdout=subprocess.DEVNULL,
+        )
+        plan = json.loads(tf('show', '-json', plan_file))
+    planned = []
+    for change in plan.get('resource_changes', []):
+        after = change['change'].get('after') or {}
+        if (
+            change.get('module_address', '') != module
+            or change['type'] != 'azapi_resource'
+            or change['change']['actions'] != ['create']
+            or after.get('type') != TABLE_TYPE
+        ):
+            continue
+        # An unknown parent is a storage account this plan creates; no table exists under it.
+        if not after.get('parent_id') or not after.get('name'):
+            continue
+        planned.append({
+            'from': None,
+            'to': change['address'],
+            'id': after['parent_id'] + '/tables/' + after['name'] + '?api-version=' + API_VERSION,
+            'imported': False,
+        })
+    return planned
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--apply', action='store_true', help='import and forget the tables; without it, only print the moves')
+    parser.add_argument('--module-address', default='', help='exact installed child module address')
+    parser.add_argument('--var-file', action='append', default=[], help='variable file the configuration needs; repeatable')
+    args = parser.parse_args()
+    configuration_args = ['-var-file=' + path for path in args.var_file]
+    # A failed or empty read must abort, never masquerade as an installation without tables.
+    pulled = tf('state', 'pull')
+    if not pulled.strip():
+        raise RuntimeError('No Terraform state found; run this where the installation was applied. Nothing changed')
+    state = json.loads(pulled)
+    if state.get('version') != 4 or not state.get('lineage'):
+        raise RuntimeError('Unsupported or incomplete Terraform state; nothing changed')
+    planned = moves(state, args.module_address)
+    # An apply without this helper forgets every old address at once, through the package's
+    # `removed` blocks, and then fails to create the tables because they exist.
+    if not planned:
+        planned = planned_tables(args.module_address, configuration_args)
+    print(json.dumps(planned, indent=2))
+    if not args.apply:
+        return
+    # Import before forgetting, so an interrupted run leaves every table tracked at least once.
+    for move in planned:
+        if not move['imported']:
+            subprocess.run([CLI, 'import', '-input=false', *configuration_args, move['to'], move['id']], check=True)
+        if move['from']:
+            subprocess.run([CLI, 'state', 'rm', move['from']], check=True)
+    print('Moved ' + str(len(planned)) + ' table(s). Run and review a plan before applying.')
+
+
+if __name__ == '__main__':
+    CLI = os.environ.get('TF_CLI', 'terraform')
+    if CLI not in ('terraform', 'tofu'):
+        raise SystemExit('TF_CLI must be terraform or tofu')
+    main()
+
+=== default_resource_group.tf ===
+resource "azurerm_resource_group" "default_resource_group" {
+  name     = var.azure_resource_group_name
+  location = var.azure_location
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-resource-group"
+    "resource-type" = "resource-group"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+=== default_storage_account.tf ===
+resource "azurerm_storage_account" "default_storage_account" {
+  name                            = substr(replace(lower("${local.resource_prefix}default"), "-", ""), 0, 24)
+  resource_group_name             = var.azure_resource_group_name
+  location                        = var.azure_location
+  account_tier                    = "Standard"
+  account_replication_type        = "LRS"
+  account_kind                    = "StorageV2"
+  access_tier                     = "Hot"
+  min_tls_version                 = "TLS1_2"
+  allow_nested_items_to_be_public = false
+  https_traffic_only_enabled      = true
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-storage-account"
+    "resource-type" = "storage-account"
+  }
+
+  blob_properties {
+    versioning_enabled  = false
+    change_feed_enabled = false
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+=== metadata.tf ===
+removed {
+  from = azurerm_storage_table.metadata
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+resource "azapi_resource" "metadata" {
+  type      = "Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01"
+  name      = substr(lower(replace("kv${local.resource_prefix}metadata", "/[^A-Za-z0-9]/", "")), 0, 63)
+  parent_id = "${azurerm_storage_account.default_storage_account.id}/tableServices/default"
+  body = {
+    properties = {}
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
+  input = {
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    management_url              = var.management_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    inputValues                 = {}
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group,
+    azurerm_storage_account.default_storage_account,
+    azapi_resource.metadata
+  ]
+
+  lifecycle {
+    precondition {
+      condition     = try(local.deployment_settings.setupManagement, "manual") == "manual"
+      error_message = format("This setup module was built for manual setup, but the settings request %s setup. Regenerate the setup artifact for the requested setup management.", nonsensitive(sensitive(try(local.deployment_settings.setupManagement == "manual", true))) ? "manual" : nonsensitive(sensitive(try(local.deployment_settings.setupManagement == "automatic", false))) ? "automatic" : "invalid")
+    }
+  }
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "azure"
+  description = "Terraform module target."
+}
+
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup registration payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Deployment registration management configuration JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Deployment registration settings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Deployment registration resource metadata JSON."
+}
+
+=== README.md ===
+# Deployment setup - acme-kv
+
+Target: `azure`.
+
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Inputs
+
+Required:
+
+- `token`: install token from the setup page.
+- `name`: deployment name to include in the registration metadata: lowercase letters, numbers, and single hyphens.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.
+- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.
+
+Azure settings:
+
+- `azure_subscription_id`: target subscription ID.
+- `azure_location`: Azure location.
+- `azure_resource_group_name`: target resource group name.
+- `azure_managing_tenant_id`, `azure_oidc_issuer`, `azure_oidc_subject`: management identity trust settings when this setup grants Azure management access.
+
+## KV tables
+
+KV tables are created through the `azapi` provider at `Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01`, the same Azure Resource Manager resource the runtime manages. Earlier packages declared them as `azurerm_storage_table`, whose table access-policy calls Azure Table storage now rejects with `415 Unsupported Media Type`, so those installations can no longer plan.
+
+To upgrade such an installation, replace its package with this one and, before the next apply, move each table to its new address. This imports the same table, with its data, and forgets the old address; nothing in Azure changes:
+
+```bash
+python3 ./import-kv-tables.py          # print the moves
+python3 ./import-kv-tables.py --apply
+```
+
+Set `TF_CLI=tofu` for OpenTofu, pass `--module-address` when this module is wrapped, and pass `--var-file` (repeatable) for any variable files the configuration needs. The next plan then only updates `terraform_data.retention_inventory` to the new addresses. A table left tainted by a failed apply needs no `terraform untaint` first.
+
+If you apply without moving the tables, nothing is deleted. OpenTofu fails on the 415 before changing anything. Terraform forgets the old addresses and then fails to create the tables because they exist; the helper then finds no old addresses, imports the tables the plan would create instead, and the next apply succeeds.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
+
+```bash
+export TF_VAR_name="acme-kv"
+export TF_VAR_token="..."
+terraform init
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.
+## Shared Azure Blob settings
+
+The generated storage account is shared by this deployment's containers. Setup owns its settings, including settings requested by containers created later by the runtime. Apply changes through the setup update workflow above.
+
+- Versioning applies to the whole account when any enabled container requests it. This also versions objects in sibling containers and can increase storage costs.
+- CORS combines the browser origins requested by enabled containers into one account-wide GET/HEAD rule. Those origins apply to every container in the account. CORS does not grant object access: private objects still require authorization, such as a signed URL. The generated plan checks Azure's combined CORS size limits.
+- Public-access capability is enabled only when an enabled container requests public reads. Each container still has its own public/private setting; private siblings remain private.
+
+## Retain Azure setup data during uninstall
+
+Setup-owned storage accounts, Blob containers, tables, container registries, Key Vaults and PostgreSQL Flexible Servers are protected against replacement and destroy, including empty resources. The recovery inventory includes encryption keys, the storage encryption identity and its key grant, database credentials and extensions. The resource group is retained because deleting it would cascade to retained children. Application and management identities and role assignments remain managed for removal.
+
+Apply the current package to the existing installation before uninstalling. Stop deployment workloads first. Set each owned container's `publicRead` to `false` and apply; the helper refuses public containers. Set `azure_storage_lifecycle_enabled = false` in the installed Terraform variables and apply. Keep the disabled policy through detachment. Refresh state before detachment. The helper refuses applicable delete rules on detached accounts or containers, while allowing unrelated container rules and tiering-only actions; it cannot infer past expiry from an empty current policy. Review runtime-created containers and policies separately.
+
+Use Python 3 on Linux or macOS, or Windows through WSL with receipts on its Linux filesystem, and the original Terraform backend, workspace and working directory. Serialize this procedure with other Terraform runs. For a child module add `--module-address 'module.<name>'`, including its instance index.
+
+```bash
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup
+python3 ./retain-data.py --receipt-dir /secure/path/retained-setup --detach
+terraform plan -destroy -out=uninstall.tfplan
+terraform apply uninstall.tfplan
+```
+
+Review the plan before applying: retained data and its group must be absent from deletes; owned access roles, workload identities and private endpoints must be removed. Detachment alone does not revoke access. Existing external grants remain outside this setup's ownership. Revoke outstanding user-delegation keys and rotate both storage account keys if credentials or SAS were issued; removing RBAC alone does not invalidate every issued credential. Verify anonymous and prior workload access is denied before declaring teardown complete.
+
+PostgreSQL stays private. Its Private Endpoint, DNS and consumer network are access paths and are removed, while the database, credential vault and server remain. An administrator can reconnect by authorizing a new private endpoint and credential access. Storage encryption identity and key permission stay because the retained account needs them to decrypt data.
+
+Receipts contain exact addresses, IDs, state lineage and full before/after Terraform state, which may contain secrets. Keep them private and backed up. Retries preserve earlier receipts. Do not run ordinary `terraform apply` after whole-setup detachment: it would try to recreate resources. Restore declarations and import each retained instance at its recorded address and ID before resuming management; review an in-place plan. Never overwrite newer state with an old state file.
+
+Retained resources continue to incur charges. Explicit erasure is a separate administrator operation against recorded cloud IDs after access revocation; preserve keys until all dependent data is erased. Key Vault purge protection still enforces its recovery window. This procedure covers the setup resources listed above; runtime-owned data requires its own retention procedure.
+
+=== retention-inventory.tf ===
+resource "terraform_data" "retention_inventory" {
+  input = {
+    version = 1
+    addresses = [
+      "azurerm_resource_group.default_resource_group",
+      "azurerm_storage_account.default_storage_account",
+      "azapi_resource.metadata"
+    ]
+  }
+}

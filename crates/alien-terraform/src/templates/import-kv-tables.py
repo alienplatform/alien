@@ -5,13 +5,19 @@ Run once after replacing an installed package with this one, before the next app
 Each existing table is imported at its new address, then its old address is forgotten.
 Nothing in Azure changes, and the table keeps its data. Without --apply, only the moves
 are printed. Rerunning is safe: a finished move is skipped.
+
+If an apply already forgot the old addresses and then failed because the tables exist, the
+tables the plan would create are imported instead. A table that doesn't exist fails its
+import and nothing changes.
 """
 import argparse
 import json
 import os
 import subprocess
+import tempfile
 
 API_VERSION = '__TABLE_API_VERSION__'
+TABLE_TYPE = 'Microsoft.Storage/storageAccounts/tableServices/tables@' + API_VERSION
 
 
 def tf(*args):
@@ -61,11 +67,44 @@ def moves(state, module):
     return planned
 
 
+def planned_tables(module, configuration_args):
+    """Tables the plan would create in this module, read without refreshing remote objects."""
+    with tempfile.TemporaryDirectory() as directory:
+        plan_file = os.path.join(directory, 'tables.tfplan')
+        subprocess.run(
+            [CLI, 'plan', '-input=false', '-refresh=false', '-out=' + plan_file, *configuration_args],
+            check=True, stdout=subprocess.DEVNULL,
+        )
+        plan = json.loads(tf('show', '-json', plan_file))
+    planned = []
+    for change in plan.get('resource_changes', []):
+        after = change['change'].get('after') or {}
+        if (
+            change.get('module_address', '') != module
+            or change['type'] != 'azapi_resource'
+            or change['change']['actions'] != ['create']
+            or after.get('type') != TABLE_TYPE
+        ):
+            continue
+        # An unknown parent is a storage account this plan creates; no table exists under it.
+        if not after.get('parent_id') or not after.get('name'):
+            continue
+        planned.append({
+            'from': None,
+            'to': change['address'],
+            'id': after['parent_id'] + '/tables/' + after['name'] + '?api-version=' + API_VERSION,
+            'imported': False,
+        })
+    return planned
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--apply', action='store_true', help='import and forget the tables; without it, only print the moves')
     parser.add_argument('--module-address', default='', help='exact installed child module address')
+    parser.add_argument('--var-file', action='append', default=[], help='variable file the configuration needs; repeatable')
     args = parser.parse_args()
+    configuration_args = ['-var-file=' + path for path in args.var_file]
     # A failed or empty read must abort, never masquerade as an installation without tables.
     pulled = tf('state', 'pull')
     if not pulled.strip():
@@ -74,14 +113,19 @@ def main():
     if state.get('version') != 4 or not state.get('lineage'):
         raise RuntimeError('Unsupported or incomplete Terraform state; nothing changed')
     planned = moves(state, args.module_address)
+    # An apply without this helper forgets every old address at once, through the package's
+    # `removed` blocks, and then fails to create the tables because they exist.
+    if not planned:
+        planned = planned_tables(args.module_address, configuration_args)
     print(json.dumps(planned, indent=2))
     if not args.apply:
         return
     # Import before forgetting, so an interrupted run leaves every table tracked at least once.
     for move in planned:
         if not move['imported']:
-            subprocess.run([CLI, 'import', '-input=false', move['to'], move['id']], check=True)
-        subprocess.run([CLI, 'state', 'rm', move['from']], check=True)
+            subprocess.run([CLI, 'import', '-input=false', *configuration_args, move['to'], move['id']], check=True)
+        if move['from']:
+            subprocess.run([CLI, 'state', 'rm', move['from']], check=True)
     print('Moved ' + str(len(planned)) + ' table(s). Run and review a plan before applying.')
 
 

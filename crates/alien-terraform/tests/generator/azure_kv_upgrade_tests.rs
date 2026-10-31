@@ -1,6 +1,6 @@
 //! `import-kv-tables.py` moves KV tables an earlier package declared as `azurerm_storage_table`
 //! to `azapi_resource`. Its moves are driven against a stand-in `terraform` that serves a fixed
-//! state and records every command, since a real import needs Azure. The real round trip
+//! state and plan and records every command, since a real import needs Azure. The real round trip
 //! (main-installed stack, then upgrade with both CLIs) is in the PR's proof.
 use std::{
     fs,
@@ -96,6 +96,11 @@ struct Workspace {
 
 impl Workspace {
     fn new(resources: Vec<Value>) -> Self {
+        Self::with_plan(resources, json!({ "resource_changes": [] }))
+    }
+
+    /// `plan` is what `terraform show -json` returns for the plan the helper writes.
+    fn with_plan(resources: Vec<Value>, plan: Value) -> Self {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().to_path_buf();
         let bin = dir.join("bin");
@@ -107,13 +112,15 @@ impl Workspace {
                 .to_string(),
         )
         .unwrap();
+        fs::write(dir.join("plan.json"), plan.to_string()).unwrap();
         let log = dir.join("commands.log");
         let stub = bin.join("terraform");
         fs::write(
             &stub,
             format!(
-                "#!/bin/sh\nif [ \"$1 $2\" = \"state pull\" ]; then cat '{}'; exit 0; fi\necho \"$*\" >> '{}'\n",
+                "#!/bin/sh\nif [ \"$1 $2\" = \"state pull\" ]; then cat '{}'; exit 0; fi\nif [ \"$1 $2\" = \"show -json\" ]; then cat '{}'; exit 0; fi\necho \"$*\" >> '{}'\n",
                 dir.join("state.json").display(),
+                dir.join("plan.json").display(),
                 log.display()
             ),
         )
@@ -142,9 +149,25 @@ impl Workspace {
             .unwrap()
     }
 
+    /// Recorded commands, with the helper's temporary plan path shown as `-out=PLAN`.
     fn commands(&self) -> Vec<String> {
         fs::read_to_string(&self.log)
-            .map(|log| log.lines().map(str::to_string).collect())
+            .map(|log| {
+                log.lines()
+                    .map(|line| {
+                        line.split(' ')
+                            .map(|arg| {
+                                if arg.starts_with("-out=") {
+                                    "-out=PLAN"
+                                } else {
+                                    arg
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }
@@ -281,6 +304,36 @@ fn a_table_whose_account_is_not_in_state_stops_before_any_change() {
     assert!(workspace.commands().is_empty());
 }
 
+const PLAN_COMMAND: &str = "plan -input=false -refresh=false -out=PLAN";
+
+/// A planned create of a KV table, as `terraform show -json` reports it.
+fn planned_table(module: Option<&str>, address: &str, name: Option<&str>) -> Value {
+    let full = match module {
+        Some(module) => format!("{module}.{address}"),
+        None => address.to_string(),
+    };
+    let mut after = json!({
+        "type": "Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01",
+        "body": { "properties": {} }
+    });
+    if let Some(name) = name {
+        after["name"] = json!(name);
+        after["parent_id"] = json!(format!(
+            "{}/tableServices/default",
+            account_id("acctdefault")
+        ));
+    }
+    let mut change = json!({
+        "address": full,
+        "type": "azapi_resource",
+        "change": { "actions": ["create"], "after": after }
+    });
+    if let Some(module) = module {
+        change["module_address"] = json!(module);
+    }
+    change
+}
+
 #[test]
 fn an_upgraded_or_new_installation_has_nothing_to_move() {
     let workspace = Workspace::new(vec![resource(
@@ -293,7 +346,105 @@ fn an_upgraded_or_new_installation_has_nothing_to_move() {
     let printed = stdout(&workspace.run(&["--apply"]));
 
     assert!(printed.starts_with("[]"), "{printed}");
-    assert!(workspace.commands().is_empty());
+    assert_eq!(workspace.commands(), vec![PLAN_COMMAND.to_string()]);
+}
+
+/// Terraform applied the package without the helper: the `removed` blocks forgot every old
+/// address, and the creates failed because the tables exist. The helper imports the tables the
+/// plan would create, at the address and id the plan gives, and forgets nothing.
+#[test]
+fn after_an_apply_forgot_the_old_tables_the_planned_tables_are_imported() {
+    let mut other_azapi = planned_table(Some("module.setup"), "azapi_resource.sandbox", Some("x"));
+    other_azapi["change"]["after"]["type"] = json!("Microsoft.App/sandboxGroups@2025-01-01");
+    let workspace = Workspace::with_plan(
+        vec![resource(
+            Some("module.setup"),
+            "azurerm_storage_account",
+            "default_storage_account",
+            json!([{ "attributes": { "name": "acctdefault", "id": account_id("acctdefault") } }]),
+        )],
+        json!({ "resource_changes": [
+            planned_table(Some("module.setup"), "azapi_resource.cache", Some("kvacache")),
+            planned_table(Some("module.setup"), "azapi_resource.sessions[0]", Some("kvasessions")),
+            other_azapi,
+            planned_table(Some("module.other"), "azapi_resource.cache", Some("kvbcache")),
+        ] }),
+    );
+
+    let preview: Value =
+        serde_json::from_str(stdout(&workspace.run(&["--module-address", "module.setup"])).trim())
+            .unwrap();
+    assert_eq!(
+        preview,
+        json!([
+            { "from": null, "to": "module.setup.azapi_resource.cache", "id": table_id("kvacache"), "imported": false },
+            { "from": null, "to": "module.setup.azapi_resource.sessions[0]", "id": table_id("kvasessions"), "imported": false }
+        ])
+    );
+    assert_eq!(workspace.commands(), vec![PLAN_COMMAND.to_string()]);
+
+    stdout(&workspace.run(&[
+        "--module-address",
+        "module.setup",
+        "--var-file",
+        "site.tfvars",
+        "--var-file",
+        "secrets.tfvars",
+        "--apply",
+    ]));
+
+    let vars = "-var-file=site.tfvars -var-file=secrets.tfvars";
+    assert_eq!(
+        workspace.commands()[1..],
+        [
+            format!("{PLAN_COMMAND} {vars}"),
+            format!(
+                "import -input=false {vars} module.setup.azapi_resource.cache {}",
+                table_id("kvacache")
+            ),
+            format!(
+                "import -input=false {vars} module.setup.azapi_resource.sessions[0] {}",
+                table_id("kvasessions")
+            ),
+        ]
+    );
+}
+
+/// A table whose storage account the plan still has to create can't exist yet.
+#[test]
+fn a_planned_table_in_an_account_not_yet_created_is_not_imported() {
+    let workspace = Workspace::with_plan(
+        Vec::new(),
+        json!({ "resource_changes": [planned_table(None, "azapi_resource.cache", None)] }),
+    );
+
+    let printed = stdout(&workspace.run(&["--apply"]));
+
+    assert!(printed.starts_with("[]"), "{printed}");
+    assert_eq!(workspace.commands(), vec![PLAN_COMMAND.to_string()]);
+}
+
+#[test]
+fn variable_files_reach_every_import() {
+    let workspace = Workspace::new(installed_resources(None));
+
+    stdout(&workspace.run(&["--var-file", "site.tfvars", "--apply"]));
+
+    assert_eq!(
+        workspace.commands(),
+        vec![
+            format!(
+                "import -input=false -var-file=site.tfvars azapi_resource.cache {}",
+                table_id("kvacache")
+            ),
+            "state rm azurerm_storage_table.cache".to_string(),
+            format!(
+                "import -input=false -var-file=site.tfvars azapi_resource.sessions[0] {}",
+                table_id("kvasessions")
+            ),
+            "state rm azurerm_storage_table.sessions[0]".to_string(),
+        ]
+    );
 }
 
 #[test]
