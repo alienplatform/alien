@@ -55,7 +55,7 @@ impl TfEmitter for AzureQueueEmitter {
                 attr("partitioning_enabled", Expression::Bool(false)),
                 attr(
                     "lock_duration",
-                    Expression::String(format!("PT{}S", lock_duration)),
+                    Expression::String(iso8601_duration(lock_duration)),
                 ),
                 attr(
                     "default_message_ttl",
@@ -130,6 +130,20 @@ fn parent_namespace_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
              the stack (preflight-injected as `default-service-bus-namespace`)"
                 .to_string(),
     }))
+}
+
+/// Azure stores Service Bus durations in canonical ISO 8601 form (`PT4M`, not `PT240S`)
+/// and the provider compares strings, so any other spelling is a change on every apply.
+fn iso8601_duration(seconds: u32) -> String {
+    let (minutes, seconds) = (seconds / 60, seconds % 60);
+    let mut duration = String::from("PT");
+    if minutes > 0 {
+        duration.push_str(&format!("{minutes}M"));
+    }
+    if seconds > 0 || minutes == 0 {
+        duration.push_str(&format!("{seconds}S"));
+    }
+    duration
 }
 
 /// Service Bus queue lock duration must be in `[5s, 5m]`. Use the
@@ -379,4 +393,57 @@ fn emit_remote_access(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iso8601_duration;
+
+    /// Values Azure returned for queues created with `PT{n}S` lock durations.
+    #[test]
+    fn durations_match_what_azure_stores() {
+        for (seconds, stored) in [
+            (5, "PT5S"),
+            (30, "PT30S"),
+            (61, "PT1M1S"),
+            (90, "PT1M30S"),
+            (240, "PT4M"),
+            (300, "PT5M"),
+        ] {
+            assert_eq!(iso8601_duration(seconds), stored);
+        }
+    }
+
+    /// Every lock duration the emitter can produce keeps its value and is canonical:
+    /// whole minutes are carried, and no component is zero unless the duration is.
+    #[test]
+    fn every_supported_lock_duration_is_canonical() {
+        for seconds in 5..=300u32 {
+            let duration = iso8601_duration(seconds);
+            let body = duration
+                .strip_prefix("PT")
+                .expect("duration starts with PT");
+            let (minutes, rest) = match body.split_once('M') {
+                Some((minutes, rest)) => (minutes.parse::<u32>().expect("minutes"), rest),
+                None => (0, body),
+            };
+            let secs = match rest.strip_suffix('S') {
+                Some(secs) => secs.parse::<u32>().expect("seconds"),
+                None => {
+                    assert!(rest.is_empty(), "{duration}: trailing {rest:?}");
+                    0
+                }
+            };
+            assert_eq!(minutes * 60 + secs, seconds, "{duration}");
+            assert!(secs < 60, "{duration}: seconds not carried into minutes");
+            assert!(
+                !body.starts_with("0M"),
+                "{duration}: zero minutes component"
+            );
+            assert!(
+                !rest.starts_with("0S"),
+                "{duration}: zero seconds component"
+            );
+        }
+    }
 }
