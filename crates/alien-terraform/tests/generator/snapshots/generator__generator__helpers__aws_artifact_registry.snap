@@ -259,12 +259,20 @@ def protect_dynamodb_ttl(state, selected):
                 raise RuntimeError('Refresh the exact DynamoDB table ARN before retention; nothing detached')
             def aws(operation, *arguments):
                 try:
-                    result = subprocess.check_output(
+                    result = subprocess.run(
                         ['aws', 'dynamodb', operation, '--region', match[2], '--table-name', arn,
-                         *arguments, '--output', 'json', '--no-cli-pager'], text=True)
-                except (FileNotFoundError, subprocess.CalledProcessError) as error:
-                    raise RuntimeError('DynamoDB retention requires AWS CLI with the installer credentials and DescribeTable, DescribeTimeToLive and UpdateTimeToLive permissions; nothing detached') from error
-                return json.loads(result)
+                         *arguments, '--output', 'json', '--no-cli-pager'],
+                        capture_output=True, text=True)
+                except FileNotFoundError as error:
+                    raise RuntimeError('DynamoDB retention requires AWS CLI with the installer credentials; nothing detached') from error
+                if result.returncode != 0:
+                    message = result.stderr.strip()
+                    # DynamoDB rejects a TTL change while the previous one, including the one at
+                    # table creation, is still processing, which takes up to an hour.
+                    if 'Time to live has been modified multiple times within a fixed interval' in message:
+                        raise RuntimeError('DynamoDB is still processing an earlier TTL change on this table, which takes up to an hour. Wait and rerun this retention command; nothing detached')
+                    raise RuntimeError(f'DynamoDB {operation} failed: {message}. Retention needs the installer credentials with DescribeTable, DescribeTimeToLive and UpdateTimeToLive permissions; nothing detached')
+                return json.loads(result.stdout)
             observed = aws('describe-table').get('Table', {})
             if observed.get('TableArn') != arn:
                 raise RuntimeError('DynamoDB account/table identity changed; nothing detached')
@@ -676,7 +684,7 @@ The receipt contains exact addresses, cloud IDs, state lineage and full before/a
 
 Retained resources continue to incur cloud charges, including storage and KMS. To explicitly erase data, first finish access revocation, then use the cloud's deletion operations on the exact IDs in the receipt, including stored versions/images, only after confirming that no retained data depends on a key. This workflow covers the AWS setup resources listed above; other database backends, other data types, runtime-owned resources and other clouds require their own retention procedure.
 
-When retaining DynamoDB tables, install AWS CLI and use the same target-account installer credentials as Terraform. The helper verifies the recorded table ARN, disables its observed TTL attribute and requires AWS to report `DISABLED` before removing any selected resource from state. If TTL is transitioning, wait and rerun the same command; no resources are detached. Required metadata/control permissions are `DescribeTable`, `DescribeTimeToLive` and `UpdateTimeToLive`.
+When retaining DynamoDB tables, install AWS CLI and use the same target-account installer credentials as Terraform. The helper verifies the recorded table ARN, disables its observed TTL attribute and requires AWS to report `DISABLED` before removing any selected resource from state. If TTL is transitioning, or AWS is still processing an earlier TTL change (including the one at table creation; this takes up to an hour), wait and rerun the same command; no resources are detached. Required metadata/control permissions are `DescribeTable`, `DescribeTimeToLive` and `UpdateTimeToLive`.
 
 === retention-inventory.tf ===
 resource "terraform_data" "retention_inventory" {

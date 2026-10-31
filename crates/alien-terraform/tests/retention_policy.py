@@ -104,8 +104,11 @@ class DynamoRetention(unittest.TestCase):
         def aws(arguments, **kwargs):
             calls.append(arguments)
             self.assertEqual(arguments[arguments.index('--table-name') + 1], self.arn)
-            return retention.json.dumps(observations.pop(0))
-        with patch.object(retention.subprocess, 'check_output', side_effect=aws):
+            observed = observations.pop(0)
+            if isinstance(observed, str):
+                return retention.subprocess.CompletedProcess(arguments, 254, '', observed)
+            return retention.subprocess.CompletedProcess(arguments, 0, retention.json.dumps(observed), '')
+        with patch.object(retention.subprocess, 'run', side_effect=aws):
             retention.protect_dynamodb_ttl(self.state, self.selected)
         return calls
 
@@ -125,12 +128,33 @@ class DynamoRetention(unittest.TestCase):
                     {'TimeToLiveDescription': {'TimeToLiveStatus': status}}])
         with self.assertRaisesRegex(RuntimeError, 'identity changed'):
             self.invoke([{'Table': {'TableArn': self.arn.replace('123456789012', '999999999999')}}])
-        with patch.object(retention.subprocess, 'check_output', side_effect=retention.subprocess.CalledProcessError(1, 'aws')):
-            with self.assertRaisesRegex(RuntimeError, 'installer credentials'):
+        with patch.object(retention.subprocess, 'run', side_effect=FileNotFoundError('aws')):
+            with self.assertRaisesRegex(RuntimeError, 'requires AWS CLI with the installer credentials; nothing detached'):
                 retention.protect_dynamodb_ttl(self.state, self.selected)
+        enabled = [{'Table': {'TableArn': self.arn}},
+            {'TimeToLiveDescription': {'TimeToLiveStatus': 'ENABLED', 'AttributeName': 'expiry'}}]
+        denied = ('An error occurred (AccessDeniedException) when calling the UpdateTimeToLive '
+            'operation: not authorized to perform: dynamodb:UpdateTimeToLive')
+        with self.assertRaises(RuntimeError) as raised:
+            self.invoke(enabled + [denied])
+        self.assertEqual(str(raised.exception), f'DynamoDB update-time-to-live failed: {denied}. '
+            'Retention needs the installer credentials with DescribeTable, DescribeTimeToLive '
+            'and UpdateTimeToLive permissions; nothing detached')
+
+    def test_ttl_change_window_is_reported_as_a_wait_not_a_permission_failure(self):
+        # The CLI's error, verbatim, for disabling TTL on a table created with TTL minutes ago.
+        window = ('\nAn error occurred (ValidationException) when calling the UpdateTimeToLive '
+            'operation: Time to live has been modified multiple times within a fixed interval\n')
+        with self.assertRaises(RuntimeError) as raised:
+            self.invoke([{'Table': {'TableArn': self.arn}},
+                {'TimeToLiveDescription': {'TimeToLiveStatus': 'ENABLED', 'AttributeName': 'expiry'}},
+                window])
+        self.assertEqual(str(raised.exception), 'DynamoDB is still processing an earlier TTL '
+            'change on this table, which takes up to an hour. Wait and rerun this retention '
+            'command; nothing detached')
 
     def test_noop_and_declaration_removal_touch_only_selected_tables(self):
-        with patch.object(retention.subprocess, 'check_output') as aws:
+        with patch.object(retention.subprocess, 'run') as aws:
             retention.protect_dynamodb_ttl(self.state, [])
             aws.assert_not_called()
         calls = self.invoke([{'Table': {'TableArn': self.arn}},
