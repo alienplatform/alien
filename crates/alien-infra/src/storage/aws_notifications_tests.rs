@@ -288,7 +288,7 @@ async fn deletion_and_retention_remove_only_owned_entries() {
 
     // Retention cleanup of a bucket without owned entries leaves it unwritten.
     let writes = bucket.writes.load(Ordering::SeqCst);
-    remove_owned(bucket.s3.as_ref(), "test", "test-uploads", "uploads")
+    remove_owned(bucket.s3.as_ref(), "test", "test-uploads", "uploads", &[])
         .await
         .unwrap();
     assert_eq!(bucket.writes.load(Ordering::SeqCst), writes);

@@ -92,19 +92,34 @@ fn normalized(configuration: &QueueConfiguration) -> impl PartialEq + std::fmt::
     )
 }
 
-/// Replace exactly the entries whose Id starts with `owner`; returns whether anything
-/// changed. Every other Lambda, queue, topic and EventBridge entry is kept as observed.
-fn replace_owned(
-    document: &mut NotificationConfiguration,
-    owner: &str,
-    desired: Vec<QueueConfiguration>,
-) -> bool {
-    let owned = |configuration: &QueueConfiguration| {
+/// Which queue configurations a Storage owns: those whose Id starts with the owner
+/// prefix, and on retention of a setup-owned bucket also those delivering to one of the
+/// queues it notified. CloudFormation can't set an Id on a queue configuration, so S3
+/// assigns one, and those queues are deleted with the deployment: an entry left pointing
+/// at one would make every later write of the document fail S3's destination check.
+struct Owned<'a> {
+    prefix: &'a str,
+    setup_queue_arns: &'a [String],
+}
+
+impl Owned<'_> {
+    fn contains(&self, configuration: &QueueConfiguration) -> bool {
         configuration
             .id
             .as_deref()
-            .is_some_and(|id| id.starts_with(owner))
-    };
+            .is_some_and(|id| id.starts_with(self.prefix))
+            || self.setup_queue_arns.contains(&configuration.queue_arn)
+    }
+}
+
+/// Replace exactly the owned entries; returns whether anything changed. Every other
+/// Lambda, queue, topic and EventBridge entry is kept as observed.
+fn replace_owned(
+    document: &mut NotificationConfiguration,
+    owner: &Owned<'_>,
+    desired: Vec<QueueConfiguration>,
+) -> bool {
+    let owned = |configuration: &QueueConfiguration| owner.contains(configuration);
     let mut observed: Vec<_> = document
         .queue_configurations
         .iter()
@@ -143,7 +158,10 @@ pub(super) async fn reconcile(
         .await?;
     write_owned(
         s3.as_ref(),
-        &aws_notification_id_prefix(ctx.resource_prefix, &storage.id),
+        &Owned {
+            prefix: &aws_notification_id_prefix(ctx.resource_prefix, &storage.id),
+            setup_queue_arns: &[],
+        },
         bucket,
         &storage.id,
         desired,
@@ -153,15 +171,21 @@ pub(super) async fn reconcile(
 }
 
 /// Retention keeps the bucket and its data but removes this Storage's entries.
+/// `setup_queue_arns` are the queues a setup-owned Storage notified (see [`Owned`]); a
+/// Live Storage passes none, because its controller wrote an Id on every entry.
 pub(super) async fn remove_owned(
     client: &dyn S3Api,
     prefix: &str,
     bucket: &str,
     id: &str,
+    setup_queue_arns: &[String],
 ) -> Result<()> {
     write_owned(
         client,
-        &aws_notification_id_prefix(prefix, id),
+        &Owned {
+            prefix: &aws_notification_id_prefix(prefix, id),
+            setup_queue_arns,
+        },
         bucket,
         id,
         Vec::new(),
@@ -172,7 +196,7 @@ pub(super) async fn remove_owned(
 
 async fn write_owned(
     client: &dyn S3Api,
-    owner: &str,
+    owner: &Owned<'_>,
     bucket: &str,
     id: &str,
     desired: Vec<QueueConfiguration>,
