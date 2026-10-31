@@ -829,7 +829,8 @@ fn prune_deprovisioned_resources(
 mod tests {
     use super::*;
     use alien_core::{
-        Kv, Resource, ResourceLifecycle, ResourceRef, StackResourceState, Storage, Worker, WorkerCode,
+        Kv, Resource, ResourceLifecycle, ResourceRef, StackResourceState, Storage, Worker,
+        WorkerCode,
     };
 
     #[tokio::test]
