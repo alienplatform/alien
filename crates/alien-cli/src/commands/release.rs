@@ -4,7 +4,7 @@ use crate::git_utils::collect_git_metadata;
 use crate::output::print_json;
 use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
-use alien_build::settings::PushSettings;
+use alien_build::{settings::PushSettings, ImageDestinations};
 use alien_core::{
     alien_event, is_deployer_secret_input, AlienEvent, Container, ContainerCode, Daemon,
     DaemonCode, Platform, Sandbox, SandboxCode, Stack, StackInputDefinition, StackInputKind,
@@ -1304,6 +1304,18 @@ struct PushDestinations {
     /// Registry host deployments pull from, when it differs from the one pushed through.
     public_registry_host: Option<String>,
     sandbox_repository: Option<String>,
+    /// Repository for container and daemon images when the manager stores them apart from the
+    /// project repository; see [`provision_proxy_only_push_repository`].
+    proxy_only_repository: Option<String>,
+}
+
+impl PushDestinations {
+    fn image_destinations(&self) -> ImageDestinations<'_> {
+        ImageDestinations {
+            sandbox: self.sandbox_repository.as_deref(),
+            proxy_only: self.proxy_only_repository.as_deref(),
+        }
+    }
 }
 
 /// Resolves the platform's push destinations. Each cloud platform has its own registry prefix
@@ -1324,13 +1336,30 @@ async fn resolve_push_destinations(
         build_proxy_push_settings(&per_platform, &platform, project_id).await?
     };
 
-    let needs_sandbox_push = platform == Platform::Aws
-        && args.image_repo.is_none()
-        && !ctx.is_dev()
+    let managed_aws_push = platform == Platform::Aws && args.image_repo.is_none() && !ctx.is_dev();
+    let needs_sandbox_push = managed_aws_push
         && built_stack.resources().any(|(_, entry)| {
             entry.config.downcast_ref::<Sandbox>().is_some_and(|sandbox| {
                 matches!(&sandbox.code, SandboxCode::Image { image } if Path::new(image).is_dir())
             })
+        });
+    let needs_proxy_only_push = managed_aws_push
+        && ctx.is_platform()
+        && built_stack.resources().any(|(_, entry)| {
+            let image = if let Some(container) = entry.config.downcast_ref::<Container>() {
+                match &container.code {
+                    ContainerCode::Image { image } => Some(image),
+                    ContainerCode::Source { .. } => None,
+                }
+            } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+                match &daemon.code {
+                    DaemonCode::Image { image } => Some(image),
+                    DaemonCode::Source { .. } => None,
+                }
+            } else {
+                None
+            };
+            image.is_some_and(|image| Path::new(image).is_dir())
         });
     let sandbox_repository = if needs_sandbox_push {
         let manager = ctx.resolve_manager(project_id, platform_str).await?;
@@ -1339,10 +1368,17 @@ async fn resolve_push_destinations(
     } else {
         None
     };
+    let proxy_only_repository = if needs_proxy_only_push {
+        let manager = ctx.resolve_manager(project_id, platform_str).await?;
+        Some(provision_proxy_only_push_repository(&manager, project_id).await?)
+    } else {
+        None
+    };
     Ok(PushDestinations {
         settings,
         public_registry_host,
         sandbox_repository,
+        proxy_only_repository,
     })
 }
 
@@ -1364,12 +1400,12 @@ async fn push_platform_stack(
     };
     let mut destinations =
         resolve_push_destinations(args, ctx, project_id, platform, &built_stack).await?;
-    let first = push_stack_with_cache_and_sandbox(
+    let first = push_stack_with_cache_to_destinations(
         built_stack.clone(),
         platform,
         output_dir,
         &destinations.settings,
-        destinations.sandbox_repository.as_deref(),
+        destinations.image_destinations(),
     )
     .await;
     let mut pushed = match first {
@@ -1382,7 +1418,7 @@ async fn push_platform_stack(
             let current =
                 resolve_push_destinations(args, ctx, project_id, platform, &built_stack).await?;
             if current.settings.repository == destinations.settings.repository
-                && current.sandbox_repository == destinations.sandbox_repository
+                && current.image_destinations() == destinations.image_destinations()
             {
                 return Err(error).context(push_failed());
             }
@@ -1391,12 +1427,12 @@ async fn push_platform_stack(
                 current.settings.repository
             );
             destinations = current;
-            push_stack_with_cache_and_sandbox(
+            push_stack_with_cache_to_destinations(
                 built_stack,
                 platform,
                 output_dir,
                 &destinations.settings,
-                destinations.sandbox_repository.as_deref(),
+                destinations.image_destinations(),
             )
             .await
             .context(push_failed())?
@@ -1652,7 +1688,42 @@ async fn provision_sandbox_push_repository(
             "repository",
         )
     };
-    let mut request = manager.http_client.post(&url).json(&body);
+    let sandbox = create_manager_repository(manager, &url, &body, key, "sandbox").await?;
+    Ok(Some(
+        manager_proxy_push_settings(manager_url, &sandbox, manager)?.repository,
+    ))
+}
+
+/// Asks a hosted manager for the project's repository for AWS container and daemon images.
+/// Those are pulled only through the manager's registry, so the manager may store them where AWS
+/// does not replicate them to every region, which worker images need. A manager that keeps one
+/// repository per project ignores the request field and answers with that repository.
+async fn provision_proxy_only_push_repository(
+    manager: &ManagerContext,
+    project_id: &str,
+) -> Result<String> {
+    let manager_url = &manager.manager_url;
+    let repository = create_manager_repository(
+        manager,
+        &format!("{manager_url}/v1/artifact-registry/repositories?platform=aws"),
+        &serde_json::json!({ "name": project_id, "proxyOnly": true }),
+        "name",
+        "container",
+    )
+    .await?;
+    Ok(manager_proxy_push_settings(manager_url, &repository, manager)?.repository)
+}
+
+/// Creates (or finds) a repository through the manager and returns the name it answers with
+/// under `key`. `kind` names the images it is for in errors.
+async fn create_manager_repository(
+    manager: &ManagerContext,
+    url: &str,
+    body: &serde_json::Value,
+    key: &str,
+    kind: &str,
+) -> Result<String> {
+    let mut request = manager.http_client.post(url).json(body);
     if let Some(token) = &manager.auth_token {
         request = request.bearer_auth(token);
     }
@@ -1661,12 +1732,12 @@ async fn provision_sandbox_push_repository(
         .await
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
-            message: "Failed to provision sandbox image repository".to_string(),
+            message: format!("Failed to provision {kind} image repository"),
         })?
         .error_for_status()
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
-            message: "Manager refused sandbox image repository provisioning".to_string(),
+            message: format!("Manager refused {kind} image repository provisioning"),
         })?;
     let body: serde_json::Value =
         response
@@ -1674,16 +1745,16 @@ async fn provision_sandbox_push_repository(
             .await
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
-                message: "Invalid sandbox image repository response".to_string(),
+                message: format!("Invalid {kind} image repository response"),
             })?;
-    let sandbox = body.get(key).and_then(|v| v.as_str()).ok_or_else(|| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: "Sandbox image repository response has no repository name".to_string(),
+    body.get(key)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!("The {kind} image repository response has no repository name"),
+            })
         })
-    })?;
-    Ok(Some(
-        manager_proxy_push_settings(manager_url, sandbox, manager)?.repository,
-    ))
 }
 
 /// Push settings for `repository` on the manager's OCI proxy at `registry_host`, which forwards
@@ -2194,15 +2265,22 @@ async fn push_stack_with_cache(
     output_dir: &PathBuf,
     push_settings: &PushSettings,
 ) -> alien_error::Result<Stack, alien_build::error::ErrorData> {
-    push_stack_with_cache_and_sandbox(built_stack, platform, output_dir, push_settings, None).await
+    push_stack_with_cache_to_destinations(
+        built_stack,
+        platform,
+        output_dir,
+        push_settings,
+        ImageDestinations::default(),
+    )
+    .await
 }
 
-async fn push_stack_with_cache_and_sandbox(
+async fn push_stack_with_cache_to_destinations(
     mut built_stack: Stack,
     platform: Platform,
     output_dir: &PathBuf,
     push_settings: &PushSettings,
-    sandbox_repository: Option<&str>,
+    destinations: ImageDestinations<'_>,
 ) -> alien_error::Result<Stack, alien_build::error::ErrorData> {
     if platform == Platform::Aws {
         alien_build::validate_aws_worker_artifacts(&built_stack)?;
@@ -2213,7 +2291,7 @@ async fn push_stack_with_cache_and_sandbox(
         &built_stack,
         &mut push_cache,
         push_settings,
-        sandbox_repository,
+        destinations,
         platform,
     )
     .await;
@@ -2223,7 +2301,7 @@ async fn push_stack_with_cache_and_sandbox(
         &mut built_stack,
         &push_cache,
         &push_settings.repository,
-        sandbox_repository,
+        destinations,
         platform,
     );
     if cache_hits > 0 {
@@ -2236,13 +2314,9 @@ async fn push_stack_with_cache_and_sandbox(
     info!("   Pushing images to {}...", push_settings.repository);
 
     let push_started = Instant::now();
-    let pushed = alien_build::push_stack_with_sandbox_repository(
-        built_stack,
-        platform,
-        push_settings,
-        sandbox_repository,
-    )
-    .await?;
+    let pushed =
+        alien_build::push_stack_to_destinations(built_stack, platform, push_settings, destinations)
+            .await?;
     info!(
         "Push for platform '{}' completed in {:.2}s",
         platform_str,
@@ -2266,7 +2340,7 @@ async fn drop_images_missing_from_registry(
     stack: &Stack,
     cache: &mut HashMap<String, String>,
     push_settings: &PushSettings,
-    sandbox_repository: Option<&str>,
+    destinations: ImageDestinations<'_>,
     platform: Platform,
 ) {
     let mut reused = stack.clone();
@@ -2274,7 +2348,7 @@ async fn drop_images_missing_from_registry(
         &mut reused,
         cache,
         &push_settings.repository,
-        sandbox_repository,
+        destinations,
         platform,
     ) == 0
     {
@@ -2390,14 +2464,20 @@ fn apply_push_cache(
     repository: &str,
     platform: Platform,
 ) -> usize {
-    apply_push_cache_with_destinations(stack, cache, repository, None, platform)
+    apply_push_cache_with_destinations(
+        stack,
+        cache,
+        repository,
+        ImageDestinations::default(),
+        platform,
+    )
 }
 
 fn apply_push_cache_with_destinations(
     stack: &mut Stack,
     cache: &HashMap<String, String>,
     repository: &str,
-    sandbox_repository: Option<&str>,
+    destinations: ImageDestinations<'_>,
     platform: Platform,
 ) -> usize {
     if cache.is_empty() {
@@ -2408,11 +2488,7 @@ fn apply_push_cache_with_destinations(
 
     for (_resource_id, resource_entry) in stack.resources_mut() {
         let cache_kind = resource_entry.config.resource_type().as_ref().to_string();
-        let repository = if cache_kind == "sandbox" {
-            sandbox_repository.unwrap_or(repository)
-        } else {
-            repository
-        };
+        let repository = destinations.repository_for(&cache_kind, repository);
         if let Some(func) = resource_entry.config.downcast_mut::<Worker>() {
             if let WorkerCode::Image { ref image } = func.code {
                 if let Some(key) = push_cache_key(&cache_kind, image, platform) {
@@ -3584,6 +3660,220 @@ mod tests {
         }
     }
 
+    /// A hosted manager in front of a real registry. It names the project's repository
+    /// `artifacts/prj_a`; when `splits` it answers a `proxyOnly` request with
+    /// `primary-artifacts/prj_a`, as the hosted manager does, and otherwise ignores the field, as a
+    /// manager from before it does. Records each repository request body.
+    #[cfg(feature = "platform")]
+    async fn start_hosted_manager(
+        splits: bool,
+    ) -> (String, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+        use axum::{extract::Json, routing::get};
+
+        let registry = container_registry::ContainerRegistry::builder()
+            .build_for_testing()
+            .run_in_background();
+        let upstream = format!("http://{}", registry.bound_addr());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let manager_url = url.clone();
+        let client = reqwest::Client::new();
+        let app = axum::Router::new()
+            .route(
+                "/v1/resolve",
+                get(move || {
+                    let manager_url = manager_url.clone();
+                    async move {
+                        axum::Json(serde_json::json!({
+                            "managerUrl": manager_url,
+                            "projectId": "prj_a",
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/v1/artifact-registry/repositories/prj_a",
+                get(|| async { axum::Json(serde_json::json!({ "name": "artifacts/prj_a" })) }),
+            )
+            .route(
+                "/v1/artifact-registry/repositories",
+                axum::routing::post(move |Json(body): Json<serde_json::Value>| {
+                    let recorded = recorded.clone();
+                    async move {
+                        let proxy_only = body["proxyOnly"] == serde_json::json!(true);
+                        recorded.lock().unwrap().push(body);
+                        let name = if splits && proxy_only {
+                            "primary-artifacts/prj_a"
+                        } else {
+                            "artifacts/prj_a"
+                        };
+                        axum::Json(serde_json::json!({ "id": name, "name": name, "uri": name }))
+                    }
+                }),
+            )
+            .fallback(move |request: axum::extract::Request| {
+                let client = client.clone();
+                let upstream = upstream.clone();
+                async move {
+                    let (parts, body) = request.into_parts();
+                    let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+                    let mut forwarded = client
+                        .request(parts.method, format!("{upstream}{}", parts.uri))
+                        .body(body);
+                    for (name, value) in &parts.headers {
+                        if name != http::header::AUTHORIZATION && name != http::header::HOST {
+                            forwarded = forwarded.header(name, value);
+                        }
+                    }
+                    let response = forwarded.send().await.unwrap();
+                    let mut answer = http::Response::builder().status(response.status());
+                    for (name, value) in response.headers() {
+                        answer = answer.header(name, value);
+                    }
+                    answer
+                        .body(axum::body::Body::from(response.bytes().await.unwrap()))
+                        .unwrap()
+                        .into_response()
+                }
+            });
+        tokio::spawn(async move {
+            let _registry = registry;
+            axum::serve(listener, app).await.unwrap()
+        });
+        (url, requests)
+    }
+
+    /// Writes a Linux ARM64 image holding `marker` where `alien build` leaves a resource's image,
+    /// with the gzip layers a Lambda worker image needs.
+    async fn write_arm64_artifact(dir: &Path, marker: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let layer = dockdash::Layer::builder()
+            .unwrap()
+            .compression(dockdash::LayerCompression::Gzip)
+            .data("/app/marker", marker.as_bytes(), Some(0o644))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        dockdash::Image::builder()
+            .platform("linux", &dockdash::Arch::ARM64)
+            .layer(layer)
+            .output_to(dir.join(format!(
+                "{}.oci.tar",
+                alien_core::BinaryTarget::LinuxArm64.runtime_platform_id()
+            )))
+            .build()
+            .await
+            .unwrap();
+    }
+
+    /// An AWS release through a hosted manager pushes container and daemon images, which only
+    /// the manager's registry serves, to the repository the manager keeps for them, and the
+    /// worker's image to the project repository, the one AWS copies to the worker's region. A
+    /// manager that keeps one repository receives every image there, as before.
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn aws_container_and_daemon_images_go_where_the_manager_keeps_proxy_only_images() {
+        for splits in [true, false] {
+            let (url, requests) = start_hosted_manager(splits).await;
+            let output = tempfile::tempdir().unwrap();
+            let output_dir = output.path().to_path_buf();
+            let build = output_dir.join("build/aws");
+            for name in ["web", "agent", "jobs"] {
+                write_arm64_artifact(&build.join(name), name).await;
+            }
+            let artifact = |name: &str| build.join(name).display().to_string();
+            let daemon = Daemon::new("agent".to_string())
+                .permissions("execution".to_string())
+                .code(DaemonCode::Image {
+                    image: artifact("agent"),
+                })
+                .build();
+            let worker = Worker::new("jobs".to_string())
+                .code(WorkerCode::Image {
+                    image: artifact("jobs"),
+                })
+                .permissions("execution".to_string())
+                .build();
+            let stack = Stack::new("split".to_string())
+                .add(
+                    test_container("web", artifact("web")),
+                    ResourceLifecycle::Live,
+                )
+                .add(daemon, ResourceLifecycle::Live)
+                .add(worker, ResourceLifecycle::Live)
+                .build();
+            let ctx = ExecutionMode::Platform {
+                base_url: url.clone(),
+                api_key: Some("test-key".to_string()),
+                no_browser: true,
+                workspace: Some("sample-workspace".to_string()),
+                project: Some("prj_a".to_string()),
+            };
+            let args = ReleaseArgs::try_parse_from(["release"]).unwrap();
+
+            let pushed =
+                push_platform_stack(&args, &ctx, "prj_a", Platform::Aws, stack, &output_dir)
+                    .await
+                    .unwrap_or_else(|e| panic!("splits={splits}: push failed: {e:?}"));
+
+            let host = url.trim_start_matches("http://");
+            let proxy_only = if splits {
+                "primary-artifacts/prj_a"
+            } else {
+                "artifacts/prj_a"
+            };
+            let images: HashMap<String, String> = pushed
+                .resources()
+                .map(|(id, entry)| {
+                    let image = if let Some(container) = entry.config.downcast_ref::<Container>() {
+                        container_image(container).to_string()
+                    } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+                        match &daemon.code {
+                            DaemonCode::Image { image } => image.clone(),
+                            DaemonCode::Source { .. } => panic!("expected image daemon"),
+                        }
+                    } else if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+                        match &worker.code {
+                            WorkerCode::Image { image } => image.clone(),
+                            WorkerCode::Source { .. } => panic!("expected image worker"),
+                        }
+                    } else {
+                        panic!("unexpected resource {id}")
+                    };
+                    (id.clone(), image)
+                })
+                .collect();
+            for (id, repository) in [
+                ("web", proxy_only),
+                ("agent", proxy_only),
+                ("jobs", "artifacts/prj_a"),
+            ] {
+                let image = &images[id];
+                assert!(
+                    image.starts_with(&format!("{host}/{repository}:")),
+                    "splits={splits}: {id} was pushed to {image}"
+                );
+                // The release names an image the registry really holds.
+                let reference = oci_client::Reference::try_from(image.as_str()).unwrap();
+                oci_client::Client::new(oci_client::client::ClientConfig {
+                    protocol: oci_client::client::ClientProtocol::Http,
+                    ..Default::default()
+                })
+                .fetch_manifest_digest(&reference, &oci_client::secrets::RegistryAuth::Anonymous)
+                .await
+                .unwrap_or_else(|e| panic!("splits={splits}: {image} is missing: {e}"));
+            }
+            assert_eq!(
+                requests.lock().unwrap().as_slice(),
+                [serde_json::json!({ "name": "prj_a", "proxyOnly": true })],
+                "splits={splits}: one request for the proxy-only repository, none for others"
+            );
+        }
+    }
+
     fn test_container(name: &str, image: String) -> Container {
         Container::new(name.to_string())
             .code(ContainerCode::Image { image })
@@ -3702,7 +3992,10 @@ mod tests {
                 &mut candidate,
                 &cache,
                 "registry.example/acme-prj_a",
-                Some("registry.example/sandbox-acme/acme-prj_a"),
+                ImageDestinations {
+                    sandbox: Some("registry.example/sandbox-acme/acme-prj_a"),
+                    proxy_only: None,
+                },
                 Platform::Aws
             ),
             0
@@ -3713,10 +4006,69 @@ mod tests {
                 &mut candidate,
                 &cache,
                 "registry.example/acme-prj_a",
-                Some("registry.example/sandbox-acme/acme-prj_a"),
+                ImageDestinations {
+                    sandbox: Some("registry.example/sandbox-acme/acme-prj_a"),
+                    proxy_only: None,
+                },
                 Platform::Aws
             ),
             1
+        );
+    }
+
+    /// A container pushed to the project repository before the manager kept proxy-only images
+    /// apart is pushed again, so an old cached reference does not keep it in the replicated
+    /// repository. Once pushed to its own repository, it is reused.
+    #[test]
+    fn proxy_only_destination_does_not_reuse_a_project_repository_push() {
+        let local = "/tmp/build/aws/web-synthetic";
+        let stack = Stack::new("test".to_string())
+            .add(
+                test_container("web", local.to_string()),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let destinations = ImageDestinations {
+            sandbox: None,
+            proxy_only: Some("registry.example/primary-artifacts-prj_a"),
+        };
+        let key = push_cache_key("container", local, Platform::Aws).unwrap();
+        let mut cache = HashMap::from([(
+            key.clone(),
+            "registry.example/artifacts-prj_a:web-old".to_string(),
+        )]);
+        let mut candidate = stack.clone();
+        assert_eq!(
+            apply_push_cache_with_destinations(
+                &mut candidate,
+                &cache,
+                "registry.example/artifacts-prj_a",
+                destinations,
+                Platform::Aws
+            ),
+            0
+        );
+        cache.insert(
+            key,
+            "registry.example/primary-artifacts-prj_a:web-new".to_string(),
+        );
+        assert_eq!(
+            apply_push_cache_with_destinations(
+                &mut candidate,
+                &cache,
+                "registry.example/artifacts-prj_a",
+                destinations,
+                Platform::Aws
+            ),
+            1
+        );
+        let web = candidate
+            .resources()
+            .find_map(|(_, entry)| entry.config.downcast_ref::<Container>())
+            .unwrap();
+        assert_eq!(
+            container_image(web),
+            "registry.example/primary-artifacts-prj_a:web-new"
         );
     }
 
