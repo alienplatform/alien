@@ -34,7 +34,7 @@ use alien_core::{
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const TEMPLATE_VERSION: &str = "2010-09-09";
 
@@ -177,6 +177,11 @@ pub struct CloudFormationOptions<'a> {
     /// passing.
     pub registry: &'a CfRegistry,
     pub target: CloudFormationTarget,
+    /// The stack before setup preflights. Compute parameter bounds come from
+    /// planning it, as the runtime does: preflights materialize a pool the source
+    /// left undeclared exactly like a declared one, so only the source still tells
+    /// which pools the developer bounded.
+    pub source_stack: &'a Stack,
     pub stack_settings: StackSettings,
     pub setup_target: String,
     pub setup_fingerprint: String,
@@ -280,6 +285,17 @@ pub fn generate_cloudformation_template_with_profile(
         options.stack_settings.compute.as_mut(),
     );
     let stack = &platform_stack;
+    let runtime_scale = if options.target.is_kubernetes() {
+        HashMap::new()
+    } else {
+        let mut source_stack = options.source_stack.clone();
+        alien_core::remove_off_platform_gated_resources(
+            &mut source_stack,
+            options.target.deployment_platform(),
+            None,
+        );
+        runtime_compute_scale(&source_stack, options.stack_settings.compute.as_ref())?
+    };
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
     // A Kubernetes target runs sandboxes as pods behind the chart's NetworkPolicy.
@@ -473,6 +489,7 @@ pub fn generate_cloudformation_template_with_profile(
     add_standard_parameters(
         &mut template,
         stack,
+        &runtime_scale,
         &stack_settings,
         supports_custom_domain,
         access_only,
@@ -1659,6 +1676,7 @@ fn apply_resource_dependencies(
 fn add_standard_parameters(
     template: &mut CfTemplate,
     stack: &Stack,
+    runtime_scale: &HashMap<String, CapacityGroupScalePolicy>,
     settings: &StackSettings,
     supports_custom_domain: bool,
     bindings_only: bool,
@@ -1700,7 +1718,7 @@ fn add_standard_parameters(
     add_network_parameters(template, stack, settings.network.as_ref(), target);
     add_container_resource_parameters(template, stack, settings.compute.as_ref())?;
     if !target.is_kubernetes() {
-        add_compute_parameters(template, stack, settings.compute.as_ref())?;
+        add_compute_parameters(template, stack, runtime_scale, settings.compute.as_ref())?;
     }
 
     if supports_custom_domain {
@@ -1956,9 +1974,25 @@ fn add_network_parameters(
     }
 }
 
+/// The machine counts the runtime accepts for each pool: the source's declared range, or the
+/// planner's range for a pool the source does not declare.
+fn runtime_compute_scale(
+    source_stack: &Stack,
+    compute: Option<&alien_core::ComputeSettings>,
+) -> Result<HashMap<String, CapacityGroupScalePolicy>> {
+    Ok(
+        alien_core::compute_planner::plan_compute(source_stack, Platform::Aws, compute)?
+            .pools
+            .into_iter()
+            .map(|pool| (pool.pool_id, pool.scale))
+            .collect(),
+    )
+}
+
 fn add_compute_parameters(
     template: &mut CfTemplate,
     stack: &Stack,
+    runtime_scale: &HashMap<String, CapacityGroupScalePolicy>,
     compute: Option<&alien_core::ComputeSettings>,
 ) -> Result<()> {
     let plan = alien_core::compute_planner::plan_compute(stack, Platform::Aws, compute)?;
@@ -2007,14 +2041,18 @@ fn add_compute_parameters(
             ),
         );
 
-        let scale = group.scale_policy.as_ref().cloned().unwrap_or_else(|| {
-            CapacityGroupScalePolicy::from_selected_bounds(group.min_size, group.max_size)
-        });
-        match (selection, scale) {
-            (
-                ComputePoolSelection::Fixed { machines, .. },
-                CapacityGroupScalePolicy::Fixed { machines: range },
-            ) => {
+        let scale = runtime_scale.get(&group.group_id).ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate CloudFormation compute parameters".to_string(),
+                reason: format!(
+                    "Compute pool '{}' is not in the compute plan of the source stack",
+                    group.group_id
+                ),
+            })
+        })?;
+        match selection {
+            ComputePoolSelection::Fixed { machines, .. } => {
+                let (min, max) = fixed_machine_bounds(scale);
                 let mut parameter = number_parameter(
                     &format!(
                         "Fixed machine count for runtime compute pool '{}'.",
@@ -2023,20 +2061,15 @@ fn add_compute_parameters(
                     *machines,
                     None,
                 );
-                parameter.min_value = Some(CfExpression::from(range.min));
-                parameter.max_value = Some(CfExpression::from(range.max));
+                parameter.min_value = Some(CfExpression::from(min));
+                parameter.max_value = Some(CfExpression::from(max));
                 template.parameters.insert(
                     compute_fixed_machines_parameter_name(&group.group_id),
                     parameter,
                 );
             }
-            (
-                ComputePoolSelection::Autoscale { min, max, .. },
-                CapacityGroupScalePolicy::Autoscale {
-                    min: min_range,
-                    max: max_range,
-                },
-            ) => {
+            ComputePoolSelection::Autoscale { min, max, .. } => {
+                let (min_range, max_range) = autoscale_machine_bounds(scale);
                 let mut min_parameter = number_parameter(
                     &format!(
                         "Minimum machine count for runtime compute pool '{}'.",
@@ -2045,8 +2078,8 @@ fn add_compute_parameters(
                     *min,
                     None,
                 );
-                min_parameter.min_value = Some(CfExpression::from(min_range.min));
-                min_parameter.max_value = Some(CfExpression::from(min_range.max));
+                min_parameter.min_value = Some(CfExpression::from(min_range.0));
+                min_parameter.max_value = Some(CfExpression::from(min_range.1));
                 template.parameters.insert(
                     compute_autoscale_min_parameter_name(&group.group_id),
                     min_parameter,
@@ -2060,17 +2093,38 @@ fn add_compute_parameters(
                     *max,
                     None,
                 );
-                max_parameter.min_value = Some(CfExpression::from(max_range.min));
-                max_parameter.max_value = Some(CfExpression::from(max_range.max));
+                max_parameter.min_value = Some(CfExpression::from(max_range.0));
+                max_parameter.max_value = Some(CfExpression::from(max_range.1));
                 template.parameters.insert(
                     compute_autoscale_max_parameter_name(&group.group_id),
                     max_parameter,
                 );
             }
-            _ => {}
         }
     }
     Ok(())
+}
+
+/// A fixed count must satisfy both ranges of an autoscaling policy, which accepts fixed N as N..N.
+fn fixed_machine_bounds(scale: &CapacityGroupScalePolicy) -> (u32, u32) {
+    match scale {
+        CapacityGroupScalePolicy::Fixed { machines } => (machines.min, machines.max),
+        CapacityGroupScalePolicy::Autoscale { min, max } => {
+            (min.min.max(max.min), min.max.min(max.max))
+        }
+    }
+}
+
+/// A fixed policy accepts an autoscaling selection only as N..N, with N inside its range.
+fn autoscale_machine_bounds(scale: &CapacityGroupScalePolicy) -> ((u32, u32), (u32, u32)) {
+    match scale {
+        CapacityGroupScalePolicy::Fixed { machines } => {
+            ((machines.min, machines.max), (machines.min, machines.max))
+        }
+        CapacityGroupScalePolicy::Autoscale { min, max } => {
+            ((min.min, min.max), (max.min, max.max))
+        }
+    }
 }
 
 fn add_container_resource_parameters(

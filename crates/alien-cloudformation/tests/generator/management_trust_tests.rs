@@ -82,6 +82,7 @@ fn try_render(
         stack,
         CloudFormationOptions {
             registry: &registry,
+            source_stack: stack,
             target,
             stack_settings: StackSettings::default(),
             setup_target: match target {

@@ -24,6 +24,7 @@ fn outputs_fallback_chunks_large_resource_payload() {
         &stack,
         CloudFormationOptions {
             registry: &registry,
+            source_stack: &stack,
             target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),
@@ -67,10 +68,12 @@ fn outputs_fallback_chunks_large_resource_payload() {
 #[test]
 fn small_payload_emits_single_resources_output() {
     let registry = sample_registry();
+    let stack = sample_stack();
     let template = generate_cloudformation_template(
-        &sample_stack(),
+        &stack,
         CloudFormationOptions {
             registry: &registry,
+            source_stack: &stack,
             target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),
@@ -115,6 +118,7 @@ fn source_function_returns_typed_error() {
         &stack,
         CloudFormationOptions {
             registry: &registry,
+            source_stack: &stack,
             target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),

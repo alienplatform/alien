@@ -157,6 +157,7 @@ fn render(stack: &Stack, settings: StackSettings, description: &str) -> Result<C
         stack,
         CloudFormationOptions {
             registry: &registry,
+            source_stack: stack,
             target: CloudFormationTarget::Aws,
             stack_settings: settings,
             setup_target: "aws".to_string(),

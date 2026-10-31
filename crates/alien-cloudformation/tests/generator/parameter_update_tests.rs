@@ -177,6 +177,7 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
             &stack,
             CloudFormationOptions {
                 registry: &registry,
+                source_stack: &stack,
                 target: CloudFormationTarget::Aws,
                 stack_settings: settings.clone(),
                 setup_target: "aws".to_string(),

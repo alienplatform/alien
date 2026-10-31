@@ -524,6 +524,7 @@ fn dump_sandbox_template_for_live_validation() {
         &stack,
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
+            source_stack: &stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,
             stack_settings: settings,
             setup_target: "aws".to_string(),

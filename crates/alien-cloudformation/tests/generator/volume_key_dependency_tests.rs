@@ -147,6 +147,7 @@ fn encrypted_container_volume_generates_an_acyclic_dependency_graph() {
         &stack,
         CloudFormationOptions {
             registry: &registry,
+            source_stack: &stack,
             target: CloudFormationTarget::Aws,
             stack_settings: StackSettings {
                 network: Some(NetworkSettings::UseDefault),

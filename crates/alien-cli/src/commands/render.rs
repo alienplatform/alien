@@ -139,15 +139,15 @@ pub async fn render_task(args: RenderArgs) -> Result<()> {
 
     match args.format {
         RenderFormat::Cloudformation => {
-            let stack = prepare_stack_for_render(
-                stack,
+            let prepared = prepare_stack_for_render(
+                stack.clone(),
                 Platform::Aws,
                 None,
                 &stack_settings,
                 args.check_quotas,
             )
             .await?;
-            render_cloudformation(&stack, &stack_settings, &args)
+            render_cloudformation(&prepared, &stack, &stack_settings, &args)
         }
         RenderFormat::Terraform => {
             let target = args.target.expect("validated by validate_args");
@@ -341,6 +341,7 @@ fn load_stack_settings(path: Option<&Path>) -> Result<StackSettings> {
 
 fn render_cloudformation(
     stack: &alien_core::Stack,
+    source_stack: &alien_core::Stack,
     stack_settings: &StackSettings,
     args: &RenderArgs,
 ) -> Result<()> {
@@ -350,6 +351,7 @@ fn render_cloudformation(
         stack,
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
+            source_stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,
             stack_settings: stack_settings.clone(),
             setup_target: "aws".to_string(),

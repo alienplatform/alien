@@ -73,6 +73,7 @@ fn terraform_grants_the_workload_role_what_cloudformation_grants() {
         &stack,
         CloudFormationOptions {
             registry: &CfRegistry::built_in(),
+            source_stack: &stack,
             target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),

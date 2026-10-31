@@ -31,6 +31,7 @@ fn plugin_can_extend_registry_alongside_built_ins() {
         &stack,
         CloudFormationOptions {
             registry: &registry,
+            source_stack: &stack,
             target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),

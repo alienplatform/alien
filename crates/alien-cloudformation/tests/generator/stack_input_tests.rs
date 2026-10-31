@@ -54,10 +54,12 @@ fn stack_with_inputs() -> Stack {
 #[test]
 fn cloudformation_emits_stack_inputs_as_parameters_and_registration_values() {
     let registry = sample_registry();
+    let stack = stack_with_inputs();
     let template = generate_cloudformation_template(
-        &stack_with_inputs(),
+        &stack,
         CloudFormationOptions {
             registry: &registry,
+            source_stack: &stack,
             target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),
@@ -266,6 +268,7 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
         &stack,
         CloudFormationOptions {
             registry: &registry,
+            source_stack: &stack,
             target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".into(),

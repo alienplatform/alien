@@ -870,6 +870,7 @@ mod tests {
                 &stack,
                 CloudFormationOptions {
                     registry: &registry,
+                    source_stack: &stack,
                     target: CloudFormationTarget::Aws,
                     stack_settings: StackSettings::default(),
                     setup_target: "aws".into(),
