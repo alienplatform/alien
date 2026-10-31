@@ -120,7 +120,7 @@ fn stack(shape: Shape, egress: SandboxEgress) -> Stack {
 
 /// Prepare the stack the way a setup template is prepared: template preflights, then mutations
 /// against a configuration that has no compute backend yet.
-async fn prepare_for_setup_template(stack: Stack, settings: &StackSettings) -> Stack {
+pub(super) async fn prepare_for_setup_template(stack: Stack, settings: &StackSettings) -> Stack {
     let runner = PreflightRunner::new();
     runner
         .run_template_preflights(&stack, Platform::Aws)

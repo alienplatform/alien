@@ -37,7 +37,15 @@ export default new alien.Stack("sandbox-session")
   .permissions({
     profiles: {
       execution: {
-        "*": ["sandbox/execute", "sandbox/management", "storage/data-read", "storage/data-write"],
+        // storage/provision stands in for an application that manages its own buckets: it must
+        // still not reach the sandbox bundle bucket's policy.
+        "*": [
+          "sandbox/execute",
+          "sandbox/management",
+          "storage/data-read",
+          "storage/data-write",
+          "storage/provision",
+        ],
       },
     },
   })
