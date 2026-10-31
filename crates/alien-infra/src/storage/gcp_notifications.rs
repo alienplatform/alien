@@ -232,6 +232,89 @@ mod tests {
             .build()
     }
 
+    /// Right after the queue grants the storage service agent `pubsub.publisher`, GCS can
+    /// still refuse to create the config (403) until IAM propagates. The step fails with a
+    /// retryable error, so the executor retries it with bounded backoff, and the retry
+    /// creates the config.
+    #[tokio::test]
+    async fn publisher_grant_propagation_denial_is_retried() {
+        let remote = Arc::new(Mutex::new(Vec::<GcsNotification>::new()));
+        let mut gcs = MockGcsApi::new();
+        let read = remote.clone();
+        gcs.expect_list_notifications().returning(move |_| {
+            Ok(ListNotificationsResponse {
+                items: read.lock().unwrap().clone(),
+                ..Default::default()
+            })
+        });
+        let attempts = Arc::new(Mutex::new(0));
+        let counter = attempts.clone();
+        let writes = remote.clone();
+        gcs.expect_insert_notification()
+            .returning(move |_, mut rule| {
+                let mut attempts = counter.lock().unwrap();
+                *attempts += 1;
+                if *attempts == 1 {
+                    return Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                        resource_type: "notification".into(),
+                        resource_name: "test-uploads".into(),
+                    }));
+                }
+                rule.id = Some(attempts.to_string());
+                rule.topic = rule
+                    .topic
+                    .map(|topic| format!("//pubsub.googleapis.com/{topic}"));
+                writes.lock().unwrap().push(rule.clone());
+                Ok(rule)
+            });
+        let gcs = Arc::new(gcs);
+        let iam = Arc::new(MockIamApi::new());
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_gcs_client()
+            .returning(move |_| Ok(gcs.clone()));
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut run = SingleControllerExecutor::builder()
+            .resource(storage("in/"))
+            .controller(GcpStorageController {
+                state: GcpStorageState::CreatingNotifications,
+                bucket_name: Some("test-uploads".into()),
+                notifications_managed: true,
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_dependency(
+                Queue::new("work".into()).build(),
+                GcpQueueController {
+                    state: GcpQueueState::Ready,
+                    topic_name: Some("test-work".into()),
+                    subscription_name: Some("test-work-sub".into()),
+                    storage_publisher_member: Some("serviceAccount:storage".into()),
+                    storage_publisher_pending: None,
+                    _internal_stay_count: None,
+                },
+            )
+            .build()
+            .await
+            .unwrap();
+        let error = run
+            .step()
+            .await
+            .expect_err("the first insert is denied while IAM propagates");
+        assert!(error.retryable, "{error:?}");
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert_eq!(
+            *attempts.lock().unwrap(),
+            3,
+            "one denied insert, then both configs"
+        );
+        assert_eq!(remote.lock().unwrap().len(), 2);
+    }
+
     #[tokio::test]
     async fn reconcile_recovers_lost_insert_response_updates_and_removes_only_owned_rules() {
         let foreign = GcsNotification {
