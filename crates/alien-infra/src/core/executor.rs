@@ -1336,26 +1336,14 @@ impl StackExecutor {
                                 // Ordering edges are the executor's, not the resource's: no
                                 // controller reads them. On a Frozen resource that setup created,
                                 // recording them is the whole change, and its update would run
-                                // runtime against what setup owns. Where setup owns every write,
-                                // a new edge waits for nothing: the resource exists, and the edge
-                                // only orders its deletion. A Frozen resource runtime manages
-                                // still updates when an edge reaches a dependency that is not
-                                // there yet, since it may read that dependency once it is.
+                                // runtime against what setup owns. The resource exists, so a new
+                                // edge waits for nothing: it only orders later work on it.
                                 let edges_only = desired_config.resource
                                     == current_resource_state.config
                                     && !self.external_binding_drifted(
                                         resource_id,
                                         current_resource_state,
                                     )?;
-                                let added_edges_settled = desired_config
-                                    .dependencies
-                                    .iter()
-                                    .filter(|dependency| {
-                                        !current_resource_state.dependencies.contains(dependency)
-                                    })
-                                    .all(|dependency| {
-                                        self.dependency_settled(dependency.id(), state)
-                                    });
                                 if edges_only
                                     && status != ResourceStatus::UpdateFailed
                                     && self.initial_setup_authority
@@ -1363,8 +1351,6 @@ impl StackExecutor {
                                     && desired_config.lifecycle == ResourceLifecycle::Frozen
                                     && current_resource_state.lifecycle
                                         == Some(ResourceLifecycle::Frozen)
-                                    && (self.setup_owns_writes(desired_config)
-                                        || added_edges_settled)
                                 {
                                     debug!(
                                         "Recording new dependencies of setup-created '{}' without an update",

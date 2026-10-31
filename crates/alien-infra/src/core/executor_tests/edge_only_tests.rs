@@ -179,17 +179,17 @@ async fn a_managed_frozen_resource_records_an_edge_to_an_existing_dependency() {
     assert!(executor.is_synced(&next));
 }
 
-/// When the new edge reaches a dependency that is not settled, the registry may need to read it
-/// once it is, so the change waits for an update as before and nothing is recorded early.
+/// The registry already exists, so a new edge to a dependency that is still updating, or not
+/// created yet, is recorded at once: its controller has nothing to do either way.
 #[test]
-fn a_managed_frozen_resource_waits_to_update_for_an_unsettled_new_dependency() {
+fn a_managed_frozen_resource_records_an_edge_to_an_unsettled_dependency() {
     let (stack, mut state) = registry_gaining_an_edge();
     state.resources.get_mut("cache").unwrap().status = ResourceStatus::Updating;
-    let waiting = executor(&stack, InitialSetupAuthority::ImportedHandoff);
-    let plan = waiting.plan(&state).unwrap();
-    assert!(plan.dependency_records.is_empty());
-    assert!(plan.updates.is_empty(), "deferred until cache settles");
-    assert!(!waiting.is_synced(&state));
+    let plan = executor(&stack, InitialSetupAuthority::ImportedHandoff)
+        .plan(&state)
+        .unwrap();
+    assert_eq!(plan.dependency_records, ["images"]);
+    assert!(plan.updates.is_empty());
 
     let (stack, mut state) = registry_gaining_an_edge();
     state.resources.remove("cache");
@@ -197,7 +197,8 @@ fn a_managed_frozen_resource_waits_to_update_for_an_unsettled_new_dependency() {
         .plan(&state)
         .unwrap();
     assert_eq!(plan.creates, ["cache"]);
-    assert!(plan.dependency_records.is_empty());
+    assert_eq!(plan.dependency_records, ["images"]);
+    assert!(plan.updates.is_empty());
 }
 
 /// A dependency that changes in the same plan is a reason to update, not just a new edge.
