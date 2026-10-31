@@ -4,35 +4,6 @@
   "platforms": {
     "aws": [
       {
-        // The sandbox bundle bucket's policy is what keeps every principal but management from
-        // writing the bundles sandbox images are built from. A grant to manage the stack's bucket
-        // policies must not lift it, except for management itself, which sets that policy when
-        // it manages the deployment's infrastructure.
-        "label": "keep-sandbox-bundle-bucket-policy",
-        "effect": "Deny",
-        "grant": {
-          "actions": ["s3:PutBucketPolicy", "s3:DeleteBucketPolicy"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-sandbox-bundles*"],
-            "condition": {
-              "ArnNotEquals": {
-                "aws:PrincipalArn": "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management"
-              }
-            }
-          },
-          "resource": {
-            "resources": ["arn:aws:s3:::${stackPrefix}-sandbox-bundles*"],
-            "condition": {
-              "ArnNotEquals": {
-                "aws:PrincipalArn": "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management"
-              }
-            }
-          }
-        }
-      },
-      {
         "grant": {
           "actions": [
             "s3:CreateBucket",

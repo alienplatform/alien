@@ -4,6 +4,7 @@
 use std::io::Read;
 use std::time::Duration;
 
+use alien_aws_clients::iam::{IamApi, IamClient};
 use alien_aws_clients::s3::{GetObjectRequest, S3Api, S3Client};
 use alien_aws_clients::AwsCredentialProvider;
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
@@ -119,9 +120,11 @@ async fn workload_write(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RewriteResponse {
     rewritten: bool,
     code: Option<String>,
+    caller_arn: Option<String>,
 }
 
 /// Asks the Worker to read a bucket's policy and write it back unchanged with its own credentials.
@@ -177,11 +180,29 @@ pub async fn check_workload_cannot_write_bundles(ctx: &TestContext) -> anyhow::R
     // The same Worker also holds stack-wide storage provision: it may rewrite its own bucket's
     // policy, and must not be able to lift the bundle bucket's write guard.
     let control = workload_rewrite_policy(ctx, &uploads).await?;
-    ensure!(
-        control.rewritten,
-        "the Worker's stack-wide provision grant should rewrite '{uploads}' policy: {:?}",
-        control.code
-    );
+    if !control.rewritten {
+        // A role the management identity writes carries the deployment's permissions boundary,
+        // which refuses bucket-policy writes to every such role. Only that excuses the control.
+        let role = control
+            .caller_arn
+            .as_deref()
+            .and_then(|arn| arn.split('/').nth(1))
+            .with_context(|| format!("the Worker did not report its role: {control:?}"))?;
+        let bounded = target_iam()
+            .await?
+            .get_role(role)
+            .await
+            .map_err(|error| anyhow::anyhow!("GetRole {role}: {error}"))?
+            .get_role_result
+            .role
+            .permissions_boundary
+            .is_some();
+        ensure!(
+            bounded && control.code.as_deref() == Some("AccessDenied"),
+            "the Worker's stack-wide provision grant should rewrite '{uploads}' policy unless a \
+             permissions boundary refuses it: {control:?}"
+        );
+    }
     let attempt = workload_rewrite_policy(ctx, &bundles).await?;
     ensure!(
         !attempt.rewritten && attempt.code.as_deref() == Some("AccessDenied"),
@@ -267,6 +288,30 @@ pub async fn check_bundle_bucket_deleted(bucket: &str) -> anyhow::Result<()> {
         Ok(()) => bail!("the sandbox bundle bucket '{bucket}' outlived the deployment"),
         Err(error) => bail!("HeadBucket '{bucket}' failed: {error}"),
     }
+}
+
+/// An IAM client with the target account's credentials.
+async fn target_iam() -> anyhow::Result<IamClient> {
+    let config = TestConfig::from_env();
+    let target = config
+        .aws_target
+        .as_ref()
+        .context("AWS target credentials are required")?;
+    Ok(IamClient::new(
+        reqwest::Client::new(),
+        AwsCredentialProvider::from_config(AwsClientConfig {
+            account_id: target.account_id.clone().unwrap_or_default(),
+            region: target.region.clone(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: target.access_key_id.clone(),
+                secret_access_key: target.secret_access_key.clone(),
+                session_token: target.session_token.clone(),
+            },
+            service_overrides: None,
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("target IAM credentials: {error}"))?,
+    ))
 }
 
 /// An S3 client with the target account's credentials.

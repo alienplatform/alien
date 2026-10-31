@@ -11,6 +11,12 @@ use alien_core::{
 use async_trait::async_trait;
 use tracing::info;
 
+/// The permission sets that can change a bucket's policy across the stack.
+const BUCKET_POLICY_SETS: [&str; 2] = ["storage/provision", "email/provision"];
+
+/// Denies changing the bundle bucket's policy, for a workload holding one of those.
+const PROTECT_BUNDLE_POLICY: &str = "sandbox/protect-bundle-policy";
+
 /// Lets management write and delete bundles in the bundle Storage, and in no other bucket.
 const SANDBOX_BUNDLE_WRITE: &str = "sandbox/bundle-write";
 
@@ -83,6 +89,23 @@ impl StackMutation for SandboxBundleStorageMutation {
             ManagementPermissions::Extend(profile) => Some(profile.clone()),
             ManagementPermissions::Auto => Some(PermissionProfile::new()),
         };
+        // The bucket's policy lets only management write bundles. A workload that can manage the
+        // stack's bucket policies gets a Deny on this bucket's, so it cannot lift that guard.
+        for sets in stack
+            .permissions
+            .profiles
+            .values_mut()
+            .filter_map(|profile| profile.0.get_mut("*"))
+        {
+            if sets
+                .iter()
+                .any(|set| BUCKET_POLICY_SETS.contains(&set.id()))
+                && !sets.iter().any(|set| set.id() == PROTECT_BUNDLE_POLICY)
+            {
+                sets.push(PermissionSetReference::from_name(PROTECT_BUNDLE_POLICY));
+            }
+        }
+
         // Stack-wide, because an automatically managed AWS setup cannot take a resource-scoped
         // management grant; the set itself is bound to this bucket's name.
         if let Some(mut profile) = management.filter(|_| has_management) {
@@ -110,6 +133,7 @@ mod tests {
     use crate::compatibility::FrozenResourcesUnchangedCheck;
     use crate::runner::PreflightRunner;
     use crate::StackCompatibilityCheck;
+    use alien_core::permissions::PermissionProfile;
     use alien_core::sandbox_setup_inputs::{
         aws_sandbox_renders_bundle, comparable_aws_sandbox_setup_inputs,
     };
@@ -288,6 +312,30 @@ mod tests {
             .await
             .expect("an automatic setup prepares the release");
         assert!(aws_sandbox_renders_bundle(&setup, "agents"));
+    }
+
+    /// A workload that can manage the stack's bucket policies is kept off the bundle bucket's;
+    /// one that cannot gets nothing extra.
+    #[tokio::test]
+    async fn a_workload_that_can_change_bucket_policies_is_kept_off_the_bundle_bucket() {
+        let mut stack = release(RELEASED, None);
+        stack.permissions.profiles.insert(
+            "execution".to_string(),
+            PermissionProfile::new().resource("*", ["storage/data-write", "storage/provision"]),
+        );
+        stack.permissions.profiles.insert(
+            "reader".to_string(),
+            PermissionProfile::new().resource("*", ["storage/data-read"]),
+        );
+        let setup = prepared(stack, &StackState::new(Platform::Aws)).await;
+        let ids = |profile: &str| {
+            setup.permissions.profiles[profile].0["*"]
+                .iter()
+                .map(|set| set.id().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(ids("execution").contains(&PROTECT_BUNDLE_POLICY.to_string()));
+        assert!(!ids("reader").contains(&PROTECT_BUNDLE_POLICY.to_string()));
     }
 
     /// A Frozen sandbox is built by setup from its published bundle and needs no bucket.
