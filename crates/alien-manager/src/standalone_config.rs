@@ -454,6 +454,19 @@ impl ManagerTomlConfig {
 # [impersonation.gcp]
 # service = "gcpserviceaccount"
 # email = "alien-management@project.iam.gserviceaccount.com"
+#
+# [impersonation.azure]
+# service = "azuremanagedidentity"
+# clientId = "00000000-0000-0000-0000-000000000000"
+# resourceId = "/subscriptions/<subscription>/resourceGroups/<group>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/alien-management"
+# principalId = "00000000-0000-0000-0000-000000000000"
+#
+# Azure setups trust the OIDC token the manager presents (AZURE_FEDERATED_TOKEN_FILE, for
+# example from AKS workload identity) through a federated identity credential. With
+# [impersonation.azure], the manager refuses to start unless it also runs with:
+#   AZURE_TENANT_ID                the manager's (managing) tenant
+#   AZURE_MANAGEMENT_OIDC_ISSUER   the issuer of that token, e.g. the AKS cluster's OIDC issuer URL
+#   AZURE_MANAGEMENT_OIDC_SUBJECT  its exact subject, e.g. system:serviceaccount:<namespace>:<name>
 
 # ── Telemetry ──────────────────────────────────────────────────────
 # [telemetry]
@@ -582,6 +595,30 @@ port = 3000
         let parsed: ManagerTomlConfig =
             toml::from_str(&template).expect("template should be valid TOML");
         assert_eq!(parsed.server.port, 8080);
+    }
+
+    /// The template's commented Azure example, uncommented, is a valid management binding.
+    #[test]
+    fn template_azure_impersonation_example_parses() {
+        let template = ManagerTomlConfig::generate_template();
+        let example: String = template
+            .lines()
+            .skip_while(|line| *line != "# [impersonation.azure]")
+            .take_while(|line| *line != "#")
+            .map(|line| format!("{}\n", line.trim_start_matches("# ")))
+            .collect();
+        let config: ManagerTomlConfig = toml::from_str(&example).expect("example should parse");
+        let bindings = config.impersonation.target_bindings(Platform::Azure);
+        assert_eq!(bindings.len(), 1, "{example}");
+        let (name, binding) = &bindings[0];
+        assert_eq!(*name, "management");
+        let ServiceAccountBinding::AzureManagedIdentity(azure) = binding else {
+            panic!("expected an Azure managed identity binding: {binding:?}");
+        };
+        assert_eq!(
+            serde_json::to_value(&azure.client_id).unwrap(),
+            "00000000-0000-0000-0000-000000000000"
+        );
     }
 
     #[test]

@@ -410,6 +410,14 @@ impl AlienManagerBuilder {
                 || toml_config.impersonation.azure.is_some();
 
             if has_impersonation && !target_bindings.is_empty() {
+                if toml_config.impersonation.azure.is_some() {
+                    crate::providers::impersonation_credentials::azure_management_config_from_env(
+                        &std::env::vars().collect(),
+                    )
+                    .context(ErrorData::ServerInitFailed {
+                        reason: "[impersonation.azure] is configured, but the Azure management identity is incomplete".to_string(),
+                    })?;
+                }
                 let primary_provider = target_bindings.values().next().unwrap().clone();
                 let management_binding_platforms = [
                     (Platform::Aws, toml_config.impersonation.aws.is_some()),

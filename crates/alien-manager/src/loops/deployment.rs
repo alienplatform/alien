@@ -21,8 +21,8 @@ use tracing::{debug, error, info, warn};
 use alien_bindings::BindingsProviderApi;
 use alien_core::{
     CredentialRetry, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
-    ReleaseInfo, Stack, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, ManagementConfig,
+    Platform, ReleaseInfo, Stack, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
@@ -1387,6 +1387,30 @@ pub(crate) struct RunnerConfigSources<'a> {
     pub target_bindings_providers: &'a HashMap<Platform, Arc<dyn BindingsProviderApi>>,
 }
 
+/// The management identity a deployment's stack renders with: the deployment record's own (set
+/// by a control plane, e.g. for private managers), else the one the credential resolver derives
+/// from `platform`'s management binding. A failure is fatal: without the identity the stack
+/// renders without its setup-owned 'management' resource, which then reads as removed and makes
+/// every update of an imported setup fail with DEPLOYMENT_SETUP_REQUIRED.
+pub(crate) async fn resolve_deployment_management_config(
+    credential_resolver: &dyn CredentialResolver,
+    deployment: &DeploymentRecord,
+    platform: Platform,
+) -> Result<Option<ManagementConfig>, AlienError> {
+    if let Some(config) = &deployment.management_config {
+        return Ok(Some(config.clone()));
+    }
+    credential_resolver
+        .resolve_management_config(platform)
+        .await
+        .context(GenericError {
+            message: format!(
+                "Failed to resolve the {platform} management identity for deployment {}",
+                deployment.id
+            ),
+        })
+}
+
 impl RunnerConfigSources<'_> {
     /// The deployment config a runner applies to this deployment.
     ///
@@ -1410,28 +1434,12 @@ impl RunnerConfigSources<'_> {
             .and_then(|config| config.monitoring.clone())
             .or_else(|| build_monitoring_config(self.config, deployment));
 
-        // Management config resolution:
-        //   1. From platform API (per-deployment, on DeploymentRecord — e.g. private managers)
-        //   2. From credential resolver (per-platform, derived from target provider's management binding)
-        let management_config = if let Some(mc) = deployment.management_config.clone() {
-            Some(mc)
-        } else {
-            match self
-                .credential_resolver
-                .resolve_management_config(deployment.platform)
-                .await
-            {
-                Ok(mc) => mc,
-                Err(e) => {
-                    warn!(
-                        deployment_id = %deployment.id,
-                        error = %e,
-                        "Failed to resolve management config from bindings"
-                    );
-                    None
-                }
-            }
-        };
+        let management_config = resolve_deployment_management_config(
+            self.credential_resolver,
+            deployment,
+            deployment.platform,
+        )
+        .await?;
 
         let native_image_host = crate::registry_access::derive_native_image_host(
             self.bindings_provider,
@@ -1827,9 +1835,10 @@ mod tests {
         active_work_statuses, build_monitoring_config, commands_receiver_env_vars,
         credential_error_retry_remaining, get_or_create_local_bindings_provider,
         has_remote_stack_management_outputs, manager_candidate_statuses,
-        needs_provision_capability, parse_status, retryable_failed_statuses,
-        should_wait_for_credential_handoff, supplied_release_stacks, worker_commands_push_env_vars,
-        DeploymentLoop, ProcessOptions, RunnerConfigSources, CREDENTIAL_ERROR_GRACE_PERIOD,
+        needs_provision_capability, parse_status, resolve_deployment_management_config,
+        retryable_failed_statuses, should_wait_for_credential_handoff, supplied_release_stacks,
+        worker_commands_push_env_vars, DeploymentLoop, ProcessOptions, RunnerConfigSources,
+        CREDENTIAL_ERROR_GRACE_PERIOD,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
@@ -1841,7 +1850,7 @@ mod tests {
         ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
     };
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
-    use alien_error::AlienError;
+    use alien_error::{AlienError, GenericError};
     use alien_local::{ContainerConfig, LocalContainerManager};
     use chrono::Utc;
     use std::collections::HashMap;
@@ -2613,7 +2622,7 @@ mod tests {
     mod credential_retry_tests {
         use super::*;
         use alien_core::Storage;
-        use alien_infra::{LocalStorageController, state_utils::StackResourceStateExt};
+        use alien_infra::{state_utils::StackResourceStateExt, LocalStorageController};
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
         struct Credentials {
@@ -4916,6 +4925,77 @@ mod tests {
         } else {
             builder.build()
         }
+    }
+
+    struct UnresolvableManagementIdentity;
+
+    #[async_trait]
+    impl CredentialResolver for UnresolvableManagementIdentity {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn resolve_management_config(
+            &self,
+            _: alien_core::Platform,
+        ) -> Result<Option<alien_core::ManagementConfig>, AlienError> {
+            Err(AlienError::new(GenericError {
+                message: "AZURE_MANAGEMENT_OIDC_ISSUER is not set".to_string(),
+            }))
+        }
+    }
+
+    /// Rendering without the management identity would drop the setup-owned 'management'
+    /// resource, so a failure to resolve it stops the deployment instead of deploying without it.
+    #[tokio::test]
+    async fn runner_config_fails_when_the_management_identity_does_not_resolve() {
+        let deployment = deployment_record(DeploymentStatus::UpdatePending, None);
+        let manager_config = crate::config::ManagerConfig::default();
+
+        let error = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &UnresolvableManagementIdentity,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
+        }
+        .deployment_config(&deployment, None)
+        .await
+        .expect_err("an unresolvable management identity must fail the runner config");
+
+        assert_eq!(
+            error.message,
+            format!(
+                "Failed to resolve the {} management identity for deployment {}",
+                deployment.platform, deployment.id
+            )
+        );
+        assert_eq!(
+            error.source.as_ref().expect("resolver error").message,
+            "AZURE_MANAGEMENT_OIDC_ISSUER is not set"
+        );
+
+        // A control plane's per-deployment identity wins; the resolver isn't consulted.
+        let recorded = alien_core::ManagementConfig::Azure(alien_core::AzureManagementConfig {
+            managing_tenant_id: "managing-tenant".to_string(),
+            oidc_issuer: "https://issuer.example.com".to_string(),
+            oidc_subject: "manager".to_string(),
+        });
+        let mut deployment = deployment;
+        deployment.management_config = Some(recorded.clone());
+        let resolved = resolve_deployment_management_config(
+            &UnresolvableManagementIdentity,
+            &deployment,
+            deployment.platform,
+        )
+        .await
+        .expect("the recorded identity needs no resolver");
+        assert_eq!(
+            serde_json::to_value(resolved).unwrap(),
+            serde_json::to_value(Some(recorded)).unwrap()
+        );
     }
 
     /// A control plane's config carries its own copy of the deployment's

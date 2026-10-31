@@ -2920,18 +2920,13 @@ pub(crate) async fn build_pull_target(
     let release_stack_platform = release_stack_platform(deployment.platform);
     let management_platform = management_platform(deployment.platform, deployment.base_platform);
 
-    // Resolve management config (same pattern as push-mode deployment loop).
-    // 1. From deployment record (platform API / private managers)
-    // 2. From credential resolver (derived from management binding env vars)
-    let management_config = if let Some(mc) = deployment.management_config.clone() {
-        Some(mc)
-    } else {
-        state
-            .credential_resolver
-            .resolve_management_config(management_platform)
-            .await
-            .unwrap_or(None)
-    };
+    let management_config = crate::loops::deployment::resolve_deployment_management_config(
+        state.credential_resolver.as_ref(),
+        deployment,
+        management_platform,
+    )
+    .await
+    .map_err(IntoResponse::into_response)?;
 
     // Image pull credentials are no longer passed through the sync response.
     // Pull-model agents pull images through the manager's /v2/ registry proxy.

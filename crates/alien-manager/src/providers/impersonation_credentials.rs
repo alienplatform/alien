@@ -339,10 +339,14 @@ impl CredentialResolver for ImpersonationCredentialResolver {
 
         let provider = self.provider_for_target(platform);
 
-        let service_account = match provider.load_service_account("management").await {
-            Ok(sa) => sa,
-            Err(_) => return Ok(None),
-        };
+        // The platform has an [impersonation] section, so its management binding must load.
+        let service_account =
+            provider
+                .load_service_account("management")
+                .await
+                .context(GenericError {
+                    message: format!("Failed to load the {platform} management binding"),
+                })?;
 
         let info = service_account.get_info().await.context(GenericError {
             message: format!(
@@ -351,7 +355,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             ),
         })?;
 
-        Ok(Some(management_config_from_info(info, platform)?))
+        Ok(Some(management_config_from_info(info)?))
     }
 }
 
@@ -487,10 +491,7 @@ async fn impersonate_service_account(
 }
 
 /// Derive ManagementConfig from ServiceAccountInfo.
-fn management_config_from_info(
-    info: ServiceAccountInfo,
-    platform: Platform,
-) -> Result<ManagementConfig, AlienError> {
+fn management_config_from_info(info: ServiceAccountInfo) -> Result<ManagementConfig, AlienError> {
     match info {
         ServiceAccountInfo::Aws(aws_info) => {
             Ok(ManagementConfig::Aws(alien_core::AwsManagementConfig {
@@ -507,48 +508,41 @@ fn management_config_from_info(
                 service_account_email: gcp_info.email,
             }))
         }
+        // Azure's management identity is the OIDC token the manager presents, so its trust
+        // comes from the environment, not from the binding.
         ServiceAccountInfo::Azure(_azure_info) => {
-            let tenant_id = std::env::var("AZURE_TENANT_ID").map_err(|_| {
-                AlienError::new(GenericError {
-                    message: format!(
-                        "AZURE_TENANT_ID required for Azure management config on {}",
-                        platform
-                    ),
-                })
-            })?;
-
-            let oidc_issuer = std::env::var("AZURE_MANAGEMENT_OIDC_ISSUER").map_err(|_| {
-                AlienError::new(GenericError {
-                    message: format!(
-                        "AZURE_MANAGEMENT_OIDC_ISSUER required for Azure management config on {}",
-                        platform
-                    ),
-                })
-            })?;
-            let oidc_subject = std::env::var("AZURE_MANAGEMENT_OIDC_SUBJECT").map_err(|_| {
-                AlienError::new(GenericError {
-                    message: format!(
-                        "AZURE_MANAGEMENT_OIDC_SUBJECT required for Azure management config on {}",
-                        platform
-                    ),
-                })
-            })?;
-            if oidc_issuer.is_empty() || oidc_subject.is_empty() {
-                return Err(AlienError::new(GenericError {
-                    message: format!(
-                        "Azure management OIDC issuer and subject must be non-empty on {}",
-                        platform
-                    ),
-                }));
-            }
-
-            Ok(ManagementConfig::Azure(alien_core::AzureManagementConfig {
-                managing_tenant_id: tenant_id,
-                oidc_issuer,
-                oidc_subject,
-            }))
+            azure_management_config_from_env(&std::env::vars().collect())
         }
     }
+}
+
+/// The Azure management identity customer setups trust: the managing tenant and the issuer and
+/// subject of the OIDC token the manager presents through a federated identity credential.
+pub(crate) fn azure_management_config_from_env(
+    env: &HashMap<String, String>,
+) -> Result<ManagementConfig, AlienError> {
+    let missing: Vec<&str> = [
+        "AZURE_TENANT_ID",
+        "AZURE_MANAGEMENT_OIDC_ISSUER",
+        "AZURE_MANAGEMENT_OIDC_SUBJECT",
+    ]
+    .into_iter()
+    .filter(|name| env.get(*name).is_none_or(|value| value.trim().is_empty()))
+    .collect();
+    if !missing.is_empty() {
+        return Err(AlienError::new(GenericError {
+            message: format!(
+                "The Azure management identity needs {}: customer setups trust the managing tenant and the issuer and subject of the manager's OIDC token",
+                missing.join(", ")
+            ),
+        }));
+    }
+
+    Ok(ManagementConfig::Azure(alien_core::AzureManagementConfig {
+        managing_tenant_id: env["AZURE_TENANT_ID"].clone(),
+        oidc_issuer: env["AZURE_MANAGEMENT_OIDC_ISSUER"].clone(),
+        oidc_subject: env["AZURE_MANAGEMENT_OIDC_SUBJECT"].clone(),
+    }))
 }
 
 pub(crate) fn apply_target_environment(
@@ -1031,6 +1025,65 @@ mod tests {
             AzureCredentials::WorkloadIdentity { client_id, .. }
                 if client_id == "management-client"
         ));
+    }
+
+    /// Setups trust exactly the tenant, issuer and subject the manager runs with; a missing or
+    /// blank one is named in the error instead of producing a partial identity.
+    #[test]
+    fn azure_management_identity_comes_from_complete_environment() {
+        let env = HashMap::from([
+            ("AZURE_TENANT_ID".to_string(), "managing-tenant".to_string()),
+            (
+                "AZURE_MANAGEMENT_OIDC_ISSUER".to_string(),
+                "https://issuer.example.com".to_string(),
+            ),
+            (
+                "AZURE_MANAGEMENT_OIDC_SUBJECT".to_string(),
+                "system:serviceaccount:alien:manager".to_string(),
+            ),
+        ]);
+        let ManagementConfig::Azure(config) =
+            azure_management_config_from_env(&env).expect("complete environment")
+        else {
+            panic!("expected an Azure management config");
+        };
+        assert_eq!(config.managing_tenant_id, "managing-tenant");
+        assert_eq!(config.oidc_issuer, "https://issuer.example.com");
+        assert_eq!(config.oidc_subject, "system:serviceaccount:alien:manager");
+
+        let mut incomplete = env.clone();
+        incomplete.remove("AZURE_TENANT_ID");
+        incomplete.insert("AZURE_MANAGEMENT_OIDC_SUBJECT".to_string(), " ".to_string());
+        let error = azure_management_config_from_env(&incomplete).expect_err("incomplete");
+        assert!(
+            error
+                .message
+                .contains("needs AZURE_TENANT_ID, AZURE_MANAGEMENT_OIDC_SUBJECT:"),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains("ISSUER"), "{}", error.message);
+    }
+
+    /// A platform with an [impersonation] section has a management identity; failing to load
+    /// it is an error, never "no management identity".
+    #[tokio::test]
+    async fn a_configured_management_binding_that_fails_to_load_is_an_error() {
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(ClientConfig::Test, HashMap::new())
+                .expect("empty test provider should be valid"),
+        );
+        let resolver = ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Azure, provider)]),
+            HashSet::from([Platform::Azure]),
+        );
+
+        let error = resolver
+            .resolve_management_config(Platform::Azure)
+            .await
+            .expect_err("a missing management binding must not resolve to None");
+        assert_eq!(error.message, "Failed to load the azure management binding");
     }
 
     #[test]
