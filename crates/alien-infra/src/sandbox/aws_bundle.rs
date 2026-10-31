@@ -11,7 +11,7 @@ use alien_aws_clients::s3::{ObjectIdentifier, PutObjectRequest, S3Api};
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_KEY_PREFIX;
 use alien_error::{AlienError, Context, IntoAlienError};
 use sha2::{Digest, Sha256};
-use tracing::info;
+use tracing::{info, warn};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
@@ -87,6 +87,9 @@ fn sandbox_prefix(resource_id: &str) -> String {
 
 /// Writes the bundle, then deletes this sandbox's other bundles except `serving`, the one its
 /// active image was built from.
+///
+/// Only the write can fail the step. A bundle left behind changes no build, and the next write or
+/// the sandbox's delete lists the prefix and removes it.
 pub(crate) async fn write(
     client: &dyn S3Api,
     bundle: &RenderedBundle,
@@ -109,10 +112,14 @@ pub(crate) async fn write(
             resource_id: Some(resource_id.to_string()),
         })?;
     let serving = serving.and_then(|uri| uri.strip_prefix(&format!("s3://{}/", bundle.bucket)));
-    delete_keys(client, &bundle.bucket, resource_id, |key| {
+    if let Err(error) = delete_keys(client, &bundle.bucket, resource_id, |key| {
         key != bundle.key && Some(key) != serving
     })
     .await
+    {
+        warn!(sandbox_id = %resource_id, bucket = %bundle.bucket, %error, "Left stale sandbox bundles for the next write or delete");
+    }
+    Ok(())
 }
 
 /// Deletes every bundle this sandbox wrote, once nothing can build from them.
@@ -251,6 +258,52 @@ mod tests {
         delete_all(&denied, "p-sandbox-bundles", "agents")
             .await
             .expect_err("a bucket that cannot be listed may still hold bundles");
+    }
+
+    /// Once the bundle is written the build can go ahead: failing to clear the old ones leaves
+    /// them for the next write or the delete, which list the prefix again.
+    #[tokio::test]
+    async fn a_written_bundle_stands_when_the_old_ones_cannot_be_cleared() {
+        use alien_aws_clients::s3::{MockS3Api, PutObjectOutput};
+        use alien_client_core::ErrorData as CloudError;
+
+        let bundle = render(
+            "p-sandbox-bundles",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:aaaa",
+            "agents",
+        )
+        .unwrap();
+        let mut s3 = MockS3Api::new();
+        s3.expect_put_object().times(1).returning(|_| {
+            Ok(PutObjectOutput {
+                e_tag: None,
+                version_id: None,
+                server_side_encryption: None,
+            })
+        });
+        s3.expect_list_objects_v2()
+            .times(1)
+            .returning(|bucket, _, _| {
+                Err(AlienError::new(CloudError::RemoteAccessDenied {
+                    resource_type: "Bucket".into(),
+                    resource_name: bucket.to_string(),
+                }))
+            });
+        write(&s3, &bundle, None, "agents")
+            .await
+            .expect("the bundle is written");
+
+        let mut refused = MockS3Api::new();
+        refused.expect_put_object().times(1).returning(|request| {
+            Err(AlienError::new(CloudError::RemoteAccessDenied {
+                resource_type: "Object".into(),
+                resource_name: request.key.clone(),
+            }))
+        });
+        refused.expect_list_objects_v2().never();
+        write(&refused, &bundle, None, "agents")
+            .await
+            .expect_err("a bundle that was not written fails the step");
     }
 
     #[test]
