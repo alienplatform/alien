@@ -1079,7 +1079,7 @@ fn sandbox_image(stack: &Stack) -> Result<String> {
         .resources()
         .find_map(
             |(_, entry)| match &entry.config.downcast_ref::<Sandbox>()?.code {
-                SandboxCode::Image { image } => Some(image.clone()),
+                SandboxCode::Image { image, .. } => Some(image.clone()),
                 SandboxCode::Source { .. } => None,
             },
         )

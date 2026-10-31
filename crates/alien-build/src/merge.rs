@@ -298,7 +298,7 @@ fn compute_image(stack: &Stack, resource_id: &str) -> Option<String> {
             return Some(image.clone());
         }
     } else if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
-        if let SandboxCode::Image { image } = &sandbox.code {
+        if let SandboxCode::Image { image, .. } = &sandbox.code {
             return Some(image.clone());
         }
     }
@@ -325,7 +325,10 @@ fn set_compute_image(stack: &mut Stack, resource_id: &str, image: String) {
     } else if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
         daemon.code = DaemonCode::Image { image };
     } else if let Some(sandbox) = entry.config.downcast_mut::<Sandbox>() {
-        sandbox.code = SandboxCode::Image { image };
+        sandbox.code = SandboxCode::Image {
+            image,
+            bundled_from: None,
+        };
     }
 }
 
@@ -686,7 +689,10 @@ mod tests {
                 .to_string_lossy()
                 .into_owned();
             let sandbox = Sandbox::new("sbx".to_string())
-                .code(SandboxCode::Image { image })
+                .code(SandboxCode::Image {
+                    image,
+                    bundled_from: None,
+                })
                 .egress(alien_core::SandboxEgress::Internet)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,

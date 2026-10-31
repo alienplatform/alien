@@ -152,7 +152,7 @@ pub fn aws_sandbox_setup_inputs(
             reason,
         })
     };
-    let SandboxCode::Image { image } = &sandbox.code else {
+    let SandboxCode::Image { image, .. } = &sandbox.code else {
         return Err(refuse(
             "an AWS sandbox is built from a prebuilt s3:// bundle, not from source".to_string(),
         ));
@@ -163,16 +163,15 @@ pub fn aws_sandbox_setup_inputs(
         aws_sandbox_build_role(sandbox, image, true, lifecycle, account).policy()?
     } else if lifecycle == ResourceLifecycle::Live {
         // A deployment set up before the bundle Storage existed builds from the publisher's
-        // bundle, so a release that adds one beside a container image keeps that setup's inputs:
-        // it goes on building without a setup rerun, and moves to the Storage when setup runs
-        // again.
+        // bundle in `code.image`, so a release that also names the image it was built from keeps
+        // that setup's inputs: it goes on building without a setup rerun, and moves to the
+        // Storage when setup runs again.
         //
         // A Live sandbox's store and base image repository are fixed by its setup: the runtime
         // reads each release's bundle key from the store this setup granted, and the publisher
         // puts a bundle there whose base image this role can pull. Only the shape of the grant
         // (stable prefix, whether a private base exists, its repository namespace) is a setup
         // input.
-        let image = sandbox.published_bundle.as_deref().unwrap_or(image);
         let mut granted = sandbox.clone();
         granted.private_base_image = sandbox
             .private_base_image

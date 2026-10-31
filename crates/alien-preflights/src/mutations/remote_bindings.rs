@@ -419,6 +419,7 @@ mod tests {
         Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: "ubuntu:24.04".to_string(),
+                bundled_from: None,
             })
             .egress(egress)
             .lifecycle(SandboxLifecyclePolicy {

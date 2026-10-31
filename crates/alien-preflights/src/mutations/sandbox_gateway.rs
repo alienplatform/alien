@@ -177,6 +177,7 @@ mod tests {
         let sandbox = Sandbox::new("subject".into())
             .code(SandboxCode::Image {
                 image: "example.invalid/base:1".into(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {

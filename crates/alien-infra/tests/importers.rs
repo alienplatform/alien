@@ -1207,6 +1207,7 @@ fn sandbox_resource() -> Sandbox {
     Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: "manager.example.com/alien-artifacts-proj:base".to_string(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {

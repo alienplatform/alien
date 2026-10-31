@@ -2085,6 +2085,7 @@ mod setup_update_authorization_tests {
         let sandbox = alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -2501,6 +2502,7 @@ mod setup_update_authorization_tests {
             let sandbox = alien_core::Sandbox::new("agents".to_string())
                 .code(alien_core::SandboxCode::Image {
                     image: bundle.to_string(),
+                    bundled_from: None,
                 })
                 .private_base_image(private_base_image.to_string())
                 .egress(egress)

@@ -1340,7 +1340,7 @@ async fn resolve_push_destinations(
     let needs_sandbox_push = managed_aws_push
         && built_stack.resources().any(|(_, entry)| {
             entry.config.downcast_ref::<Sandbox>().is_some_and(|sandbox| {
-                matches!(&sandbox.code, SandboxCode::Image { image } if Path::new(image).is_dir())
+                matches!(&sandbox.code, SandboxCode::Image { image, .. } if Path::new(image).is_dir())
             })
         });
     let needs_proxy_only_push = managed_aws_push
@@ -2083,10 +2083,13 @@ fn retarget_stack_registry(stack: &mut Stack, push_host: &str, public_host: &str
                 }
             }
         } else if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
-            if let SandboxCode::Image { image } = &sandbox.code {
+            if let SandboxCode::Image { image, .. } = &sandbox.code {
                 if let Some(image) = retarget(image) {
                     let mut updated = sandbox.clone();
-                    updated.code = SandboxCode::Image { image };
+                    updated.code = SandboxCode::Image {
+                        image,
+                        bundled_from: None,
+                    };
                     entry.config = alien_core::Resource::new(updated);
                 }
             }
@@ -2143,12 +2146,15 @@ fn rebase_prebuilt_stack_image_paths(stack: &mut Stack, output_dir: &Path) -> Re
             }
         } else if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
             match &sandbox.code {
-                SandboxCode::Image { image } => {
+                SandboxCode::Image { image, .. } => {
                     if let Some(rebased) =
                         rebase_prebuilt_image_path("sandbox", &sandbox.id, image, output_dir)?
                     {
                         let mut updated = sandbox.clone();
-                        updated.code = SandboxCode::Image { image: rebased };
+                        updated.code = SandboxCode::Image {
+                            image: rebased,
+                            bundled_from: None,
+                        };
                         resource_entry.config = alien_core::Resource::new(updated);
                     }
                 }
@@ -2544,7 +2550,7 @@ fn apply_push_cache_with_destinations(
                 }
             }
         } else if let Some(sandbox) = resource_entry.config.downcast_mut::<Sandbox>() {
-            if let SandboxCode::Image { ref image } = sandbox.code {
+            if let SandboxCode::Image { ref image, .. } = sandbox.code {
                 if let Some(key) = push_cache_key(&cache_kind, image, platform) {
                     if let Some(cached_uri) = cache
                         .get(&key)
@@ -2556,6 +2562,7 @@ fn apply_push_cache_with_destinations(
                         );
                         sandbox.code = SandboxCode::Image {
                             image: cached_uri.clone(),
+                            bundled_from: None,
                         };
                         hits += 1;
                     }
@@ -2601,7 +2608,7 @@ fn collect_push_cache_entries(
                 }
             }
             if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
-                if let SandboxCode::Image { ref image } = sandbox.code {
+                if let SandboxCode::Image { ref image, .. } = sandbox.code {
                     return Some((id.clone(), image.clone()));
                 }
             }
@@ -2629,7 +2636,7 @@ fn collect_push_cache_entries(
                 None
             }
         } else if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
-            if let SandboxCode::Image { ref image } = sandbox.code {
+            if let SandboxCode::Image { ref image, .. } = sandbox.code {
                 Some(image.clone())
             } else {
                 None
@@ -3012,6 +3019,7 @@ mod tests {
         Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -3051,7 +3059,8 @@ mod tests {
         assert_eq!(
             sandbox.code,
             SandboxCode::Image {
-                image: "registry.example.com/base:tag".to_string()
+                image: "registry.example.com/base:tag".to_string(),
+                bundled_from: None,
             }
         );
 
@@ -3220,7 +3229,13 @@ mod tests {
             .resources()
             .find_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
             .unwrap();
-        assert_eq!(sandbox.code, SandboxCode::Image { image: local_path });
+        assert_eq!(
+            sandbox.code,
+            SandboxCode::Image {
+                image: local_path,
+                bundled_from: None
+            }
+        );
     }
 
     #[test]

@@ -202,6 +202,7 @@ fn sandbox_resource() -> Sandbox {
     Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: "ubuntu:24.04".to_string(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::Allow)
         .lifecycle(SandboxLifecyclePolicy {

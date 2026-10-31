@@ -380,6 +380,7 @@ mod tests {
         let sandbox = Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: "example.com/sandbox:latest".to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {

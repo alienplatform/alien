@@ -215,6 +215,7 @@ mod tests {
             Sandbox::new("sbx".to_string())
                 .code(SandboxCode::Image {
                     image: "ubuntu".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::None)
                 .limits(SandboxLimits {
@@ -257,6 +258,7 @@ mod tests {
             Sandbox::new("sbx".to_string())
                 .code(SandboxCode::Image {
                     image: "docker.io/library/python:3.14-slim".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -291,6 +293,7 @@ mod tests {
             Sandbox::new("sbx".to_string())
                 .code(SandboxCode::Image {
                     image: PYTHON.to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {

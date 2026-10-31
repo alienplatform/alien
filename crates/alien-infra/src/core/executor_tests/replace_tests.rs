@@ -1061,6 +1061,7 @@ async fn failed_artifact_registry_and_sandbox_creates_are_created_again_not_repl
         alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: bundle.to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {

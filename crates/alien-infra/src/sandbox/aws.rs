@@ -1437,9 +1437,10 @@ fn image_build_inputs(
 impl AwsSandboxController {
     /// The bundle this sandbox builds from.
     ///
-    /// A Live sandbox that depends on the deployment's bundle Storage renders its bundle there. One
-    /// whose setup predates that Storage builds from the release's published bundle, read from the
-    /// store its setup granted.
+    /// A Live sandbox that depends on the deployment's bundle Storage renders its bundle there,
+    /// from the release's container image: `code.image`, or `bundledFrom` when a publisher put its
+    /// bundle in `code.image`. One whose setup predates that Storage builds from the publisher's
+    /// bundle, read from the store its setup granted.
     ///
     /// A Live build role grants one store's stable prefix, and every published bundle is written to
     /// each store under the same key. A release naming another store (stores moved after this setup
@@ -1451,7 +1452,11 @@ impl AwsSandboxController {
         config: &Sandbox,
         region: &str,
     ) -> Result<BundleToBuild> {
-        let SandboxCode::Image { image } = &config.code else {
+        let SandboxCode::Image {
+            image,
+            bundled_from,
+        } = &config.code
+        else {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "an AWS sandbox is built from a released image, not from source"
                     .to_string(),
@@ -1473,6 +1478,7 @@ impl AwsSandboxController {
                     dependency_id: SANDBOX_BUNDLE_STORAGE_ID.to_string(),
                 })
             })?;
+            let image = bundled_from.as_ref().unwrap_or(image);
             // The release stores the manager's proxy reference; the build pulls from the
             // registry behind it.
             let image = match ctx.deployment_config.native_image_host.as_deref() {
@@ -1484,20 +1490,16 @@ impl AwsSandboxController {
                 bucket, &image, &config.id,
             )?));
         }
-        let published = if image.starts_with("s3://") {
-            image.as_str()
-        } else {
-            config.published_bundle.as_deref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "this sandbox's setup granted a published bundle store rather than \
-                              the deployment's bundle Storage, and the release has no bundle \
-                              published there; run setup again to add the Storage"
-                        .to_string(),
-                    resource_id: Some(config.id.clone()),
-                })
-            })?
-        };
-        let desired = regional_bundle_uri(published, region, &config.id)?;
+        if !image.starts_with("s3://") {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "this sandbox's setup granted a published bundle store rather than the \
+                          deployment's bundle Storage, and the release has no bundle published \
+                          there; run setup again to add the Storage"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+        let desired = regional_bundle_uri(image, region, &config.id)?;
         Ok(BundleToBuild::Published(
             match (
                 self.granted_bundle_uri.as_deref().and_then(split_s3_uri),
@@ -2346,6 +2348,7 @@ mod tests {
         Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::None)
             .preview_ports(vec![8080])
@@ -2363,6 +2366,7 @@ mod tests {
         Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: bundle_uri.to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::None)
             .preview_ports(vec![8080])
@@ -2445,9 +2449,16 @@ mod tests {
     const RELEASED_IMAGE: &str = "210987654321.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:\
                                   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+    /// A Live sandbox as a release carries it: the image alone, or, when a publisher still
+    /// publishes bundles for the project, its bundle in `image` and the image in `bundledFrom`.
     fn released_sandbox(published_bundle: Option<&str>) -> Sandbox {
         let mut sandbox = sandbox_with_bundle(RELEASED_IMAGE);
-        sandbox.published_bundle = published_bundle.map(str::to_string);
+        if let Some(bundle) = published_bundle {
+            sandbox.code = SandboxCode::Image {
+                image: bundle.to_string(),
+                bundled_from: Some(RELEASED_IMAGE.to_string()),
+            };
+        }
         sandbox
     }
 
@@ -2470,6 +2481,20 @@ mod tests {
     /// sandbox wrote, so setup can delete the empty bucket.
     #[tokio::test]
     async fn a_sandbox_renders_its_bundle_into_the_bundle_storage_and_removes_it_on_delete() {
+        renders_into_the_bundle_storage_and_removes_it_on_delete(released_sandbox(None)).await;
+    }
+
+    /// A release that also carries a publisher's bundle, for the project's deployments whose setup
+    /// granted the publisher's store, renders from the image it was built from all the same.
+    #[tokio::test]
+    async fn a_sandbox_with_its_own_storage_renders_from_the_image_a_published_bundle_names() {
+        renders_into_the_bundle_storage_and_removes_it_on_delete(released_sandbox(Some(
+            "s3://publisher-{region}/sandbox-bundle/v2/bundle.zip",
+        )))
+        .await;
+    }
+
+    async fn renders_into_the_bundle_storage_and_removes_it_on_delete(sandbox: Sandbox) {
         use alien_aws_clients::s3::{
             DeleteObjectsOutput, ListObjectsV2Output, MockS3Api, Object, PutObjectOutput,
         };
@@ -2577,7 +2602,7 @@ mod tests {
             .returning(move |_| Ok(s3.clone()));
 
         let mut executor = SingleControllerExecutor::builder()
-            .resource(released_sandbox(None))
+            .resource(sandbox)
             .controller(AwsSandboxController {
                 state: AwsSandboxState::CreatingImage,
                 ..runtime_seeded_controller()
@@ -2621,9 +2646,10 @@ mod tests {
         assert!(stored.lock().unwrap().is_empty(), "every bundle deleted");
     }
 
-    /// A setup that granted a publisher's store keeps building after the release moves to a
-    /// container image: it reads the published bundle's key from the store it was granted, and
-    /// never touches S3 itself (the provider here has no S3 client to give).
+    /// A setup that granted a publisher's store keeps building from the bundle the publisher put
+    /// in `code.image`, as a controller that predates `bundledFrom` does: it reads the bundle's
+    /// key from the store it was granted, and never touches S3 itself (the provider here has no
+    /// S3 client to give).
     #[tokio::test]
     async fn a_setup_granted_a_publishers_store_builds_from_the_published_bundle() {
         const GRANTED: &str = "s3://publisher-us-east-1/sandbox-bundle/v1/bundle.zip";
@@ -2667,6 +2693,8 @@ mod tests {
 
     /// With neither the bundle Storage nor a published bundle, there is nothing the build role
     /// could read; the sandbox says to run setup instead of starting a build that cannot succeed.
+    /// A release carries only its image once no deployment of the project builds from a
+    /// publisher's store.
     #[tokio::test]
     async fn a_release_with_no_bundle_for_a_publishers_store_asks_for_setup() {
         const GRANTED: &str = "s3://publisher-us-east-1/sandbox-bundle/v1/bundle.zip";

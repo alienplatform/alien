@@ -44,7 +44,7 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                     && lifecycle == ResourceLifecycle::Frozen
                     && match &sandbox.code {
                         SandboxCode::Source { .. } => true,
-                        SandboxCode::Image { image } => parse_ecr_image_repository(image).is_ok(),
+                        SandboxCode::Image { image, .. } => parse_ecr_image_repository(image).is_ok(),
                     }
                 {
                     return Some(format!(
@@ -150,6 +150,7 @@ mod tests {
                 // A bare name, because Azure takes a catalog entry rather than a reference and
                 // these cases are about egress and limits rather than about the image.
                 image: "ubuntu".to_string(),
+                bundled_from: None,
             })
             .egress(egress)
             .lifecycle(SandboxLifecyclePolicy {
@@ -349,6 +350,7 @@ mod tests {
             let mut sandbox = sandbox("agents", None, SandboxEgress::Allow);
             sandbox.code = SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             };
             stack_with(sandbox)
         };

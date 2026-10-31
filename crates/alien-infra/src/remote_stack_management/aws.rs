@@ -1447,6 +1447,7 @@ mod tests {
             Sandbox::new(id.to_string())
                 .code(SandboxCode::Image {
                     image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {

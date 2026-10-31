@@ -1374,6 +1374,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {
@@ -1441,6 +1442,7 @@ mod tests {
             Sandbox::new(id.to_string())
                 .code(SandboxCode::Image {
                     image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -1545,6 +1547,7 @@ mod tests {
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: "public.ecr.aws/docker/library/alpine:3.20".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
@@ -1595,6 +1598,7 @@ mod tests {
             Sandbox::new(id.to_string())
                 .code(SandboxCode::Image {
                     image: "us-central1-docker.pkg.dev/p/r/agent:1".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -1645,6 +1649,7 @@ mod tests {
             Sandbox::new(id.to_string())
                 .code(SandboxCode::Image {
                     image: image.to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {

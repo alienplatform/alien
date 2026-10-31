@@ -457,6 +457,7 @@ mod tests {
         let sandbox = alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -636,6 +637,7 @@ mod tests {
                 &alien_core::Sandbox::new("agents".to_string())
                     .code(alien_core::SandboxCode::Image {
                         image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+                        bundled_from: None,
                     })
                     .egress(alien_core::SandboxEgress::Internet)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -681,6 +683,7 @@ mod tests {
             alien_core::Sandbox::new("agents".to_string())
                 .code(alien_core::SandboxCode::Image {
                     image: "s3://example-artifacts/agents/bundle.zip".to_string(),
+                    bundled_from: None,
                 })
                 .egress(alien_core::SandboxEgress::Internet)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -767,6 +770,7 @@ mod tests {
                 &alien_core::Sandbox::new("agents".to_string())
                     .code(alien_core::SandboxCode::Image {
                         image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+                        bundled_from: None,
                     })
                     .egress(alien_core::SandboxEgress::Internet)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {

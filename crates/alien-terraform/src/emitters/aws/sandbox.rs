@@ -1122,16 +1122,18 @@ fn artifact_uri(sandbox: &Sandbox) -> Result<BundleUri<'_>> {
     match &sandbox.code {
         // A bucket with no key would scope the build role to the whole bucket rather than the
         // one object, so it is refused here rather than silently widening the grant.
-        SandboxCode::Image { image }
+        SandboxCode::Image { image, .. }
             if image.starts_with("s3://") && image.trim_start_matches("s3://").contains('/') =>
         {
             alien_core::parse_bundle_uri(image).map_err(unsupported)
         }
-        SandboxCode::Image { image } if image.starts_with("s3://") => Err(unsupported(format!(
+        SandboxCode::Image { image, .. } if image.starts_with("s3://") => {
+            Err(unsupported(format!(
             "code.image '{image}' names a bucket with no object key; give the full path to the \
              bundle, for example s3://bucket/sandbox.zip"
-        ))),
-        SandboxCode::Image { image } => Err(unsupported(format!(
+        )))
+        }
+        SandboxCode::Image { image, .. } => Err(unsupported(format!(
             "AWS builds a MicroVM image from an S3 bundle containing a Dockerfile, so code.image \
              must be an s3:// URI, not the container reference '{image}'"
         ))),
@@ -1228,6 +1230,7 @@ mod tests {
         Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: LITERAL.to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -1339,6 +1342,7 @@ mod tests {
         let sandbox = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
                 image: "s3://acme-artifacts-{regio}/bundle.zip".to_string(),
+                bundled_from: None,
             })
             .limits(alien_core::SandboxLimits {
                 cpu: "1".to_string(),

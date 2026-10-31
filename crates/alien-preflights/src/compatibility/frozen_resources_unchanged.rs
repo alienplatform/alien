@@ -2,9 +2,9 @@ use crate::error::{ErrorData, Result};
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::{find_instance_type, is_same_architecture_machine};
 use alien_core::{
-    AzureStorageAccount, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
-    ComputePoolSelection, Platform, Resource, ResourceLifecycle, Sandbox, SandboxCode,
-    ServiceAccount, Stack, permissions::PermissionSet,
+    permissions::PermissionSet, AzureStorageAccount, CapacityGroup, CapacityGroupScalePolicy,
+    ComputeCluster, ComputePoolSelection, Platform, Resource, ResourceLifecycle, Sandbox,
+    SandboxCode, ServiceAccount, Stack,
 };
 use alien_error::Context;
 use std::borrow::Cow;
@@ -1244,6 +1244,7 @@ mod tests {
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::None)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -1386,28 +1387,26 @@ mod azure_storage_settings_tests {
         };
         let saved = serde_json::to_vec(&authorization).unwrap();
         let reloaded = serde_json::from_slice(&saved).unwrap();
-        assert!(
-            crate::compatibility::azure_setup::authorization_matches(&baseline, &target, &reloaded)
-                .unwrap()
-        );
+        assert!(crate::compatibility::azure_setup::authorization_matches(
+            &baseline, &target, &reloaded
+        )
+        .unwrap());
         let changed = stack(
             Storage::new("files".to_string())
                 .versioning(true)
                 .public_read(true)
                 .build(),
         );
-        assert!(
-            !crate::compatibility::azure_setup::authorization_matches(
-                &baseline, &changed, &reloaded
-            )
-            .unwrap()
-        );
+        assert!(!crate::compatibility::azure_setup::authorization_matches(
+            &baseline, &changed, &reloaded
+        )
+        .unwrap());
         let mut gated = target.clone();
         gated.resources.get_mut("files").unwrap().enabled_when = Some("includeFiles".to_string());
-        assert!(
-            !crate::compatibility::azure_setup::authorization_matches(&baseline, &gated, &reloaded)
-                .unwrap()
-        );
+        assert!(!crate::compatibility::azure_setup::authorization_matches(
+            &baseline, &gated, &reloaded
+        )
+        .unwrap());
         assert!(AzureStorageAccount::setup_settings_digest(&baseline).is_none());
         let mut reordered = target.clone();
         reordered.resources.reverse();

@@ -1,6 +1,6 @@
 //! Give a deployment's Live AWS sandboxes a bucket of its own to build their images from.
 
-use crate::error::Result;
+use crate::error::{ErrorData, Result};
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
@@ -8,6 +8,7 @@ use alien_core::{
     DeploymentConfig, Platform, RemoteStackManagement, Resource, ResourceEntry, ResourceLifecycle,
     ResourceRef, Sandbox, SandboxCode, Stack, StackState, Storage,
 };
+use alien_error::AlienError;
 use async_trait::async_trait;
 use tracing::info;
 
@@ -35,6 +36,9 @@ const SANDBOX_BUNDLE_WRITE: &str = "sandbox/bundle-write";
 /// such a deployment leaves it out, and its sandboxes keep building from the bundle a publisher put
 /// in the store their setup granted. The next setup adds it: setup prepares its stack from empty
 /// state, and later updates find it installed.
+///
+/// The controller writes bundles as the management role, the one principal the bucket lets write,
+/// so a new stack with no remote stack management cannot render bundles and is refused here.
 pub struct SandboxBundleStorageMutation;
 
 #[async_trait]
@@ -58,6 +62,30 @@ impl StackMutation for SandboxBundleStorageMutation {
         _state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
+        let has_management = stack
+            .resources
+            .values()
+            .any(|entry| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE);
+        if !has_management {
+            // A publisher's bundle beside the image still builds, from the store setup grants.
+            let Some(sandbox) = stack
+                .resources()
+                .find(|(_, entry)| renders_bundle(entry) && !published(entry))
+                .map(|(id, _)| id.clone())
+            else {
+                return Ok(stack);
+            };
+            return Err(AlienError::new(ErrorData::StackMutationFailed {
+                mutation_name: self.description().to_string(),
+                message: "a Live AWS sandbox released as a container image has its image-build \
+                          bundle written by the deployment's management role, and this deployment \
+                          has no remote stack management; deploy it with a management \
+                          configuration, or make the sandbox Frozen with an s3:// bundle"
+                    .to_string(),
+                resource_id: Some(sandbox),
+            }));
+        }
+
         info!("Adding the sandbox bundle bucket");
         stack
             .resources
@@ -82,10 +110,6 @@ impl StackMutation for SandboxBundleStorageMutation {
             }
         }
 
-        let has_management = stack
-            .resources
-            .values()
-            .any(|entry| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE);
         let management = match &stack.permissions.management {
             // The deployer authored management's grants in full.
             ManagementPermissions::Override(_) => None,
@@ -112,7 +136,7 @@ impl StackMutation for SandboxBundleStorageMutation {
 
         // Stack-wide, because an automatically managed AWS setup cannot take a resource-scoped
         // management grant; the set itself is bound to this bucket's name.
-        if let Some(mut profile) = management.filter(|_| has_management) {
+        if let Some(mut profile) = management {
             let grants = profile.0.entry("*".to_string()).or_default();
             if !grants.iter().any(|set| set.id() == SANDBOX_BUNDLE_WRITE) {
                 grants.push(PermissionSetReference::from_name(SANDBOX_BUNDLE_WRITE));
@@ -123,12 +147,24 @@ impl StackMutation for SandboxBundleStorageMutation {
     }
 }
 
-/// A Live sandbox released as a container image rather than a prebuilt `s3://` bundle.
+/// A sandbox whose release also carries a publisher's bundle in `code.image`.
+fn published(entry: &ResourceEntry) -> bool {
+    entry.config.downcast_ref::<Sandbox>().is_some_and(|sandbox| {
+        matches!(&sandbox.code, SandboxCode::Image { image, .. } if image.starts_with("s3://"))
+    })
+}
+
+/// A Live sandbox released as a container image, alone or beside the bundle a publisher built
+/// from it, rather than as a prebuilt `s3://` bundle only.
 fn renders_bundle(entry: &ResourceEntry) -> bool {
     entry.lifecycle == ResourceLifecycle::Live
-        && entry.config.downcast_ref::<Sandbox>().is_some_and(|sandbox| {
-            matches!(&sandbox.code, SandboxCode::Image { image } if !image.starts_with("s3://"))
-        })
+        && entry
+            .config
+            .downcast_ref::<Sandbox>()
+            .is_some_and(|sandbox| {
+                matches!(&sandbox.code, SandboxCode::Image { image, bundled_from }
+                if bundled_from.is_some() || !image.starts_with("s3://"))
+            })
 }
 
 #[cfg(test)]
@@ -151,18 +187,27 @@ mod tests {
     const RELEASED_NEXT: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:\
                                  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+    /// A release of `image`, with the bundle a publisher built from it in `code.image` when
+    /// `published_bundle` is given.
     fn release(image: &str, published_bundle: Option<&str>) -> Stack {
-        let mut sandbox = Sandbox::new("agents".to_string())
-            .code(SandboxCode::Image {
+        let code = match published_bundle {
+            Some(bundle) => SandboxCode::Image {
+                image: bundle.to_string(),
+                bundled_from: Some(image.to_string()),
+            },
+            None => SandboxCode::Image {
                 image: image.to_string(),
-            })
+                bundled_from: None,
+            },
+        };
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(code)
             .egress(SandboxEgress::Allow)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
             })
             .build();
-        sandbox.published_bundle = published_bundle.map(str::to_string);
         Stack::new("app".to_string())
             .add(sandbox, ResourceLifecycle::Live)
             .build()
@@ -270,7 +315,7 @@ mod tests {
     }
 
     /// A deployment set up when its releases named a published bundle has no bundle Storage.
-    /// A release that moves to a container image, with the published bundle beside it, deploys
+    /// A release that still names one, with the image it was built from in `bundledFrom`, deploys
     /// without setup and keeps building from the store that setup granted. Running setup again adds
     /// the Storage and moves the sandbox onto it.
     #[tokio::test]
@@ -410,6 +455,40 @@ mod tests {
     async fn a_pre_change_install_with_a_bucket_policy_workload_passes_the_frozen_check() {
         let (pre_change, update) = pre_change_install_and_update().await;
         assert!(frozen_unchanged(&pre_change, &update).await);
+    }
+
+    /// Only the management role may write the bundle bucket, so a new stack without one cannot
+    /// render bundles: a sandbox released as an image alone is refused before anything is
+    /// created, and one released with a publisher's bundle builds from that bundle.
+    #[tokio::test]
+    async fn without_remote_stack_management_only_a_published_bundle_builds() {
+        let mut unmanaged = config();
+        unmanaged.management_config = None;
+        let prepare = |stack: Stack| {
+            let unmanaged = unmanaged.clone();
+            async move {
+                PreflightRunner::new()
+                    .apply_mutations(stack, &StackState::new(Platform::Aws), &unmanaged)
+                    .await
+            }
+        };
+
+        let error = prepare(release(RELEASED, None))
+            .await
+            .expect_err("nothing could write the bundle");
+        assert!(
+            error.to_string().contains("no remote stack management"),
+            "unexpected error: {error}"
+        );
+
+        let published = prepare(release(
+            RELEASED,
+            Some("s3://publisher-{region}/sandbox-bundle/v1/bundle.zip"),
+        ))
+        .await
+        .expect("a published bundle builds without the bucket");
+        assert!(!published.resources.contains_key(SANDBOX_BUNDLE_STORAGE_ID));
+        assert!(!aws_sandbox_renders_bundle(&published, "agents"));
     }
 
     /// A Frozen sandbox is built by setup from its published bundle and needs no bucket.

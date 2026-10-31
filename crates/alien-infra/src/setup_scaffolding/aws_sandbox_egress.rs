@@ -1970,6 +1970,7 @@ mod tests {
         Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+                bundled_from: None,
             })
             .egress(egress)
             .lifecycle(SandboxLifecyclePolicy {
@@ -3759,7 +3760,7 @@ mod tests {
             served.build_role_arn,
             format!("arn:aws:iam::{ACCOUNT}:role/{BUILD_ROLE}")
         );
-        let SandboxCode::Image { image } = &sandbox.code else {
+        let SandboxCode::Image { image, .. } = &sandbox.code else {
             unreachable!("the fixture is a bundle")
         };
         let frozen_policy = serde_json::to_value(
@@ -3784,6 +3785,7 @@ mod tests {
             preview_ports: vec![3000, 8080],
             code: SandboxCode::Image {
                 image: REGIONAL_BUNDLE.to_string(),
+                bundled_from: None,
             },
             ..sandbox(SandboxEgress::Allow)
         };

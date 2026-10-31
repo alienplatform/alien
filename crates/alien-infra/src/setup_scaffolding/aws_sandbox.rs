@@ -53,7 +53,7 @@ pub(super) async fn reconcile(
     let aws = aws_config(ctx.client_config)?;
     let partition = aws_partition(&aws.region);
     let role_name = sandbox_build_role_name(ctx.resource_prefix, &sandbox.id);
-    let SandboxCode::Image { image } = &sandbox.code else {
+    let SandboxCode::Image { image, .. } = &sandbox.code else {
         return Err(not_a_bundle(sandbox));
     };
     let renders_bundle = aws_sandbox_renders_bundle(stack, &sandbox.id);
@@ -800,6 +800,7 @@ mod tests {
         Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Allow)
             .lifecycle(SandboxLifecyclePolicy {
@@ -1362,6 +1363,7 @@ mod tests {
             egress,
             code: SandboxCode::Image {
                 image: bundle.to_string(),
+                bundled_from: None,
             },
             ..sandbox()
         }

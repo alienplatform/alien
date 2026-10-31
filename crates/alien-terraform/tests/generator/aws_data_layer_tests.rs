@@ -380,6 +380,7 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
     let sandbox = Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::Allow)
         .lifecycle(SandboxLifecyclePolicy {
@@ -468,6 +469,7 @@ fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
     let sandbox = Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
@@ -525,6 +527,7 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {

@@ -45,6 +45,7 @@ fn source_stack(target: &Container) -> Stack {
         })
         .code(alien_core::SandboxCode::Image {
             image: "python:3.13-slim".into(),
+            bundled_from: None,
         })
         .build();
     sandbox.links.push(ResourceRef::new(

@@ -297,7 +297,7 @@ impl LocalSandboxController {
 fn session_template(sandbox: &Sandbox) -> Result<alien_local::SandboxSessionConfig> {
     use alien_core::{SandboxCode, SandboxEgress};
 
-    let SandboxCode::Image { image } = &sandbox.code else {
+    let SandboxCode::Image { image, .. } = &sandbox.code else {
         return Err(AlienError::new(ErrorData::CloudPlatformError {
             message: "Local sandboxes take a prebuilt image; building one from source is not \
                       supported on this platform"

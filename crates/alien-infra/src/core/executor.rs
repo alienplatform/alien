@@ -239,6 +239,7 @@ mod controller_platform_tests {
                 alien_core::Sandbox::new("sandbox".to_string())
                     .code(alien_core::SandboxCode::Image {
                         image: "python:3.13-slim".to_string(),
+                        bundled_from: None,
                     })
                     .egress(alien_core::SandboxEgress::Deny)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {

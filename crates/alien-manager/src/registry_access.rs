@@ -1038,7 +1038,7 @@ fn resource_image_references(
         return Vec::new();
     };
     let code_image = match &sandbox.code {
-        SandboxCode::Image { image } => Some(image.as_str()),
+        SandboxCode::Image { image, .. } => Some(image.as_str()),
         SandboxCode::Source { .. } => None,
     };
     match sandbox_source {
@@ -2301,6 +2301,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: image.to_string(),
+                        bundled_from: None,
                     })
                     .maybe_private_base_image(private_base_image.map(str::to_string))
                     .egress(SandboxEgress::Internet)
@@ -3178,6 +3179,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: STORED_BUNDLE_URI.to_string(),
+                        bundled_from: None,
                     })
                     .private_base_image(
                         "123456789012.dkr.ecr.{region}.amazonaws.com/\
@@ -3223,6 +3225,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: STORED_BUNDLE_URI.to_string(),
+                        bundled_from: None,
                     })
                     .private_base_image(
                         "123456789012.dkr.ecr.{region}.amazonaws.com/\

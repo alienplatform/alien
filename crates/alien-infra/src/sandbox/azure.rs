@@ -1116,6 +1116,7 @@ mod tests {
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: "ubuntu".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
@@ -1530,6 +1531,7 @@ mod tests {
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: image.to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Allow)
                 .lifecycle(SandboxLifecyclePolicy {

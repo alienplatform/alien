@@ -297,6 +297,7 @@ mod tests {
         let sandbox = Sandbox::new("subject".into())
             .code(SandboxCode::Image {
                 image: "example.invalid/base:1".into(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -360,9 +361,16 @@ mod tests {
         // A controller outside the cluster has no cluster search path to read.
         unsafe { std::env::set_var(CLUSTER_DOMAIN_ENV, "corp.example") };
         let (mut key, mut published, mut sourced) = (None, None, false);
-        let first = configure(&ctx, &sandbox, "test-ns", &mut key, &mut published, &mut sourced)
-            .await
-            .unwrap();
+        let first = configure(
+            &ctx,
+            &sandbox,
+            "test-ns",
+            &mut key,
+            &mut published,
+            &mut sourced,
+        )
+        .await
+        .unwrap();
         let SandboxEgressBinding::Gateway(gateway) = &first else {
             panic!("gateway binding")
         };
@@ -377,9 +385,16 @@ mod tests {
         let stored = vault.get_secret(egress::GATEWAY_CONFIG).await.unwrap();
         let version = vault.secret_presence(egress::GATEWAY_CONFIG).await.unwrap();
         assert_eq!(
-            configure(&ctx, &sandbox, "test-ns", &mut key, &mut published, &mut sourced)
-                .await
-                .unwrap(),
+            configure(
+                &ctx,
+                &sandbox,
+                "test-ns",
+                &mut key,
+                &mut published,
+                &mut sourced
+            )
+            .await
+            .unwrap(),
             first
         );
         assert_eq!(
@@ -514,6 +529,7 @@ mod tests {
         Sandbox::new(id.into())
             .code(SandboxCode::Image {
                 image: "example.invalid/base:1".into(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -695,9 +711,16 @@ mod tests {
             .await;
 
         let (mut key, mut published, mut sourced) = (None, None, false);
-        let binding = configure(&ctx, &sandbox, "test-ns", &mut key, &mut published, &mut sourced)
-            .await
-            .expect("the owner initializes without reading");
+        let binding = configure(
+            &ctx,
+            &sandbox,
+            "test-ns",
+            &mut key,
+            &mut published,
+            &mut sourced,
+        )
+        .await
+        .expect("the owner initializes without reading");
         let SandboxEgressBinding::Gateway(gateway_binding) = &binding else {
             panic!("gateway binding")
         };
@@ -713,9 +736,16 @@ mod tests {
         // Every later pass with the same configuration: no request at all.
         for _ in 0..3 {
             assert_eq!(
-                configure(&ctx, &sandbox, "test-ns", &mut key, &mut published, &mut sourced)
-                    .await
-                    .unwrap(),
+                configure(
+                    &ctx,
+                    &sandbox,
+                    "test-ns",
+                    &mut key,
+                    &mut published,
+                    &mut sourced
+                )
+                .await
+                .unwrap(),
                 binding
             );
         }
@@ -749,9 +779,16 @@ mod tests {
             })
             .await;
         let before = published.clone();
-        configure(&ctx, &sandbox, "test-ns", &mut key, &mut published, &mut sourced)
-            .await
-            .expect("a change is written without a read");
+        configure(
+            &ctx,
+            &sandbox,
+            "test-ns",
+            &mut key,
+            &mut published,
+            &mut sourced,
+        )
+        .await
+        .expect("a change is written without a read");
         // The client may retry a refused create before it updates.
         assert!(exists.hits_async().await >= 1);
         assert_eq!(replaced.hits_async().await, 1);
@@ -807,11 +844,16 @@ mod tests {
             .await;
 
         let (mut key, mut published, mut sourced) = (None, Some("stale".to_string()), false);
-        let SandboxEgressBinding::Gateway(binding) =
-            configure(&ctx, &other, "test-ns", &mut key, &mut published, &mut sourced)
-                .await
-                .unwrap()
-        else {
+        let SandboxEgressBinding::Gateway(binding) = configure(
+            &ctx,
+            &other,
+            "test-ns",
+            &mut key,
+            &mut published,
+            &mut sourced,
+        )
+        .await
+        .unwrap() else {
             panic!("gateway binding")
         };
         assert_eq!(binding.kid, "kid-1");
@@ -901,9 +943,16 @@ mod tests {
         ctx.desired_stack = &stack;
         point_at(&mut ctx, &server);
         let (mut key, mut published, mut sourced) = (None, None, false);
-        configure(&ctx, &sandbox, "test-ns", &mut key, &mut published, &mut sourced)
-            .await
-            .expect("the owner records the existing key");
+        configure(
+            &ctx,
+            &sandbox,
+            "test-ns",
+            &mut key,
+            &mut published,
+            &mut sourced,
+        )
+        .await
+        .expect("the owner records the existing key");
         assert_eq!(
             key,
             Some(egress::GatewayPublicKey {
@@ -924,9 +973,16 @@ mod tests {
             alien_core::ResourceStatus::Updating,
         )));
         ctx.state = &rolling;
-        configure(&ctx, &sandbox, "test-ns", &mut key, &mut published, &mut sourced)
-            .await
-            .unwrap();
+        configure(
+            &ctx,
+            &sandbox,
+            "test-ns",
+            &mut key,
+            &mut published,
+            &mut sourced,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             embedded_write.hits_async().await,
             1,
@@ -951,17 +1007,26 @@ mod tests {
         )));
         ctx.state = &rolled;
         for _ in 0..3 {
-            configure(&ctx, &sandbox, "test-ns", &mut key, &mut published, &mut sourced)
-                .await
-                .unwrap();
+            configure(
+                &ctx,
+                &sandbox,
+                "test-ns",
+                &mut key,
+                &mut published,
+                &mut sourced,
+            )
+            .await
+            .unwrap();
         }
         assert_eq!(sourced_write.hits_async().await, 1);
         assert!(sourced);
 
         // A later gateway update, during which the configuration changes (a new public pod
         // range): it stays on the source, still without a read.
-        let updating =
-            deployment_state(Some((MOUNTING_GATEWAY, alien_core::ResourceStatus::Updating)));
+        let updating = deployment_state(Some((
+            MOUNTING_GATEWAY,
+            alien_core::ResourceStatus::Updating,
+        )));
         ctx.state = &updating;
         nodes.delete_async().await;
         let ranges = server
@@ -976,9 +1041,16 @@ mod tests {
             })
             .await;
         let before = published.clone();
-        configure(&ctx, &sandbox, "test-ns", &mut key, &mut published, &mut sourced)
-            .await
-            .unwrap();
+        configure(
+            &ctx,
+            &sandbox,
+            "test-ns",
+            &mut key,
+            &mut published,
+            &mut sourced,
+        )
+        .await
+        .unwrap();
         assert!(ranges.hits_async().await >= 1);
         assert_ne!(published, before);
         assert_eq!(sourced_write.hits_async().await, 2);
