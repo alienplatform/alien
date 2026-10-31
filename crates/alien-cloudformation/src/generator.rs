@@ -2041,15 +2041,20 @@ fn add_compute_parameters(
             ),
         );
 
-        let scale = runtime_scale.get(&group.group_id).ok_or_else(|| {
-            AlienError::new(ErrorData::OperationNotSupported {
-                operation: "generate CloudFormation compute parameters".to_string(),
-                reason: format!(
-                    "Compute pool '{}' is not in the compute plan of the source stack",
-                    group.group_id
-                ),
-            })
-        })?;
+        // Setup preflights add workloads the source does not have (an internet sandbox's
+        // egress gateway), so their pool can be missing from the source plan. No source declares
+        // such a pool, so it gets a generated pool's range, as preflight gives it.
+        let scale = runtime_scale
+            .get(&group.group_id)
+            .cloned()
+            .unwrap_or_else(|| {
+                alien_core::compute_planner::generated_pool_scale_policy(
+                    selection.min_size().min(1),
+                    selection.max_size(),
+                    Some(selection.max_size()),
+                )
+            });
+        let scale = &scale;
         match selection {
             ComputePoolSelection::Fixed { machines, .. } => {
                 let (min, max) = fixed_machine_bounds(scale);
@@ -2070,6 +2075,29 @@ fn add_compute_parameters(
             }
             ComputePoolSelection::Autoscale { min, max, .. } => {
                 let (min_range, max_range) = autoscale_machine_bounds(scale);
+                if matches!(scale, CapacityGroupScalePolicy::Fixed { .. }) {
+                    // A fixed policy takes an autoscaling selection only as N..N. CloudFormation
+                    // cannot compare numbers, but the two counts must be the same value.
+                    template.rules.insert(
+                        format!("Compute{}FixedSize", pascal_identifier(&group.group_id)),
+                        CfRule {
+                            assertions: vec![CfRuleAssertion {
+                                assertion: CfExpression::equals(
+                                    CfExpression::ref_(compute_autoscale_min_parameter_name(
+                                        &group.group_id,
+                                    )),
+                                    CfExpression::ref_(compute_autoscale_max_parameter_name(
+                                        &group.group_id,
+                                    )),
+                                ),
+                                assert_description: format!(
+                                    "Runtime compute pool '{}' has a fixed size: its minimum and maximum machine counts must be equal.",
+                                    group.group_id
+                                ),
+                            }],
+                        },
+                    );
+                }
                 let mut min_parameter = number_parameter(
                     &format!(
                         "Minimum machine count for runtime compute pool '{}'.",

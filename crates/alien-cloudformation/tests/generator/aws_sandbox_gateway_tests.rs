@@ -146,7 +146,12 @@ async fn prepare_for_setup_template(stack: Stack, settings: &StackSettings) -> S
         .expect("template mutations apply")
 }
 
-fn render(stack: &Stack, settings: StackSettings, description: &str) -> Result<CfTemplate> {
+fn render(
+    stack: &Stack,
+    source_stack: &Stack,
+    settings: StackSettings,
+    description: &str,
+) -> Result<CfTemplate> {
     let mut registry = CfRegistry::built_in();
     registry.register(
         ComputeCluster::RESOURCE_TYPE,
@@ -157,7 +162,7 @@ fn render(stack: &Stack, settings: StackSettings, description: &str) -> Result<C
         stack,
         CloudFormationOptions {
             registry: &registry,
-            source_stack: stack,
+            source_stack,
             target: CloudFormationTarget::Aws,
             stack_settings: settings,
             setup_target: "aws".to_string(),
@@ -177,17 +182,40 @@ fn render(stack: &Stack, settings: StackSettings, description: &str) -> Result<C
 /// the stack also has containers, and CloudFormation accepts it.
 #[tokio::test]
 async fn an_internet_sandbox_setup_template_carries_the_gateway_network() {
-    for shape in [Shape::SandboxOnly, Shape::SandboxAndContainer] {
-        let description = format!("internet sandbox setup template, {shape:?}");
-        let settings = settings();
-        let prepared =
-            prepare_for_setup_template(stack(shape, SandboxEgress::Internet), &settings).await;
+    // The gateway Container is added by setup preparation, so with a compute choice for its pool
+    // the source stack has no pool to plan for it.
+    let gateway_pool_choice = StackSettings {
+        compute: Some(alien_core::ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                alien_core::ComputePoolSelection::Fixed {
+                    machines: 2,
+                    machine: Some("c7g.large".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into(),
+            ..Default::default()
+        }),
+        ..settings()
+    };
+    for (shape, settings) in [
+        (Shape::SandboxOnly, settings()),
+        (Shape::SandboxAndContainer, settings()),
+        (Shape::SandboxOnly, gateway_pool_choice),
+    ] {
+        let description = format!(
+            "internet sandbox setup template, {shape:?}, compute {:?}",
+            settings.compute
+        );
+        let source = stack(shape, SandboxEgress::Internet);
+        let prepared = prepare_for_setup_template(source.clone(), &settings).await;
         assert!(
             has_sandbox_gateway(&prepared),
             "{description}: setup preparation must install the egress gateway"
         );
 
-        let template = render(&prepared, settings, &description)
+        let template = render(&prepared, &source, settings, &description)
             .unwrap_or_else(|error| panic!("{description}: {error}"));
         let yaml = to_yaml(&template).expect("template serializes");
         cfn_lint(&yaml).assert_ok(&description);
@@ -231,8 +259,13 @@ fn an_internet_sandbox_without_its_gateway_is_refused() {
         )
         .build();
 
-    let error = render(&unprepared, settings(), "unprepared internet sandbox")
-        .expect_err("an internet sandbox without its gateway must not render");
+    let error = render(
+        &unprepared,
+        &unprepared,
+        settings(),
+        "unprepared internet sandbox",
+    )
+    .expect_err("an internet sandbox without its gateway must not render");
     assert_eq!(error.code, "SANDBOX_INTERNET_GATEWAY_MISSING");
     assert!(error.message.contains("'agents'"), "{}", error.message);
 }
@@ -299,13 +332,13 @@ async fn a_profile_granted_an_internet_sandbox_renders_without_a_dependency_cycl
         ("a profile granted an internet sandbox", granted_profile),
     ] {
         let settings = settings();
-        let prepared = prepare_for_setup_template(stack, &settings).await;
+        let prepared = prepare_for_setup_template(stack.clone(), &settings).await;
         assert!(
             has_sandbox_gateway(&prepared),
             "{description}: gateway installed"
         );
 
-        let template = render(&prepared, settings, description)
+        let template = render(&prepared, &stack, settings, description)
             .unwrap_or_else(|error| panic!("{description}: {error}"));
         for (logical_id, resource) in &template.resources {
             assert!(
@@ -409,13 +442,15 @@ fn evaluate_condition(
 #[tokio::test]
 async fn the_third_gateway_subnet_condition_resolves_for_any_cidr_list() {
     let settings = settings();
-    let prepared = prepare_for_setup_template(
-        stack(Shape::SandboxOnly, SandboxEgress::Internet),
-        &settings,
+    let source = stack(Shape::SandboxOnly, SandboxEgress::Internet);
+    let prepared = prepare_for_setup_template(source.clone(), &settings).await;
+    let template = render(
+        &prepared,
+        &source,
+        settings,
+        "third gateway subnet condition",
     )
-    .await;
-    let template = render(&prepared, settings, "third gateway subnet condition")
-        .expect("internet sandbox template renders");
+    .expect("internet sandbox template renders");
     let condition = serde_json::to_value(&template.conditions["SandboxGatewayHasThirdSubnet"])
         .expect("condition serializes");
 
@@ -576,9 +611,14 @@ async fn the_management_role_cannot_decrypt_or_read_the_deployments_secrets() {
         )
         .build();
     let settings = settings();
-    let prepared = prepare_for_setup_template(stack, &settings).await;
-    let template = render(&prepared, settings, "deployment key and internet sandbox")
-        .expect("template renders");
+    let prepared = prepare_for_setup_template(stack.clone(), &settings).await;
+    let template = render(
+        &prepared,
+        &stack,
+        settings,
+        "deployment key and internet sandbox",
+    )
+    .expect("template renders");
     cfn_lint(&to_yaml(&template).expect("template serializes"))
         .assert_ok("deployment key and internet sandbox");
 
