@@ -831,7 +831,7 @@ async fn internet_sandbox_key_dependencies_respect_setup_ownership() {
         for (id, lifecycle) in [("a-first", first), ("z-last", last)] {
             let sandbox = Sandbox::new(id.into())
                 .code(SandboxCode::Image {
-                    image: "example.invalid/sandbox:1".into(),
+                    image: "s3://example-bundles/sandbox.zip".into(),
                     bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
