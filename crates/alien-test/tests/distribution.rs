@@ -933,8 +933,8 @@ async fn cloudformation_aws_push_comprehensive_rust(ctx: &mut CloudFormationAwsP
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 
-/// A distribution test of the `sandbox-session` app that, after teardown, checks the bundle
-/// bucket went with the setup.
+/// A distribution test of the `sandbox-session` app that, after teardown, checks no bundle bucket
+/// is left.
 macro_rules! sandbox_session_context {
     ($name:ident, $flow:expr) => {
         struct $name {
@@ -961,7 +961,7 @@ macro_rules! sandbox_session_context {
                     &bucket.expect("the deployment records its bundle bucket"),
                 )
                 .await
-                .expect("the bundle bucket goes with the setup");
+                .expect("no bundle bucket is left after teardown");
             }
         }
     };
@@ -974,7 +974,7 @@ sandbox_session_context!(
 
 /// A source-built Live sandbox installed by CloudFormation: a session runs a command, only
 /// management writes the image-build bundle, the bundle lives in the deployment's own bucket, and
-/// deleting the stack deletes the bucket.
+/// teardown leaves no bucket behind.
 #[test_context(CloudFormationAwsPushSandboxSession)]
 #[tokio::test]
 async fn cloudformation_aws_push_sandbox_session(ctx: &mut CloudFormationAwsPushSandboxSession) {

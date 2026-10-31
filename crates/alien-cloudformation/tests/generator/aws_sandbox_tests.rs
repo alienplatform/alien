@@ -31,6 +31,7 @@ fn sandbox_fixture_with(egress: SandboxEgress, image: &str) -> Sandbox {
     Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: image.to_string(),
+            bundled_from: None,
         })
         .egress(egress)
         .lifecycle(SandboxLifecyclePolicy {
@@ -2307,11 +2308,10 @@ async fn the_bundle_bucket_and_its_guards_render_under_both_setup_modes() {
         if mode == SetupManagement::Manual {
             // Setup creates the bucket and its policy; under automatic management the runtime
             // creates both, as management.
-            let bucket = template
-                .resources
-                .get("SandboxBundles")
-                .expect("the bundle bucket renders");
-            assert_eq!(bucket.deletion_policy, None, "not retained");
+            assert!(
+                template.resources.contains_key("SandboxBundles"),
+                "the bundle bucket renders"
+            );
             let guard = statements
                 .iter()
                 .find(|(_, s)| s["Sid"] == "OnlyManagementWritesBundles")

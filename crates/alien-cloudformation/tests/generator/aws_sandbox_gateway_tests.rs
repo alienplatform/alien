@@ -84,6 +84,7 @@ fn stack(shape: Shape, egress: SandboxEgress) -> Stack {
     let sandbox = Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+            bundled_from: None,
         })
         .egress(egress)
         .lifecycle(SandboxLifecyclePolicy {
@@ -248,6 +249,7 @@ fn an_internet_sandbox_without_its_gateway_is_refused() {
             Sandbox::new("agents".to_string())
                 .code(SandboxCode::Image {
                     image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
                 .lifecycle(SandboxLifecyclePolicy {
@@ -297,6 +299,7 @@ async fn a_profile_granted_an_internet_sandbox_renders_without_a_dependency_cycl
         Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
@@ -538,6 +541,7 @@ async fn the_management_role_cannot_decrypt_or_read_the_deployments_secrets() {
     let sandbox = Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
             image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::Internet)
         .lifecycle(SandboxLifecyclePolicy {

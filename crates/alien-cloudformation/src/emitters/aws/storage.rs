@@ -170,11 +170,9 @@ impl CfEmitter for AwsStorageEmitter {
         }
 
         bucket.properties.insert("Tags".to_string(), tags(ctx));
-        // Sandbox bundles are build inputs the controller renders again and deletes with each
-        // sandbox, so their bucket goes with the stack instead of outliving it.
-        if storage.id() != SANDBOX_BUNDLE_STORAGE_ID {
-            bucket.retain_data();
-        }
+        // The sandbox bundle bucket is kept too. CloudFormation cannot empty a bucket, and one
+        // left holding a bundle (the stack deleted before the deployment) would fail the delete.
+        bucket.retain_data();
 
         let mut policy = CfResource::new(
             format!("{bucket_id}BucketPolicy"),
@@ -321,8 +319,7 @@ fn bucket_policy_document(
 
     if let Some(writer) = bundle_writer {
         // An explicit Deny outranks every same-account Allow, including stack-wide grants. Only
-        // writes are held back: a delete can fail a build but not change what it builds, and
-        // setup teardown empties the bucket.
+        // writes are held back: a delete can fail a build but not change what it builds.
         statements.push(CfExpression::object([
             ("Sid", CfExpression::from("OnlyManagementWritesBundles")),
             ("Effect", CfExpression::from("Deny")),
