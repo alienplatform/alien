@@ -71,6 +71,7 @@ on:
           - command-routing-ts
           - container-rust
           - runtime-less-mixed
+          - sandbox-session
       network_mode:
         description: "Cloud network mode"
         type: choice

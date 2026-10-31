@@ -98,6 +98,9 @@ fi
 # Build push matrix
 PUSH_ENTRIES='[]'
 if [ "$PUSH_AWS_CLI" = "true" ]; then
+  if [ "$APP" = "All" ] || [ "$APP" = "sandbox-session" ]; then
+    PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-sandbox-session","test_filter":"push_aws_sandbox_session","needs_oidc":false,"resource_suffix":"awsss","bindings_arch":"aarch64","timeout_minutes":60}]')
+  fi
   if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
     PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-storage-notifications","test_filter":"push_aws_storage_notifications","needs_oidc":false,"resource_suffix":"awsntf","bindings_arch":"aarch64","timeout_minutes":60}]')
   fi
@@ -183,6 +186,11 @@ HAS_LOCAL=$([ "$(echo "$LOCAL_ENTRIES" | jq 'length')" -gt 0 ] && echo true || e
 # Build Terraform distribution matrix. Kubernetes entries provision
 # frozen resources with Terraform and install the agent with Helm.
 TERRAFORM_ENTRIES='[]'
+if [ "$APP" = "All" ] || [ "$APP" = "sandbox-session" ]; then
+  if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
+    TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-sandbox-session","test_filter":"terraform_aws_push_sandbox_session","needs_oidc":false,"resource_suffix":"tfawsss","bindings_arch":"aarch64"}]')
+  fi
+fi
 if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
   if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
     TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-storage-notifications","test_filter":"terraform_aws_push_storage_notifications","needs_oidc":false,"resource_suffix":"tfawsntf","bindings_arch":"aarch64"}]')
@@ -289,6 +297,9 @@ fi
 # and currently validates the push/import path.
 CLOUDFORMATION_ENTRIES='[]'
 if [ "$PUSH_AWS_CLOUDFORMATION" = "true" ]; then
+  if [ "$APP" = "All" ] || [ "$APP" = "sandbox-session" ]; then
+    CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-sandbox-session","test_filter":"cloudformation_aws_push_sandbox_session","needs_oidc":false,"resource_suffix":"cfawsss","bindings_arch":"aarch64"}]')
+  fi
   if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
     CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-storage-notifications","test_filter":"cloudformation_aws_push_storage_notifications","needs_oidc":false,"resource_suffix":"cfawsntf","bindings_arch":"aarch64"}]')
   fi
