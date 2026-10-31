@@ -27,7 +27,7 @@ use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
 use crate::error::ErrorData;
 use crate::ids;
-use crate::loops::deployment::{target_release_stack, RunnerConfigSources};
+use crate::loops::deployment::{target_release_stack, ManagementRenderer, RunnerConfigSources};
 use crate::traits::{
     CreateDeploymentParams, CreateTokenParams, DeploymentAcquireMode, DeploymentFilter,
     DeploymentRecord, ReconcileData, ReconcileInput, ReleaseRecord, TokenType,
@@ -571,8 +571,15 @@ async fn acquired_deployment_response(
         Some(release_id) => target_release_stack(release_store, record, release_id).await?,
         None => None,
     };
+    let management_config = crate::loops::deployment::resolve_deployment_management_config(
+        sources.credential_resolver,
+        record,
+        record.platform,
+        ManagementRenderer::Runner,
+    )
+    .await?;
     let config = sources
-        .deployment_config(record, deployment_stack.as_ref())
+        .deployment_config(record, deployment_stack.as_ref(), management_config)
         .await
         .context(GenericError {
             message: format!("Failed to build the config for deployment {}", record.id),
@@ -913,6 +920,7 @@ mod tests {
         ResourceHeartbeatData, RuntimeMetadata, Stack, StackSettings, StackState,
         CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
+    use alien_error::{AlienError, GenericError};
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode},
@@ -937,7 +945,9 @@ mod tests {
         },
         stores::sqlite::{SqliteDatabase, SqliteReleaseStore, SqliteTokenStore},
         traits::{
-            deployment_store::{MockDeploymentStore, ReconcileData, ReconcileOutcome},
+            deployment_store::{
+                ExecutionClaim, MockDeploymentStore, ReconcileData, ReconcileOutcome,
+            },
             CreateReleaseParams, DeploymentRecord, ReleaseStore,
         },
     };
@@ -1082,50 +1092,14 @@ mod tests {
             })
         });
 
-        let kv: Arc<dyn alien_bindings::traits::Kv> =
-            Arc::new(LocalKv::new(temp.path().join("kv")).await.expect("kv"));
-        let command_storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
-            LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
-                .expect("command storage"),
-        );
-        let command_dispatcher: Arc<dyn CommandDispatcher> = Arc::new(NullCommandDispatcher);
-        let command_registry: Arc<dyn CommandRegistry> =
-            Arc::new(InMemoryCommandRegistry::default());
-        let state = AppState {
-            deployment_store: Arc::new(store),
+        let state = test_app_state(
+            temp.path(),
+            Arc::new(store),
             release_store,
-            project_store: Arc::new(SingleWorkspaceProjects),
-            token_store: Arc::new(SqliteTokenStore::new(db)),
-            auth_validator: Arc::new(PermissiveAuthValidator::new()),
-            authz: Arc::new(OssAuthz),
-            telemetry_backend: Arc::new(NullTelemetryBackend),
-            credential_resolver: Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf())),
-            command_server: Arc::new(CommandServer::new(
-                kv.clone(),
-                command_storage,
-                command_dispatcher,
-                command_registry,
-                "http://localhost:0/v1".to_string(),
-                b"test-signing-key".to_vec(),
-            )),
-            config: Arc::new(ManagerConfig::default()),
-            bindings_provider: None,
-            target_bindings_providers: HashMap::new(),
-            kv,
-            http_client: reqwest::Client::new(),
-            credential_cache: Arc::new(CredentialCache::new()),
-            pull_validation_cache: Arc::new(PullValidationCache::new()),
-            registry_routing_table: Arc::new(
-                RegistryRoutingTable::new(vec![]).expect("empty routing table"),
-            ),
-            import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-            tunnels: None,
-            charts: None,
-            release_channels: None,
-            bundle_signing_key: None,
-            bundle_sources: None,
-            log_buffer: Arc::new(crate::dev::LogBuffer::new()),
-        };
+            Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf())),
+            db,
+        )
+        .await;
 
         // The Operator's report claims the pending target is already running.
         // Accepting it would acknowledge work the Operator never received.
@@ -1163,6 +1137,426 @@ mod tests {
         .expect("response json");
         let reconciled = reconciled.lock().expect("reconcile log").clone();
         (response, reconciled)
+    }
+
+    /// The sync routes' state over `deployment_store`, with local command storage.
+    async fn test_app_state(
+        directory: &std::path::Path,
+        deployment_store: Arc<dyn crate::traits::DeploymentStore>,
+        release_store: Arc<SqliteReleaseStore>,
+        credential_resolver: Arc<dyn crate::traits::CredentialResolver>,
+        db: Arc<SqliteDatabase>,
+    ) -> AppState {
+        let kv: Arc<dyn alien_bindings::traits::Kv> =
+            Arc::new(LocalKv::new(directory.join("kv")).await.expect("kv"));
+        let command_storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
+            LocalStorage::new(directory.join("storage").to_string_lossy().to_string())
+                .expect("command storage"),
+        );
+        let command_dispatcher: Arc<dyn CommandDispatcher> = Arc::new(NullCommandDispatcher);
+        let command_registry: Arc<dyn CommandRegistry> =
+            Arc::new(InMemoryCommandRegistry::default());
+        AppState {
+            deployment_store,
+            release_store,
+            project_store: Arc::new(SingleWorkspaceProjects),
+            token_store: Arc::new(SqliteTokenStore::new(db)),
+            auth_validator: Arc::new(PermissiveAuthValidator::new()),
+            authz: Arc::new(OssAuthz),
+            telemetry_backend: Arc::new(NullTelemetryBackend),
+            credential_resolver,
+            command_server: Arc::new(CommandServer::new(
+                kv.clone(),
+                command_storage,
+                command_dispatcher,
+                command_registry,
+                "http://localhost:0/v1".to_string(),
+                b"test-signing-key".to_vec(),
+            )),
+            config: Arc::new(ManagerConfig::default()),
+            bindings_provider: None,
+            target_bindings_providers: HashMap::new(),
+            kv,
+            http_client: reqwest::Client::new(),
+            credential_cache: Arc::new(CredentialCache::new()),
+            pull_validation_cache: Arc::new(PullValidationCache::new()),
+            registry_routing_table: Arc::new(
+                RegistryRoutingTable::new(vec![]).expect("empty routing table"),
+            ),
+            import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+            tunnels: None,
+            charts: None,
+            release_channels: None,
+            bundle_signing_key: None,
+            bundle_sources: None,
+            log_buffer: Arc::new(crate::dev::LogBuffer::new()),
+        }
+    }
+
+    struct UnresolvableManagementIdentity;
+
+    #[async_trait::async_trait]
+    impl crate::traits::CredentialResolver for UnresolvableManagementIdentity {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn resolve_management_config(
+            &self,
+            _: Platform,
+        ) -> Result<Option<alien_core::ManagementConfig>, AlienError> {
+            Err(AlienError::new(GenericError {
+                message: "[impersonation.azure] needs AZURE_MANAGEMENT_OIDC_ISSUER".to_string(),
+            }))
+        }
+    }
+
+    /// The Azure management identity a complete `[impersonation.azure]` resolves to.
+    fn azure_management_identity() -> alien_core::ManagementConfig {
+        alien_core::ManagementConfig::Azure(alien_core::AzureManagementConfig {
+            managing_tenant_id: "managing-tenant".to_string(),
+            oidc_issuer: "https://issuer.example.com".to_string(),
+            oidc_subject: "manager".to_string(),
+        })
+    }
+
+    struct ResolvedManagementIdentity;
+
+    #[async_trait::async_trait]
+    impl crate::traits::CredentialResolver for ResolvedManagementIdentity {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn resolve_management_config(
+            &self,
+            _: Platform,
+        ) -> Result<Option<alien_core::ManagementConfig>, AlienError> {
+            Ok(Some(azure_management_identity()))
+        }
+    }
+
+    /// What a pull sync did on a manager whose management identity doesn't resolve.
+    struct UnresolvableManagementSync {
+        status: StatusCode,
+        response: Value,
+        reconciled: Vec<ReconcileData>,
+        released: Vec<Option<ExecutionClaim>>,
+    }
+
+    /// An Operator that supports execution claims syncs `record` (whose target is
+    /// the release this creates) and the control plane grants it a claim.
+    async fn sync_without_management_identity(
+        record: DeploymentRecord,
+    ) -> UnresolvableManagementSync {
+        sync_with_management_resolver(record, Arc::new(UnresolvableManagementIdentity)).await
+    }
+
+    async fn sync_with_management_resolver(
+        mut record: DeploymentRecord,
+        credential_resolver: Arc<dyn crate::traits::CredentialResolver>,
+    ) -> UnresolvableManagementSync {
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let release_store = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let release = release_store
+            .create_release(
+                &crate::auth::Subject::system(),
+                CreateReleaseParams {
+                    project_id: record.project_id.clone(),
+                    stacks: HashMap::from([(
+                        Platform::Kubernetes,
+                        Stack::new("app".to_string()).build(),
+                    )]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .expect("release");
+        record.base_platform = Some(Platform::Azure);
+        if record.status == "delete-pending" {
+            record.current_release_id = Some(release.id.clone());
+        } else {
+            record.desired_release_id = Some(release.id.clone());
+        }
+
+        let claim = ExecutionClaim {
+            operation_id: "operation_test".to_string(),
+            attempt_id: "attempt_test".to_string(),
+        };
+        let reconciled = Arc::new(Mutex::new(Vec::new()));
+        let released = Arc::new(Mutex::new(Vec::new()));
+        let mut store = MockDeploymentStore::new();
+        store.expect_requires_execution_claims().return_const(true);
+        let stored = record.clone();
+        store
+            .expect_get_deployment()
+            .returning(move |_, _| Ok(Some(stored.clone())));
+        let acquired = record.clone();
+        let granted = claim.clone();
+        store
+            .expect_acquire()
+            .times(1)
+            .returning(move |_, _, _, _| {
+                Ok(vec![crate::traits::deployment_store::AcquiredDeployment {
+                    deployment: acquired.clone(),
+                    execution_claim: Some(granted.clone()),
+                }])
+            });
+        store.expect_renew_lease().returning(|_, _, _, _| Ok(()));
+        let received = reconciled.clone();
+        let reconciled_record = record.clone();
+        store.expect_reconcile().returning(move |_, data| {
+            received.lock().expect("reconcile log").push(data);
+            Ok(ReconcileOutcome {
+                record: reconciled_record.clone(),
+                target_operations_bundle_set: None,
+                target_dynamic_containers: None,
+            })
+        });
+        let gave_back = released.clone();
+        store.expect_release().returning(move |_, _, _, claim| {
+            gave_back.lock().expect("release log").push(claim);
+            Ok(())
+        });
+        let state = test_app_state(
+            temp.path(),
+            Arc::new(store),
+            release_store,
+            credential_resolver,
+            db,
+        )
+        .await;
+
+        let body = json!({
+            "deploymentId": record.id,
+            "session": "operator-session",
+            "supportsExecutionClaims": true,
+            "maxSupportedDeploymentProtocolVersion":
+                alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
+        });
+        let response = super::router()
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sync")
+                    .header("authorization", "Bearer operator-token")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("request"),
+            )
+            .await
+            .expect("sync response");
+        let status = response.status();
+        let response: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .expect("response body"),
+        )
+        .expect("response json");
+        let reconciled = reconciled.lock().expect("reconcile log").clone();
+        let released = released.lock().expect("release log").clone();
+        UnresolvableManagementSync {
+            status,
+            response,
+            reconciled,
+            released,
+        }
+    }
+
+    /// A pull update that can't render without the management identity is saved as failed
+    /// with its cause under the claim the sync acquired, and the claim is given back, so
+    /// the failure shows on the deployment and the target isn't offered again until a retry.
+    #[tokio::test]
+    async fn a_pull_update_without_its_management_identity_saves_the_failure() {
+        let sync =
+            sync_without_management_identity(deployment_record_with_state("update-pending", None))
+                .await;
+
+        assert_eq!(
+            sync.status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{}",
+            sync.response
+        );
+        assert!(sync.response.get("target").is_none(), "{}", sync.response);
+        assert_eq!(sync.reconciled.len(), 1, "one failure checkpoint");
+        let saved = &sync.reconciled[0];
+        assert_eq!(saved.state.status, DeploymentStatus::UpdateFailed);
+        assert_eq!(saved.session, "operator-session");
+        let claim = saved
+            .execution_claim
+            .as_ref()
+            .expect("saved under the claim");
+        assert_eq!(claim.operation_id, "operation_test");
+        let error = saved.state.error.as_ref().expect("saved cause");
+        assert_eq!(
+            error.message,
+            "Failed to resolve the azure management identity for deployment dep_test"
+        );
+        assert_eq!(
+            error.source.as_ref().expect("resolver error").message,
+            "[impersonation.azure] needs AZURE_MANAGEMENT_OIDC_ISSUER"
+        );
+        assert_eq!(sync.released.len(), 1, "the claim is given back");
+        assert_eq!(
+            sync.released[0]
+                .as_ref()
+                .map(|claim| claim.attempt_id.as_str()),
+            Some("attempt_test")
+        );
+    }
+
+    fn pull_record_in_cluster(
+        status: &str,
+        ownership: alien_core::KubernetesClusterOwnership,
+    ) -> DeploymentRecord {
+        let mut record = deployment_record_with_state(status, None);
+        record.stack_settings = Some(StackSettings {
+            deployment_model: alien_core::DeploymentModel::Pull,
+            kubernetes: Some(alien_core::KubernetesSettings {
+                cluster: Some(alien_core::KubernetesClusterSettings {
+                    ownership,
+                    namespace: Some("application".to_string()),
+                    cloud: None,
+                }),
+                exposure: None,
+            }),
+            ..Default::default()
+        });
+        record
+    }
+
+    /// An Operator installed into an existing cluster gets no setup-owned management
+    /// resource, so its update renders without the identity the manager can't resolve.
+    /// An Operator whose cluster the setup manages still needs it.
+    #[tokio::test]
+    async fn an_existing_cluster_pull_update_renders_without_the_management_identity() {
+        let sync = sync_without_management_identity(pull_record_in_cluster(
+            "update-pending",
+            alien_core::KubernetesClusterOwnership::Existing,
+        ))
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        let target = sync.response.get("target").expect("update target");
+        assert!(
+            target["config"].get("managementConfig").is_none(),
+            "{target}"
+        );
+        assert!(
+            sync.reconciled
+                .iter()
+                .all(|data| data.state.status == DeploymentStatus::UpdatePending),
+            "no failure saved"
+        );
+
+        let sync = sync_without_management_identity(pull_record_in_cluster(
+            "update-pending",
+            alien_core::KubernetesClusterOwnership::Managed,
+        ))
+        .await;
+        assert_eq!(
+            sync.status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{}",
+            sync.response
+        );
+        assert_eq!(sync.reconciled.len(), 1);
+        assert_eq!(
+            sync.reconciled[0].state.status,
+            DeploymentStatus::UpdateFailed
+        );
+    }
+
+    /// A target delivered to a Running or RefreshFailed Operator carries the management
+    /// identity, as it did before the identity became required: the Operator turns the target
+    /// into an update (`accept_target_release`), whose RemoteStackManagement mutation renders
+    /// the management resource from it, and keeps its config for later refreshes. Without the
+    /// identity the sync saves the failure instead of delivering a target that drops it.
+    #[tokio::test]
+    async fn a_running_pull_target_carries_the_management_identity() {
+        for (status, recorded, failed) in [
+            (
+                "running",
+                DeploymentStatus::Running,
+                DeploymentStatus::RefreshFailed,
+            ),
+            (
+                "refresh-failed",
+                DeploymentStatus::RefreshFailed,
+                DeploymentStatus::RefreshFailed,
+            ),
+        ] {
+            let sync = sync_with_management_resolver(
+                deployment_record_with_state(status, None),
+                Arc::new(ResolvedManagementIdentity),
+            )
+            .await;
+            assert_eq!(sync.status, StatusCode::OK, "{status}: {}", sync.response);
+            let target = sync.response.get("target").expect("target");
+            assert_eq!(
+                target["config"]["managementConfig"],
+                serde_json::to_value(azure_management_identity()).unwrap(),
+                "{status}: {target}"
+            );
+            assert!(
+                sync.reconciled
+                    .iter()
+                    .all(|data| data.state.status == recorded && data.state.error.is_none()),
+                "{status}: no failure saved"
+            );
+
+            let sync =
+                sync_without_management_identity(deployment_record_with_state(status, None)).await;
+            assert_eq!(
+                sync.status,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{status}: {}",
+                sync.response
+            );
+            assert!(sync.response.get("target").is_none(), "{}", sync.response);
+            assert_eq!(sync.reconciled.len(), 1, "{status}: one failure checkpoint");
+            let saved = &sync.reconciled[0].state;
+            assert_eq!(saved.status, failed, "{status}");
+            assert_eq!(
+                saved.error.as_ref().expect("saved cause").message,
+                "Failed to resolve the azure management identity for deployment dep_test"
+            );
+            assert_eq!(sync.released.len(), 1, "{status}: the claim is given back");
+        }
+    }
+
+    /// Deleting a pull deployment never renders setup, so the Operator gets its delete
+    /// target without the management identity.
+    #[tokio::test]
+    async fn a_pull_deletion_needs_no_management_identity() {
+        let sync =
+            sync_without_management_identity(deployment_record_with_state("delete-pending", None))
+                .await;
+
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        let target = sync.response.get("target").expect("delete target");
+        assert!(
+            target["config"].get("managementConfig").is_none(),
+            "{target}"
+        );
+        assert!(sync
+            .reconciled
+            .iter()
+            .all(|data| data.state.status == DeploymentStatus::DeletePending));
     }
 
     /// Assert the one reconcile recorded the Operator as connected, with its
@@ -2188,7 +2582,7 @@ mod tests {
         .await
         .expect("acquire response");
         let loop_config = sources
-            .deployment_config(&record, Some(&stack))
+            .deployment_config(&record, Some(&stack), None)
             .await
             .expect("loop config");
 
@@ -2703,8 +3097,30 @@ async fn agent_sync(
             .map(|t| t.to_string());
         match release {
             Some(r) => {
-                match build_pull_target(&state, &deployment, r, agent_token, req.supports_tunnels)
-                    .await
+                let management_config = match pull_management_config(&state, &deployment).await {
+                    Ok(management_config) => management_config,
+                    Err(error) => {
+                        return save_pull_render_failure(
+                            &state,
+                            &subject,
+                            &deployment,
+                            &r,
+                            &req.session,
+                            execution_claim,
+                            error,
+                        )
+                        .await
+                    }
+                };
+                match build_pull_target(
+                    &state,
+                    &deployment,
+                    r,
+                    management_config,
+                    agent_token,
+                    req.supports_tunnels,
+                )
+                .await
                 {
                     Ok(target) => Some(target),
                     Err(response) => return response,
@@ -2858,6 +3274,73 @@ async fn agent_sync(
     .into_response()
 }
 
+/// Answers a sync whose target can't render because the management identity
+/// doesn't resolve. Under the execution claim this sync acquired, the failure
+/// is saved in the phase's failed status, so it shows on the deployment and the
+/// target isn't offered again until a retry; without one (an Operator that
+/// predates claims) the Operator gets the error on each sync.
+async fn save_pull_render_failure(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+    deployment: &DeploymentRecord,
+    release: &crate::traits::ReleaseRecord,
+    session: &str,
+    execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
+    error: AlienError,
+) -> Response {
+    let Some(execution_claim) = execution_claim else {
+        return error.into_response();
+    };
+    let Some(status) = deployment_status_from_record(&deployment.status) else {
+        return error.into_response();
+    };
+    let failed_state = crate::loops::deployment::failed_state_for_phase_error(
+        deployment,
+        status,
+        release
+            .stacks
+            .get(&release_stack_platform(deployment.platform)),
+        Some(&release.id),
+        error.clone(),
+    );
+    let saved = state
+        .deployment_store
+        .reconcile(
+            subject,
+            ReconcileData {
+                deployment_id: deployment.id.clone(),
+                session: session.to_string(),
+                state: failed_state,
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: Vec::new(),
+                observed_inventory_batches: Vec::new(),
+                capabilities: Vec::new(),
+                operator_version: None,
+                execution_claim: Some(execution_claim.clone()),
+                operations_report: None,
+            },
+        )
+        .await;
+    if let Err(save_error) = saved {
+        tracing::error!(
+            deployment_id = %deployment.id,
+            render_error = %error,
+            error = %save_error,
+            "Failed to save a pull deployment's render failure"
+        );
+        return save_error.into_response();
+    }
+    if let Err(release_error) = state
+        .deployment_store
+        .release(subject, &deployment.id, session, Some(execution_claim))
+        .await
+    {
+        return release_error.into_response();
+    }
+    error.into_response()
+}
+
 /// The target a pull deployment converges to for `release`: the release's
 /// stack for the deployment's platform and the deployment's configuration.
 /// Sync delivers it to connected Operators; air-gapped bundles carry it.
@@ -2910,28 +3393,33 @@ fn resolve_pull_input_environment(
     Ok(env_vars)
 }
 
+/// The management identity a pull deployment's target renders with; see
+/// [`crate::loops::deployment::resolve_deployment_management_config`] and
+/// [`ManagementRenderer::PullTarget`].
+pub(crate) async fn pull_management_config(
+    state: &AppState,
+    deployment: &DeploymentRecord,
+) -> Result<Option<alien_core::ManagementConfig>, AlienError> {
+    crate::loops::deployment::resolve_deployment_management_config(
+        state.credential_resolver.as_ref(),
+        deployment,
+        management_platform(deployment.platform, deployment.base_platform),
+        ManagementRenderer::PullTarget,
+    )
+    .await
+}
+
+/// `management_config` comes from [`pull_management_config`].
 pub(crate) async fn build_pull_target(
     state: &AppState,
     deployment: &DeploymentRecord,
     r: crate::traits::ReleaseRecord,
+    management_config: Option<alien_core::ManagementConfig>,
     agent_token: Option<String>,
     operator_supports_tunnels: bool,
 ) -> Result<TargetDeployment, Response> {
     let release_stack_platform = release_stack_platform(deployment.platform);
     let management_platform = management_platform(deployment.platform, deployment.base_platform);
-
-    // Resolve management config (same pattern as push-mode deployment loop).
-    // 1. From deployment record (platform API / private managers)
-    // 2. From credential resolver (derived from management binding env vars)
-    let management_config = if let Some(mc) = deployment.management_config.clone() {
-        Some(mc)
-    } else {
-        state
-            .credential_resolver
-            .resolve_management_config(management_platform)
-            .await
-            .unwrap_or(None)
-    };
 
     // Image pull credentials are no longer passed through the sync response.
     // Pull-model agents pull images through the manager's /v2/ registry proxy.

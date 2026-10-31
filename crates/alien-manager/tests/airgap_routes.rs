@@ -4,7 +4,7 @@
 //! token, including the deployment group's (which a customer's admin holds
 //! from onboarding), must not be able to report state or push logs for it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,17 +20,22 @@ use prost::Message;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
-use alien_bindings::{providers::kv::local::LocalKv, providers::storage::local::LocalStorage};
+use alien_bindings::{
+    providers::kv::local::LocalKv, providers::storage::local::LocalStorage, BindingsProvider,
+    BindingsProviderApi,
+};
 use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
 use alien_commands::InMemoryCommandRegistry;
 use alien_core::{
-    ClientConfig, Platform, ResourceLifecycle, RuntimeMetadata, Stack, StackSettings, StackState,
-    Storage, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    AzureClientConfig, AzureCredentials, ClientConfig, DeploymentModel, KubernetesClusterOwnership,
+    KubernetesClusterSettings, KubernetesSettings, Platform, ResourceLifecycle, RuntimeMetadata,
+    Stack, StackSettings, StackState, Storage, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
 };
 use alien_error::AlienError;
 use alien_manager::auth::Subject;
 use alien_manager::config::ManagerConfig;
+use alien_manager::providers::impersonation_credentials::ImpersonationCredentialResolver;
 use alien_manager::providers::OssAuthz;
 use alien_manager::routes::registry_proxy::{
     CredentialCache, PullValidationCache, RegistryRoutingTable,
@@ -115,6 +120,30 @@ async fn fixture_with_backend_delay(delay: Duration) -> Fixture {
 }
 
 async fn fixture_with_mode(delay: Duration, airgapped: bool) -> Fixture {
+    fixture_with_site(
+        delay,
+        Site {
+            base_platform: None,
+            stack_settings: StackSettings {
+                airgapped,
+                ..Default::default()
+            },
+            status: "running",
+            credential_resolver: Arc::new(NoCredentials),
+        },
+    )
+    .await
+}
+
+/// How the site's deployment is set up and what resolves its credentials.
+struct Site {
+    base_platform: Option<Platform>,
+    stack_settings: StackSettings,
+    status: &'static str,
+    credential_resolver: Arc<dyn CredentialResolver>,
+}
+
+async fn fixture_with_site(delay: Duration, site: Site) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("manager.db");
     let db = Arc::new(
@@ -169,17 +198,15 @@ async fn fixture_with_mode(delay: Duration, airgapped: bool) -> Fixture {
                     name: name.to_string(),
                     deployment_group_id: group.id.clone(),
                     platform: Platform::Kubernetes,
-                    base_platform: None,
-                    stack_settings: StackSettings {
-                        airgapped,
-                        ..Default::default()
-                    },
+                    base_platform: site.base_platform,
+                    stack_settings: site.stack_settings.clone(),
                     stack_state: StackState::new(Platform::Kubernetes),
                     environment_info: None,
                     runtime_metadata: RuntimeMetadata::default(),
-                    status: "running".to_string(),
+                    status: site.status.to_string(),
                     current_release_id: Some(release.id.clone()),
-                    desired_release_id: None,
+                    desired_release_id: (site.status == "update-pending")
+                        .then(|| release.id.clone()),
                     import_source: None,
                     setup_metadata: None,
                     setup_target: "test".to_string(),
@@ -236,7 +263,7 @@ async fn fixture_with_mode(delay: Duration, airgapped: bool) -> Fixture {
         ),
         authz: Arc::new(OssAuthz),
         telemetry_backend: telemetry.clone(),
-        credential_resolver: Arc::new(NoCredentials),
+        credential_resolver: site.credential_resolver,
         command_server: Arc::new(CommandServer::new(
             kv.clone(),
             command_storage,
@@ -825,4 +852,112 @@ async fn deletion_signing_requires_a_current_deletion_request() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("accepted deletion request"));
+}
+
+/// A manager with [impersonation.azure] whose environment lacks the Azure management
+/// variables: it has the management binding, but can't derive the identity from it.
+fn incomplete_azure_management() -> Arc<dyn CredentialResolver> {
+    let azure = BindingsProvider::new(
+        ClientConfig::Azure(Box::new(AzureClientConfig {
+            subscription_id: "subscription".to_string(),
+            tenant_id: "managing-tenant".to_string(),
+            region: None,
+            credentials: AzureCredentials::AccessToken {
+                token: "token".to_string(),
+            },
+            service_overrides: None,
+        })),
+        HashMap::from([(
+            "management".to_string(),
+            serde_json::json!({
+                "service": "azuremanagedidentity",
+                "clientId": "00000000-0000-0000-0000-000000000001",
+                "resourceId": "/subscriptions/s/resourceGroups/g/providers/Microsoft.ManagedIdentity/userAssignedIdentities/management",
+                "principalId": "00000000-0000-0000-0000-000000000002",
+            }),
+        )]),
+    )
+    .unwrap();
+    let azure: Arc<dyn BindingsProviderApi> = Arc::new(azure);
+    Arc::new(
+        ImpersonationCredentialResolver::new(
+            azure.clone(),
+            HashMap::from([(Platform::Azure, azure)]),
+            HashSet::from([Platform::Azure]),
+        )
+        .with_environment(HashMap::new()),
+    )
+}
+
+/// An air-gapped Operator on an Azure-based cluster, pending an update to the release.
+fn azure_based_operator_site(ownership: KubernetesClusterOwnership) -> Site {
+    Site {
+        base_platform: Some(Platform::Azure),
+        stack_settings: StackSettings {
+            airgapped: true,
+            deployment_model: DeploymentModel::Pull,
+            kubernetes: Some(KubernetesSettings {
+                cluster: Some(KubernetesClusterSettings {
+                    ownership,
+                    namespace: Some("application".to_string()),
+                    cloud: None,
+                }),
+                exposure: None,
+            }),
+            ..Default::default()
+        },
+        status: "update-pending",
+        credential_resolver: incomplete_azure_management(),
+    }
+}
+
+async fn airgapped_target(fixture: &Fixture) -> (StatusCode, serde_json::Value) {
+    let response = alien_manager::routes::airgap::router()
+        .with_state(fixture.state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/deployments/{}/target", fixture.deployment))
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", fixture.site_token),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// An Operator installed into an existing cluster has no setup-owned management resource, so
+/// its bundle target renders on a manager whose Azure management config is incomplete. An
+/// Operator whose cluster the setup manages has one, and its render fails, naming what's missing.
+#[tokio::test]
+async fn an_existing_cluster_bundle_target_renders_without_the_azure_management_identity() {
+    let fixture = fixture_with_site(
+        Duration::ZERO,
+        azure_based_operator_site(KubernetesClusterOwnership::Existing),
+    )
+    .await;
+    let (status, target) = airgapped_target(&fixture).await;
+    assert_eq!(status, StatusCode::OK, "{target}");
+    assert_eq!(target["releaseInfo"]["stack"]["id"], "files", "{target}");
+    assert!(
+        target["config"].get("managementConfig").is_none(),
+        "{target}"
+    );
+
+    let fixture = fixture_with_site(
+        Duration::ZERO,
+        azure_based_operator_site(KubernetesClusterOwnership::Managed),
+    )
+    .await;
+    let (status, error) = airgapped_target(&fixture).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{error}");
+    assert!(
+        error.to_string().contains("AZURE_MANAGEMENT_OIDC_ISSUER"),
+        "the error names the missing variables: {error}"
+    );
 }
