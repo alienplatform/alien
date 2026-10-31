@@ -75,6 +75,7 @@ fn gated_fixture(resource_type: &str) -> Option<(Stack, StackSettings)> {
                 Sandbox::new("fixture".to_string())
                     .code(SandboxCode::Image {
                         image: "s3://matrix-artifacts/sandbox.zip".to_string(),
+                        bundled_from: None,
                     })
                     .limits(SandboxLimits {
                         cpu: "1".to_string(),

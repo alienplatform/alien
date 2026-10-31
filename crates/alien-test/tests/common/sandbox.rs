@@ -277,12 +277,12 @@ pub async fn check_bundle_in_deployment_bucket(ctx: &TestContext) -> anyhow::Res
     Ok(bucket)
 }
 
-/// After teardown the bundle bucket must be gone: unlike the deployment's other Storage it holds
-/// only build inputs, so setup deletes it with the stack.
+/// After teardown no bundle bucket is left: Terraform deletes it with the module, and
+/// CloudFormation keeps it like the stack's other buckets, for the cleanup that removes those.
 pub async fn check_bundle_bucket_deleted(bucket: &str) -> anyhow::Result<()> {
     match target_s3().await?.head_bucket(bucket).await {
         Err(error) if error.code == "REMOTE_RESOURCE_NOT_FOUND" => {
-            tracing::info!(%bucket, "sandbox bundle bucket deleted with the deployment");
+            tracing::info!(%bucket, "sandbox bundle bucket gone after teardown");
             Ok(())
         }
         Ok(()) => bail!("the sandbox bundle bucket '{bucket}' outlived the deployment"),

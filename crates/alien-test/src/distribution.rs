@@ -4,7 +4,6 @@
 //! CloudFormation/Terraform/Helm tests cannot accidentally validate controller
 //! provisioning instead of the setup import path.
 
-use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use std::{collections::BTreeMap, env, path::Path, sync::Arc, time::Duration};
 
 use alien_azure_clients::azure::resource_graph::ResourceGraphQueryRequest;
@@ -430,22 +429,11 @@ async fn cleanup_after_ordered_setup_error(
     setup_error
 }
 
-/// The imported resources a deleted CloudFormation stack leaves behind. The sandbox bundle bucket
-/// is not retained: the stack deletes it, and a retained bucket that is missing still fails the
-/// cleanup.
-fn retained_cloudformation_resources(
-    resources: &[ImportedResource],
-) -> impl Iterator<Item = &ImportedResource> {
-    resources
-        .iter()
-        .filter(|resource| resource.id != SANDBOX_BUNDLE_STORAGE_ID)
-}
-
 async fn cleanup_retained_cloudformation_resources(
     env: &[(String, String)],
     resources: &[ImportedResource],
 ) -> anyhow::Result<()> {
-    for resource in retained_cloudformation_resources(resources) {
+    for resource in resources {
         match resource.resource_type.as_ref() {
             "storage" => {
                 let data: AwsStorageImportData =
@@ -4296,22 +4284,6 @@ mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionProfile};
     use alien_core::ResourceLifecycle;
-
-    /// The stack deletes the sandbox bundle bucket, so teardown leaves it alone; every other
-    /// imported bucket is retained and still emptied and deleted.
-    #[test]
-    fn the_bundle_bucket_is_not_cleaned_up_as_retained() {
-        let storage = |id: &str| ImportedResource {
-            id: id.to_string(),
-            resource_type: alien_core::Storage::RESOURCE_TYPE,
-            import_data: serde_json::json!({ "bucketName": format!("p-{id}") }),
-        };
-        let resources = [storage(SANDBOX_BUNDLE_STORAGE_ID), storage("uploads")];
-        let retained = retained_cloudformation_resources(&resources)
-            .map(|resource| resource.id.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(retained, vec!["uploads"]);
-    }
 
     /// Normalizes the guards back, so the comparison shows that lifting them changed
     /// nothing else in the module.
