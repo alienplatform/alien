@@ -5329,8 +5329,6 @@ fn setup_notification_markers(
         .collect()
 }
 
-/// The retention helper. Packages that retain an S3 bucket notification also remove the
-/// entries setup wrote before detaching it; every other package keeps the helper unchanged.
 /// The upgrade helper that moves `azurerm_storage_table` KV tables to `azapi_resource`, pinned
 /// to the API version the table resource declares.
 fn import_kv_tables_helper() -> Result<String> {
@@ -5348,6 +5346,8 @@ fn import_kv_tables_helper() -> Result<String> {
     ))
 }
 
+/// The retention helper. Packages that retain an S3 bucket notification also remove the
+/// entries setup wrote before detaching it; every other package keeps the helper unchanged.
 fn retain_data_helper(
     retained_data_addresses: &[String],
     markers: &BTreeMap<String, String>,
