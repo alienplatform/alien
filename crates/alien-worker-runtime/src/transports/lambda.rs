@@ -2330,14 +2330,14 @@ mod tests {
             "awsRegion": "us-east-2",
             "eventTime": "2026-10-30T18:28:41.358Z",
             "eventName": "ObjectCreated:Put",
-            "userIdentity": {"principalId": "AWS:AIDATLKJAW4BZIY5MKZTX"},
-            "requestParameters": {"sourceIPAddress": "18.212.70.151"},
-            "responseElements": {"x-amz-request-id": "X1E9MRMH58NVARK1", "x-amz-id-2": "s4fAzHTIcUxF5js4fKVOE3yftUageoO"},
+            "userIdentity": {"principalId": "AWS:AIDAEXAMPLEPRINCIPAL"},
+            "requestParameters": {"sourceIPAddress": "192.0.2.10"},
+            "responseElements": {"x-amz-request-id": "EXAMPLEREQUEST01", "x-amz-id-2": "EXAMPLEid2"},
             "s3": {
                 "s3SchemaVersion": "1.0",
                 "configurationId": "rule-0",
-                "bucket": {"name": "n2081-s3d-78f48e", "ownerIdentity": {"principalId": "A5OBGC8W2F4L2"}, "arn": "arn:aws:s3:::n2081-s3d-78f48e"},
-                "object": {"key": encoded_key, "size": 7, "eTag": "321c3cf486ed509164edec1e1981fec8", "sequencer": "006AE4E1D955757FA5"}
+                "bucket": {"name": "example-bucket", "ownerIdentity": {"principalId": "EXAMPLEOWNER"}, "arn": "arn:aws:s3:::example-bucket"},
+                "object": {"key": encoded_key, "size": 7, "eTag": "321c3cf486ed509164edec1e1981fec8", "sequencer": "0055AED6DCD90281E5"}
             }
         })
     }
@@ -2351,7 +2351,7 @@ mod tests {
     async fn sqs_s3_notifications_reach_the_app_as_storage_events() {
         let test_event = serde_json::json!({
             "Service": "Amazon S3", "Event": "s3:TestEvent", "Time": "2026-10-30T18:28:30.022Z",
-            "Bucket": "n2081-s3d-78f48e", "RequestId": "5582815E1AEA5ADF", "HostId": "8cLeGAmw098X5cv4Zkwcmo8vvZa3eH3eKxsPzbB9wrR"
+            "Bucket": "example-bucket", "RequestId": "EXAMPLEREQUEST02", "HostId": "EXAMPLEhostid"
         });
         let notification = serde_json::json!({
             "Records": [s3_record("in/with+space.json"), s3_record("in/plus%2Bsign.json")]
@@ -2547,7 +2547,7 @@ mod tests {
                         let event: alien_core::StorageEvent =
                             serde_json::from_slice(&message.payload).expect("StorageEvent");
                         assert_eq!(event.event_type, alien_core::StorageEventType::Created);
-                        assert_eq!(event.bucket_name, "n2081-s3d-78f48e");
+                        assert_eq!(event.bucket_name, "example-bucket");
                         assert_eq!(event.size, Some(7));
                         keys.push(event.object_key);
                     }

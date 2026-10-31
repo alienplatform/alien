@@ -571,7 +571,7 @@ mod tests {
             };
             let event: StorageEvent = serde_json::from_value(value.clone()).expect("StorageEvent");
             assert_eq!(event.event_type, StorageEventType::Created);
-            assert_eq!(event.bucket_name, "n2081-s3d-78f48e");
+            assert_eq!(event.bucket_name, "example-bucket");
             keys.push(event.object_key);
         }
         assert_eq!(keys, ["in/with space.json", "in/plus+sign.json"]);
