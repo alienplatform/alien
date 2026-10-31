@@ -222,8 +222,8 @@ pub enum AwsQueueDelivery {
     /// payload comes from the same SQS message, so they share its receipt handle and
     /// message ID: completing one completes them all, and a retry redelivers them all.
     Deliver(Vec<MessagePayload>),
-    /// An S3 notification with nothing to deliver, such as the `s3:TestEvent` S3 sends
-    /// whenever a bucket's notification configuration changes: acknowledge it unseen.
+    /// The `s3:TestEvent` S3 sends whenever a bucket's notification configuration
+    /// changes: there is nothing to deliver, so acknowledge it unseen.
     Discard,
 }
 
@@ -259,11 +259,11 @@ struct S3EventObject {
 /// decided on its own: a notification that doesn't parse is delivered unchanged instead
 /// of failing the batch it arrived in.
 ///
-/// A body is an S3 notification only when it is an object whose `Records` array is
-/// non-empty and every record has `eventSource == "aws:s3"`. Records whose `eventName`
-/// is not `ObjectCreated:*` are skipped: Storage rules only subscribe to object creation,
-/// so they can only come from a configuration Alien doesn't own and have no portable
-/// `StorageEvent` meaning here. A notification left with no records is discarded.
+/// A body is converted only when it is an object whose `Records` array is non-empty and
+/// every record has `eventSource == "aws:s3"` and an `ObjectCreated:*` `eventName`.
+/// Storage rules only subscribe to object creation, so any other S3 notification, such as
+/// `ObjectRemoved:*`, comes from a configuration Alien doesn't own, and its consumer gets
+/// it unchanged.
 pub fn aws_queue_payload(body: &str) -> AwsQueueDelivery {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
         return AwsQueueDelivery::Deliver(vec![MessagePayload::Text(body.to_string())]);
@@ -274,8 +274,16 @@ pub fn aws_queue_payload(body: &str) -> AwsQueueDelivery {
     let Some(records) = s3_notification_records(&value) else {
         return AwsQueueDelivery::Deliver(vec![MessagePayload::Json(value)]);
     };
+    let created = records.iter().all(|record| {
+        record
+            .get("eventName")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|name| name.starts_with("ObjectCreated:"))
+    });
+    if !created {
+        return AwsQueueDelivery::Deliver(vec![MessagePayload::Json(value)]);
+    }
     match s3_storage_events(records) {
-        Ok(events) if events.is_empty() => AwsQueueDelivery::Discard,
         Ok(events) => {
             AwsQueueDelivery::Deliver(events.into_iter().map(MessagePayload::Json).collect())
         }
@@ -309,13 +317,6 @@ fn s3_storage_events(records: &[serde_json::Value]) -> Result<Vec<serde_json::Va
         let record: S3EventRecord = serde_json::from_value(record.clone())
             .into_alien_error()
             .context(invalid("S3 notification record is invalid"))?;
-        if !record.event_name.starts_with("ObjectCreated:") {
-            warn!(
-                event_name = %record.event_name,
-                "Skipping an S3 notification record that is not an object creation"
-            );
-            continue;
-        }
         let object_key = decode_s3_key(&record.s3.object.key)?;
         if record.s3.bucket.name.is_empty() || object_key.is_empty() {
             return Err(AlienError::new(invalid(
@@ -720,10 +721,8 @@ mod tests {
         let object = sparse["s3"]["object"].as_object_mut().expect("object");
         object.remove("size");
         object.remove("eTag");
-        let removed = aws_fixtures::s3_record("ObjectRemoved:Delete", "in/gone.json", 0, "x");
         let events = aws_events(&aws_fixtures::notification(vec![
             aws_fixtures::s3_put("in/plain.json"),
-            removed,
             multipart,
             sparse,
         ]));
@@ -742,16 +741,26 @@ mod tests {
     }
 
     #[test]
-    fn s3_test_events_and_notifications_without_created_records_are_discarded() {
+    fn s3_test_events_are_discarded_and_other_s3_notifications_pass_through() {
         assert_eq!(
             aws_queue_payload(&aws_fixtures::test_event()),
             AwsQueueDelivery::Discard
         );
+        // Rules only subscribe to object creation: a removal, alone or next to a creation,
+        // comes from someone else's configuration and reaches its consumer unchanged.
         let removed = aws_fixtures::s3_record("ObjectRemoved:Delete", "in/gone.json", 0, "x");
-        assert_eq!(
-            aws_queue_payload(&aws_fixtures::notification(vec![removed])),
-            AwsQueueDelivery::Discard
-        );
+        for records in [
+            vec![removed.clone()],
+            vec![aws_fixtures::s3_put("in/plain.json"), removed],
+        ] {
+            let body = aws_fixtures::notification(records);
+            assert_eq!(
+                aws_queue_payload(&body),
+                AwsQueueDelivery::Deliver(vec![MessagePayload::Json(
+                    serde_json::from_str(&body).unwrap()
+                )])
+            );
+        }
     }
 
     #[test]

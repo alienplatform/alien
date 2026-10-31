@@ -167,7 +167,8 @@ Provider details that matter in production:
   Azure creates when the first subscription is added. Alien never deletes the
   topic, and subscriptions created elsewhere are left alone.
 - **Messages that are not notifications** in the same queue are delivered
-  unchanged on every provider. A notification that can't be parsed is also
+  unchanged on every provider. That includes S3 notifications other than object
+  creation (for example `ObjectRemoved:*` from a configuration made outside Alien). A notification that can't be parsed is also
   delivered unchanged, rather than failing the batch it arrived in, and the SDK
   helpers below report it.
 
