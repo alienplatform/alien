@@ -130,7 +130,7 @@ with the provider's error until one of them changes.
 | | AWS | GCP | Azure | Local (`alien dev`) |
 |---|---|---|---|---|
 | Path | S3 → SQS | Cloud Storage → Pub/Sub | Blob Storage → Event Grid → Service Bus | file watcher → local queue |
-| One rule is | an S3 queue configuration (`s3:ObjectCreated:*`, prefix/suffix filter) | a bucket notification config | an Event Grid subscription on the storage account's system topic | a watcher with its own cursor |
+| One rule is | an S3 queue configuration (`s3:ObjectCreated:*`, prefix/suffix filter) | a bucket notification config, shared by the rules with the same queue and prefix | an Event Grid subscription on the storage account's system topic | a watcher with its own cursor |
 | Prefix filter | at the provider | at the provider | at the provider | in the watcher |
 | Suffix filter | at the provider | **in the consumer** (see below) | at the provider | in the watcher |
 | Queue grant | one `StorageNotificationIngress` statement on the queue policy: `s3.amazonaws.com`, this account, exactly the notifying buckets | Cloud Storage service agent as publisher on the topic, once per queue | none needed | none |
@@ -147,14 +147,22 @@ Provider details that matter in production:
   changes, S3 also sends an `s3:TestEvent` message; consumers acknowledge it and
   never hand it to your code.
 - **GCP suffix filtering happens in the consumer.** Cloud Storage filters only by
-  prefix. The suffix travels as a message attribute, and the Worker runtime or
-  `queue.receive()` acknowledges non-matching messages without handing them to
-  your code. Every object under the prefix still costs one Pub/Sub message, and
-  with push delivery one Worker request. On a pull binding those messages also
-  use up slots in `receive(max)`, so a call can return fewer messages than
-  available, or none. Pick prefixes that are selective on their own.
+  prefix, and Pub/Sub subscription filters can't match suffixes either. Rules with
+  the same queue and prefix share one notification config, which carries their
+  suffixes as message attributes, so each object under that prefix is published
+  once, however many rules share it. The Worker runtime or `queue.receive()`
+  acknowledges messages that match no suffix without handing them to your code.
+  Every object under the prefix still costs one Pub/Sub message, and with push
+  delivery one Worker request. On a pull binding those messages also use up slots
+  in `receive(max)`, so a call can return fewer messages than available, or none.
+  Pick prefixes that are selective on their own.
+- **GCP nested prefixes.** Rules with nested prefixes (`logs/` and `logs/a/`) need
+  separate configs, so an object under both prefixes is published once per config.
+  Rules can't overlap, so at most one copy matches a rule, and the consumer drops
+  the other.
 - **GCP quota.** Cloud Storage allows 10 notification configs per bucket per event
-  type, and that includes configs created outside Alien.
+  type, including configs created outside Alien. A Storage uses one config per
+  distinct queue and prefix.
 - **Azure.** All subscriptions share the storage account's one system topic, which
   Azure creates when the first subscription is added. Alien never deletes the
   topic, and subscriptions created elsewhere are left alone.

@@ -2,7 +2,7 @@
 
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    storage_notifications::{GCS_RULE_ATTRIBUTE, GCS_SUFFIX_ATTRIBUTE},
+    storage_notifications::{gcs_suffixes, GCS_RULE_ATTRIBUTE},
     MessagePayload, StorageEvent, StorageEventType,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -36,7 +36,8 @@ fn invalid(reason: impl Into<String>) -> ErrorData {
 pub enum GcpQueueDelivery {
     /// Hand this payload to the consumer.
     Deliver(MessagePayload),
-    /// A storage notification whose key misses its rule's suffix: acknowledge it unseen.
+    /// A storage notification whose key matches none of its config's suffixes: acknowledge
+    /// it unseen.
     Filtered,
 }
 
@@ -101,10 +102,13 @@ fn gcs_storage_event(
         .transpose()
         .into_alien_error()
         .context(invalid("GCS notification size is invalid"))?;
-    if attributes
-        .get(GCS_SUFFIX_ATTRIBUTE)
-        .is_some_and(|suffix| !object.name.ends_with(suffix))
-    {
+    let suffixes = gcs_suffixes(attributes)
+        .context(invalid("GCS notification suffix attributes are invalid"))?;
+    if suffixes.is_some_and(|suffixes| {
+        !suffixes
+            .iter()
+            .any(|suffix| object.name.ends_with(suffix.as_str()))
+    }) {
         return Ok(None);
     }
     let event = StorageEvent {
@@ -428,7 +432,15 @@ pub(crate) mod aws_fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::storage_notifications::GCS_SUFFIXES_ATTRIBUTE;
     use serde_json::json;
+
+    fn suffixes(attrs: &mut HashMap<String, String>, suffixes: &[&str]) {
+        attrs.insert(
+            format!("{GCS_SUFFIXES_ATTRIBUTE}0"),
+            serde_json::to_string(suffixes).unwrap(),
+        );
+    }
 
     fn attributes() -> HashMap<String, String> {
         [
@@ -440,7 +452,7 @@ mod tests {
             ("payloadFormat", "JSON_API_V1"),
             ("eventTime", "2026-10-30T08:00:00.123Z"),
             (GCS_RULE_ATTRIBUTE, "source/0"),
-            (GCS_SUFFIX_ATTRIBUTE, ".json"),
+            ("storageEventSuffixes0", r#"[".json"]"#),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -477,13 +489,15 @@ mod tests {
     }
 
     #[test]
-    fn gcs_suffix_is_literal_and_case_sensitive_and_optional() {
+    fn gcs_suffixes_are_literal_case_sensitive_any_of_and_optional() {
         let mut attrs = attributes();
-        attrs.insert(GCS_SUFFIX_ATTRIBUTE.into(), "*.json".into());
+        suffixes(&mut attrs, &["*.json", ".csv"]);
         for (key, matches) in [
             ("in/a*.json", true),
+            ("in/a.csv", true),
             ("in/a.json", false),
             ("in/a*.JSON", false),
+            ("in/a.csv.gz", false),
         ] {
             let body = serde_json::to_vec(&json!({"bucket":"source", "name":key})).unwrap();
             assert_eq!(
@@ -492,11 +506,27 @@ mod tests {
                 "{key}"
             );
         }
-        attrs.remove(GCS_SUFFIX_ATTRIBUTE);
+        attrs.remove(&format!("{GCS_SUFFIXES_ATTRIBUTE}0"));
         assert!(matches!(
             gcp_queue_payload(br#"{"bucket":"source","name":"any"}"#, &attrs),
             GcpQueueDelivery::Deliver(MessagePayload::Json(_))
         ));
+    }
+
+    #[test]
+    fn gcs_suffixes_split_across_attributes_are_joined_in_order() {
+        let mut attrs = attributes();
+        attrs.insert(format!("{GCS_SUFFIXES_ATTRIBUTE}0"), r#"[".js"#.into());
+        attrs.insert(format!("{GCS_SUFFIXES_ATTRIBUTE}1"), r#"on"]"#.into());
+        let body = |key: &str| serde_json::to_vec(&json!({"bucket":"source", "name":key})).unwrap();
+        assert!(matches!(
+            gcp_queue_payload(&body("in/a.json"), &attrs),
+            GcpQueueDelivery::Deliver(MessagePayload::Json(_))
+        ));
+        assert_eq!(
+            gcp_queue_payload(&body("in/a.js"), &attrs),
+            GcpQueueDelivery::Filtered
+        );
     }
 
     #[test]
@@ -522,6 +552,15 @@ mod tests {
             );
         }
         let body = br#"{"bucket":"source","name":"file.txt"}"#;
+        let mut broken = attrs.clone();
+        broken.insert(format!("{GCS_SUFFIXES_ATTRIBUTE}0"), "not json".into());
+        assert_eq!(
+            gcp_queue_payload(body, &broken),
+            GcpQueueDelivery::Deliver(MessagePayload::Json(
+                json!({"bucket":"source","name":"file.txt"})
+            )),
+            "undecodable suffixes must not filter the notification"
+        );
         for field in ["eventType", "payloadFormat", "eventTime"] {
             let mut broken = attrs.clone();
             broken.remove(field);

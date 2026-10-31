@@ -1,13 +1,138 @@
 //! Shared notification translation for setup generators and live controllers.
 
-use crate::{Queue, Stack, Storage, StorageNotification};
+use crate::{error::ErrorData, Queue, ResourceRef, Result, Stack, Storage, StorageNotification};
+use alien_error::{AlienError, Context, IntoAlienError};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 
-/// Custom GCS notification attribute carrying the literal consumer-side suffix.
-pub const GCS_SUFFIX_ATTRIBUTE: &str = "storageEventSuffix";
+/// Custom GCS notification attributes `storageEventSuffixes0`, `storageEventSuffixes1`, …
+/// whose values, concatenated in order, form a JSON array of the config's literal suffixes.
+pub const GCS_SUFFIXES_ATTRIBUTE: &str = "storageEventSuffixes";
 
-/// Stable rule identity for additive GCS notification reconciliation.
+/// Stable config identity for additive GCS notification reconciliation.
 pub const GCS_RULE_ATTRIBUTE: &str = "storageNotificationRule";
+
+/// GCS accepts at most 5 custom attributes per notification config; one is the rule.
+const GCS_MAX_SUFFIX_ATTRIBUTES: usize = 4;
+
+/// GCS rejects custom attribute values longer than 1024 characters, and Pub/Sub attribute
+/// values are limited to 1024 bytes. Chunks are cut at character boundaries by bytes.
+const GCS_ATTRIBUTE_VALUE_BYTES: usize = 1024;
+
+/// One GCS notification config: every rule of a Storage with the same queue and prefix.
+/// GCS filters by prefix only, so one config per rule would publish each object under a
+/// shared prefix once per rule. The consumer checks the suffixes instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GcsNotificationConfig<'a> {
+    /// Queue the config publishes to.
+    pub queue: &'a ResourceRef,
+    /// `object_name_prefix`, if any.
+    pub prefix: Option<&'a str>,
+    /// Suffix attributes; empty when a rule of the group has no suffix and so matches
+    /// every object under the prefix (rules can't overlap, so it is then the only rule).
+    pub suffix_attributes: Vec<(String, String)>,
+}
+
+/// GCS notification configs for a Storage's rules, in order of first appearance.
+pub fn gcs_notification_configs(storage: &Storage) -> Result<Vec<GcsNotificationConfig<'_>>> {
+    let mut groups: Vec<(&ResourceRef, Option<&str>, Vec<&str>, bool)> = Vec::new();
+    for rule in &storage.notifications {
+        let prefix = rule.prefix.as_deref();
+        let index = match groups
+            .iter()
+            .position(|(queue, other, _, _)| queue.id == rule.queue.id && *other == prefix)
+        {
+            Some(index) => index,
+            None => {
+                groups.push((&rule.queue, prefix, Vec::new(), false));
+                groups.len() - 1
+            }
+        };
+        match rule.suffix.as_deref() {
+            Some(suffix) => groups[index].2.push(suffix),
+            None => groups[index].3 = true,
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(queue, prefix, suffixes, unfiltered)| {
+            let suffix_attributes = if unfiltered {
+                Vec::new()
+            } else {
+                gcs_suffix_attributes(&suffixes).context(ErrorData::GenericError {
+                    message: format!(
+                        "Storage '{}' notification suffixes for queue '{}' do not fit in GCS attributes",
+                        storage.id, queue.id
+                    ),
+                })?
+            };
+            Ok(GcsNotificationConfig {
+                queue,
+                prefix,
+                suffix_attributes,
+            })
+        })
+        .collect()
+}
+
+fn gcs_suffix_attributes(suffixes: &[&str]) -> Result<Vec<(String, String)>> {
+    let encoded =
+        serde_json::to_string(suffixes)
+            .into_alien_error()
+            .context(ErrorData::GenericError {
+                message: "Encode notification suffixes".to_string(),
+            })?;
+    let mut chunks = Vec::new();
+    let mut rest = encoded.as_str();
+    while !rest.is_empty() {
+        let mut end = rest.len().min(GCS_ATTRIBUTE_VALUE_BYTES);
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        chunks.push(&rest[..end]);
+        rest = &rest[end..];
+    }
+    if chunks.len() > GCS_MAX_SUFFIX_ATTRIBUTES {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "{} encoded bytes need {} attributes; GCS allows {GCS_MAX_SUFFIX_ATTRIBUTES}",
+                encoded.len(),
+                chunks.len()
+            ),
+        }));
+    }
+    Ok(chunks
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            (
+                format!("{GCS_SUFFIXES_ATTRIBUTE}{index}"),
+                chunk.to_string(),
+            )
+        })
+        .collect())
+}
+
+/// The literal suffixes a GCS notification's attributes carry, or `None` when they carry
+/// none (every object under the config's prefix matches).
+pub fn gcs_suffixes(attributes: &HashMap<String, String>) -> Result<Option<Vec<String>>> {
+    let mut encoded = String::new();
+    let mut index = 0;
+    while let Some(chunk) = attributes.get(&format!("{GCS_SUFFIXES_ATTRIBUTE}{index}")) {
+        encoded.push_str(chunk);
+        index += 1;
+    }
+    if index == 0 {
+        return Ok(None);
+    }
+    serde_json::from_str(&encoded)
+        .map(Some)
+        .into_alien_error()
+        .context(ErrorData::GenericError {
+            message: "Storage notification suffix attributes are not a JSON string array"
+                .to_string(),
+        })
+}
 
 /// Whether this queue owns an ingress grant for storage notifications in its stack.
 pub fn queue_receives_storage_notifications(stack: &Stack, queue_id: &str) -> bool {
@@ -119,8 +244,7 @@ mod tests {
     }
 
     fn matches(rule: &StorageNotification, key: &str) -> bool {
-        rule.prefix.as_deref().map_or(true, |prefix| key.starts_with(prefix))
-            && rule.suffix.as_deref().map_or(true, |suffix| key.ends_with(suffix))
+        rule.matches_key(key)
     }
 
     /// Rules overlap exactly when they share a key that S3 would have to route twice.
@@ -130,18 +254,168 @@ mod tests {
     fn overlap_equals_existence_of_a_key_matching_both_rules() {
         let keys = keys();
         let filters = filters();
-        for (ap, asf) in filters.iter().flat_map(|p| filters.iter().map(move |s| (p, s))) {
+        for (ap, asf) in filters
+            .iter()
+            .flat_map(|p| filters.iter().map(move |s| (p, s)))
+        {
             let a = notification(ap.as_deref(), asf.as_deref());
-            for (bp, bsf) in filters.iter().flat_map(|p| filters.iter().map(move |s| (p, s))) {
+            for (bp, bsf) in filters
+                .iter()
+                .flat_map(|p| filters.iter().map(move |s| (p, s)))
+            {
                 let b = notification(bp.as_deref(), bsf.as_deref());
                 let witnessed = keys.iter().any(|key| matches(&a, key) && matches(&b, key));
-                assert_eq!(
-                    notifications_overlap(&a, &b),
-                    witnessed,
-                    "a={a:?} b={b:?}"
-                );
+                assert_eq!(notifications_overlap(&a, &b), witnessed, "a={a:?} b={b:?}");
             }
         }
+    }
+
+    fn storage(rules: Vec<StorageNotification>) -> Storage {
+        Storage::new("uploads".into()).notifications(rules).build()
+    }
+
+    /// A GCS config as the consumer sees it: queue, prefix and decoded suffixes.
+    type Decoded<'a> = (&'a str, Option<&'a str>, Option<Vec<String>>);
+
+    /// Queues of the configs that deliver `key`: GCS filters by prefix, the consumer by the
+    /// decoded suffixes.
+    fn delivered_to<'a>(configs: &[Decoded<'a>], key: &str) -> Vec<&'a str> {
+        configs
+            .iter()
+            .filter(|(_, prefix, suffixes)| {
+                prefix.is_none_or(|prefix| key.starts_with(prefix))
+                    && suffixes
+                        .as_ref()
+                        .is_none_or(|suffixes| suffixes.iter().any(|suffix| key.ends_with(suffix)))
+            })
+            .map(|(queue, _, _)| *queue)
+            .collect()
+    }
+
+    fn decoded(storage: &Storage) -> Vec<Decoded<'_>> {
+        gcs_notification_configs(storage)
+            .unwrap()
+            .into_iter()
+            .map(|config| {
+                let attributes: HashMap<_, _> = config.suffix_attributes.into_iter().collect();
+                (
+                    config.queue.id.as_str(),
+                    config.prefix,
+                    gcs_suffixes(&attributes).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// For every pair of non-overlapping rules: rules with one queue and prefix share a
+    /// config, and every key is delivered exactly once if a rule matches it, else never.
+    #[test]
+    fn grouped_gcs_configs_deliver_exactly_the_keys_each_rule_matches() {
+        let filters: Vec<_> = filters()
+            .into_iter()
+            .filter(|filter| {
+                filter
+                    .as_ref()
+                    .is_none_or(|value| value.chars().count() <= 2)
+            })
+            .collect();
+        let keys: Vec<_> = keys()
+            .into_iter()
+            .filter(|key| key.chars().count() <= 4)
+            .collect();
+        let rules: Vec<_> = filters
+            .iter()
+            .flat_map(|prefix| {
+                filters
+                    .iter()
+                    .map(move |suffix| notification(prefix.as_deref(), suffix.as_deref()))
+            })
+            .collect();
+        for (index, a) in rules.iter().enumerate() {
+            for b in &rules[index + 1..] {
+                if notifications_overlap(a, b) {
+                    continue;
+                }
+                let storage = storage(vec![a.clone(), b.clone()]);
+                let configs = decoded(&storage);
+                assert_eq!(configs.len(), if a.prefix == b.prefix { 1 } else { 2 });
+                for key in &keys {
+                    let expected = [a, b].iter().filter(|rule| matches(rule, key)).count();
+                    assert_eq!(
+                        delivered_to(&configs, key).len(),
+                        expected,
+                        "a={a:?} b={b:?} key={key:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gcs_configs_split_by_queue_and_keep_unfiltered_rules_unfiltered() {
+        let rule = |queue: &str, prefix: &str, suffix: Option<&str>| {
+            StorageNotification::builder()
+                .queue(ResourceRef::new(Queue::RESOURCE_TYPE, queue))
+                .prefix(prefix.into())
+                .maybe_suffix(suffix.map(str::to_string))
+                .build()
+        };
+        let storage = storage(vec![
+            rule("work", "logs/", Some(".json")),
+            rule("audit", "logs/", Some(".csv")),
+            rule("work", "logs/", Some(".gz")),
+            rule("work", "raw/", None),
+        ]);
+        let configs = decoded(&storage);
+        assert_eq!(
+            configs,
+            [
+                (
+                    "work",
+                    Some("logs/"),
+                    Some(vec![".json".into(), ".gz".into()])
+                ),
+                ("audit", Some("logs/"), Some(vec![".csv".into()])),
+                ("work", Some("raw/"), None),
+            ]
+        );
+        assert_eq!(delivered_to(&configs, "logs/a.json"), ["work"]);
+        assert_eq!(delivered_to(&configs, "logs/a.csv"), ["audit"]);
+        assert!(delivered_to(&configs, "logs/a.txt").is_empty());
+        assert_eq!(delivered_to(&configs, "raw/anything"), ["work"]);
+    }
+
+    /// The largest suffix set the portable limits allow (10 rules, 128-byte suffixes) must
+    /// fit the GCS limits measured on real GCS: at most 5 custom attributes per config
+    /// (one is the rule) and values of at most 1024 characters.
+    #[test]
+    fn largest_allowed_suffix_set_fits_gcs_attribute_limits_and_round_trips() {
+        let suffixes: Vec<String> = (0..10)
+            .map(|index| {
+                let mut suffix = index.to_string();
+                for character in ['"', '\\', '*', 'é'].iter().cycle() {
+                    if suffix.len() + character.len_utf8() > 128 {
+                        break;
+                    }
+                    suffix.push(*character);
+                }
+                suffix
+            })
+            .collect();
+        assert!(suffixes.iter().all(|suffix| suffix.len() >= 127));
+        let borrowed: Vec<&str> = suffixes.iter().map(String::as_str).collect();
+        let attributes = gcs_suffix_attributes(&borrowed).unwrap();
+        assert!(attributes.len() <= GCS_MAX_SUFFIX_ATTRIBUTES);
+        assert!(
+            attributes.len() > 1,
+            "the worst case must exercise chunking"
+        );
+        for (_, value) in &attributes {
+            assert!(value.len() <= GCS_ATTRIBUTE_VALUE_BYTES);
+        }
+        let attributes: HashMap<_, _> = attributes.into_iter().collect();
+        assert_eq!(gcs_suffixes(&attributes).unwrap(), Some(suffixes));
+        assert_eq!(gcs_suffixes(&HashMap::new()).unwrap(), None);
     }
 
     #[test]

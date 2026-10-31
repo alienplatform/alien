@@ -17,7 +17,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext,
-    storage_notifications::{GCS_RULE_ATTRIBUTE, GCS_SUFFIX_ATTRIBUTE},
+    storage_notifications::{gcs_notification_configs, GCS_RULE_ATTRIBUTE},
     LifecycleRule, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
     ServiceAccount, Storage,
 };
@@ -101,13 +101,17 @@ fn emit_notifications(
     label: &str,
     storage: &Storage,
 ) -> Result<()> {
-    for (index, notification) in storage.notifications.iter().enumerate() {
-        let queue_label = ctx.name_for(&notification.queue.id).ok_or_else(|| {
+    let configs =
+        gcs_notification_configs(storage).context(alien_core::ErrorData::GenericError {
+            message: format!("Storage '{}' notifications as GCS configs", storage.id()),
+        })?;
+    for (index, config) in configs.into_iter().enumerate() {
+        let queue_label = ctx.name_for(&config.queue.id).ok_or_else(|| {
             AlienError::new(alien_core::ErrorData::GenericError {
                 message: format!(
-                    "Storage '{}' notification {index} queue '{}' has no Terraform resource",
+                    "Storage '{}' notification queue '{}' has no Terraform resource",
                     storage.id(),
-                    notification.queue.id
+                    config.queue.id
                 ),
             })
         })?;
@@ -133,21 +137,24 @@ fn emit_notifications(
                 ])]),
             ),
         ];
-        if let Some(prefix) = &notification.prefix {
+        if let Some(prefix) = config.prefix {
             body.push(attr(
                 "object_name_prefix",
-                Expression::String(prefix.clone()),
+                Expression::String(prefix.to_string()),
             ));
         }
         let mut attributes = vec![(
-            GCS_RULE_ATTRIBUTE,
+            GCS_RULE_ATTRIBUTE.to_string(),
             expr::raw(format!(
                 "format(\"%s/{index}\", google_storage_bucket.{label}.name)"
             )),
         )];
-        if let Some(suffix) = &notification.suffix {
-            attributes.push((GCS_SUFFIX_ATTRIBUTE, Expression::String(suffix.clone())));
-        }
+        attributes.extend(
+            config
+                .suffix_attributes
+                .into_iter()
+                .map(|(name, value)| (name, Expression::String(value))),
+        );
         body.push(attr("custom_attributes", expr::object(attributes)));
         fragment.resource_blocks.push(resource_block(
             "google_storage_notification",

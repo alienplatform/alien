@@ -361,7 +361,7 @@ mod notification_tests {
                 "ackId":format!("receipt-{i}"), "message": {
                     "messageId": format!("id-{i}"),
                     "data":BASE64_STANDARD.encode(json!({"bucket":"source","name":key,"size":"7"}).to_string()),
-                    "attributes":{"notificationConfig":"config-1","storageNotificationRule":"source/0","eventType":"OBJECT_FINALIZE","payloadFormat":"JSON_API_V1","eventTime":"2026-10-30T08:00:00Z","storageEventSuffix":".json"}
+                    "attributes":{"notificationConfig":"config-1","storageNotificationRule":"source/0","eventType":"OBJECT_FINALIZE","payloadFormat":"JSON_API_V1","eventTime":"2026-10-30T08:00:00Z","storageEventSuffixes0":"[\".json\"]"}
                 }
             })).collect::<Vec<_>>();
             let pull = server

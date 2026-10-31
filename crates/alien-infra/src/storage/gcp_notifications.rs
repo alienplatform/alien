@@ -8,7 +8,7 @@ use crate::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    storage_notifications::{GCS_RULE_ATTRIBUTE, GCS_SUFFIX_ATTRIBUTE},
+    storage_notifications::{gcs_notification_configs, GCS_RULE_ATTRIBUTE},
     Storage,
 };
 use alien_error::{AlienError, Context};
@@ -28,25 +28,28 @@ pub(super) async fn reconcile(
     let owner = format!("{bucket}/");
     let mut desired = Vec::new();
     if !deleting {
-        for (index, rule) in storage.notifications.iter().enumerate() {
-            let queue = ctx.require_dependency::<GcpQueueController>(&rule.queue)?;
+        let configs =
+            gcs_notification_configs(storage).context(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(storage.id.clone()),
+                message: "Storage notifications cannot be expressed as GCS configs".to_string(),
+            })?;
+        for (index, config) in configs.into_iter().enumerate() {
+            let queue = ctx.require_dependency::<GcpQueueController>(config.queue)?;
             let topic = queue.topic_name.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::DependencyNotReady {
                     resource_id: storage.id.clone(),
-                    dependency_id: rule.queue.id.clone(),
+                    dependency_id: config.queue.id.clone(),
                 })
             })?;
             let mut custom_attributes =
                 HashMap::from([(GCS_RULE_ATTRIBUTE.to_string(), format!("{owner}{index}"))]);
-            if let Some(suffix) = &rule.suffix {
-                custom_attributes.insert(GCS_SUFFIX_ATTRIBUTE.to_string(), suffix.clone());
-            }
+            custom_attributes.extend(config.suffix_attributes);
             desired.push(GcsNotification {
                 id: None,
                 topic: Some(format!("projects/{}/topics/{topic}", cfg.project_id)),
                 event_types: vec!["OBJECT_FINALIZE".into()],
                 payload_format: Some("JSON_API_V1".into()),
-                object_name_prefix: rule.prefix.clone(),
+                object_name_prefix: config.prefix.map(str::to_string),
                 custom_attributes,
             });
         }
@@ -365,7 +368,10 @@ mod tests {
         assert_eq!(rules[0].id.as_deref(), Some("foreign"));
         assert_eq!(rules[1].id.as_deref(), Some("2"));
         assert_eq!(rules[2].object_name_prefix.as_deref(), Some("changed/"));
-        assert_eq!(rules[2].custom_attributes[GCS_SUFFIX_ATTRIBUTE], ".json");
+        assert_eq!(
+            rules[2].custom_attributes["storageEventSuffixes0"],
+            r#"[".json"]"#
+        );
 
         let mut removed = run
             .internal_state::<GcpStorageController>()

@@ -31,7 +31,7 @@ async fn notification_create_and_list_preserve_provider_filters_and_attributes()
         "event_types": ["OBJECT_FINALIZE"],
         "payload_format": "JSON_API_V1",
         "object_name_prefix": "in/é*",
-        "custom_attributes": {"storageEventSuffix": ".json"}
+        "custom_attributes": {"storageEventSuffixes0": "[\".json\"]"}
     });
     let mut response = wire.clone();
     response["id"] = json!("7");
@@ -60,7 +60,10 @@ async fn notification_create_and_list_preserve_provider_filters_and_attributes()
                 event_types: vec!["OBJECT_FINALIZE".into()],
                 payload_format: Some("JSON_API_V1".into()),
                 object_name_prefix: Some("in/é*".into()),
-                custom_attributes: HashMap::from([("storageEventSuffix".into(), ".json".into())]),
+                custom_attributes: HashMap::from([(
+                    "storageEventSuffixes0".into(),
+                    r#"[".json"]"#.into(),
+                )]),
                 ..Default::default()
             },
         )
