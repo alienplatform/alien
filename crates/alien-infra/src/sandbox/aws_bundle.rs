@@ -132,10 +132,22 @@ async fn delete_keys(
     };
     let mut continuation = None;
     loop {
-        let page = client
+        let page = match client
             .list_objects_v2(bucket, Some(sandbox_prefix(resource_id)), continuation)
             .await
-            .context(failed())?;
+        {
+            Ok(page) => page,
+            // A bucket that is already gone holds no bundles.
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error).context(failed()),
+        };
         let keys = page
             .contents
             .into_iter()
@@ -203,6 +215,42 @@ mod tests {
         assert_ne!(first.key, next.key);
         assert!(first.key.starts_with("sandbox-bundle/agents/"));
         assert_eq!(dockerfile(&first), format!("FROM {image}\n"));
+    }
+
+    /// Teardown can reach a sandbox whose bundle bucket is already gone; that leaves nothing to
+    /// delete, while any other failure to list still stops the delete.
+    #[tokio::test]
+    async fn deleting_from_a_missing_bucket_succeeds_and_other_failures_do_not() {
+        use alien_aws_clients::s3::MockS3Api;
+        use alien_client_core::ErrorData as CloudError;
+
+        let mut gone = MockS3Api::new();
+        gone.expect_list_objects_v2()
+            .times(1)
+            .returning(|bucket, _, _| {
+                Err(AlienError::new(CloudError::RemoteResourceNotFound {
+                    resource_type: "Bucket".into(),
+                    resource_name: bucket.to_string(),
+                }))
+            });
+        gone.expect_delete_objects().never();
+        delete_all(&gone, "p-sandbox-bundles", "agents")
+            .await
+            .expect("a missing bucket holds no bundles");
+
+        let mut denied = MockS3Api::new();
+        denied
+            .expect_list_objects_v2()
+            .times(1)
+            .returning(|bucket, _, _| {
+                Err(AlienError::new(CloudError::RemoteAccessDenied {
+                    resource_type: "Bucket".into(),
+                    resource_name: bucket.to_string(),
+                }))
+            });
+        delete_all(&denied, "p-sandbox-bundles", "agents")
+            .await
+            .expect_err("a bucket that cannot be listed may still hold bundles");
     }
 
     #[test]
