@@ -9,16 +9,21 @@ use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::import::data::AwsSandboxImportData;
 use alien_core::sandbox_build_role::{
     sandbox_build_role_arn, sandbox_build_role_name, SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME,
+    SANDBOX_BUNDLE_STORAGE_ID,
 };
 use alien_core::sandbox_setup_inputs::{
-    aws_sandbox_build_role, aws_sandbox_remote_grant, aws_sandbox_setup_inputs, SetupAccount,
+    aws_sandbox_build_role, aws_sandbox_remote_grant, aws_sandbox_renders_bundle,
+    aws_sandbox_setup_inputs, SetupAccount,
 };
 use alien_core::{
     setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Platform, RemoteBindings,
     ResourceLifecycle, ResourceStatus, Sandbox, SandboxCode, SetupScaffolding, Stack, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_permissions::{generators::AwsRuntimePermissionsGenerator, PermissionContext};
+use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
+use alien_permissions::{
+    generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
+};
 use tracing::info;
 
 use super::aws_sandbox_egress;
@@ -51,9 +56,11 @@ pub(super) async fn reconcile(
     let SandboxCode::Image { image } = &sandbox.code else {
         return Err(not_a_bundle(sandbox));
     };
+    let renders_bundle = aws_sandbox_renders_bundle(stack, &sandbox.id);
     let build_role = aws_sandbox_build_role(
         sandbox,
         image,
+        renders_bundle,
         lifecycle,
         SetupAccount {
             partition,
@@ -61,7 +68,10 @@ pub(super) async fn reconcile(
             region: &aws.region,
         },
     );
-    let policy = build_policy(&build_role, sandbox)?;
+    let mut policy = build_policy(&build_role, sandbox)?;
+    if renders_bundle {
+        grant_bundle_storage_read(&mut policy, ctx.resource_prefix, sandbox)?;
+    }
     let image_arn = setup_built_image(ctx, aws, sandbox, lifecycle);
     let trust = serde_json::to_value(build_role.trust_policy())
         .into_alien_error()
@@ -334,6 +344,37 @@ fn build_policy(build_role: &SandboxBuildRole<'_>, sandbox: &Sandbox) -> Result<
     )
     .into_alien_error()
     .context(serialize_failed(&sandbox.id))
+}
+
+/// The bundle Storage's `storage/data-read`, the grant the CloudFormation and Terraform Storage
+/// emitters attach to this role. Here it joins the role's one inline policy, which setup already
+/// owns and verifies.
+fn grant_bundle_storage_read(
+    policy: &mut serde_json::Value,
+    resource_prefix: &str,
+    sandbox: &Sandbox,
+) -> Result<()> {
+    let failed = || ErrorData::ResourceConfigInvalid {
+        message: "the sandbox's bundle Storage grant cannot be resolved".to_string(),
+        resource_id: Some(sandbox.id.clone()),
+    };
+    let read = alien_permissions::get_permission_set("storage/data-read")
+        .ok_or_else(|| AlienError::new(failed()))?;
+    let context = PermissionContext::new().with_resource_name(aws_prefixed_resource_name(
+        resource_prefix,
+        SANDBOX_BUNDLE_STORAGE_ID,
+    ));
+    let grant = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(read, BindingTarget::Resource, &context)
+        .context(failed())?;
+    let statements = serde_json::to_value(grant.statement)
+        .into_alien_error()
+        .context(serialize_failed(&sandbox.id))?;
+    policy["Statement"]
+        .as_array_mut()
+        .ok_or_else(|| AlienError::new(failed()))?
+        .extend(statements.as_array().into_iter().flatten().cloned());
+    Ok(())
 }
 
 fn not_a_bundle(sandbox: &Sandbox) -> AlienError<ErrorData> {

@@ -1,5 +1,7 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
+use alien_core::permissions::ManagementPermissions;
+use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID;
 use alien_core::{
     Platform, Sandbox, SandboxEgress, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID,
@@ -66,6 +68,29 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             );
         }
 
+        // A grant scoped to the bundle bucket would reach it past its write guard.
+        let management_profile = match &stack.permissions.management {
+            ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+                Some(("management", profile))
+            }
+            ManagementPermissions::Auto => None,
+        };
+        for (profile_name, profile) in stack
+            .permissions
+            .profiles
+            .iter()
+            .map(|(name, profile)| (name.as_str(), profile))
+            .chain(management_profile)
+        {
+            for scope in profile.0.keys() {
+                if scope.starts_with(SANDBOX_BUNDLE_STORAGE_ID) {
+                    errors.push(format!(
+                        "Permission profile '{profile_name}' grants on '{scope}', which is reserved for the bucket sandbox images are built from"
+                    ));
+                }
+            }
+        }
+
         for (resource_id, resource_entry) in stack.resources() {
             let resource_type_value = resource_entry.config.resource_type();
             let resource_type = resource_type_value.0.as_ref();
@@ -84,6 +109,14 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             ) {
                 errors.push(format!(
                     "Resource ID '{resource_id}' is reserved for deployment secret delivery. Choose a different ID for the application resource"
+                ));
+                continue;
+            }
+
+            // The bundle bucket's grants and its write guard are bound to this name as a prefix.
+            if resource_id.starts_with(SANDBOX_BUNDLE_STORAGE_ID) {
+                errors.push(format!(
+                    "Resource ID '{resource_id}' starts with '{SANDBOX_BUNDLE_STORAGE_ID}', which is reserved for the bucket sandbox images are built from. Choose a different ID for the application resource"
                 ));
                 continue;
             }
@@ -269,6 +302,62 @@ mod tests {
         assert!(!result.success);
         assert!(!result.errors.is_empty());
         assert!(result.errors[0].contains("network"));
+    }
+
+    #[tokio::test]
+    async fn rejects_ids_in_the_sandbox_bundle_namespace() {
+        // The bundle bucket's management grant and its write guard match this prefix, so an
+        // application bucket under it would share both.
+        for (id, rejected) in [
+            ("sandbox-bundles", true),
+            ("sandbox-bundles-archive", true),
+            ("bundles", false),
+        ] {
+            let storage = alien_core::Storage::new(id.to_string()).build();
+            let stack = Stack::new("test-stack".to_string())
+                .add(storage, ResourceLifecycle::Frozen)
+                .build();
+            let result = AllowedUserResourcesCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .expect("reserved-id validation should run");
+            assert_eq!(!result.success, rejected, "{id}: {:?}", result.errors);
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_grants_scoped_to_the_sandbox_bundle_bucket() {
+        let workload = Stack::new("test-stack".to_string())
+            .permissions(alien_core::permissions::PermissionsConfig {
+                profiles: IndexMap::from([(
+                    "execution".to_string(),
+                    alien_core::permissions::PermissionProfile::new()
+                        .resource("sandbox-bundles", ["storage/data-write"]),
+                )]),
+                ..Default::default()
+            })
+            .build();
+        let management = Stack::new("test-stack".to_string())
+            .permissions(alien_core::permissions::PermissionsConfig {
+                management: ManagementPermissions::Extend(
+                    alien_core::permissions::PermissionProfile::new()
+                        .resource("sandbox-bundles", ["storage/provision"]),
+                ),
+                ..Default::default()
+            })
+            .build();
+        for stack in [workload, management] {
+            let result = AllowedUserResourcesCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .expect("reserved-scope validation should run");
+            assert!(!result.success);
+            assert!(
+                result.errors[0].contains("'sandbox-bundles', which is reserved"),
+                "{:?}",
+                result.errors
+            );
+        }
     }
 
     #[tokio::test]

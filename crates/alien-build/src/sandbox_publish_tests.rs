@@ -1,5 +1,4 @@
 use super::*;
-use crate::sandbox_bundle::{write_bundle, AgentSource};
 use tempfile::tempdir;
 
 async fn archive(directory: &Path, target: BinaryTarget, contents: &[u8]) {
@@ -20,10 +19,11 @@ async fn archive(directory: &Path, target: BinaryTarget, contents: &[u8]) {
         .unwrap();
 }
 
-/// Publish through the real registry protocol and render the actual build bundle.
-/// Fresh push tags must not manufacture a new sandbox build for identical ARM64 bytes.
+/// Publish through the real registry protocol and pin the result by digest, as an AWS release
+/// does with the image the deployment's bundle names in its `FROM`. Fresh push tags must not
+/// manufacture a new sandbox build for identical ARM64 bytes.
 #[tokio::test]
-async fn repeated_sandbox_pushes_preserve_the_arm64_bundle_identity() {
+async fn repeated_sandbox_pushes_preserve_the_arm64_image_identity() {
     let registry = container_registry::ContainerRegistry::builder()
         .build_for_testing()
         .run_in_background();
@@ -37,8 +37,8 @@ async fn repeated_sandbox_pushes_preserve_the_arm64_bundle_identity() {
         monolithic_push: dockdash::MonolithicPushPolicy::Always,
         ..Default::default()
     };
-    let publish = || {
-        push_resource_images(
+    let publish = || async {
+        let pushed = push_resource_images(
             "sandbox",
             "sandbox",
             "sandbox",
@@ -47,28 +47,15 @@ async fn repeated_sandbox_pushes_preserve_the_arm64_bundle_identity() {
             &repository,
             &options,
         )
+        .await?;
+        pin_to_digest("sandbox", &pushed, &options).await
     };
     let first = publish().await.unwrap();
     let second = publish().await.unwrap();
-    let agent = AgentSource::Image("example.com/agent:v1".to_string());
-    let base = DockDashImage::from_tarball(images.path().join(format!(
-        "{}.oci.tar",
-        BinaryTarget::LinuxArm64.runtime_platform_id()
-    )))
-    .unwrap();
-    let identity = crate::sandbox_identity::BaseIdentity::read(&base, "sandbox")
-        .await
-        .unwrap();
-    let first_bundle = images.path().join("first.zip");
-    let second_bundle = images.path().join("second.zip");
-    write_bundle(&first_bundle, &first, &agent, &identity).unwrap();
-    write_bundle(&second_bundle, &second, &agent, &identity).unwrap();
     assert_eq!(
-        std::fs::read(&first_bundle).unwrap(),
-        std::fs::read(&second_bundle).unwrap(),
-        "the same ARM64 image pushed under fresh tags must produce identical bundle bytes"
+        first, second,
+        "the same ARM64 image pushed under fresh tags must keep one reference"
     );
-    assert_eq!(first, second);
     assert!(first.starts_with(&format!("{repository}@sha256:")));
     let client = OciClient::new(OciClientConfig {
         protocol: dockdash::ClientProtocol::Http,
@@ -93,26 +80,9 @@ async fn repeated_sandbox_pushes_preserve_the_arm64_bundle_identity() {
         "an unused architecture cannot roll the sandbox"
     );
     archive(images.path(), BinaryTarget::LinuxArm64, b"arm-v2").await;
-    let changed = publish().await.unwrap();
     assert_ne!(
-        changed, first,
+        publish().await.unwrap(),
+        first,
         "changed executable content requires a new version"
-    );
-    write_bundle(&second_bundle, &changed, &agent, &identity).unwrap();
-    assert_ne!(
-        std::fs::read(&first_bundle).unwrap(),
-        std::fs::read(&second_bundle).unwrap()
-    );
-    write_bundle(
-        &second_bundle,
-        &first,
-        &AgentSource::Image("example.com/agent:v2".to_string()),
-        &identity,
-    )
-    .unwrap();
-    assert_ne!(
-        std::fs::read(&first_bundle).unwrap(),
-        std::fs::read(&second_bundle).unwrap(),
-        "an agent upgrade must remain a real build change"
     );
 }

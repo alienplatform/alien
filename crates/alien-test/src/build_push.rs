@@ -16,7 +16,7 @@ use alien_aws_clients::{
 use alien_build::settings::{BuildSettings, PlatformBuildSettings, PushSettings};
 use alien_core::{
     AwsClientConfig, AwsCredentials, Container, ContainerCode, Daemon, DaemonCode, Platform,
-    Worker, WorkerCode,
+    Sandbox, SandboxCode, Worker, WorkerCode,
 };
 use anyhow::Context;
 use dockdash::{ClientProtocol, PushOptions, RegistryAuth};
@@ -48,6 +48,13 @@ fn resolve_source_paths(stack: &mut alien_core::Stack, app_dir: &Path) {
 
         if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
             if let DaemonCode::Source { ref mut src, .. } = daemon.code {
+                let resolved = app_dir.join(&*src);
+                *src = resolved.to_string_lossy().to_string();
+            }
+        }
+
+        if let Some(sandbox) = entry.config.downcast_mut::<Sandbox>() {
+            if let SandboxCode::Source { ref mut src, .. } = sandbox.code {
                 let resolved = app_dir.join(&*src);
                 *src = resolved.to_string_lossy().to_string();
             }

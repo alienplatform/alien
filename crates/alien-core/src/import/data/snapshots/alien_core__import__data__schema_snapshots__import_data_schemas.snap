@@ -346,7 +346,7 @@ expression: schemas
         ]
       },
       "bundleUri": {
-        "description": "Bundle the controller builds the image from. Only a runtime-provisioned sandbox carries it.",
+        "description": "Bundle the controller builds the image from. Only a runtime-provisioned sandbox carries it. Absent for a sandbox whose controller renders its own bundle into the deployment's bundle Storage.",
         "type": [
           "string",
           "null"

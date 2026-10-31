@@ -20,6 +20,7 @@ use alien_core::sandbox_egress::{
     sandbox_egress_network, sandbox_needs_connector, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
 };
 use alien_core::sandbox_image::AWS_MICROVM;
+use alien_core::sandbox_setup_inputs::aws_sandbox_renders_bundle;
 use alien_core::{
     import::EmitContext, BundleUri, ErrorData, RemoteBindings, ResourceLifecycle, Result, Sandbox,
     SandboxCode, SandboxEgress,
@@ -50,7 +51,13 @@ impl CfEmitter for AwsSandboxEmitter {
         let image_id = required_logical_id(ctx)?;
         let role_id = format!("{image_id}BuildRole");
 
-        let artifact_uri = artifact_uri(sandbox)?;
+        // A sandbox whose controller renders its own bundle reads it through the bundle Storage's
+        // grant, and has no published one.
+        let artifact_uri = if aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
+            None
+        } else {
+            Some(artifact_uri(sandbox)?)
+        };
         let egress = egress_network(ctx, sandbox)?;
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
         // its baseline with no way to opt out, so the baseline is a quarter of what was declared.
@@ -77,7 +84,10 @@ impl CfEmitter for AwsSandboxEmitter {
         );
         role.properties.insert(
             "Policies".to_string(),
-            build_policies(sandbox, artifact_uri, provisioned_at_runtime(ctx))?,
+            match artifact_uri {
+                Some(uri) => build_policies(sandbox, uri, provisioned_at_runtime(ctx))?,
+                None => image_pull_build_policies(),
+            },
         );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
@@ -196,10 +206,12 @@ impl CfEmitter for AwsSandboxEmitter {
             "BuildRoleArn".to_string(),
             CfExpression::get_att(&role_id, "Arn"),
         );
-        properties.insert(
-            "CodeArtifact".to_string(),
-            CfExpression::object([("Uri", code_artifact_uri(artifact_uri))]),
-        );
+        if let Some(uri) = artifact_uri {
+            properties.insert(
+                "CodeArtifact".to_string(),
+                CfExpression::object([("Uri", code_artifact_uri(uri))]),
+            );
+        }
         // The switch behind "control plane never sees sandbox contents", not an approximation.
         properties.insert(
             "Logging".to_string(),
@@ -252,6 +264,9 @@ impl CfEmitter for AwsSandboxEmitter {
         properties.insert("Tags".to_string(), tags(ctx));
 
         let mut resources = vec![role];
+        if artifact_uri.is_none() {
+            resources.push(super::storage::sandbox_bundle_read_policy(ctx, &role_id)?);
+        }
         resources.append(&mut egress_resources);
         // A Live sandbox's image is built by the runtime controller once the deployment registers —
         // only then is a customer account a principal Alien's registry can open to. The build role
@@ -579,7 +594,7 @@ fn runtime_import_ref(
     // Mirrors the logical id `emit_resources` gives the build role. No shared constant ties them,
     // so a rename there leaves this GetAtt pointing at nothing and the template fails at deploy.
     let role_id = format!("{image_id}BuildRole");
-    Ok(CfExpression::object([
+    let mut fields = vec![
         ("previewPorts", preview_ports(sandbox)),
         (
             "egressConnectorArns",
@@ -590,8 +605,11 @@ fn runtime_import_ref(
             CfExpression::from(!sandbox_needs_connector(ctx.stack, sandbox)),
         ),
         ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
-        ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
-    ]))
+    ];
+    if !aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
+        fields.push(("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)));
+    }
+    Ok(CfExpression::object(fields))
 }
 
 /// AWS's MicroVM build-role guidance prescribes this `aws:SourceAccount` condition on the trust
@@ -733,6 +751,63 @@ fn build_policies(
             ]),
         ),
     ])]))
+}
+
+/// What the build role may do when the controller renders the bundle beyond reading it, which the
+/// bundle Storage grants: pull the released image from another account's registry.
+/// `SandboxBuildRole::policy` holds the resolved form and says why.
+fn image_pull_build_policies() -> CfExpression {
+    let statements = vec![
+        CfExpression::object([
+            ("Sid", CfExpression::from("AuthorizeSandboxImagePull")),
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                CfExpression::list([CfExpression::from("ecr:GetAuthorizationToken")]),
+            ),
+            ("Resource", CfExpression::from("*")),
+        ]),
+        CfExpression::object([
+            ("Sid", CfExpression::from("PullSandboxImage")),
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                CfExpression::list([
+                    CfExpression::from("ecr:BatchGetImage"),
+                    CfExpression::from("ecr:GetDownloadUrlForLayer"),
+                ]),
+            ),
+            (
+                "Resource",
+                CfExpression::sub("arn:${AWS::Partition}:ecr:*:*:repository/*"),
+            ),
+        ]),
+        CfExpression::object([
+            ("Sid", CfExpression::from("DenySameAccountImagePull")),
+            ("Effect", CfExpression::from("Deny")),
+            (
+                "Action",
+                CfExpression::list([
+                    CfExpression::from("ecr:BatchGetImage"),
+                    CfExpression::from("ecr:GetDownloadUrlForLayer"),
+                ]),
+            ),
+            (
+                "Resource",
+                CfExpression::sub("arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"),
+            ),
+        ]),
+    ];
+    CfExpression::list([CfExpression::object([
+        ("PolicyName", CfExpression::from("sandbox-image-build")),
+        (
+            "PolicyDocument",
+            CfExpression::object([
+                ("Version", CfExpression::from("2012-10-17")),
+                ("Statement", CfExpression::list(statements)),
+            ]),
+        ),
+    ])])
 }
 
 /// Lifecycle hooks, served by the agent on its own port.

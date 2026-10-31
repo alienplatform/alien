@@ -11,7 +11,7 @@ import * as z from "zod";
 export const AwsSandboxImportDataSchema = z.object({
     "allowEgress": z.optional(z.boolean().describe("Whether sessions use native cloud internet without a deployment gateway.\nIsolated sessions must instead name their setup-owned connector.")),
 "buildRoleArn": z.string().describe("Role the controller passes to `CreateMicrovmImage`. Setup owns it because\n`sandbox/provision` grants the controller `iam:PassRole` and no `iam:CreateRole`.").nullish(),
-"bundleUri": z.string().describe("Bundle the controller builds the image from. Only a runtime-provisioned sandbox carries it.").nullish(),
+"bundleUri": z.string().describe("Bundle the controller builds the image from. Only a runtime-provisioned sandbox carries it.\nAbsent for a sandbox whose controller renders its own bundle into the deployment's bundle\nStorage.").nullish(),
 "egressConnectorArns": z.optional(z.array(z.string()).describe("Egress network connectors. Deleting one while MicroVMs still reference it breaks their\nnetworking, so teardown needs them named rather than rediscovered.")),
 "imageArn": z.string().describe("MicroVM image ARN. Absent until a runtime-provisioned image has been built.").nullish(),
 "imageIdentifier": z.string().describe("MicroVM image identifier. Absent until a runtime-provisioned image has been built.").nullish(),
