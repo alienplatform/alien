@@ -1,0 +1,32 @@
+{
+  "id": "sandbox/bundle-write",
+  "description": "Allows writing and deleting the image-build bundles of a deployment's sandboxes",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          // A Live sandbox's controller writes the bundle its MicroVM image is built from into the
+          // deployment's bundle Storage, and deletes the ones no image needs any more. Granted
+          // stack-wide but bound to that one bucket by name, so an automatically managed setup,
+          // whose management role cannot take resource-scoped grants, holds it too, and no other
+          // bucket of the deployment is reachable through it.
+          "actions": ["s3:ListBucket", "s3:PutObject", "s3:DeleteObject"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:s3:::${stackPrefix}-sandbox-bundles*",
+              "arn:aws:s3:::${stackPrefix}-sandbox-bundles*/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:s3:::${stackPrefix}-sandbox-bundles*",
+              "arn:aws:s3:::${stackPrefix}-sandbox-bundles*/*"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

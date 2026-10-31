@@ -48,24 +48,57 @@ async fn push_aws_comprehensive_rust(ctx: &mut AwsPushRust) {
         .expect("command checks failed");
 }
 
-e2e_test_context!(
-    AwsPushSandboxSession,
-    Platform::Aws,
-    DeploymentModel::Push,
-    TestApp::SandboxSession
-);
+/// A source-built Live sandbox set up directly: a session runs a command, only management writes
+/// the image-build bundle, the bundle lives in the deployment's own bucket, and the bucket goes
+/// with the deployment.
+struct AwsPushSandboxSession {
+    ctx: alien_test::TestContext,
+    bundle_bucket: Option<String>,
+}
 
-/// A source-built Live sandbox set up directly: a session runs a command, and the image-build
-/// bundle lives in the deployment's own bucket.
+impl test_context::AsyncTestContext for AwsPushSandboxSession {
+    async fn setup() -> Self {
+        alien_test::e2e::init_tracing();
+        let ctx = alien_test::e2e::setup(
+            Platform::Aws,
+            DeploymentModel::Push,
+            TestApp::SandboxSession,
+        )
+        .await
+        .expect("AwsPushSandboxSession setup failed");
+        Self {
+            ctx,
+            bundle_bucket: None,
+        }
+    }
+
+    async fn teardown(self) {
+        self.ctx
+            .cleanup()
+            .await
+            .expect("E2E cleanup must reach a safe terminal state");
+        if let Some(bucket) = self.bundle_bucket {
+            common::sandbox::check_bundle_bucket_deleted(&bucket)
+                .await
+                .expect("the bundle bucket goes with the deployment");
+        }
+    }
+}
+
 #[test_context(AwsPushSandboxSession)]
 #[tokio::test]
 async fn push_aws_sandbox_session(ctx: &mut AwsPushSandboxSession) {
     common::sandbox::check_session_runs_a_command(&ctx.ctx)
         .await
         .expect("a sandbox session runs a command");
-    common::sandbox::check_bundle_in_deployment_bucket(&ctx.ctx)
+    common::sandbox::check_workload_cannot_write_bundles(&ctx.ctx)
         .await
-        .expect("the bundle lives in the deployment's own bucket");
+        .expect("only management writes sandbox bundles");
+    ctx.bundle_bucket = Some(
+        common::sandbox::check_bundle_in_deployment_bucket(&ctx.ctx)
+            .await
+            .expect("the bundle lives in the deployment's own bucket"),
+    );
 }
 
 e2e_test_context!(

@@ -1,3 +1,4 @@
+use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_error::{AlienError, ContextError};
 use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use std::collections::HashMap;
@@ -1358,6 +1359,26 @@ impl AwsStorageController {
             "Resource": [bucket_arn, format!("{bucket_arn}/*")],
             "Condition": {"Bool": {"aws:SecureTransport": "false"}}
         })];
+        // The one principal that may write sandbox bundles is the management role the controller
+        // runs as: a bundle is what the next image is built from, so a workload able to write one
+        // could choose what a sandbox runs. An explicit Deny outranks every same-account Allow.
+        // Only writes are held back; a delete can fail a build but not change what it builds.
+        if config.id == SANDBOX_BUNDLE_STORAGE_ID {
+            let aws = ctx.get_aws_config()?;
+            statements.push(serde_json::json!({
+                "Sid": "OnlyManagementWritesBundles",
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": ["s3:PutObject", "s3:PutObjectAcl", "s3:PutObjectTagging"],
+                "Resource": format!("{bucket_arn}/*"),
+                "Condition": {"ArnNotEquals": {"aws:PrincipalArn": format!(
+                    "arn:{}:iam::{}:role/{}",
+                    crate::sandbox::aws_partition(&aws.region),
+                    aws.account_id,
+                    crate::remote_stack_management::aws_management_role_name(ctx.resource_prefix),
+                )}}
+            }));
+        }
         if config.public_read {
             statements.push(serde_json::json!({
                 "Sid": "AllowPublicRead",
