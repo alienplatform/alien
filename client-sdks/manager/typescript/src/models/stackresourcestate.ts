@@ -55,6 +55,15 @@ export type StackResourceState = {
   displayName?: string | null | undefined;
   error?: AlienError | null | undefined;
   /**
+   * Whether this resource was adopted from an external binding instead of provisioned.
+   *
+   * @remarks
+   * The binding may exist only where the adopting executor ran (a Helm value or a
+   * chart-created database), so the record carries it: deleting the resource releases it
+   * and never touches what the binding points at.
+   */
+  externalBinding?: boolean | undefined;
+  /**
    * Stores the controller state that failed, used for manual retry operations.
    *
    * @remarks
@@ -104,6 +113,7 @@ export const StackResourceState$inboundSchema: z.ZodType<
   description: z.nullable(z.string()).optional(),
   displayName: z.nullable(z.string()).optional(),
   error: z.nullable(AlienError$inboundSchema).optional(),
+  externalBinding: z.boolean().optional(),
   lastFailedState: z.any().optional(),
   lifecycle: z.nullable(ResourceLifecycle$inboundSchema).optional(),
   outputs: z.nullable(BaseResourceOutputs$inboundSchema).optional(),

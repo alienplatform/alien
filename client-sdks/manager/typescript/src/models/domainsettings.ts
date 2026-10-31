@@ -25,7 +25,7 @@ import {
  * @remarks
  *
  * When `custom_domains` is set, the specified resources use customer-provided
- * domains and certificates. Otherwise, Alien auto-generates domains.
+ * domains with supplied or managed certificates. Otherwise, Alien auto-generates domains.
  */
 export type DomainSettings = {
   /**

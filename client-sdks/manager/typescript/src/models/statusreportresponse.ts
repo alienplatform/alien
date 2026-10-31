@@ -14,10 +14,14 @@ export type StatusReportResponse = {
    */
   telemetryAccepted: number;
   /**
-   * Highest batch the manager has passed on for this deployment, across
+   * Permanently rejected batches recorded separately for diagnosis, not ingested.
+   */
+  telemetryRejected?: number | undefined;
+  /**
+   * Highest batch durably ingested or retained as permanently rejected,
    *
    * @remarks
-   * reports.
+   * across reports.
    */
   telemetryThrough?: number | null | undefined;
 };
@@ -29,6 +33,7 @@ export const StatusReportResponse$inboundSchema: z.ZodType<
 > = z.object({
   status: z.string(),
   telemetryAccepted: z.int(),
+  telemetryRejected: z.int().optional(),
   telemetryThrough: z.nullable(z.int()).optional(),
 });
 

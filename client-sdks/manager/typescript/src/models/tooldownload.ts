@@ -15,6 +15,10 @@ export type ToolDownload = {
    * `<os>-<arch>`, e.g. `linux-x86_64`.
    */
   platform: string;
+  /**
+   * SHA-256 of the exact downloaded bytes, when supplied by the publisher.
+   */
+  sha256?: string | null | undefined;
   url: string;
 };
 
@@ -22,6 +26,7 @@ export type ToolDownload = {
 export const ToolDownload$inboundSchema: z.ZodType<ToolDownload, unknown> = z
   .object({
     platform: z.string(),
+    sha256: z.nullable(z.string()).optional(),
     url: z.string(),
   });
 
