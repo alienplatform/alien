@@ -1,10 +1,16 @@
 terraform {
-  required_version = ">= 1.5"
+  # `removed` blocks (commands.tf) need 1.7.
+  required_version = ">= 1.7"
 
   required_providers {
+    # azurerm 5 drops storage_account_name, which the commands container uses.
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 3.80"
+      version = ">= 3.80, < 5.0"
+    }
+    azapi = {
+      source  = "Azure/azapi"
+      version = ">= 2.6, < 3.0"
     }
     random = {
       source  = "hashicorp/random"

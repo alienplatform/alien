@@ -5,11 +5,29 @@
 # Reuses the existing storage account; adds a table and blob container.
 # -----------------------------------------------------------------------------
 
-resource "azurerm_storage_table" "commands" {
+# Created through Azure Resource Manager: azurerm_storage_table also reads and
+# writes the table ACL on the Table data plane, which Azure Table storage now
+# rejects with 415 Unsupported Media Type, so it can neither create nor refresh
+# the table.
+resource "azapi_resource" "commands" {
   count = var.enable_commands_store ? 1 : 0
 
-  name                 = "commands"
-  storage_account_name = azurerm_storage_account.manager.name
+  type      = "Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01"
+  name      = "commands"
+  parent_id = "${azurerm_storage_account.manager.id}/tableServices/default"
+  body = {
+    properties = {}
+  }
+}
+
+# Forget the azurerm_storage_table of earlier versions of this module without
+# deleting the table. The README's upgrade steps import it as azapi_resource.
+removed {
+  from = azurerm_storage_table.commands
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 resource "azurerm_storage_container" "commands" {
