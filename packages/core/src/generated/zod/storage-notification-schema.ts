@@ -8,7 +8,7 @@ import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { StorageNotificationEventSchema } from "./storage-notification-event-schema.js";
 
 /**
- * @description Delivers matching object events to a queue in the same stack.\nOverlapping rules each deliver a message; consumers must tolerate duplicates.
+ * @description Delivers matching object events to a queue in the same stack.\nRules on one Storage must not overlap: no object key may match two of them.\nDelivery is at least once, so consumers must tolerate duplicates.
  */
 export const StorageNotificationSchema = z.object({
     get "events"(){
@@ -19,6 +19,6 @@ get "queue"(){
                 return ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")
               },
 "suffix": z.string().describe("Literal object key suffix, non-empty and at most 128 UTF-8 bytes when set.").nullish()
-    }).describe("Delivers matching object events to a queue in the same stack.\nOverlapping rules each deliver a message; consumers must tolerate duplicates.")
+    }).describe("Delivers matching object events to a queue in the same stack.\nRules on one Storage must not overlap: no object key may match two of them.\nDelivery is at least once, so consumers must tolerate duplicates.")
 
 export type StorageNotification = z.infer<typeof StorageNotificationSchema>

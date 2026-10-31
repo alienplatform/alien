@@ -34,7 +34,8 @@ fn default_notification_events() -> Vec<StorageNotificationEvent> {
 }
 
 /// Delivers matching object events to a queue in the same stack.
-/// Overlapping rules each deliver a message; consumers must tolerate duplicates.
+/// Rules on one Storage must not overlap: no object key may match two of them.
+/// Delivery is at least once, so consumers must tolerate duplicates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

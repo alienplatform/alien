@@ -48,8 +48,8 @@ onQueueMessage("work", async message => {
 
 ## Delivery guarantees
 
-- **At least once.** Redelivery, provider retries and overlapping rules can deliver
-  the same object more than once. Make processing idempotent, for example by
+- **At least once.** Redelivery and provider retries can deliver the same object more
+  than once (on GCP, nested prefixes also publish a copy that the consumer drops). Make processing idempotent, for example by
   recording `(objectKey, etag)` when an ETag is available.
 - **Unordered.** Events for different objects, and for successive overwrites of
   one object, can arrive in any order.
@@ -187,7 +187,7 @@ Every provider delivers the same JSON shape (`StorageEvent`):
 |---|---|---|
 | `eventType` | always | `"created"` |
 | `bucketName` | always | the physical bucket or container name |
-| `objectKey` | always | the literal key, never URL-decoded |
+| `objectKey` | always | the literal key; on AWS, S3's URL encoding of the key is decoded |
 | `timestamp` | always | RFC 3339, UTC |
 | `size` | AWS, GCP, Azure, local | bytes |
 | `etag` | AWS, GCP, Azure | the provider's own format (S3 MD5 hex, GCS base64, Azure `0x…`). Compare ETags only within one provider |
@@ -246,3 +246,6 @@ Workers: stopping a Worker doesn't stop events from reaching the queue.
   two scans, or overwritten twice, produces at most one event.
 - A crash between delivering and recording an event redelivers it, so local
   delivery is also at least once.
+- The local storage backend rejects keys whose last segment ends in `#` followed by
+  digits (it writes in-progress uploads under that form), so such keys can't be
+  stored or notified locally. The cloud providers accept them.

@@ -106,8 +106,9 @@ export class Storage extends ResourceBuilder {
 
   /**
    * Delivers matching object creation events into a Queue in the same stack.
-   * Prefix and suffix are literal and case sensitive. Overlapping rules each deliver
-   * a message. Storage and Queue must both be Frozen or both be Live.
+   * Prefix and suffix are literal and case sensitive. Rules on one Storage must not
+   * overlap (no key may match two of them); delivery is at least once. Storage and Queue
+   * must both be Frozen or both be Live.
    */
   public notify(queue: Resource, options: StorageNotificationOptions = {}): this {
     if (queue.config.type !== "queue") {
