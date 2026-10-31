@@ -119,6 +119,13 @@ configuration.** CloudFormation sets the bucket's
 EventBridge notifications added to that bucket outside Alien are removed the next
 time setup runs. Add more notifications as rules instead.
 
+When the deployment is deleted and the bucket's data is retained, the rules setup wrote
+are removed before the queue is deleted, and every other entry stays, including ones
+added by hand since the last setup run. S3 checks every destination when the document is
+written, so if a remaining entry points at a queue, topic or function that no longer
+exists, the deletion stops with an error that says so; fix or remove that entry and
+retry.
+
 Live controllers instead read, modify and write the bucket's notification
 document. They recognise their own entries by Id (`<prefix>-sn-<hash>-<n>`) and
 preserve every entry they don't own. S3 rejects a document in which two entries can match the
