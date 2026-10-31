@@ -478,6 +478,13 @@ impl AwsQueueController {
                 }
             }));
         }
+        // SQS rejects a policy without statements ("Invalid value for the parameter Policy"),
+        // so removing the last one removes the policy.
+        let written = if statements.is_empty() {
+            String::new()
+        } else {
+            policy.to_string()
+        };
         if policy != original {
             client
                 .set_queue_attributes(
@@ -485,7 +492,7 @@ impl AwsQueueController {
                     SetQueueAttributesRequest::builder()
                         .attributes(std::collections::HashMap::from([(
                             "Policy".into(),
-                            policy.to_string(),
+                            written,
                         )]))
                         .build(),
                 )

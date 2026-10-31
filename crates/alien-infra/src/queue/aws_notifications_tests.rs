@@ -261,3 +261,83 @@ async fn pending_ingress_is_removed_when_declaration_changes_after_lost_write() 
     assert!(controller.storage_ingress_buckets.is_empty());
     assert_eq!(controller.storage_ingress_pending, None);
 }
+
+/// When the ingress statement was the queue's only one, removing it removes the policy:
+/// SQS rejects a policy without statements ("Invalid value for the parameter Policy").
+#[tokio::test]
+async fn removing_the_only_ingress_statement_removes_the_policy() {
+    let queue = Queue::new("work".into()).build();
+    let policy = Arc::new(Mutex::new(String::new()));
+    let mut sqs = MockSqsApi::new();
+    let reads = policy.clone();
+    sqs.expect_get_queue_attributes().returning(move |_, _| {
+        let value = reads.lock().unwrap().clone();
+        Ok(GetQueueAttributesResponse {
+            get_queue_attributes_result: GetQueueAttributesResult {
+                attributes: if value.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Attribute {
+                        name: "Policy".into(),
+                        value,
+                    }]
+                },
+            },
+        })
+    });
+    let writes = policy.clone();
+    sqs.expect_set_queue_attributes()
+        .times(2)
+        .returning(move |_, request| {
+            let value = &request.attributes["Policy"];
+            // Behave like SQS: a document with no statements is an invalid value.
+            if !value.is_empty() {
+                let document: Value = serde_json::from_str(value).unwrap();
+                if document["Statement"].as_array().is_some_and(Vec::is_empty) {
+                    return Err(alien_error::AlienError::new(
+                        alien_client_core::ErrorData::InvalidInput {
+                            message: "Invalid value for the parameter Policy.".into(),
+                            field_name: Some("Policy".into()),
+                        },
+                    ));
+                }
+            }
+            *writes.lock().unwrap() = value.clone();
+            Ok(())
+        });
+    let sqs = Arc::new(sqs);
+    let mut provider = MockPlatformServiceProvider::new();
+    provider
+        .expect_get_aws_sqs_client()
+        .returning(move |_| Ok(sqs.clone()));
+    let mut run = SingleControllerExecutor::builder()
+        .resource(queue.clone())
+        .controller(queue_controller())
+        .platform(Platform::Aws)
+        .resource_lifecycle(ResourceLifecycle::Live)
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .with_stack_resource(notifying(&queue), ResourceLifecycle::Live)
+        .service_provider(Arc::new(provider))
+        .build()
+        .await
+        .unwrap();
+    run.update(queue.clone()).unwrap();
+    run.run_until_terminal().await.unwrap();
+    let granted: Value = serde_json::from_str(&policy.lock().unwrap()).unwrap();
+    assert_eq!(granted["Statement"].as_array().unwrap().len(), 1);
+
+    *run.desired_resource_config_mut("uploads").unwrap() =
+        Resource::new(Storage::new("uploads".into()).build());
+    run.update(queue).unwrap();
+    run.run_until_terminal().await.unwrap();
+    assert_eq!(
+        *policy.lock().unwrap(),
+        "",
+        "the policy is removed, not emptied"
+    );
+    assert!(run
+        .internal_state::<AwsQueueController>()
+        .unwrap()
+        .storage_ingress_buckets
+        .is_empty());
+}
