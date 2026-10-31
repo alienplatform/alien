@@ -281,6 +281,7 @@ mod cluster {
         Sandbox::new("agent".to_string())
             .code(SandboxCode::Image {
                 image: IMAGE.to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {

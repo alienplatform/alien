@@ -30,6 +30,13 @@ pub enum SandboxCode {
         /// `s3://` bundle; Azure takes a catalog name such as `ubuntu` or an amd64 registry
         /// image, told apart by syntax. Each refuses what it cannot take while planning.
         image: String,
+        /// The container image a publisher built the `s3://` bundle in `image` from. An AWS
+        /// deployment with a bundle Storage of its own renders its bundle from this image; one
+        /// whose setup granted the publisher's store builds from `image`. Set by a publisher,
+        /// never by authoring. Kept inside `code` so a controller that predates it ignores it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(ignore))]
+        bundled_from: Option<String>,
     },
     /// A Dockerfile `alien build` builds into the sandbox's base image.
     ///
@@ -608,14 +615,6 @@ pub struct Sandbox {
     /// which registration reports. Absent means the base image is pulled anonymously.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub private_base_image: Option<String>,
-    /// A prebuilt `s3://` bundle of `code.image`, for an AWS deployment whose setup granted its
-    /// build role a publisher's bundle store instead of a bucket of its own. Such a deployment
-    /// builds from this bundle's key in the store it was granted; every other Live deployment
-    /// renders its own bundle from `code.image`. Set by a publisher, never by authoring.
-    #[builder(skip)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "openapi", schema(ignore))]
-    pub published_bundle: Option<String>,
     /// Enforced resource ceilings.
     ///
     /// Optional because not every platform can enforce them, and a declaration that names none
@@ -906,7 +905,7 @@ impl Sandbox {
     /// [`classify_azure_sandbox_image`]. Refused while planning, because a value the data plane
     /// rejects would otherwise surface at the first sandbox, long after the apply.
     pub fn azure_image(&self) -> Result<AzureSandboxImage<'_>> {
-        let SandboxCode::Image { image } = &self.code else {
+        let SandboxCode::Image { image, .. } = &self.code else {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
                 field: "code".to_string(),
@@ -1704,6 +1703,7 @@ mod tests {
         Sandbox::new("agent-sbx".to_string())
             .code(SandboxCode::Image {
                 image: "ubuntu".to_string(),
+                bundled_from: None,
             })
             .limits(SandboxLimits {
                 cpu: "1".to_string(),
@@ -2008,6 +2008,7 @@ mod tests {
         let egress_only = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
                 image: "alpine".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
@@ -2029,6 +2030,7 @@ mod tests {
         let undeclared = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
                 image: "alpine".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
@@ -2107,6 +2109,7 @@ mod tests {
         let mut sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
         sandbox.code = SandboxCode::Image {
             image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+            bundled_from: None,
         };
         sandbox.private_base_image =
             Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme:tag".to_string());
@@ -2333,6 +2336,7 @@ mod tests {
         for image in ["ubuntu@sha256:abc", "", "   ", "ubuntu latest", "ubuntu?x"] {
             sandbox.code = SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             };
             let error = sandbox
                 .validate_for_platform(Platform::Azure)
@@ -2343,6 +2347,7 @@ mod tests {
         for image in ["ubuntu", "ubuntu-22.04", "debian_slim"] {
             sandbox.code = SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             };
             sandbox
                 .validate_for_platform(Platform::Azure)
@@ -2357,6 +2362,7 @@ mod tests {
         ] {
             sandbox.code = SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             };
             sandbox
                 .validate_for_platform(Platform::Azure)
@@ -2366,6 +2372,7 @@ mod tests {
         // Surrounding space is trimmed rather than carried into the create body.
         sandbox.code = SandboxCode::Image {
             image: " ubuntu ".to_string(),
+            bundled_from: None,
         };
         assert_eq!(
             sandbox
@@ -2664,6 +2671,7 @@ mod tests {
         let renamed = Sandbox::new("other".to_string())
             .code(SandboxCode::Image {
                 image: "ubuntu".to_string(),
+                bundled_from: None,
             })
             .limits(
                 original
@@ -2697,6 +2705,7 @@ mod tests {
             Sandbox::new("sbx".to_string())
                 .code(SandboxCode::Image {
                     image: "ubuntu".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Allow)
                 .lifecycle(lifecycle)
@@ -2734,6 +2743,7 @@ mod tests {
             Sandbox::new("sbx".to_string())
                 .code(SandboxCode::Image {
                     image: "ubuntu".to_string(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::AllowDomains { domains })
                 .lifecycle(SandboxLifecyclePolicy {
@@ -2802,6 +2812,7 @@ mod tests {
         let expected = Sandbox::new("sandbox".to_string())
             .code(SandboxCode::Image {
                 image: "s3://example-bundles/analysis/v1/bundle.zip".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Allow)
             .lifecycle(SandboxLifecyclePolicy {

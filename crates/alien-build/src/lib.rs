@@ -848,7 +848,10 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                 Ok((resource_id, sandbox, build_result)) => match build_result {
                     Ok(image_uri) => {
                         let mut updated_sandbox = sandbox;
-                        updated_sandbox.code = SandboxCode::Image { image: image_uri };
+                        updated_sandbox.code = SandboxCode::Image {
+                            image: image_uri,
+                            bundled_from: None,
+                        };
                         build_results.push((resource_id, updated_sandbox));
                         completed_tasks += 1;
                     }
@@ -1547,7 +1550,7 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
             }
         } else if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
             match &sandbox.code {
-                SandboxCode::Image { image } => {
+                SandboxCode::Image { image, .. } => {
                     let path = PathBuf::from(image);
                     if path.exists() && path.is_dir() {
                         info!(
@@ -1597,7 +1600,10 @@ fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
             } else if let Some(daemon) = resource_entry.1.config.downcast_mut::<Daemon>() {
                 daemon.code = DaemonCode::Image { image: image_uri };
             } else if let Some(sandbox) = resource_entry.1.config.downcast_mut::<Sandbox>() {
-                sandbox.code = SandboxCode::Image { image: image_uri };
+                sandbox.code = SandboxCode::Image {
+                    image: image_uri,
+                    bundled_from: None,
+                };
             }
         }
     }
@@ -2589,7 +2595,7 @@ async fn prepare_prebuilt_sandbox(
     output_dir: &Path,
     aws_connector: bool,
 ) -> Result<Sandbox> {
-    let SandboxCode::Image { image } = &sandbox.code else {
+    let SandboxCode::Image { image, .. } = &sandbox.code else {
         return Ok(sandbox);
     };
     let platform = settings.platform.runtime_platform();
@@ -2649,7 +2655,10 @@ async fn prepare_prebuilt_sandbox(
     } else {
         directory
     };
-    sandbox.code = SandboxCode::Image { image };
+    sandbox.code = SandboxCode::Image {
+        image,
+        bundled_from: None,
+    };
     Ok(sandbox)
 }
 
@@ -7100,6 +7109,7 @@ mod sandbox_build_tests {
                 let sandbox = Sandbox::new("sbx".into())
                     .code(SandboxCode::Image {
                         image: reference.clone(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {
@@ -7137,7 +7147,7 @@ mod sandbox_build_tests {
                     old.expect("ordinary non-root releases must remain readable before upgrade");
                 }
                 if settings.platform.runtime_platform() == Platform::Local {
-                    let SandboxCode::Image { image: pinned } = &sandbox.code else {
+                    let SandboxCode::Image { image: pinned, .. } = &sandbox.code else {
                         panic!("built image")
                     };
                     assert_eq!(pinned, image.config_digest());
@@ -7152,7 +7162,10 @@ mod sandbox_build_tests {
                         "pinned local image must exist in the daemon"
                     );
                 } else {
-                    let SandboxCode::Image { image: directory } = &sandbox.code else {
+                    let SandboxCode::Image {
+                        image: directory, ..
+                    } = &sandbox.code
+                    else {
                         panic!("built image")
                     };
                     let archive =
@@ -7223,6 +7236,7 @@ mod sandbox_build_tests {
                 let sandbox = Sandbox::new("sbx".into())
                     .code(SandboxCode::Image {
                         image: reference.clone(),
+                        bundled_from: None,
                     })
                     .egress(egress.clone())
                     .lifecycle(SandboxLifecyclePolicy {
@@ -7366,7 +7380,10 @@ mod sandbox_build_tests {
         settings.targets = Some(vec![target]);
         settings.output_directory = output.path().to_string_lossy().into_owned();
         let sandbox = Sandbox::new("local-only".into())
-            .code(SandboxCode::Image { image: tag.clone() })
+            .code(SandboxCode::Image {
+                image: tag.clone(),
+                bundled_from: None,
+            })
             .egress(SandboxEgress::Allow)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
@@ -7392,7 +7409,13 @@ mod sandbox_build_tests {
             .resources()
             .find_map(|(_, e)| e.config.downcast_ref::<Sandbox>())
             .unwrap();
-        assert_eq!(sandbox.code, SandboxCode::Image { image: image_id });
+        assert_eq!(
+            sandbox.code,
+            SandboxCode::Image {
+                image: image_id,
+                bundled_from: None
+            }
+        );
         assert_eq!(sandbox.image_user, None);
         sandbox.validate_for_platform(Platform::Local).unwrap();
     }
@@ -7455,7 +7478,10 @@ mod sandbox_build_tests {
         settings.targets = Some(vec![BinaryTarget::LinuxX64]);
         settings.output_directory = output.path().to_string_lossy().into_owned();
         let sandbox = Sandbox::new("local-platform".into())
-            .code(SandboxCode::Image { image: tag })
+            .code(SandboxCode::Image {
+                image: tag,
+                bundled_from: None,
+            })
             .egress(SandboxEgress::Allow)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
@@ -7472,6 +7498,7 @@ mod sandbox_build_tests {
         let pinned = Sandbox::new("pinned-platform".into())
             .code(SandboxCode::Image {
                 image: ids[1].clone(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Allow)
             .lifecycle(SandboxLifecyclePolicy {
@@ -7503,7 +7530,8 @@ mod sandbox_build_tests {
         assert_eq!(
             sandbox.code,
             SandboxCode::Image {
-                image: ids[0].clone()
+                image: ids[0].clone(),
+                bundled_from: None,
             }
         );
         assert_eq!(sandbox.image_user, None);
@@ -7518,6 +7546,7 @@ mod sandbox_build_tests {
         let sandbox = Sandbox::new("catalog".into())
             .code(SandboxCode::Image {
                 image: "ubuntu".into(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
@@ -7570,7 +7599,8 @@ mod sandbox_build_tests {
         assert_eq!(
             sandbox.code,
             SandboxCode::Image {
-                image: "ubuntu".into()
+                image: "ubuntu".into(),
+                bundled_from: None,
             }
         );
         assert!(matches!(
@@ -7585,6 +7615,7 @@ mod sandbox_build_tests {
         let sandbox = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
                 image: "s3://released-images/base.zip".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(SandboxLifecyclePolicy {
@@ -7606,7 +7637,8 @@ mod sandbox_build_tests {
         assert_eq!(
             code,
             SandboxCode::Image {
-                image: "s3://released-images/base.zip".to_string()
+                image: "s3://released-images/base.zip".to_string(),
+                bundled_from: None,
             }
         );
     }
@@ -7628,6 +7660,7 @@ mod sandbox_push_tests {
         Sandbox::new(id.to_string())
             .code(SandboxCode::Image {
                 image: image.to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(lifecycle())
@@ -7646,7 +7679,7 @@ mod sandbox_push_tests {
             .expect("resource is a sandbox")
             .code
         {
-            SandboxCode::Image { image } => image.clone(),
+            SandboxCode::Image { image, .. } => image.clone(),
             SandboxCode::Source { .. } => panic!("'{resource_id}' should still be image-sourced"),
         }
     }

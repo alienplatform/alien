@@ -287,6 +287,7 @@ fn sandbox_only_stack() -> Stack {
     let sandbox = alien_core::Sandbox::new("box".to_string())
         .code(alien_core::SandboxCode::Image {
             image: "ubuntu".to_string(),
+            bundled_from: None,
         })
         .egress(alien_core::SandboxEgress::Internet)
         .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -415,6 +416,7 @@ async fn state_keeps_a_sandbox(fixture: &Fixture, binding: serde_json::Value) {
                 alien_core::Sandbox::new("box".to_string())
                     .code(alien_core::SandboxCode::Image {
                         image: "ubuntu".to_string(),
+                        bundled_from: None,
                     })
                     .egress(alien_core::SandboxEgress::Internet)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -581,6 +583,7 @@ async fn a_sandbox_sharing_the_release_with_another_remote_resource_refuses_a_da
     let sandbox = alien_core::Sandbox::new("box".to_string())
         .code(alien_core::SandboxCode::Image {
             image: "ubuntu".to_string(),
+            bundled_from: None,
         })
         .egress(alien_core::SandboxEgress::Internet)
         .lifecycle(alien_core::SandboxLifecyclePolicy {

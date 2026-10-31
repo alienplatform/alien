@@ -120,6 +120,7 @@ async fn ubuntu_without_user_keeps_released_exec_identity() {
     let sandbox = Sandbox::new("ubuntu-no-user".into())
         .code(SandboxCode::Image {
             image: "ubuntu:24.04".into(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {
@@ -153,7 +154,7 @@ async fn ubuntu_without_user_keeps_released_exec_identity() {
         .validate_for_platform(Platform::Local)
         .expect("absent USER remains supported");
     assert_eq!(sandbox.image_user, None, "keep the released boot contract");
-    let SandboxCode::Image { image } = &sandbox.code else {
+    let SandboxCode::Image { image, .. } = &sandbox.code else {
         panic!("built image")
     };
     let docker = bollard::Docker::connect_with_local_defaults().unwrap();

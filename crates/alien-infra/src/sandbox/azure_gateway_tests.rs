@@ -1,15 +1,15 @@
 use super::*;
 use crate::core::{
-    MockPlatformServiceProvider, ResourceController, controller_test::SingleControllerExecutor,
+    controller_test::SingleControllerExecutor, MockPlatformServiceProvider, ResourceController,
 };
 use crate::network::azure_sandbox::tests::{client, fixture};
 use crate::vault::LocalVaultController;
-use alien_azure_clients::azure::AzureClientConfigExt;
 use alien_azure_clients::azure::sandbox_groups::MockSandboxGroupsApi;
-use alien_bindings::{Vault as VaultApi, providers::vault::LocalVault};
+use alien_azure_clients::azure::AzureClientConfigExt;
+use alien_bindings::{providers::vault::LocalVault, Vault as VaultApi};
 use alien_core::{
-    Container, ContainerCode, Network, NetworkSettings, Platform, ResourceLifecycle,
-    SECRETS_VAULT_ID, SandboxCode, Vault,
+    Container, ContainerCode, Network, NetworkSettings, Platform, ResourceLifecycle, SandboxCode,
+    Vault, SECRETS_VAULT_ID,
 };
 use std::sync::Arc;
 
@@ -73,6 +73,7 @@ async fn executor_with(
     let config = Sandbox::new("sandbox".into())
         .code(SandboxCode::Image {
             image: "ubuntu".into(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::Internet)
         .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -148,6 +149,7 @@ async fn executor_with(
             Sandbox::new("aaa-live".into())
                 .code(SandboxCode::Image {
                     image: "ubuntu".into(),
+                    bundled_from: None,
                 })
                 .egress(SandboxEgress::Internet)
                 .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -181,12 +183,10 @@ async fn actual_controller_initializes_shared_key_and_publishes_only_after_netwo
         .get_secret(crate::sandbox::egress::SIGNING_KEY)
         .await
         .unwrap();
-    assert!(
-        vault
-            .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
-            .await
-            .is_err()
-    );
+    assert!(vault
+        .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
+        .await
+        .is_err());
     run.step().await.unwrap();
     let controller = run.internal_state::<AzureSandboxController>().unwrap();
     assert_eq!(controller.state, AzureSandboxState::Ready);
@@ -220,12 +220,10 @@ async fn actual_controller_initializes_shared_key_and_publishes_only_after_netwo
     )
     .unwrap();
     assert_eq!(config["audiences"], serde_json::json!(["test/sandbox"]));
-    assert!(
-        config["deniedRanges"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::json!("198.18.0.0/16"))
-    );
+    assert!(config["deniedRanges"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("198.18.0.0/16")));
     assert_eq!(config["keys"][0]["kid"], gateway.kid);
     assert!(config["keys"][0].get("privateKey").is_none());
     // The gateway reads its replica secret from its own vault entry; none is embedded.
@@ -374,6 +372,7 @@ async fn the_owner_never_reads_a_value_from_key_vault() {
         Sandbox::new("sandbox".into())
             .code(SandboxCode::Image {
                 image: "ubuntu".into(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Internet)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -449,12 +448,10 @@ async fn actual_connection_mismatch_prevents_config_and_binding_publication() {
     let controller = run.internal_state::<AzureSandboxController>().unwrap();
     assert!(!controller.egress_network_verified);
     assert!(controller.get_binding_params().unwrap().is_none());
-    assert!(
-        vault
-            .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
-            .await
-            .is_err()
-    );
+    assert!(vault
+        .get_secret(crate::sandbox::egress::GATEWAY_CONFIG)
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -469,13 +466,11 @@ async fn frozen_controller_initializes_key_before_earlier_live_sandbox() {
             .state,
         AzureSandboxState::PublishingEgressConfig
     );
-    assert!(
-        !vault
-            .get_secret(crate::sandbox::egress::SIGNING_KEY)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(!vault
+        .get_secret(crate::sandbox::egress::SIGNING_KEY)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 // Azure has no default VNet: UseDefault creates the same managed VNet, subnets and NAT

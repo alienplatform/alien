@@ -899,6 +899,7 @@ mod tests {
         let sandbox = alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::Allow)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -1239,6 +1240,7 @@ mod tests {
         let second = alien_core::Sandbox::new("zeta".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::Allow)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -1495,6 +1497,7 @@ mod tests {
         let sandbox = alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: PYTHON.to_string(),
+                bundled_from: None,
             })
             .egress(alien_core::SandboxEgress::Allow)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -2281,6 +2284,7 @@ mod tests {
             .clone();
         sandbox.code = alien_core::SandboxCode::Image {
             image: NEXT_BUNDLE.to_string(),
+            bundled_from: None,
         };
         entry.config = alien_core::Resource::new(sandbox);
         state.status = DeploymentStatus::InitialSetup;

@@ -477,6 +477,7 @@ mod tests {
                 Sandbox::new("subject".into())
                     .code(SandboxCode::Image {
                         image: "s3://test/bundle.zip".into(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::Internet)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -548,6 +549,7 @@ mod tests {
                 Sandbox::new("subject".into())
                     .code(SandboxCode::Image {
                         image: "s3://test/bundle.zip".into(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::Internet)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {

@@ -37,6 +37,7 @@ fn sandbox(limits: Option<SandboxLimits>) -> Sandbox {
     let builder = Sandbox::new("agent".to_string())
         .code(SandboxCode::Image {
             image: "ubuntu".to_string(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {

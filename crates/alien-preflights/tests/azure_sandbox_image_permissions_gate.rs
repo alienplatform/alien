@@ -11,6 +11,7 @@ fn sandbox(id: &str, image: &str) -> Sandbox {
     Sandbox::new(id.to_string())
         .code(SandboxCode::Image {
             image: image.to_string(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::None)
         .lifecycle(SandboxLifecyclePolicy {

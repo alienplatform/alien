@@ -293,6 +293,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "manager.example.com/alien-artifacts-proj:base".to_string(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {

@@ -23,13 +23,13 @@ use crate::{
     expr,
 };
 use alien_core::{
-    ErrorData, Network, PermissionProfile, PermissionSet, PermissionSetReference, RemoteBindings,
-    Result, Sandbox, SandboxEgress, import::EmitContext,
+    import::EmitContext, ErrorData, Network, PermissionProfile, PermissionSet,
+    PermissionSetReference, RemoteBindings, Result, Sandbox, SandboxEgress,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    BindingTarget,
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    BindingTarget,
 };
 use hcl::expr::Expression;
 use std::collections::HashSet;
@@ -735,9 +735,9 @@ fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::bindings::{AzureSandboxBinding, BindingValue};
     use alien_core::SandboxCode;
     use alien_core::SandboxEgress;
-    use alien_core::bindings::{AzureSandboxBinding, BindingValue};
     use alien_core::{ResourceLifecycle, SandboxLifecyclePolicy, Stack, StackSettings};
     use hcl::eval::Evaluate;
     use indexmap::IndexMap;
@@ -752,6 +752,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::Internet)
                     .lifecycle(SandboxLifecyclePolicy {
@@ -787,6 +788,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
+                        bundled_from: None,
                     })
                     // Declared, so the ceilings are in the rendered binding: Azure takes them at
                     // create and nowhere else, and the key-coverage assertion below is what pins

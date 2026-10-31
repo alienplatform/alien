@@ -726,6 +726,7 @@ mod tests {
                         alien_core::Sandbox::new(id.into())
                             .code(alien_core::SandboxCode::Image {
                                 image: "q5-image:latest".into(),
+                                bundled_from: None,
                             })
                             .egress(alien_core::SandboxEgress::Internet)
                             .lifecycle(alien_core::SandboxLifecyclePolicy {

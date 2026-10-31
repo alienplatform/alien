@@ -526,7 +526,11 @@ impl AzureRemoteStackManagementController {
                 ..Default::default()
             };
             let created = client
-                .create_or_update_role_definition(&resource_group_scope, uuid.clone(), &role_definition)
+                .create_or_update_role_definition(
+                    &resource_group_scope,
+                    uuid.clone(),
+                    &role_definition,
+                )
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -656,9 +660,7 @@ impl AzureRemoteStackManagementController {
             let (scope, shard) = role_assignment_role_scope(&key);
             let condition = conditions.get(shard).cloned().ok_or_else(|| {
                 AlienError::new(ErrorData::InfrastructureError {
-                    message: format!(
-                        "No role-assignment condition for shard {shard} at '{scope}'"
-                    ),
+                    message: format!("No role-assignment condition for shard {shard} at '{scope}'"),
                     operation: Some("create_role_assignments".to_string()),
                     resource_id: Some(config.id.clone()),
                 })
@@ -1076,7 +1078,9 @@ impl AzureRemoteStackManagementController {
             };
             for (uuid, role_def_id) in self.runtime_role_definition_ids.clone() {
                 match client.delete_role_definition(&scope, uuid.clone()).await {
-                    Ok(_) => info!(role_definition_id = %role_def_id, "Runtime role definition deleted"),
+                    Ok(_) => {
+                        info!(role_definition_id = %role_def_id, "Runtime role definition deleted")
+                    }
                     Err(error)
                         if matches!(
                             &error.error,
@@ -1562,8 +1566,12 @@ mod tests {
         let mut authorization = MockAuthorizationApi::new();
         authorization.expect_delete_role_assignment_by_id().times(0);
         authorization.expect_delete_role_definition().times(0);
-        authorization.expect_create_or_update_role_definition().times(0);
-        authorization.expect_create_or_update_role_assignment_by_id().times(0);
+        authorization
+            .expect_create_or_update_role_definition()
+            .times(0);
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(0);
         let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
         let mut provider = MockPlatformServiceProvider::new();
         provider
@@ -1870,6 +1878,7 @@ mod tests {
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: "ubuntu".to_string(),
+                bundled_from: None,
             })
             .egress(SandboxEgress::Allow)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -1901,6 +1910,7 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
+                        bundled_from: None,
                     })
                     .egress(SandboxEgress::Allow)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
@@ -2443,9 +2453,13 @@ fn management_role_definitions(
         .roles
         .iter()
         .map(|role| definition(role, false, 0))
-        .chain(roles.role_assignment_roles.iter().flat_map(|role| {
-            (0..shards).map(move |shard| (role, shard))
-        }).map(|(role, shard)| definition(role, true, shard)))
+        .chain(
+            roles
+                .role_assignment_roles
+                .iter()
+                .flat_map(|role| (0..shards).map(move |shard| (role, shard)))
+                .map(|(role, shard)| definition(role, true, shard)),
+        )
         .collect())
 }
 

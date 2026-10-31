@@ -420,6 +420,7 @@ mod direct_setup_planning_tests {
             let sandbox = Sandbox::new("subject".into())
                 .code(SandboxCode::Image {
                     image: "s3://example/bundle.zip".into(),
+                    bundled_from: None,
                 })
                 .egress(serde_json::from_value::<SandboxEgress>(value).unwrap())
                 .lifecycle(SandboxLifecyclePolicy {
@@ -522,6 +523,7 @@ mod direct_setup_planning_tests {
             let sandbox = Sandbox::new("subject".into())
                 .code(SandboxCode::Image {
                     image: "s3://example/bundle.zip".into(),
+                    bundled_from: None,
                 })
                 .egress(egress)
                 .lifecycle(SandboxLifecyclePolicy {

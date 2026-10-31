@@ -81,6 +81,7 @@ async fn prepared_stack(session_image: &str, app_image: &str) -> Stack {
     let sandbox = Sandbox::new("agent".to_string())
         .code(SandboxCode::Image {
             image: session_image.to_string(),
+            bundled_from: None,
         })
         .egress(SandboxEgress::Internet)
         .lifecycle(SandboxLifecyclePolicy {
@@ -146,8 +147,14 @@ async fn prepared_stack(session_image: &str, app_image: &str) -> Stack {
 async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
     let _ = tracing_subscriber::fmt::try_init();
     let context = env("ALIEN_GATEWAY_KIND_CONTEXT");
-    assert!(context.starts_with("kind-"), "only Kind contexts are accepted");
-    assert_eq!(run("kubectl", &["config", "current-context"]).trim(), context);
+    assert!(
+        context.starts_with("kind-"),
+        "only Kind contexts are accepted"
+    );
+    assert_eq!(
+        run("kubectl", &["config", "current-context"]).trim(),
+        context
+    );
     let namespace = env("ALIEN_GATEWAY_KIND_NAMESPACE");
     assert!(namespace.starts_with("alien-gateway-"));
     let session_image = env("ALIEN_GATEWAY_KIND_SESSION_IMAGE");
@@ -239,7 +246,10 @@ async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
             .expect("executor")
     };
     let mut state = StackState::with_resource_prefix(Platform::Kubernetes, PREFIX.to_string());
-    for lifecycles in [vec![ResourceLifecycle::Frozen], vec![ResourceLifecycle::Live]] {
+    for lifecycles in [
+        vec![ResourceLifecycle::Frozen],
+        vec![ResourceLifecycle::Live],
+    ] {
         let result = executor(lifecycles).run_until_synced(state).await;
         assert!(result.success, "{:?}", result.error);
         state = result.final_state;
@@ -258,8 +268,10 @@ async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
     let mut pool = Vec::new();
     for _ in 0..30 {
         state = executor.refresh(state).await.expect("refresh").next_state;
-        pool = kubectl_json(&namespace, &["get", "pods", "-l", "alien.dev/sandbox=agent"])
-            ["items"]
+        pool = kubectl_json(
+            &namespace,
+            &["get", "pods", "-l", "alien.dev/sandbox=agent"],
+        )["items"]
             .as_array()
             .cloned()
             .unwrap_or_default();
@@ -268,7 +280,10 @@ async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
-    assert!(!pool.is_empty(), "the warm pool never created a session pod");
+    assert!(
+        !pool.is_empty(),
+        "the warm pool never created a session pod"
+    );
     // The binding a policy writer loads: writes must reach all three replicas.
     let binding = {
         use alien_infra::{ResourceController as _, StackResourceStateExt as _};
@@ -326,21 +341,22 @@ async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
         alien_core::bindings::BindingValue::Value(broker_url.clone())
     );
     let environment = &pool[0]["spec"]["containers"][0]["env"];
-    let gateway_service = kubectl_json(
-        &namespace,
-        &["get", "service", SANDBOX_EGRESS_GATEWAY_ID],
-    );
+    let gateway_service = kubectl_json(&namespace, &["get", "service", SANDBOX_EGRESS_GATEWAY_ID]);
     let address = format!(
         "{}:3128",
-        gateway_service["spec"]["clusterIP"].as_str().expect("ClusterIP")
+        gateway_service["spec"]["clusterIP"]
+            .as_str()
+            .expect("ClusterIP")
     );
     assert!(
         environment
             .as_array()
             .unwrap()
             .iter()
-            .any(|variable| variable["name"] == "ALIEN_SANDBOX_EGRESS_GATEWAY"
-                && variable["value"] == address.as_str()),
+            .any(
+                |variable| variable["name"] == "ALIEN_SANDBOX_EGRESS_GATEWAY"
+                    && variable["value"] == address.as_str()
+            ),
         "session pods are given the gateway Service address: {environment}"
     );
 
@@ -368,11 +384,7 @@ async fn kubernetes_installs_and_reconciles_a_replicated_sandbox_gateway() {
     assert_eq!(peers["spec"]["clusterIP"], "None");
     let policy = kubectl_json(
         &namespace,
-        &[
-            "get",
-            "networkpolicy",
-            SANDBOX_EGRESS_GATEWAY_ID,
-        ],
+        &["get", "networkpolicy", SANDBOX_EGRESS_GATEWAY_ID],
     );
     assert!(policy["spec"]["policyTypes"]
         .as_array()

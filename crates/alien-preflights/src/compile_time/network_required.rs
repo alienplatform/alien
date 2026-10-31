@@ -431,6 +431,7 @@ mod tests {
                 Sandbox::new("runner".to_string())
                     .code(SandboxCode::Image {
                         image: "test:latest".to_string(),
+                        bundled_from: None,
                     })
                     .egress(egress)
                     .lifecycle(SandboxLifecyclePolicy {

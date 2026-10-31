@@ -77,7 +77,7 @@ impl AwsSandboxImportData {
                 reason,
             })
         };
-        let SandboxCode::Image { image } = &sandbox.code else {
+        let SandboxCode::Image { image, .. } = &sandbox.code else {
             return Err(refuse(
                 "an AWS sandbox is built from a prebuilt s3:// bundle, not from source".to_string(),
             ));

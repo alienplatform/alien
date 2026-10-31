@@ -973,6 +973,7 @@ mod tests {
                     Sandbox::new("agents".to_string())
                         .code(SandboxCode::Image {
                             image: bundle.to_string(),
+                            bundled_from: None,
                         })
                         .egress(egress)
                         .lifecycle(SandboxLifecyclePolicy {
@@ -1322,6 +1323,7 @@ mod tests {
                         Sandbox::new("agents".to_string())
                             .code(SandboxCode::Image {
                                 image: image.to_string(),
+                                bundled_from: None,
                             })
                             .egress(SandboxEgress::None)
                             .lifecycle(SandboxLifecyclePolicy {
