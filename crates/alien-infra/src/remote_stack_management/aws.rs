@@ -24,7 +24,7 @@ use alien_permissions::{
 use chrono::Utc;
 
 /// Generates the AWS IAM role name for RemoteStackManagement.
-fn get_aws_management_role_name(prefix: &str) -> String {
+pub(crate) fn aws_management_role_name(prefix: &str) -> String {
     format!("{}-management", prefix)
 }
 
@@ -75,7 +75,7 @@ impl AwsRemoteStackManagementController {
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
 
-        let role_name = get_aws_management_role_name(ctx.resource_prefix);
+        let role_name = aws_management_role_name(ctx.resource_prefix);
 
         // Get management role ARN from stack settings (required for cross-account management)
         let aws_management = ctx.get_aws_management_config()?
