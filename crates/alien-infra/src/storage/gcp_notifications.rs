@@ -14,6 +14,7 @@ use alien_core::{
 use alien_error::{AlienError, Context};
 use alien_gcp_clients::gcs::{GcsApi, GcsNotification};
 use std::collections::HashMap;
+use tracing::warn;
 
 /// Perform at most one mutation. The caller checkpoints and invokes this again
 /// until it returns true, so failures never lose cleanup progress.
@@ -33,7 +34,7 @@ pub(super) async fn reconcile(
                 resource_id: Some(storage.id.clone()),
                 message: "Storage notifications cannot be expressed as GCS configs".to_string(),
             })?;
-        for (index, config) in configs.into_iter().enumerate() {
+        for config in configs {
             let queue = ctx.require_dependency::<GcpQueueController>(config.queue)?;
             let topic = queue.topic_name.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::DependencyNotReady {
@@ -41,8 +42,10 @@ pub(super) async fn reconcile(
                     dependency_id: config.queue.id.clone(),
                 })
             })?;
-            let mut custom_attributes =
-                HashMap::from([(GCS_RULE_ATTRIBUTE.to_string(), format!("{owner}{index}"))]);
+            let mut custom_attributes = HashMap::from([(
+                GCS_RULE_ATTRIBUTE.to_string(),
+                format!("{owner}{}", config.key),
+            )]);
             custom_attributes.extend(config.suffix_attributes);
             desired.push(GcsNotification {
                 id: None,
@@ -72,54 +75,56 @@ pub(super) async fn reconcile(
             })
         }
     };
-    // Remove obsolete rules before inserting to respect the per-event quota.
-    // Remove duplicate owned entries too, including any from an ambiguous POST.
+    // Owned configs that match a desired one are kept untouched; the rest are obsolete,
+    // including duplicates from an ambiguous POST.
     let mut matched = vec![false; desired.len()];
+    let mut obsolete = Vec::new();
     for notification in &existing {
-        if !notification
+        let Some(rule) = notification
             .custom_attributes
             .get(GCS_RULE_ATTRIBUTE)
-            .is_some_and(|value| value.starts_with(&owner))
-        {
+            .filter(|value| value.starts_with(&owner))
+        else {
             continue;
-        }
-        if let Some((index, _)) = desired
+        };
+        match desired
             .iter()
             .enumerate()
-            .find(|(index, rule)| !matched[*index] && matches(notification, rule))
+            .find(|(index, wanted)| !matched[*index] && matches(notification, wanted))
         {
-            matched[index] = true;
-            continue;
+            Some((index, _)) => matched[index] = true,
+            None => obsolete.push((rule.as_str(), notification)),
         }
-        let id = notification.id.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                resource_id: Some(storage.id.clone()),
-                message: format!("GCS returned a notification without an ID on '{bucket}'"),
+    }
+    // Create before delete, so a changed group keeps delivering (possibly twice) while it
+    // is replaced. GCS allows 10 configs per bucket per event type, counting configs made
+    // elsewhere; at that limit the obsolete config of the group goes first.
+    if let Some(index) = matched.iter().position(|matched| !matched) {
+        let wanted = &desired[index];
+        let finalize_configs = existing
+            .iter()
+            .filter(|notification| {
+                notification.event_types.is_empty()
+                    || notification
+                        .event_types
+                        .iter()
+                        .any(|event| event == "OBJECT_FINALIZE")
             })
-        })?;
-        match client.delete_notification(bucket.into(), id.clone()).await {
-            Ok(()) => {}
-            Err(error)
-                if matches!(
-                    &error.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) => {}
-            Err(error) => {
-                return Err(error).context(ErrorData::CloudPlatformError {
-                    resource_id: Some(storage.id.clone()),
-                    message: format!("Delete notification '{id}' on bucket '{bucket}'"),
-                })
+            .count();
+        if finalize_configs >= GCS_MAX_CONFIGS_PER_EVENT {
+            let group = &wanted.custom_attributes[GCS_RULE_ATTRIBUTE];
+            if let Some((_, old)) = obsolete
+                .iter()
+                .find(|(rule, _)| *rule == group.as_str())
+                .or(obsolete.first())
+            {
+                warn!(bucket, storage = %storage.id, "Bucket has {GCS_MAX_CONFIGS_PER_EVENT} notification configs; replacing one without overlap, so objects written until the new config exists are not delivered");
+                delete(client.as_ref(), bucket, &storage.id, old).await?;
+                return Ok(false);
             }
         }
-        return Ok(false);
-    }
-    if let Some((_, notification)) = desired
-        .into_iter()
-        .enumerate()
-        .find(|(index, _)| !matched[*index])
-    {
         client
-            .insert_notification(bucket.into(), notification)
+            .insert_notification(bucket.into(), wanted.clone())
             .await
             .context(ErrorData::CloudPlatformError {
                 resource_id: Some(storage.id.clone()),
@@ -127,7 +132,43 @@ pub(super) async fn reconcile(
             })?;
         return Ok(false);
     }
+    if let Some((_, old)) = obsolete.first() {
+        delete(client.as_ref(), bucket, &storage.id, old).await?;
+        return Ok(false);
+    }
     Ok(true)
+}
+
+/// GCS allows at most this many notification configs per bucket for one event type.
+const GCS_MAX_CONFIGS_PER_EVENT: usize = 10;
+
+async fn delete(
+    client: &dyn GcsApi,
+    bucket: &str,
+    storage: &str,
+    notification: &GcsNotification,
+) -> Result<()> {
+    let id = notification.id.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            resource_id: Some(storage.into()),
+            message: format!("GCS returned a notification without an ID on '{bucket}'"),
+        })
+    })?;
+    match client.delete_notification(bucket.into(), id.clone()).await {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                &error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+            resource_id: Some(storage.into()),
+            message: format!("Delete notification '{id}' on bucket '{bucket}'"),
+        }),
+    }
 }
 
 fn matches(existing: &GcsNotification, desired: &GcsNotification) -> bool {
@@ -230,6 +271,196 @@ mod tests {
                     .build(),
             ])
             .build()
+    }
+
+    /// A simulated bucket: configs keep their ids, and every insert/delete is logged in order.
+    fn simulated_gcs(
+        remote: Arc<Mutex<Vec<GcsNotification>>>,
+        log: Arc<Mutex<Vec<String>>>,
+    ) -> Arc<MockPlatformServiceProvider> {
+        let mut gcs = MockGcsApi::new();
+        let read = remote.clone();
+        gcs.expect_list_notifications().returning(move |_| {
+            Ok(ListNotificationsResponse {
+                items: read.lock().unwrap().clone(),
+                ..Default::default()
+            })
+        });
+        let (writes, inserts) = (remote.clone(), log.clone());
+        let mut next = 100;
+        gcs.expect_insert_notification()
+            .returning(move |_, mut rule| {
+                next += 1;
+                rule.id = Some(next.to_string());
+                rule.topic = rule
+                    .topic
+                    .map(|topic| format!("//pubsub.googleapis.com/{topic}"));
+                inserts.lock().unwrap().push(format!(
+                    "insert {}",
+                    rule.object_name_prefix.clone().unwrap_or_default()
+                ));
+                writes.lock().unwrap().push(rule.clone());
+                Ok(rule)
+            });
+        let (deletes, deleted) = (remote, log);
+        gcs.expect_delete_notification().returning(move |_, id| {
+            let mut rules = deletes.lock().unwrap();
+            let prefix = rules
+                .iter()
+                .find(|rule| rule.id.as_deref() == Some(&id))
+                .and_then(|rule| rule.object_name_prefix.clone())
+                .unwrap_or_default();
+            rules.retain(|rule| rule.id.as_deref() != Some(&id));
+            deleted.lock().unwrap().push(format!("delete {prefix}"));
+            Ok(())
+        });
+        let gcs = Arc::new(gcs);
+        let iam = Arc::new(MockIamApi::new());
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_gcs_client()
+            .returning(move |_| Ok(gcs.clone()));
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        Arc::new(provider)
+    }
+
+    fn rules(rules: &[(&str, &str)]) -> Storage {
+        let queue = Queue::new("work".into()).build();
+        Storage::new("uploads".into())
+            .notifications(
+                rules
+                    .iter()
+                    .map(|(prefix, suffix)| {
+                        StorageNotification::builder()
+                            .queue((&queue).into())
+                            .prefix((*prefix).into())
+                            .suffix((*suffix).into())
+                            .build()
+                    })
+                    .collect(),
+            )
+            .build()
+    }
+
+    async fn reconcile_to(
+        storage: Storage,
+        state: GcpStorageState,
+        provider: Arc<MockPlatformServiceProvider>,
+    ) {
+        let mut run = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(GcpStorageController {
+                state,
+                bucket_name: Some("test-uploads".into()),
+                notifications_managed: true,
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .service_provider(provider)
+            .with_dependency(
+                Queue::new("work".into()).build(),
+                GcpQueueController {
+                    state: GcpQueueState::Ready,
+                    topic_name: Some("test-work".into()),
+                    subscription_name: Some("test-work-sub".into()),
+                    storage_publisher_member: Some("serviceAccount:storage".into()),
+                    storage_publisher_pending: None,
+                    _internal_stay_count: None,
+                },
+            )
+            .build()
+            .await
+            .unwrap();
+        run.run_until_terminal().await.unwrap();
+        assert_eq!(run.status(), ResourceStatus::Running);
+    }
+
+    /// Configs are keyed by their (queue, prefix) group, not their position: inserting a
+    /// rule first and reordering the rest only adds the new group. A changed suffix set
+    /// creates the group's new config before deleting the old one, so the unchanged suffix
+    /// keeps delivering. At GCS's limit of 10 configs the old one has to go first.
+    #[tokio::test]
+    async fn unchanged_groups_survive_edits_and_changed_groups_are_replaced_create_first() {
+        let remote = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let provider = simulated_gcs(remote.clone(), log.clone());
+        reconcile_to(
+            rules(&[("in/", ".json"), ("logs/", ".json"), ("logs/", ".csv")]),
+            GcpStorageState::CreatingNotifications,
+            provider.clone(),
+        )
+        .await;
+        let original: Vec<_> = remote.lock().unwrap().clone();
+        assert_eq!(original.len(), 2);
+        log.lock().unwrap().clear();
+
+        reconcile_to(
+            rules(&[
+                ("new/", ".bin"),
+                ("logs/", ".csv"),
+                ("logs/", ".json"),
+                ("in/", ".json"),
+            ]),
+            GcpStorageState::UpdatingNotifications,
+            provider.clone(),
+        )
+        .await;
+        assert_eq!(*log.lock().unwrap(), ["insert new/"]);
+        let kept: Vec<_> = remote
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|config| config.id.clone())
+            .collect();
+        for config in &original {
+            assert!(
+                kept.contains(config.id.as_ref().unwrap()),
+                "{config:?} was replaced"
+            );
+        }
+        log.lock().unwrap().clear();
+
+        reconcile_to(
+            rules(&[
+                ("new/", ".bin"),
+                ("logs/", ".txt"),
+                ("logs/", ".json"),
+                ("in/", ".json"),
+            ]),
+            GcpStorageState::UpdatingNotifications,
+            provider.clone(),
+        )
+        .await;
+        assert_eq!(*log.lock().unwrap(), ["insert logs/", "delete logs/"]);
+        log.lock().unwrap().clear();
+
+        // Fill the bucket to GCS's limit with configs made elsewhere.
+        for index in 0..7 {
+            remote.lock().unwrap().push(GcsNotification {
+                id: Some(format!("foreign-{index}")),
+                topic: Some("//pubsub.googleapis.com/projects/test/topics/other".into()),
+                event_types: vec!["OBJECT_FINALIZE".into()],
+                payload_format: Some("JSON_API_V1".into()),
+                object_name_prefix: Some(format!("foreign-{index}/")),
+                ..Default::default()
+            });
+        }
+        assert_eq!(remote.lock().unwrap().len(), 10);
+        reconcile_to(
+            rules(&[
+                ("new/", ".bin"),
+                ("logs/", ".gz"),
+                ("logs/", ".json"),
+                ("in/", ".json"),
+            ]),
+            GcpStorageState::UpdatingNotifications,
+            provider,
+        )
+        .await;
+        assert_eq!(*log.lock().unwrap(), ["delete logs/", "insert logs/"]);
+        assert_eq!(remote.lock().unwrap().len(), 10);
     }
 
     /// Right after the queue grants the storage service agent `pubsub.publisher`, GCS can

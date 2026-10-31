@@ -19,11 +19,34 @@ const GCS_MAX_SUFFIX_ATTRIBUTES: usize = 4;
 /// values are limited to 1024 bytes. Chunks are cut at character boundaries by bytes.
 const GCS_ATTRIBUTE_VALUE_BYTES: usize = 1024;
 
+fn short_hash(parts: &[&str]) -> String {
+    let mut digest = Sha256::new();
+    for part in parts {
+        digest.update(part.as_bytes());
+        digest.update([0]);
+    }
+    format!("{:x}", digest.finalize())[..16].to_string()
+}
+
+/// Stable identity of what a rule delivers (queue, prefix, suffix), independent of its
+/// position, so adding or removing another rule never replaces this one's subscription.
+pub fn notification_rule_key(rule: &StorageNotification) -> String {
+    short_hash(&[
+        "rule",
+        &rule.queue.id,
+        rule.prefix.as_deref().unwrap_or_default(),
+        rule.suffix.as_deref().unwrap_or_default(),
+    ])
+}
+
 /// One GCS notification config: every rule of a Storage with the same queue and prefix.
 /// GCS filters by prefix only, so one config per rule would publish each object under a
 /// shared prefix once per rule. The consumer checks the suffixes instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GcsNotificationConfig<'a> {
+    /// Stable identity of the group (queue and prefix), independent of rule positions and
+    /// suffixes: a changed suffix set replaces only this group's config.
+    pub key: String,
     /// Queue the config publishes to.
     pub queue: &'a ResourceRef,
     /// `object_name_prefix`, if any.
@@ -55,7 +78,9 @@ pub fn gcs_notification_configs(storage: &Storage) -> Result<Vec<GcsNotification
     }
     groups
         .into_iter()
-        .map(|(queue, prefix, suffixes, unfiltered)| {
+        .map(|(queue, prefix, mut suffixes, unfiltered)| {
+            // Sorted, so reordering rules leaves the group's config unchanged.
+            suffixes.sort_unstable();
             let suffix_attributes = if unfiltered {
                 Vec::new()
             } else {
@@ -67,6 +92,7 @@ pub fn gcs_notification_configs(storage: &Storage) -> Result<Vec<GcsNotification
                 })?
             };
             Ok(GcsNotificationConfig {
+                key: short_hash(&["gcs", &queue.id, prefix.unwrap_or_default()]),
                 queue,
                 prefix,
                 suffix_attributes,
@@ -373,7 +399,7 @@ mod tests {
                 (
                     "work",
                     Some("logs/"),
-                    Some(vec![".json".into(), ".gz".into()])
+                    Some(vec![".gz".into(), ".json".into()])
                 ),
                 ("audit", Some("logs/"), Some(vec![".csv".into()])),
                 ("work", Some("raw/"), None),
