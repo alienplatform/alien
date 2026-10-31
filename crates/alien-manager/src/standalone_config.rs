@@ -463,7 +463,7 @@ impl ManagerTomlConfig {
 #
 # Azure setups trust the OIDC token the manager presents (AZURE_FEDERATED_TOKEN_FILE, for
 # example from AKS workload identity) through a federated identity credential. With
-# [impersonation.azure], the manager refuses to start unless it also runs with:
+# [impersonation.azure], Azure deployments render only when the manager also runs with:
 #   AZURE_TENANT_ID                the manager's (managing) tenant
 #   AZURE_MANAGEMENT_OIDC_ISSUER   the issuer of that token, e.g. the AKS cluster's OIDC issuer URL
 #   AZURE_MANAGEMENT_OIDC_SUBJECT  its exact subject, e.g. system:serviceaccount:<namespace>:<name>

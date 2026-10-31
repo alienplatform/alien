@@ -37,7 +37,9 @@ environment variable (the file's contents), or from the working directory.
 - `[impersonation]` sets the identity used to deploy into customer clouds. With
   `[impersonation.azure]`, the manager also needs `AZURE_TENANT_ID`,
   `AZURE_MANAGEMENT_OIDC_ISSUER` and `AZURE_MANAGEMENT_OIDC_SUBJECT`: the tenant, issuer
-  and subject of the OIDC token Azure setups trust. It refuses to start without them
+  and subject of the OIDC token Azure setups trust. Without them the manager still
+  starts and serves other clouds, logs a warning naming the missing ones, and fails
+  every Azure deployment's render with the same message
 
 ## Embedding
 

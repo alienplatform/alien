@@ -34,6 +34,9 @@ pub struct ImpersonationCredentialResolver {
     management_binding_platforms: HashSet<Platform>,
     environment_resolver: super::environment_credentials::EnvironmentCredentialResolver,
     management_external_ids: Option<Arc<dyn ManagementExternalIdSource>>,
+    /// The manager's environment, which carries the trust parts of the GCP and Azure management
+    /// identities.
+    environment: HashMap<String, String>,
 }
 
 impl ImpersonationCredentialResolver {
@@ -49,7 +52,14 @@ impl ImpersonationCredentialResolver {
             environment_resolver:
                 super::environment_credentials::EnvironmentCredentialResolver::new(),
             management_external_ids: None,
+            environment: std::env::vars().collect(),
         }
+    }
+
+    /// Derive management identities from `environment` instead of the process environment.
+    pub fn with_environment(mut self, environment: HashMap<String, String>) -> Self {
+        self.environment = environment;
+        self
     }
 
     /// Send each deployment's ExternalId when assuming its AWS management and
@@ -355,7 +365,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             ),
         })?;
 
-        Ok(Some(management_config_from_info(info)?))
+        Ok(Some(management_config_from_info(info, &self.environment)?))
     }
 }
 
@@ -491,7 +501,10 @@ async fn impersonate_service_account(
 }
 
 /// Derive ManagementConfig from ServiceAccountInfo.
-fn management_config_from_info(info: ServiceAccountInfo) -> Result<ManagementConfig, AlienError> {
+fn management_config_from_info(
+    info: ServiceAccountInfo,
+    environment: &HashMap<String, String>,
+) -> Result<ManagementConfig, AlienError> {
     match info {
         ServiceAccountInfo::Aws(aws_info) => {
             Ok(ManagementConfig::Aws(alien_core::AwsManagementConfig {
@@ -502,7 +515,7 @@ fn management_config_from_info(info: ServiceAccountInfo) -> Result<ManagementCon
             Ok(ManagementConfig::Gcp(alien_core::GcpManagementConfig {
                 federation_trust: super::gcp_federation::federation_trust(
                     Some(&gcp_info.unique_id),
-                    &std::env::vars().collect(),
+                    environment,
                 )
                 .map_err(|error| error.into_generic())?,
                 service_account_email: gcp_info.email,
@@ -510,9 +523,7 @@ fn management_config_from_info(info: ServiceAccountInfo) -> Result<ManagementCon
         }
         // Azure's management identity is the OIDC token the manager presents, so its trust
         // comes from the environment, not from the binding.
-        ServiceAccountInfo::Azure(_azure_info) => {
-            azure_management_config_from_env(&std::env::vars().collect())
-        }
+        ServiceAccountInfo::Azure(_azure_info) => azure_management_config_from_env(environment),
     }
 }
 
@@ -532,7 +543,7 @@ pub(crate) fn azure_management_config_from_env(
     if !missing.is_empty() {
         return Err(AlienError::new(GenericError {
             message: format!(
-                "The Azure management identity needs {}: customer setups trust the managing tenant and the issuer and subject of the manager's OIDC token",
+                "[impersonation.azure] needs {} in the manager's environment: Azure setups trust the managing tenant and the issuer and subject of the manager's OIDC token",
                 missing.join(", ")
             ),
         }));
@@ -1058,7 +1069,7 @@ mod tests {
         assert!(
             error
                 .message
-                .contains("needs AZURE_TENANT_ID, AZURE_MANAGEMENT_OIDC_SUBJECT:"),
+                .starts_with("[impersonation.azure] needs AZURE_TENANT_ID, AZURE_MANAGEMENT_OIDC_SUBJECT in the manager's environment:"),
             "{}",
             error.message
         );
