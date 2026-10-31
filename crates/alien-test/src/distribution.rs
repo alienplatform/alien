@@ -467,6 +467,19 @@ async fn cleanup_retained_cloudformation_resources(
 }
 
 async fn cleanup_retained_s3_bucket(env: &[(String, String)], bucket: &str) -> anyhow::Result<()> {
+    // Not every bucket a template creates is retained: the sandbox bundle bucket goes with the
+    // stack.
+    let mut head = Command::new("aws");
+    head.args(["s3api", "head-bucket", "--bucket", bucket]);
+    apply_env(&mut head, env);
+    let probe = head
+        .output()
+        .await
+        .context("failed to start aws s3api head-bucket")?;
+    if !probe.status.success() && String::from_utf8_lossy(&probe.stderr).contains("Not Found") {
+        info!(%bucket, "CloudFormation S3 bucket was deleted with the stack");
+        return Ok(());
+    }
     info!(%bucket, "deleting retained CloudFormation S3 bucket");
     let temp = TempDir::new().context("Failed to create retained S3 cleanup temp dir")?;
 
