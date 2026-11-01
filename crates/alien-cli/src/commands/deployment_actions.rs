@@ -226,11 +226,19 @@ fn saved_compute(detail: &Value) -> Result<Option<ComputeSettings>> {
     }
 }
 
+fn machine_count(count: u32) -> String {
+    if count == 1 {
+        "1 machine".to_string()
+    } else {
+        format!("{count} machines")
+    }
+}
+
 fn describe_pool(selection: &ComputePoolSelection) -> String {
     let (size, machine) = match selection {
         ComputePoolSelection::Fixed {
             machines, machine, ..
-        } => (format!("{machines} machines (fixed)"), machine),
+        } => (format!("{} (fixed)", machine_count(*machines)), machine),
         ComputePoolSelection::Autoscale {
             min, max, machine, ..
         } => (format!("{min}-{max} machines (autoscale)"), machine),
