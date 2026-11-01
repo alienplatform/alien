@@ -1,0 +1,1 @@
+ALTER TABLE "organization_metadata" ADD COLUMN "deployment_token_expires_at" timestamp;

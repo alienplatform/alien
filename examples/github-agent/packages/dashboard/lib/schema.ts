@@ -102,6 +102,7 @@ export const organizationMetadata = pgTable("organization_metadata", {
     .unique(),
   deploymentGroupId: text("deployment_group_id"),
   deploymentToken: text("deployment_token"),
+  deploymentTokenExpiresAt: timestamp("deployment_token_expires_at"),
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 })

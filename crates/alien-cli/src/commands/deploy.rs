@@ -949,7 +949,7 @@ async fn resolve_self_deployment_group(
         [] => Err(AlienError::new(ErrorData::ValidationError {
             field: "deployment-group".to_string(),
             message: format!(
-                "Deployment group '{reference}' was not found in this project. Run `alien onboard <customer-name>` or pass an existing group ID, name, or external ID."
+                "Deployment group '{reference}' was not found in this project. Run `alien onboard <customer-name> --allow <email|@domain>` or pass an existing group ID, name, or external ID."
             ),
         })),
         _ => Err(AlienError::new(ErrorData::ValidationError {

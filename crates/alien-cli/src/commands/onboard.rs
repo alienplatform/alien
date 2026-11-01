@@ -8,6 +8,7 @@ use alien_core::{
     StackInputKind, StackInputProvider,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_platform_api::types::CreateSetupLinkRequestAllowedItem;
 use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -34,6 +35,17 @@ pub struct OnboardArgs {
         default_value = "application"
     )]
     pub setup_items: Vec<SetupItem>,
+
+    /// Email address (jane@acme.com) or domain (@acme.com) that may open the setup link. Repeat for each.
+    /// The link asks for the person's email and a code sent to it.
+    /// Platform setup links only; required unless --airgapped.
+    #[arg(
+        long = "allow",
+        value_name = "EMAIL|@DOMAIN",
+        value_parser = parse_allowed_entry,
+        conflicts_with = "airgapped"
+    )]
+    pub allowed: Vec<CreateSetupLinkRequestAllowedItem>,
 
     /// HTTPS destination when the customer leaves or finishes setup (maximum 2048 characters).
     #[arg(long, value_parser = parse_setup_link_url, conflicts_with = "airgapped")]
@@ -95,6 +107,22 @@ fn parse_setup_link_url(value: &str) -> std::result::Result<String, String> {
     Ok(value.to_string())
 }
 
+// Entries are case-insensitive; the API stores them lowercased.
+fn parse_allowed_entry(
+    value: &str,
+) -> std::result::Result<CreateSetupLinkRequestAllowedItem, String> {
+    let value = value.to_lowercase();
+    // The generated parser's pattern error quotes its regex. Check the spec's
+    // maxLength (254) here so that reason stays readable, and give every other
+    // refusal a plain message.
+    if value.chars().count() > 254 {
+        return Err("Enter an email address or domain of at most 254 characters".to_string());
+    }
+    value
+        .parse()
+        .map_err(|_| "Enter an email address (jane@acme.com) or a domain (@acme.com)".to_string())
+}
+
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
     let name = if let Some(ref name) = args.name {
         name.clone()
@@ -119,6 +147,13 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
 #[cfg(feature = "platform")]
 async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
     use alien_platform_api::SdkResultExt;
+
+    if args.allowed.is_empty() && !args.airgapped {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "allow".to_string(),
+            message: "Pass --allow with each email (jane@acme.com) or domain (@acme.com) that may open the setup link, or --airgapped for an environment that can't reach your manager.".to_string(),
+        }));
+    }
 
     let setup_environment_variables = platform_setup_environment_variables(
         &crate::parse_env_and_secret_vars(&args.env_vars, &args.secret_vars)?,
@@ -218,6 +253,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             )?),
             return_url: args.return_url.clone(),
             refresh_url: args.refresh_url.clone(),
+            allowed: args.allowed.clone(),
             description: None,
             entry_point: None,
             expires_at: None,
@@ -298,6 +334,11 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     }
 
     let deployment_link = response.deployment_link.clone();
+    let allowed = args
+        .allowed
+        .iter()
+        .map(|entry| entry.as_str())
+        .collect::<Vec<_>>();
 
     if args.json {
         print_json(&serde_json::json!({
@@ -305,9 +346,11 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             "name": name,
             "externalId": external_id,
             "deploymentLink": deployment_link,
+            "allowed": allowed,
+            "expiresAt": response.expires_at,
             "setupItems": args.setup_items.iter().map(|item| item.cli_name()).collect::<Vec<_>>(),
             "readiness": "setup_pending",
-            "nextAction": "Share deploymentLink with the customer's admin, then run `alien deployments ls` to check readiness.",
+            "nextAction": "Share deploymentLink with the customer's admin. It asks for an email that matches allowed and a code sent to that address. Then run `alien deployments ls` to check readiness.",
             "maxDeployments": args.max_deployments,
             "platforms": selected_platforms.iter().map(|platform| platform.as_str()).collect::<Vec<_>>(),
             "subdomain": public_subdomain,
@@ -328,6 +371,16 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         dim_label("Share this link with the customer's admin:")
     );
     println!("  {}", accent(&deployment_link));
+    println!(
+        "{}",
+        dim_label("It asks for their email and a code sent to it. It opens for:")
+    );
+    println!("  {}", allowed.join(", "));
+    println!(
+        "{} {}",
+        dim_label("Expires"),
+        response.expires_at.format("%Y-%m-%d %H:%M UTC")
+    );
     println!();
     println!(
         "{} {}",
@@ -1247,9 +1300,9 @@ fn platform_setup_environment_variables(
 /// Self-hosted and local managers: create the deployment group on the
 /// manager and print the setup command for each selected platform.
 async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
-    if args.return_url.is_some() || args.refresh_url.is_some() {
+    if !args.allowed.is_empty() || args.return_url.is_some() || args.refresh_url.is_some() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "--return-url and --refresh-url require a platform setup link. Run `alien login` and link a project first.".to_string(),
+            message: "--allow, --return-url and --refresh-url require a platform setup link. Run `alien login` and link a project first.".to_string(),
         }));
     }
     use alien_manager_api::types::{
@@ -2113,22 +2166,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn allow_entry_errors_name_the_problem_without_the_pattern() {
+        let long = format!("{}@acme.com", "a".repeat(246));
+        assert_eq!(
+            parse_allowed_entry(&long).unwrap_err(),
+            "Enter an email address or domain of at most 254 characters"
+        );
+        assert_eq!(
+            parse_allowed_entry("jane").unwrap_err(),
+            "Enter an email address (jane@acme.com) or a domain (@acme.com)"
+        );
+    }
+
+    #[test]
+    fn allow_is_repeatable_lowercased_and_refuses_anything_but_emails_and_domains() {
+        let args = OnboardArgs::try_parse_from([
+            "onboard",
+            "acme",
+            "--allow",
+            "Jane@Acme.com",
+            "--allow",
+            "@Example.co.uk",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.allowed
+                .iter()
+                .map(|entry| entry.as_str())
+                .collect::<Vec<_>>(),
+            ["jane@acme.com", "@example.co.uk"]
+        );
+        for value in [
+            "",
+            "acme.com",
+            "jane@",
+            "@acme",
+            "@acme.c",
+            "@-acme.com",
+            "jane doe@acme.com",
+            "jane,bob@acme.com",
+            "jane@acme.com@acme.com",
+        ] {
+            assert!(
+                OnboardArgs::try_parse_from(["onboard", "acme", "--allow", value]).is_err(),
+                "{value:?} should be refused"
+            );
+        }
+        let too_long = format!("{}@acme.com", "a".repeat(246));
+        assert!(OnboardArgs::try_parse_from(["onboard", "acme", "--allow", &too_long]).is_err());
+        assert!(OnboardArgs::try_parse_from([
+            "onboard",
+            "acme",
+            "--allow",
+            "@acme.com",
+            "--airgapped"
+        ])
+        .is_err());
+    }
+
     #[tokio::test]
-    async fn standalone_rejects_setup_link_urls_before_contacting_manager() {
+    async fn standalone_rejects_setup_link_options_before_contacting_manager() {
         let manager = httpmock::MockServer::start_async().await;
         let requests = manager
             .mock_async(|_, then| {
                 then.status(500);
             })
             .await;
-        for flag in ["--return-url", "--refresh-url"] {
-            let args = OnboardArgs::try_parse_from([
-                "onboard",
-                "acme",
-                flag,
-                "https://example.com/complete",
-            ])
-            .unwrap();
+        for (flag, value) in [
+            ("--return-url", "https://example.com/complete"),
+            ("--refresh-url", "https://example.com/complete"),
+            ("--allow", "@acme.com"),
+        ] {
+            let args = OnboardArgs::try_parse_from(["onboard", "acme", flag, value]).unwrap();
             let error = onboard_standalone(
                 args,
                 ExecutionMode::Standalone {

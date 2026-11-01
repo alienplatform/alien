@@ -1276,7 +1276,10 @@ fn render_setup_output(output: &ManagerSetupOutput, json: bool) -> Result<()> {
         println!("  Region: {}", region);
     }
     println!("  Setup: {}", output.setup_status);
-    println!("  Deployment Portal: {}", output.deployment_link);
+    println!(
+        "  Deployment Portal: {} (opens once, within 5 minutes)",
+        output.deployment_link
+    );
     render_setup_action(&output.setup);
     if !output.files_written.is_empty() {
         println!("  Files:");

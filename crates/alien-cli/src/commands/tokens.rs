@@ -175,7 +175,7 @@ async fn resolve_group(client: &alien_manager_api::Client, customer: &str) -> Re
             AlienError::new(ErrorData::ValidationError {
                 field: "customer".to_string(),
                 message: format!(
-                    "No customer named '{customer}'. Run `alien onboard {customer}` first."
+                    "No customer named '{customer}'. Run `alien onboard {customer}` first (on the platform, add `--allow <email|@domain>`)."
                 ),
             })
         })

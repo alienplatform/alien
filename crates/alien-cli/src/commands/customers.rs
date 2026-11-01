@@ -19,7 +19,7 @@ use std::num::NonZeroU64;
     alien deployment-groups update acme --max-deployments 5
     alien deployment-groups set-external-id acme customer_123
     alien deployment-groups delete acme --yes
-    alien onboard acme --external-id customer_123 --setup-items models,keys"
+    alien onboard acme --allow @acme.com --external-id customer_123 --setup-items models,keys"
 )]
 pub struct CustomersArgs {
     /// Project to manage (defaults to the linked project)
@@ -114,7 +114,7 @@ pub async fn customers_task(args: CustomersArgs, ctx: ExecutionMode) -> Result<(
                 println!(
                     "{} {}",
                     dim_label("Next"),
-                    command("alien onboard <customer-name>")
+                    command("alien onboard <customer-name> --allow <email|@domain>")
                 );
             } else {
                 let mut table = make_table(&["Deployment group", "External ID", "Limit", "ID"]);

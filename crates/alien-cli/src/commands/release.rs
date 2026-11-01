@@ -1919,6 +1919,10 @@ fn onboard_command_hint(config: &ReleaseConfig) -> String {
         .filter_map(|platform| Platform::from_str(platform).ok())
         .collect::<Vec<_>>();
     let mut command_parts = vec!["alien onboard <customer-name>".to_string()];
+    // A platform setup link needs its allowed emails; a manager token does not.
+    if config.manager.is_none() {
+        command_parts.push("--allow <email|@domain>".to_string());
+    }
 
     if !config.platforms.is_empty() {
         command_parts.push(format!("--platforms {}", config.platforms.join(",")));

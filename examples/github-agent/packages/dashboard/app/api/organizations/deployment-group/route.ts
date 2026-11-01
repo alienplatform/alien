@@ -63,7 +63,6 @@ export async function GET() {
     return NextResponse.json({
       deploymentGroupId,
       deploymentToken,
-      deploymentLink: `https://alien.dev/deploy#${deploymentToken}`,
     })
   } catch (error) {
     console.error("Failed to get/create deployment group:", error)
