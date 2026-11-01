@@ -4,7 +4,7 @@ use crate::{
     emitter::TfFragment,
     emitters::aws::{
         helpers::{iam_managed_policy_name_template, iam_role_name_template, jsonencode},
-        key::KMS_KEY_ARN_PATTERN,
+        key::{customer_key_connection_validation, KMS_KEY_ARN_PATTERN},
     },
     expr, TerraformOptions, TerraformTarget, TfRegistry,
 };
@@ -86,6 +86,18 @@ fn usage(resources: Vec<Block>) -> Result<ModuleUsage> {
 
 fn check(resources: Vec<Block>) -> Result<()> {
     RenderedModule::new(resources, IndexMap::new()).check()
+}
+
+/// A `variable` block of an object with a `deployment_id`, with `validations`.
+fn connection_variable(name: &str, validations: Vec<Block>) -> Block {
+    let mut variable = Block::builder("variable")
+        .add_label(name)
+        .add_attribute(("type", expr::raw("object({ deployment_id = string })")))
+        .add_attribute(("default", Expression::Null));
+    for validation in validations {
+        variable = variable.add_block(validation);
+    }
+    variable.build()
 }
 
 #[test]
@@ -214,7 +226,12 @@ fn sizes_each_interpolation_at_its_longest_value() {
             vec![inline_policy("grant", "execution", document(resource.clone()))],
         ]
         .concat();
-        let module = RenderedModule::new(resources, locals.clone());
+        let module = RenderedModule::new(resources, locals.clone()).with_variables(vec![
+            connection_variable(
+                "key_customer_key_connection",
+                vec![customer_key_connection_validation("key_customer_key_connection").unwrap()],
+            ),
+        ]);
         let usage = module.usage(DeploymentLengths::longest()).unwrap();
         assert_eq!(
             usage.roles["execution"],
@@ -383,6 +400,118 @@ fn a_key_arn_is_bounded_only_by_its_kms_postcondition() {
             "{error:?}"
         );
     }
+}
+
+/// A deployment ID is bounded only on a customer key connection whose variable admits nothing
+/// but alien's deployment ID format.
+#[test]
+fn a_deployment_id_is_bounded_only_by_its_connection_validation() {
+    let looser = block(
+        "validation",
+        [attr(
+            "condition",
+            expr::raw(
+                r#"var.key_customer_key_connection == null || can(regex("^dep_", var.key_customer_key_connection.deployment_id))"#,
+            ),
+        )],
+    );
+    for (variable, reference) in [
+        (None, "key_customer_key_connection"),
+        (
+            Some(connection_variable("key_customer_key_connection", vec![])),
+            "key_customer_key_connection",
+        ),
+        (
+            Some(connection_variable(
+                "key_customer_key_connection",
+                vec![looser],
+            )),
+            "key_customer_key_connection",
+        ),
+        // The validation alone does not bound a variable outside the naming convention.
+        (
+            Some(connection_variable(
+                "key_connection",
+                vec![customer_key_connection_validation("key_connection").unwrap()],
+            )),
+            "key_connection",
+        ),
+    ] {
+        let module = RenderedModule::new(
+            vec![
+                role("execution"),
+                inline_policy(
+                    "grant",
+                    "execution",
+                    document(expr::template(&format!(
+                        "customer-key:${{var.{reference}.deployment_id}}"
+                    ))),
+                ),
+            ],
+            IndexMap::new(),
+        )
+        .with_variables(variable.into_iter().collect());
+        let error = module
+            .check()
+            .expect_err("an unvalidated deployment ID has no longest value");
+        assert!(
+            format!("{error:?}").contains(&format!(
+                "Cannot bound the size of `var.{reference}.deployment_id`"
+            )),
+            "{reference}: {error:?}"
+        );
+    }
+}
+
+/// Terraform admits exactly what the deployment ID bound assumes: null or alien's format.
+#[test]
+fn the_connection_validation_admits_only_deployment_ids() {
+    if std::env::var("SKIP_LINTERS").as_deref() == Ok("1") {
+        return;
+    }
+    let variable = connection_variable(
+        "key_customer_key_connection",
+        vec![customer_key_connection_validation("key_customer_key_connection").unwrap()],
+    );
+    let valid = alien_core::new_id(alien_core::IdType::Deployment);
+    let mut runs = format!(
+        r#"run "null" {{
+  command = plan
+}}
+run "valid" {{
+  command = plan
+  variables {{
+    key_customer_key_connection = {{ deployment_id = "{valid}" }}
+  }}
+}}
+"#
+    );
+    for (name, invalid) in [
+        ("short", format!("dep_{}", "a".repeat(27))),
+        ("long", format!("dep_{}", "a".repeat(29))),
+        ("uppercase", format!("dep_{}", "A".repeat(28))),
+        ("prefix", format!("dg_{}", "a".repeat(28))),
+        ("padded", format!("{valid} ")),
+    ] {
+        runs.push_str(&format!(
+            r#"run "{name}" {{
+  command = plan
+  variables {{
+    key_customer_key_connection = {{ deployment_id = "{invalid}" }}
+  }}
+  expect_failures = [var.key_customer_key_connection]
+}}
+"#
+        ));
+    }
+    let files = IndexMap::from([
+        (
+            "main.tf".to_string(),
+            hcl::to_string(&hcl::Body::builder().add_block(variable).build()).unwrap(),
+        ),
+        ("tests/connection.tftest.hcl".to_string(), runs),
+    ]);
+    crate::test_utils::terraform_test(&files).assert_ok("customer key connection validation");
 }
 
 #[test]

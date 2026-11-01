@@ -150,6 +150,12 @@ pub(crate) fn consolidate_role_policies(
             .flat_map(|fragment| fragment.resource_blocks.iter().cloned())
             .collect(),
         locals.clone(),
+    )
+    .with_variables(
+        per_resource
+            .values()
+            .flat_map(|fragment| fragment.variable_blocks.iter().cloned())
+            .collect(),
     );
     let lengths = DeploymentLengths::longest();
     let graph = DependencyGraph::new(per_resource, locals);

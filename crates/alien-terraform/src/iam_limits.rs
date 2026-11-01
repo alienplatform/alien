@@ -7,7 +7,12 @@
 //! passes therefore fits every deployment. An interpolation this check cannot bound fails the
 //! render instead of being guessed, and resources behind `count`/`for_each` count as present.
 
-use crate::{emitters::aws::key::KMS_KEY_ARN_PATTERN, expr, ModuleFiles};
+use crate::{
+    emitters::aws::key::{
+        customer_key_connection_condition, CUSTOMER_KEY_CONNECTION_SUFFIX, KMS_KEY_ARN_PATTERN,
+    },
+    expr, ModuleFiles,
+};
 use alien_core::{new_id, ErrorData, IdType, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::generators::aws_longest_permission_context;
@@ -87,16 +92,28 @@ pub(crate) fn validate_role_policy_limits(module: &ModuleFiles) -> Result<()> {
 pub(crate) struct RenderedModule {
     resources: Vec<Block>,
     locals: IndexMap<String, Expression>,
+    variables: Vec<Block>,
 }
 
 impl RenderedModule {
     pub fn new(resources: Vec<Block>, locals: IndexMap<String, Expression>) -> Self {
-        Self { resources, locals }
+        Self {
+            resources,
+            locals,
+            variables: Vec::new(),
+        }
+    }
+
+    /// The module's `variable` blocks, whose validations can bound a variable's value.
+    pub fn with_variables(mut self, variables: Vec<Block>) -> Self {
+        self.variables = variables;
+        self
     }
 
     pub fn parse(module: &ModuleFiles) -> Result<Self> {
         let mut resources = Vec::new();
         let mut locals = IndexMap::new();
+        let mut variables = Vec::new();
         for (path, contents) in module.iter().filter(|(path, _)| path.ends_with(".tf")) {
             let body = hcl::parse(contents).into_alien_error().context(
                 ErrorData::TemplateSerializationFailed {
@@ -107,6 +124,7 @@ impl RenderedModule {
             for block in body.into_blocks() {
                 match block.identifier.as_str() {
                     "resource" => resources.push(block),
+                    "variable" => variables.push(block),
                     "locals" => {
                         for attribute in block.body.into_attributes() {
                             locals.insert(attribute.key.to_string(), attribute.expr);
@@ -116,7 +134,7 @@ impl RenderedModule {
                 }
             }
         }
-        Ok(Self::new(resources, locals))
+        Ok(Self::new(resources, locals).with_variables(variables))
     }
 
     /// Fails when a quota can be exceeded with the longest deployment values.
@@ -158,17 +176,17 @@ impl RenderedModule {
 
     /// Largest non-whitespace characters IAM counts for a `policy` attribute at `lengths`.
     pub fn policy_chars(&self, policy: &Expression, lengths: DeploymentLengths) -> Result<usize> {
-        Module::new(&self.resources, &self.locals, lengths).policy_chars(policy)
+        Module::new(&self.resources, &self.locals, &self.variables, lengths).policy_chars(policy)
     }
 
     /// Largest non-whitespace characters of a value inside a policy document at `lengths`.
     pub fn json_chars(&self, value: &Expression, lengths: DeploymentLengths) -> Result<usize> {
-        Module::new(&self.resources, &self.locals, lengths).json_chars(value, 0)
+        Module::new(&self.resources, &self.locals, &self.variables, lengths).json_chars(value, 0)
     }
 
     /// Sizes every IAM role and managed policy of the module at `lengths`.
     pub fn usage(&self, lengths: DeploymentLengths) -> Result<ModuleUsage> {
-        let module = Module::new(&self.resources, &self.locals, lengths);
+        let module = Module::new(&self.resources, &self.locals, &self.variables, lengths);
         let mut usage = ModuleUsage::default();
         let mut attachments: IndexMap<String, HashSet<String>> = IndexMap::new();
         for block in &self.resources {
@@ -268,6 +286,7 @@ impl RenderedModule {
 struct Module<'a> {
     resources: HashMap<(&'a str, &'a str), &'a Block>,
     locals: &'a IndexMap<String, Expression>,
+    variables: HashMap<&'a str, &'a Block>,
     lengths: DeploymentLengths,
 }
 
@@ -288,6 +307,7 @@ impl<'a> Module<'a> {
     fn new(
         blocks: &'a [Block],
         locals: &'a IndexMap<String, Expression>,
+        variables: &'a [Block],
         lengths: DeploymentLengths,
     ) -> Self {
         let resources = blocks
@@ -298,9 +318,14 @@ impl<'a> Module<'a> {
                 Some(((kind, label), block))
             })
             .collect();
+        let variables = variables
+            .iter()
+            .filter_map(|block| Some((block.labels.first()?.as_str(), block)))
+            .collect();
         Self {
             resources,
             locals,
+            variables,
             lengths,
         }
     }
@@ -492,8 +517,20 @@ impl<'a> Module<'a> {
                 + UUID
                 + "-".len()
                 + SECRET_ARN_SUFFIX),
-            // A deployment ID, in alien's ID format: `dep_` and 28 characters.
-            ("var", [_, "deployment_id"]) => Ok(new_id(IdType::Deployment).len()),
+            // A customer key connection's deployment ID, which its variable's validation admits
+            // only in alien's deployment ID format: `dep_` and 28 characters.
+            ("var", [name, "deployment_id"]) if name.ends_with(CUSTOMER_KEY_CONNECTION_SUFFIX) => {
+                if !self.validates(name, &customer_key_connection_condition(name))? {
+                    return Err(unbounded(
+                        expression,
+                        &format!(
+                            "var.{name} must be declared with the validation `{}` (see customer_key_connection_validation)",
+                            customer_key_connection_condition(name)
+                        ),
+                    ));
+                }
+                Ok(new_id(IdType::Deployment).len())
+            }
             ("var", ["managing_account_id"]) => Ok(lengths.managing_account_id),
             ("var", ["managing_role_arn"]) => Ok(lengths.managing_role_arn),
             // An existing cluster's name, which EKS caps at 100 characters.
@@ -595,6 +632,22 @@ impl<'a> Module<'a> {
     }
 
     /// A KMS key ARN, whose key ID is a UUID or a multi-Region `mrk-` ID of the same length.
+    /// Whether the module declares `variable` with a validation whose condition is `condition`.
+    fn validates(&self, variable: &str, condition: &str) -> Result<bool> {
+        let required = expr::parse(condition)?;
+        Ok(self.variables.get(variable).is_some_and(|block| {
+            block
+                .body
+                .blocks()
+                .filter(|nested| nested.identifier.as_str() == "validation")
+                .any(|validation| {
+                    validation.body.attributes().any(|attribute| {
+                        attribute.key.as_str() == "condition" && attribute.expr == required
+                    })
+                })
+        }))
+    }
+
     fn kms_key_arn_chars(&self, partition: usize) -> usize {
         "arn:".len()
             + partition
