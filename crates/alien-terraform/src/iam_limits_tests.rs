@@ -543,9 +543,11 @@ fn options(registry: &TfRegistry) -> TerraformOptions<'_> {
 }
 
 /// The execution role's inline policies, sized at real deployment values, equal what IAM
-/// counted for the same module (evaluated by Terraform with that prefix in us-east-2): the
-/// role holds the measured 10,804 characters at a 39-character prefix. At the longest prefix
-/// and region the module could not be applied, so rendering it is refused.
+/// counts for the same module (evaluated by Terraform with that prefix and region).
+///
+/// Before ALIEN-2147 the role held 19 policies: 10,804 characters at a 39-character prefix in
+/// us-east-2, which IAM rejects, and the render was refused. The storage and vault grants the
+/// stack-level policy already holds are no longer repeated per resource, which leaves 14.
 #[tokio::test]
 async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
     let stack = prepare_for_render(e2e_container_stack()).await;
@@ -561,34 +563,114 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
     .expect("module renders");
     let rendered = RenderedModule::parse(&module).unwrap();
     let us_east_2 = "us-east-2".len();
-    for (prefix, chars) in [(9, 9_634), (39, 10_804), (40, 10_843)] {
+    for (prefix, region, chars) in [
+        (9, us_east_2, 7_937),
+        (39, us_east_2, 8_897),
+        (40, us_east_2, 8_929),
+        (PREFIX, REGION, 9_034),
+    ] {
         let usage = rendered
             .usage(DeploymentLengths {
                 prefix,
-                region: us_east_2,
+                region,
                 ..DeploymentLengths::longest()
             })
             .unwrap();
         assert_eq!(
             usage.roles["execution_sa"],
             RoleUsage {
-                inline_policies: 19,
+                inline_policies: 14,
                 inline_chars: chars,
                 attachments: 0,
             },
-            "{prefix}-character prefix"
+            "{prefix}-character prefix, {region}-character region"
         );
     }
+    crate::generate_terraform_module(&stack, TerraformTarget::Aws, options(&registry))
+        .expect("the module fits every deployment it accepts");
+}
 
-    let longest = rendered.usage(DeploymentLengths::longest()).unwrap();
-    let error = crate::generate_terraform_module(&stack, TerraformTarget::Aws, options(&registry))
-        .expect_err("a module IAM can reject must not render");
-    assert!(longest.roles["execution_sa"].inline_chars > IAM_ROLE_INLINE_POLICY_CHARS);
-    assert!(
-        error.to_string().contains(&format!(
-            "IAM role 'execution_sa' can need {} non-whitespace characters across its 19 inline policies with a 40-character resource prefix and a 16-character region",
-            longest.roles["execution_sa"].inline_chars
-        )),
-        "{error}"
+/// The vault's `"*"` sets in the e2e stack are all held by the execution role's stack-level
+/// policy: the data sets by a wider prefix, the deployer-secrets protection as the same
+/// document. Only a set the vault names itself is written for it.
+#[tokio::test]
+async fn a_vault_writes_no_copy_of_the_stack_level_policy() {
+    let mut stack = prepare_for_render(e2e_container_stack()).await;
+    let names = crate::naming::resource_labels(&stack).unwrap();
+    let settings = StackSettings::default();
+    let selected = |stack: &Stack| {
+        let resource = &stack.resources["test-vault"];
+        let ctx = alien_core::import::EmitContext {
+            stack,
+            resource,
+            resource_id: "test-vault",
+            platform: Platform::Aws,
+            targets_kubernetes: false,
+            stack_settings: &settings,
+            names: &names,
+        };
+        let profile = &stack.permissions.profiles["execution"];
+        // As the vault emitter selects them: sets named for the vault, then `"*"` ones.
+        let mut seen = HashSet::new();
+        let refs: Vec<_> = profile
+            .0
+            .get("test-vault")
+            .into_iter()
+            .flatten()
+            .chain(profile.0["*"].iter())
+            .filter(|reference| reference.id().starts_with("vault/"))
+            .filter(|reference| seen.insert(reference.id().to_string()))
+            .cloned()
+            .collect();
+        let context = crate::emitters::aws::helpers::stack_permission_context(&ctx)
+            .with_resource_name("${local.resource_prefix}-test-vault".to_string());
+        let ids = |refs: Vec<alien_core::PermissionSetReference>| {
+            refs.iter().map(|r| r.id().to_string()).collect::<Vec<_>>()
+        };
+        (
+            ids(crate::emitters::aws::helpers::without_stack_policy_grants(
+                &ctx,
+                "execution",
+                profile,
+                refs.clone(),
+                &context,
+            )
+            .unwrap()),
+            ids(crate::emitters::aws::helpers::without_stack_policy_copies(
+                &ctx,
+                "execution",
+                profile,
+                refs,
+                &context,
+            )
+            .unwrap()),
+        )
+    };
+
+    // Containment alone proves the Allows covered; the Deny is kept until it is compared.
+    assert_eq!(
+        selected(&stack),
+        (
+            vec!["vault/protect-unmapped-deployer-secrets".to_string()],
+            Vec::<String>::new()
+        )
+    );
+
+    stack
+        .permissions
+        .profiles
+        .get_mut("execution")
+        .unwrap()
+        .0
+        .insert(
+            "test-vault".into(),
+            vec![alien_core::PermissionSetReference::from_name(
+                "vault/data-read",
+            )],
+        );
+    assert_eq!(
+        selected(&stack).1,
+        vec!["vault/data-read".to_string()],
+        "a set the vault names itself is still written"
     );
 }

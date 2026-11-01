@@ -10,6 +10,7 @@ use crate::{
     emitters::aws::helpers::{
         downcast, emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize,
         required_label, resource_prefix_template, stack_permission_context, tags,
+        without_stack_policy_copies,
     },
     expr,
 };
@@ -119,7 +120,7 @@ fn emit_storage_key_iam(
 
     // Only object readers and writers use the bucket key. A health check or provisioning
     // grant must not turn into kms:Decrypt on the deployment's key.
-    for (owner_label, refs) in storage_permission_owners(ctx) {
+    for (owner_label, _profile, refs) in storage_permission_owners(ctx) {
         let uses_object_data = refs.iter().any(|permission_ref| {
             permission_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
@@ -391,11 +392,28 @@ fn bucket_path(label: &str, attribute: &str) -> String {
 }
 
 fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
-    for (owner_label, permission_refs) in storage_permission_owners(ctx) {
+    for (owner_label, profile, permission_refs) in storage_permission_owners(ctx) {
         let context = stack_permission_context(ctx)
             .with_resource_name(format!("${{{}}}", bucket_path(label, "bucket")));
+        // A workload's stack-level policy already grants its `"*"` sets on every bucket named
+        // under the prefix, as this one is. Skipped sets keep their index, so the policies
+        // that remain keep their addresses.
+        let kept = match profile {
+            Some((profile_name, profile)) => without_stack_policy_copies(
+                ctx,
+                profile_name,
+                profile,
+                permission_refs.clone(),
+                &stack_permission_context(ctx)
+                    .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id)),
+            )?,
+            None => permission_refs.clone(),
+        };
 
         for (idx, permission_ref) in permission_refs.iter().enumerate() {
+            if !kept.contains(permission_ref) {
+                continue;
+            }
             let Some(permission_set) =
                 permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
             else {
@@ -461,7 +479,15 @@ pub(crate) fn emit_sandbox_bundle_read(
     )
 }
 
-fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
+/// The roles granted sets on this storage: each with the workload profile it serves, if any,
+/// and the sets.
+fn storage_permission_owners<'a>(
+    ctx: &'a EmitContext<'_>,
+) -> Vec<(
+    String,
+    Option<(&'a str, &'a PermissionProfile)>,
+    Vec<PermissionSetReference>,
+)> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         // A workload's stack-wide sets do not reach the sandbox bundle Storage: its bundles decide
@@ -477,7 +503,11 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
 
         let service_account_id = format!("{profile_name}-sa");
         if let Some((label, _service_account)) = service_account_for_id(ctx, &service_account_id) {
-            owners.push((label.to_string(), refs));
+            owners.push((
+                label.to_string(),
+                Some((profile_name.as_str(), profile)),
+                refs,
+            ));
         }
     }
 
@@ -485,7 +515,7 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
         let refs = storage_permission_refs(profile, ctx.resource_id, true);
         if !refs.is_empty() {
             if let Some(label) = remote_stack_management_label(ctx) {
-                owners.push((label.to_string(), refs));
+                owners.push((label.to_string(), None, refs));
             }
         }
     }
@@ -494,6 +524,7 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
         if let Some(label) = remote_bindings_label(ctx) {
             owners.push((
                 label.to_string(),
+                None,
                 vec![PermissionSetReference::from_name(definition.permission_set)],
             ));
         }
