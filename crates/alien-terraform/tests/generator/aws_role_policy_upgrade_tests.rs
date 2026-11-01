@@ -508,6 +508,32 @@ async fn an_inline_install_upgrades_in_place_after_the_managed_policies_attach()
             .collect();
         assert_eq!(depends_on, role_attachments, "{}", grant.address);
     }
+
+    // Teardown keeps its order: Lambda and ECS release their network interfaces with the role's
+    // permissions, so the private subnets and the workload security group wait for, and outlive,
+    // every grant, new or stubbed.
+    for network in [
+        "aws_subnet.default_network_private",
+        "aws_security_group.default_network_workload",
+    ] {
+        let depends_on: BTreeSet<String> = configured[network]["depends_on"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{network} depends on IAM"))
+            .iter()
+            .map(|dependency| dependency.as_str().unwrap().to_string())
+            .collect();
+        let grants: BTreeSet<String> = policies
+            .iter()
+            .chain(&attachments)
+            .cloned()
+            .chain(former.iter().map(|grant| grant.address.clone()))
+            .collect();
+        assert!(
+            grants.is_subset(&depends_on),
+            "{network} is destroyed before {:?}",
+            grants.difference(&depends_on).collect::<Vec<_>>()
+        );
+    }
 }
 
 /// The addresses an attribute of a configured resource refers to, from `terraform show -json`.
