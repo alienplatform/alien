@@ -12,12 +12,12 @@ use super::helpers::{
 };
 use alien_core::{
     import::EmitContext, AwsManagementConfig, ComputeCluster, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, Platform, Stack,
+    EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, Platform, Postgres, Stack,
     StackSettings, StackState,
 };
 use alien_preflights::runner::PreflightRunner;
 use alien_terraform::{
-    block::{attr, resource_block},
+    block::{attr, data_block, resource_block},
     emitters::aws::helpers::{
         aws_terraform_permission_context, emit_iam_role_policy, required_label,
         resource_prefix_template, service_assume_role_policy,
@@ -138,8 +138,12 @@ fn former_grants() -> Vec<FormerGrant> {
         .collect()
 }
 
-/// Answers the reads the module's data sources make, STS GetCallerIdentity and EC2
-/// DescribeAvailabilityZones, so planning needs no AWS account.
+/// The master user secret RDS manages for every cluster the fake describes, in the format of
+/// the RDS documentation's example.
+const RDS_MASTER_SECRET_ARN: &str = "arn:aws:secretsmanager:us-east-2:123456789012:secret:rds!cluster-033d7456-2c96-450d-9d48-f5de3025e51c-xmJRDx";
+
+/// Answers the reads the module's data sources make, STS GetCallerIdentity, EC2
+/// DescribeAvailabilityZones and RDS DescribeDBClusters, so planning needs no AWS account.
 fn fake_aws() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds a local port");
     let port = listener.local_addr().expect("has an address").port();
@@ -173,7 +177,9 @@ fn fake_aws() -> u16 {
                     request.extend_from_slice(&buffer[..read]);
                 }
                 let request = String::from_utf8_lossy(&request);
-                let body = if request.contains("Action=DescribeAvailabilityZones") {
+                let body = if request.contains("Action=DescribeDBClusters") {
+                    format!("<DescribeDBClustersResponse xmlns=\"http://rds.amazonaws.com/doc/2014-10-31/\"><DescribeDBClustersResult><DBClusters><DBCluster><DBClusterIdentifier>{PREFIX}-database</DBClusterIdentifier><DBClusterArn>arn:aws:rds:us-east-2:{ACCOUNT}:cluster:{PREFIX}-database</DBClusterArn><Engine>aurora-postgresql</Engine><Status>available</Status><MasterUserSecret><SecretArn>{RDS_MASTER_SECRET_ARN}</SecretArn><SecretStatus>active</SecretStatus><KmsKeyId>arn:aws:kms:us-east-2:{ACCOUNT}:key/0987dcba-09fe-87dc-65ba-ab0987654321</KmsKeyId></MasterUserSecret></DBCluster></DBClusters></DescribeDBClustersResult><ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000000</RequestId></ResponseMetadata></DescribeDBClustersResponse>")
+                } else if request.contains("Action=DescribeAvailabilityZones") {
                     let zones: String = ["a", "b", "c"]
                         .iter()
                         .enumerate()
@@ -531,6 +537,7 @@ fn module_dir(module: &alien_terraform::ModuleFiles) -> tempfile::TempDir {
   skip_requesting_account_id  = true
   endpoints {{
     ec2 = "http://127.0.0.1:{port}"
+    rds = "http://127.0.0.1:{port}"
     sts = "http://127.0.0.1:{port}"
   }}
 }}
@@ -1568,4 +1575,139 @@ async fn an_unchanged_managed_policy_keeps_its_address() {
             attachment_of(policy)
         );
     }
+}
+
+/// Stands in for a registered database emitter: it reads the RDS cluster's data source and
+/// grants its reader role the RDS-managed master user secret, as composed CLIs' Postgres
+/// emitters do.
+struct DatabaseSecretReader;
+
+impl TfEmitter for DatabaseSecretReader {
+    fn emit(&self, ctx: &EmitContext<'_>) -> alien_core::Result<TfFragment> {
+        let label = required_label(ctx)?;
+        let role = format!("{label}_reader");
+        let cluster = format!("{label}_credentials");
+        let mut fragment = TfFragment::default();
+        fragment.data_blocks.push(data_block(
+            "aws_rds_cluster",
+            &cluster,
+            [attr(
+                "cluster_identifier",
+                resource_prefix_template(ctx.resource_id),
+            )],
+        ));
+        fragment.resource_blocks.push(resource_block(
+            "aws_iam_role",
+            &role,
+            [
+                attr("name", resource_prefix_template("database-reader")),
+                attr(
+                    "assume_role_policy",
+                    service_assume_role_policy(&["ec2.amazonaws.com"]),
+                ),
+            ],
+        ));
+        let statement = expr::object([
+            (
+                "Sid",
+                hcl::Expression::String("ReadConnectionSecret".into()),
+            ),
+            ("Effect", hcl::Expression::String("Allow".into())),
+            (
+                "Action",
+                hcl::Expression::Array(vec![hcl::Expression::String(
+                    "secretsmanager:GetSecretValue".into(),
+                )]),
+            ),
+            (
+                "Resource",
+                hcl::Expression::Array(vec![expr::template(format!(
+                    "${{data.aws_rds_cluster.{cluster}.master_user_secret[0].secret_arn}}"
+                ))]),
+            ),
+        ]);
+        fragment.resource_blocks.push(resource_block(
+            "aws_iam_role_policy",
+            &format!("{role}_secret"),
+            [
+                attr("name", hcl::Expression::String("database-secret-0".into())),
+                attr("role", expr::traversal(["aws_iam_role", &role, "id"])),
+                attr(
+                    "policy",
+                    expr::jsonencode(expr::object([
+                        ("Version", hcl::Expression::String("2012-10-17".into())),
+                        ("Statement", hcl::Expression::Array(vec![statement])),
+                    ])),
+                ),
+            ],
+        ));
+        Ok(fragment)
+    }
+
+    fn emit_import_ref(&self, _ctx: &EmitContext<'_>) -> alien_core::Result<hcl::Expression> {
+        Ok(hcl::Expression::Object(hcl::Object::new()))
+    }
+}
+
+/// A grant on an RDS-managed master user secret renders, moves to a managed policy, and
+/// Terraform evaluates `master_user_secret[0].secret_arn` to the secret's ARN.
+#[tokio::test]
+async fn a_grant_on_an_rds_master_secret_renders_and_evaluates_to_the_secret_arn() {
+    if std::env::var("SKIP_LINTERS").as_deref() == Ok("1") {
+        return;
+    }
+    let mut source: Stack = serde_json::from_str(STACK).expect("the fixture is a stack");
+    source.resources.insert(
+        "database".to_string(),
+        alien_core::ResourceEntry {
+            config: alien_core::Resource::new(Postgres::new("database".to_string()).build()),
+            lifecycle: alien_core::ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            display_name: None,
+            description: None,
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
+    let stack = prepare(source).await;
+    let mut registry = container_registry(NoComputeCluster);
+    registry.register(Postgres::RESOURCE_TYPE, Platform::Aws, DatabaseSecretReader);
+    let module = render(&stack, &registry);
+    assert_terraform_valid(&module, "database secret grant");
+
+    let role = "database_reader";
+    let documents = role_policy_documents(&module, role);
+    let [(policy, _)] = documents.as_slice() else {
+        panic!("the reader role holds one managed policy: {documents:?}");
+    };
+
+    let dir = module_dir(&module);
+    let fresh = plan(dir.path(), "fresh.tfplan");
+    let planned = fresh["planned_values"]["root_module"]["resources"]
+        .as_array()
+        .expect("planned resources")
+        .iter()
+        .find(|resource| resource["address"] == policy.as_str())
+        .unwrap_or_else(|| panic!("{policy} is planned"));
+    let document = planned["values"]["policy"]
+        .as_str()
+        .expect("the document is known at plan time");
+    let evaluated: Value = serde_json::from_str(document).expect("the document is JSON");
+    assert_eq!(
+        evaluated["Statement"],
+        json!([{
+            "Sid": "ReadConnectionSecret",
+            "Effect": "Allow",
+            "Action": ["secretsmanager:GetSecretValue"],
+            "Resource": [RDS_MASTER_SECRET_ARN],
+        }]),
+        "{document}"
+    );
+    // What IAM counts. `rds_master_secret_document_is_sized_as_terraform_evaluates_it` sizes
+    // the same document at this region: the same count, plus the partition at its longest.
+    assert_eq!(
+        document.chars().filter(|c| !c.is_whitespace()).count(),
+        253,
+        "{document}"
+    );
 }

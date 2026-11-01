@@ -2,8 +2,9 @@ use super::*;
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::TfFragment,
-    emitters::aws::helpers::{
-        iam_managed_policy_name_template, iam_role_name_template, jsonencode,
+    emitters::aws::{
+        helpers::{iam_managed_policy_name_template, iam_role_name_template, jsonencode},
+        key::KMS_KEY_ARN_PATTERN,
     },
     expr, TerraformOptions, TerraformTarget, TfRegistry,
 };
@@ -121,6 +122,28 @@ fn sizes_each_interpolation_at_its_longest_value() {
             ],
         ),
         resource_block("aws_kms_key", "key", [attr("count", expr::raw("1"))]),
+        resource_block("random_uuid", "operation", [attr("count", expr::raw("1"))]),
+        // A key from another provider, which a postcondition admits only as a KMS key ARN.
+        resource_block(
+            "example_encryption_key",
+            "customer",
+            [
+                attr("count", expr::raw("1")),
+                nested(block(
+                    "lifecycle",
+                    [nested(block(
+                        "postcondition",
+                        [attr(
+                            "condition",
+                            expr::parse(&format!(
+                                r#"can(regex("{KMS_KEY_ARN_PATTERN}", self.arn))"#
+                            ))
+                            .unwrap(),
+                        )],
+                    ))],
+                )),
+            ],
+        ),
     ];
     let locals = IndexMap::from([(
         "key_selected_key".to_string(),
@@ -163,6 +186,27 @@ fn sizes_each_interpolation_at_its_longest_value() {
         (
             expr::template("${data.aws_partition.current.partition}"),
             "aws-us-gov".to_string(),
+        ),
+        (
+            expr::template("terraform:${random_uuid.operation[0].result}"),
+            "terraform:00000000-0000-0000-0000-000000000000".to_string(),
+        ),
+        (
+            expr::template("customer-key:${var.key_customer_key_connection.deployment_id}"),
+            "customer-key:dep_0123456789abcdefghijklmnopqr".to_string(),
+        ),
+        (
+            expr::traversal(["example_encryption_key", "customer", "arn"]),
+            kms_arn.replacen("arn:aws:", "arn:aws-us-gov:", 1),
+        ),
+        // A registered database emitter grants on the RDS-managed master user secret.
+        (
+            expr::template(
+                "${data.aws_rds_cluster.database.master_user_secret[0].secret_arn}",
+            ),
+            format!(
+                "arn:aws-us-gov:secretsmanager:{region}:{ACCOUNT}:secret:rds!cluster-033d7456-2c96-450d-9d48-f5de3025e51c-xmJRDx"
+            ),
         ),
     ] {
         let resources = [
@@ -209,6 +253,57 @@ fn sizes_each_interpolation_at_its_longest_value() {
     );
 }
 
+/// The managed policy a registered database emitter's grant on an RDS-managed master user secret
+/// becomes, sized at the region Terraform evaluated it in
+/// (`a_grant_on_an_rds_master_secret_renders_and_evaluates_to_the_secret_arn`: 253 characters
+/// in `us-east-2`, partition `aws`). The size is that count with the partition at its longest.
+#[test]
+fn rds_master_secret_document_is_sized_as_terraform_evaluates_it() {
+    let policy = jsonencode(expr::object([
+        ("Version", Expression::String("2012-10-17".into())),
+        (
+            "Statement",
+            Expression::Array(vec![expr::object([
+                ("Sid", Expression::String("ReadConnectionSecret".into())),
+                ("Effect", Expression::String("Allow".into())),
+                (
+                    "Action",
+                    Expression::Array(vec![Expression::String(
+                        "secretsmanager:GetSecretValue".into(),
+                    )]),
+                ),
+                (
+                    "Resource",
+                    Expression::Array(vec![expr::template(
+                        "${data.aws_rds_cluster.database_credentials.master_user_secret[0].secret_arn}",
+                    )]),
+                ),
+            ])]),
+        ),
+    ]));
+    let module = RenderedModule::new(
+        vec![resource_block(
+            "aws_iam_policy",
+            "database_reader_setup",
+            [
+                attr("name", Expression::String("database-reader-setup".into())),
+                attr("policy", policy),
+            ],
+        )],
+        IndexMap::new(),
+    );
+    let usage = module
+        .usage(DeploymentLengths {
+            region: "us-east-2".len(),
+            ..DeploymentLengths::longest()
+        })
+        .unwrap();
+    assert_eq!(
+        usage.managed_policies["database_reader_setup"],
+        253 + "aws-us-gov".len() - "aws".len()
+    );
+}
+
 #[test]
 fn shortened_names_are_bounded_by_their_limit() {
     // 40 + 1 + 30 characters exceed IAM's 64-character role names, so the name is cut to 64.
@@ -252,6 +347,40 @@ fn an_interpolation_without_a_known_bound_fails_the_render() {
         assert!(
             format!("{error:?}").contains("Cannot bound the size of"),
             "{resource}: {error:?}"
+        );
+    }
+}
+
+/// Only a postcondition requiring a KMS key ARN of this account and region bounds another
+/// provider's key ARN.
+#[test]
+fn a_key_arn_is_bounded_only_by_its_kms_postcondition() {
+    for lifecycle in [
+        Vec::new(),
+        vec![nested(block(
+            "lifecycle",
+            [nested(block(
+                "postcondition",
+                [attr(
+                    "condition",
+                    expr::raw(r#"can(regex("^arn:aws[a-z-]*:kms:.*$", self.arn))"#),
+                )],
+            ))],
+        ))],
+    ] {
+        let error = check(vec![
+            role("execution"),
+            resource_block("example_encryption_key", "customer", lifecycle),
+            inline_policy(
+                "grant",
+                "execution",
+                document(expr::template("${example_encryption_key.customer[0].arn}")),
+            ),
+        ])
+        .expect_err("an unconstrained key ARN has no longest value");
+        assert!(
+            format!("{error:?}").contains("no known longest value for this attribute"),
+            "{error:?}"
         );
     }
 }

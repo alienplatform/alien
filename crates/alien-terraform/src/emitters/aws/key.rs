@@ -16,6 +16,11 @@ use hcl::{
     structure::Block,
 };
 
+/// A KMS key ARN in this deployment's account and region, in any AWS partition; aliases are not
+/// immutable, so they are refused. The IAM size check bounds a resource attribute that a
+/// `can(regex(KMS_KEY_ARN_PATTERN, self.<attribute>))` postcondition admits as a KMS key ARN.
+pub const KMS_KEY_ARN_PATTERN: &str = "^arn:aws[a-z-]*:kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:key/[a-zA-Z0-9-]+$";
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsKeyEmitter;
 
@@ -78,7 +83,7 @@ impl TfEmitter for AwsKeyEmitter {
                     attr("error_message", Expression::String("The encryption key is immutable. Create a new deployment to use a different key.".to_string())),
                 ])),
                 nested(block("postcondition", [
-                    attr("condition", expr::parse(r#"can(regex("^arn:aws[a-z-]*:kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:key/[a-zA-Z0-9-]+$", self.output))"#)?),
+                    attr("condition", expr::parse(&format!(r#"can(regex("{KMS_KEY_ARN_PATTERN}", self.output))"#))?),
                     attr("error_message", Expression::String("The key must be an immutable KMS key ARN in this deployment's AWS account and region. Aliases are not supported.".to_string())),
                 ])),
             ])),

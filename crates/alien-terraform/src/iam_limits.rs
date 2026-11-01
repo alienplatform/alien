@@ -7,8 +7,8 @@
 //! passes therefore fits every deployment. An interpolation this check cannot bound fails the
 //! render instead of being guessed, and resources behind `count`/`for_each` count as present.
 
-use crate::ModuleFiles;
-use alien_core::{ErrorData, Result};
+use crate::{emitters::aws::key::KMS_KEY_ARN_PATTERN, expr, ModuleFiles};
+use alien_core::{new_id, ErrorData, IdType, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::generators::aws_longest_permission_context;
 use hcl::{
@@ -262,8 +262,12 @@ struct Module<'a> {
 const MAX_LOCAL_DEPTH: usize = 32;
 /// The longest AWS partition name.
 const LONGEST_PARTITION: &str = "aws-us-gov";
-/// Characters of a KMS key ID.
-const KMS_KEY_ID: usize = 36;
+/// Characters of a UUID.
+const UUID: usize = 36;
+/// Characters of a KMS key ID, a UUID or a multi-Region `mrk-` ID of the same length.
+const KMS_KEY_ID: usize = UUID;
+/// Random characters Secrets Manager appends, after a `-`, to a secret's name in its ARN.
+const SECRET_ARN_SUFFIX: usize = 6;
 /// EKS's limit on cluster names.
 const EKS_CLUSTER_NAME: usize = 100;
 
@@ -460,6 +464,23 @@ impl<'a> Module<'a> {
             ("data", ["aws_region", _, "region" | "name"]) => Ok(lengths.region),
             ("data", ["aws_caller_identity", _, "account_id"]) => Ok(lengths.account_id),
             ("data", ["aws_partition", _, "partition"]) => Ok(LONGEST_PARTITION.len()),
+            // An RDS-managed master user secret of a cluster:
+            // `arn:<partition>:secretsmanager:<region>:<account>:secret:rds!cluster-<UUID>-<6>`.
+            // RDS names the secret `rds!cluster-<UUID>`; Secrets Manager appends `-` and six
+            // random characters to every secret's ARN.
+            ("data", ["aws_rds_cluster", _, "master_user_secret", "secret_arn"]) => Ok("arn:"
+                .len()
+                + LONGEST_PARTITION.len()
+                + ":secretsmanager:".len()
+                + lengths.region
+                + 1
+                + lengths.account_id
+                + ":secret:rds!cluster-".len()
+                + UUID
+                + "-".len()
+                + SECRET_ARN_SUFFIX),
+            // A deployment ID, in alien's ID format: `dep_` and 28 characters.
+            ("var", [_, "deployment_id"]) => Ok(new_id(IdType::Deployment).len()),
             ("var", ["managing_account_id"]) => Ok(lengths.managing_account_id),
             ("var", ["managing_role_arn"]) => Ok(lengths.managing_role_arn),
             // An existing cluster's name, which EKS caps at 100 characters.
@@ -546,6 +567,11 @@ impl<'a> Module<'a> {
             }
             // A setup-recorded value is the first `input` it was given.
             ("terraform_data", "output") => named("input")?,
+            ("random_uuid", "result" | "id") => UUID,
+            // KMS issues only UUID or `mrk-` key IDs of the same length.
+            (_, attribute) if admits_only_kms_key_arns(block, attribute)? => {
+                self.kms_key_arn_chars(LONGEST_PARTITION.len())
+            }
             _ => {
                 return Err(unbounded(
                     expression,
@@ -737,6 +763,25 @@ fn resource_reference(expression: &Expression) -> Option<ResourceReference<'_>> 
 }
 
 /// Attribute names of a traversal, skipping literal instance indexes (`[0]`) that gating adds.
+/// Whether a postcondition of the resource requires `attribute` to be a KMS key ARN of this
+/// deployment's account and region.
+fn admits_only_kms_key_arns(block: &Block, attribute: &str) -> Result<bool> {
+    let required = expr::parse(&format!(
+        r#"can(regex("{KMS_KEY_ARN_PATTERN}", self.{attribute}))"#
+    ))?;
+    Ok(block
+        .body
+        .blocks()
+        .filter(|nested| nested.identifier.as_str() == "lifecycle")
+        .flat_map(|lifecycle| lifecycle.body.blocks())
+        .filter(|nested| nested.identifier.as_str() == "postcondition")
+        .any(|postcondition| {
+            postcondition.body.attributes().any(|condition| {
+                condition.key.as_str() == "condition" && condition.expr == required
+            })
+        }))
+}
+
 fn attribute_path(traversal: &Traversal) -> Option<Vec<&str>> {
     traversal
         .operators
