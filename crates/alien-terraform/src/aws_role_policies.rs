@@ -64,6 +64,8 @@ struct Grant {
 /// Grants of one role under one gate, which may fold into the same managed policies.
 struct Group {
     role: String,
+    /// The role's `name`, at the instance the grants name when the role has a `count`.
+    role_name: Expression,
     count: Option<Expression>,
     grants: Vec<usize>,
 }
@@ -98,7 +100,7 @@ pub(crate) fn consolidate_role_policies(
             if attribute(block, "for_each").is_some() {
                 return Err(invalid(&address, "uses for_each"));
             }
-            let role = role_label(block)
+            let (role, role_name) = role_reference(block)
                 .ok_or_else(|| invalid(&address, "names no role of this module"))?;
             if !role_fragments.contains_key(role) {
                 return Err(invalid(&address, "names no role of this module"));
@@ -118,13 +120,13 @@ pub(crate) fn consolidate_role_policies(
                 statements,
                 depends_on,
             });
-            match groups
-                .iter_mut()
-                .find(|group| group.role == role && group.count == count)
-            {
+            match groups.iter_mut().find(|group| {
+                group.role == role && group.role_name == role_name && group.count == count
+            }) {
                 Some(group) => group.grants.push(grant),
                 None => groups.push(Group {
                     role: role.to_string(),
+                    role_name,
                     count,
                     grants: vec![grant],
                 }),
@@ -212,10 +214,7 @@ pub(crate) fn consolidate_role_policies(
             ];
             let attachment_label = format!("{label}_attachment");
             let mut attachment = vec![
-                attr(
-                    "role",
-                    expr::traversal(["aws_iam_role", &group.role, "name"]),
-                ),
+                attr("role", group.role_name.clone()),
                 attr(
                     "policy_arn",
                     expr::traversal(["aws_iam_policy", label, "arn"]),
@@ -313,8 +312,9 @@ pub(crate) fn consolidate_role_policies(
     }
     for grant in &grants {
         let block = &mut per_resource[&grant.fragment].resource_blocks[grant.index];
-        let role = role_label(block)
+        let role = role_reference(block)
             .expect("a grant's role was resolved above")
+            .0
             .to_string();
         stub(
             block,
@@ -812,7 +812,9 @@ fn object_key(key: &ObjectKey) -> Option<&str> {
     }
 }
 
-fn role_label(block: &Block) -> Option<&str> {
+/// The role label a grant's `role` names, `aws_iam_role.<label>[<n>].id` or `.name` with an
+/// optional literal index, and that role instance's `name`.
+fn role_reference(block: &Block) -> Option<(&str, Expression)> {
     let Expression::Traversal(traversal) = attribute(block, "role")? else {
         return None;
     };
@@ -822,14 +824,31 @@ fn role_label(block: &Block) -> Option<&str> {
     if root.as_str() != "aws_iam_role" {
         return None;
     }
-    match traversal.operators.as_slice() {
-        [TraversalOperator::GetAttr(label), TraversalOperator::GetAttr(attribute)]
-            if matches!(attribute.as_str(), "id" | "name") =>
-        {
-            Some(label.as_str())
+    let (label, instance, attribute) = match traversal.operators.as_slice() {
+        [TraversalOperator::GetAttr(label), TraversalOperator::GetAttr(attribute)] => {
+            (label, None, attribute)
         }
-        _ => None,
+        [TraversalOperator::GetAttr(label), index @ (TraversalOperator::LegacyIndex(_)
+        | TraversalOperator::Index(Expression::Number(_))), TraversalOperator::GetAttr(attribute)] => {
+            (label, Some(index), attribute)
+        }
+        _ => return None,
+    };
+    if !matches!(attribute.as_str(), "id" | "name") {
+        return None;
     }
+    let operators = [TraversalOperator::GetAttr(label.clone())]
+        .into_iter()
+        .chain(instance.cloned())
+        .chain([TraversalOperator::GetAttr("name".into())])
+        .collect::<Vec<_>>();
+    Some((
+        label.as_str(),
+        Expression::Traversal(Box::new(hcl::expr::Traversal::new(
+            traversal.expr.clone(),
+            operators,
+        ))),
+    ))
 }
 
 /// `type.label` of a whole-resource reference such as a `depends_on` entry.

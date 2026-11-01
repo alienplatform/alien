@@ -1711,3 +1711,124 @@ async fn a_grant_on_an_rds_master_secret_renders_and_evaluates_to_the_secret_arn
         "{document}"
     );
 }
+
+/// Stands in for a registered emitter that gates its own role and grant on an input of its
+/// own, and names the role's instance: `aws_iam_role.<role>[0].id`.
+struct GatedInstances;
+
+impl TfEmitter for GatedInstances {
+    fn emit(&self, ctx: &EmitContext<'_>) -> alien_core::Result<TfFragment> {
+        let label = required_label(ctx)?;
+        let role = format!("{label}_gated");
+        let enabled = format!("var.{label}_gated_enabled ? 1 : 0");
+        let mut fragment = TfFragment::default();
+        fragment.variable_blocks.push(
+            hcl::Block::builder("variable")
+                .add_label(format!("{label}_gated_enabled"))
+                .add_attribute(("type", expr::parse("bool")?))
+                .add_attribute(("default", hcl::Expression::Bool(true)))
+                .build(),
+        );
+        fragment.resource_blocks.push(resource_block(
+            "aws_iam_role",
+            &role,
+            [
+                attr("count", expr::parse(&enabled)?),
+                attr("name", resource_prefix_template("gated")),
+                attr(
+                    "assume_role_policy",
+                    service_assume_role_policy(&["ec2.amazonaws.com"]),
+                ),
+            ],
+        ));
+        let statement = expr::object([
+            ("Effect", hcl::Expression::String("Allow".into())),
+            ("Action", hcl::Expression::String("s3:GetObject".into())),
+            (
+                "Resource",
+                expr::template("arn:aws:s3:::${local.resource_prefix}-gated/*"),
+            ),
+        ]);
+        fragment.resource_blocks.push(resource_block(
+            "aws_iam_role_policy",
+            &format!("{role}_grant"),
+            [
+                attr("count", expr::parse(&enabled)?),
+                attr("name", hcl::Expression::String("gated-grant".into())),
+                attr("role", expr::parse(&format!("aws_iam_role.{role}[0].id"))?),
+                attr(
+                    "policy",
+                    expr::jsonencode(expr::object([
+                        ("Version", hcl::Expression::String("2012-10-17".into())),
+                        ("Statement", hcl::Expression::Array(vec![statement])),
+                    ])),
+                ),
+            ],
+        ));
+        Ok(fragment)
+    }
+
+    fn emit_import_ref(&self, _ctx: &EmitContext<'_>) -> alien_core::Result<hcl::Expression> {
+        Ok(hcl::Expression::Object(hcl::Object::new()))
+    }
+}
+
+/// A grant on an instance of a role behind `count` moves to a managed policy behind the same
+/// `count`, attached to that instance, and its address stays as a stub.
+#[tokio::test]
+async fn a_grant_on_a_counted_role_instance_moves_to_a_managed_policy() {
+    if std::env::var("SKIP_LINTERS").as_deref() == Ok("1") {
+        return;
+    }
+    let stack = prepared_stack().await;
+    let module = render(&stack, &container_registry(GatedInstances));
+    assert_terraform_valid(&module, "counted role grant");
+
+    let dir = module_dir(&module);
+    let fresh = plan(dir.path(), "fresh.tfplan");
+    let role_name = format!("{PREFIX}-gated");
+    let gated: BTreeMap<String, &Value> = fresh["resource_changes"]
+        .as_array()
+        .expect("resource changes")
+        .iter()
+        .filter(|change| change["name"].as_str().unwrap().contains("_gated"))
+        .map(|change| {
+            (
+                change["address"].as_str().unwrap().to_string(),
+                &change["change"],
+            )
+        })
+        .collect();
+    let find = |kind: &str| -> Vec<&String> {
+        gated
+            .keys()
+            .filter(|address| address.starts_with(&format!("{kind}.")))
+            .collect()
+    };
+    let [policy] = find("aws_iam_policy")[..] else {
+        panic!("one managed policy for the gated role: {:?}", gated.keys());
+    };
+    let label = policy
+        .strip_prefix("aws_iam_policy.")
+        .and_then(|label| label.strip_suffix("[0]"))
+        .unwrap_or_else(|| panic!("the policy keeps the count: {policy}"));
+    let attachment = &gated[&format!("aws_iam_role_policy_attachment.{label}_attachment[0]")];
+    assert_eq!(attachment["actions"], json!(["create"]));
+    assert_eq!(attachment["after"]["role"], json!(role_name));
+    let [stub] = find("aws_iam_role_policy")[..] else {
+        panic!("one stub for the gated role: {:?}", gated.keys());
+    };
+    assert!(stub.ends_with("_gated_grant[0]"), "{stub}");
+    assert_eq!(gated[stub]["after"]["name"], json!("gated-grant"));
+    assert_eq!(gated[stub]["after"]["policy"], json!(INERT_POLICY));
+    let document: Value = serde_json::from_str(
+        gated[policy]["after"]["policy"]
+            .as_str()
+            .expect("the document is known"),
+    )
+    .unwrap();
+    assert_eq!(
+        document["Statement"][0]["Resource"],
+        json!([format!("arn:aws:s3:::{PREFIX}-gated/*")])
+    );
+}
