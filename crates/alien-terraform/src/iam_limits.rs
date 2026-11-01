@@ -226,13 +226,26 @@ impl RenderedModule {
                         return Err(unknown_role(kind, label, role));
                     }
                     let arn = required_attribute(block, "policy_arn", kind, label)?;
+                    let arns = match attribute(block, "for_each") {
+                        Some(for_each) => for_each_arns(for_each, arn).ok_or_else(|| {
+                            AlienError::new(ErrorData::TemplateSerializationFailed {
+                                format: "Terraform IAM policy".into(),
+                                reason: format!(
+                                    "Cannot count the policies {kind}.{label} attaches: its for_each must be literal lists of ARNs, and its policy_arn each.value"
+                                ),
+                            })
+                        })?,
+                        None => vec![arn.clone()],
+                    };
                     let identities = attachments.entry(role.to_string()).or_default();
-                    let identity = policy_identity(arn);
-                    // The attachment that replaces it is attached before it is detached.
-                    if creates_before_destroying(block) {
-                        identities.insert(format!("{identity} (replacement)"));
+                    for arn in &arns {
+                        let identity = policy_identity(arn);
+                        // The attachment that replaces it is attached before it is detached.
+                        if creates_before_destroying(block) {
+                            identities.insert(format!("{identity} (replacement)"));
+                        }
+                        identities.insert(identity);
                     }
-                    identities.insert(identity);
                 }
                 "aws_iam_policy" => {
                     let policy = required_attribute(block, "policy", kind, label)?;
@@ -847,6 +860,41 @@ fn projections<'e>(
             "the local is not an object this check can read",
         )),
     }
+}
+
+/// Every ARN a `for_each` attachment can attach: the elements of each literal list its
+/// `for_each` can take, when `policy_arn` is `each.value`.
+fn for_each_arns(for_each: &Expression, policy_arn: &Expression) -> Option<Vec<Expression>> {
+    if policy_arn.to_string() != "each.value" {
+        return None;
+    }
+    fn elements(expression: &Expression) -> Option<Vec<Expression>> {
+        match expression {
+            Expression::Array(values) => values
+                .iter()
+                .map(|value| matches!(value, Expression::String(_)).then(|| value.clone()))
+                .collect(),
+            Expression::FuncCall(call)
+                if matches!(call.name.to_string().as_str(), "toset" | "tolist")
+                    && call.args.len() == 1
+                    && !call.expand_final =>
+            {
+                elements(&call.args[0])
+            }
+            Expression::Conditional(conditional) => {
+                let mut values = elements(&conditional.true_expr)?;
+                for value in elements(&conditional.false_expr)? {
+                    if !values.contains(&value) {
+                        values.push(value);
+                    }
+                }
+                Some(values)
+            }
+            Expression::Parenthesis(inner) => elements(inner),
+            _ => None,
+        }
+    }
+    elements(for_each)
 }
 
 /// Identity of an attached managed policy. References to the same resource or the same literal

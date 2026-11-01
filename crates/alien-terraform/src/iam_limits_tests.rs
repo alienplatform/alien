@@ -541,6 +541,74 @@ fn attachments_count_distinct_policies_up_to_the_quota() {
         .contains("IAM role 'execution' requires 21 managed-policy attachments"));
 }
 
+/// A `for_each` attachment attaches every element of the list it iterates: EKS attaches its
+/// cluster role five AWS-managed policies through one block.
+#[test]
+fn a_for_each_attachment_counts_every_policy_it_attaches() {
+    let attachment = |label: &str, for_each: &str| {
+        resource_block(
+            "aws_iam_role_policy_attachment",
+            label,
+            [
+                attr("for_each", expr::raw(for_each)),
+                attr(
+                    "role",
+                    expr::traversal(["aws_iam_role", "execution", "name"]),
+                ),
+                attr("policy_arn", expr::raw("each.value")),
+            ],
+        )
+    };
+    let managed = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| format!("\"arn:aws:iam::aws:policy/{name}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let cluster = format!(
+        "var.mode == \"create\" ? toset([{}]) : toset([])",
+        managed(&[
+            "Cluster",
+            "BlockStorage",
+            "Compute",
+            "LoadBalancing",
+            "Networking"
+        ])
+    );
+    let overlapping = format!("toset([{}])", managed(&["Cluster", "Worker"]));
+    assert_eq!(
+        usage(vec![role("execution"), attachment("cluster", &cluster)])
+            .unwrap()
+            .roles["execution"]
+            .attachments,
+        5
+    );
+    // The same ARN attached by two blocks is one attachment.
+    assert_eq!(
+        usage(vec![
+            role("execution"),
+            attachment("cluster", &cluster),
+            attachment("worker", &overlapping),
+        ])
+        .unwrap()
+        .roles["execution"]
+            .attachments,
+        6
+    );
+    let error = check(vec![
+        role("execution"),
+        attachment("dynamic", "var.extra_policy_arns"),
+    ])
+    .expect_err("a for_each this check cannot enumerate cannot be counted");
+    assert!(
+        error
+            .to_string()
+            .contains("Cannot count the policies aws_iam_role_policy_attachment.dynamic attaches"),
+        "{error}"
+    );
+}
+
 /// An update attaches a create-before-destroy replacement before it detaches the attachment it
 /// replaces, so both count against the role's quota.
 #[test]
