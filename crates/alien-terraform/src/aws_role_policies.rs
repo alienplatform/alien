@@ -13,9 +13,17 @@
 //! removed. New installs get the same stubs, so every deployment has one structure.
 //!
 //! Anything that depended on a grant now depends on the attachments that carry it.
+//!
+//! A later release that adds or removes a grant can move statements between a role's managed
+//! policies. A policy whose document changes is a new policy under a name derived from its
+//! content, created and attached before the old one goes: policies and attachments are
+//! create-before-destroy, each attachment waits for all of its bin's policies, and a per-role
+//! barrier replaced with every attachment change makes Terraform detach and delete the old ones
+//! only after every new attachment exists. During such an update a role holds both, so each
+//! attachment counts twice against its quota.
 
 use crate::{
-    block::{attr, resource_block},
+    block::{attr, block, nested, resource_block},
     emitter::TfFragment,
     emitters::aws::helpers::{iam_managed_policy_name_template, jsonencode},
     expr,
@@ -23,12 +31,13 @@ use crate::{
     iam_limits::{DeploymentLengths, RenderedModule},
 };
 use alien_core::{ErrorData, Result};
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
 use hcl::{
     expr::{Expression, ObjectKey, TraversalOperator},
     structure::{Block, Structure},
 };
 use indexmap::{IndexMap, IndexSet};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 /// Largest consolidated policy at the longest deployment values. IAM allows 6,144 characters;
@@ -36,9 +45,10 @@ use std::collections::HashSet;
 const MAX_MANAGED_POLICY_CHARS: usize = 5_500;
 
 /// The inert document every former inline grant keeps: it denies no action, so it neither
-/// grants nor denies anything, and it is the smallest document IAM accepts.
+/// grants nor denies anything. It is the smallest document IAM accepts that policy validators
+/// (IAM Access Analyzer) also pass without findings, which is why it names its version.
 pub(crate) const STUB_POLICY: &str =
-    r#"{"Statement":[{"Effect":"Deny","NotAction":"*","Resource":"*"}]}"#;
+    r#"{"Version":"2012-10-17","Statement":[{"Effect":"Deny","NotAction":"*","Resource":"*"}]}"#;
 
 /// One `aws_iam_role_policy` before consolidation.
 struct Grant {
@@ -139,6 +149,7 @@ pub(crate) fn consolidate_role_policies(
     let mut role_attachments: IndexMap<String, Vec<Expression>> = IndexMap::new();
     let mut new_blocks: IndexMap<String, Vec<Block>> = IndexMap::new();
     let mut policies_per_label: IndexMap<String, usize> = IndexMap::new();
+    let mut group_attachments: IndexMap<usize, Vec<Expression>> = IndexMap::new();
     for bin in &bins {
         let group = &groups[bin.group];
         let members: HashSet<&str> = bin
@@ -161,15 +172,32 @@ pub(crate) fn consolidate_role_policies(
         }
         let documents = chunk(compact(statements), &module, lengths)?;
         let base = group_label(group);
+        let labels: Vec<String> = documents
+            .iter()
+            .map(|_| {
+                let index = policies_per_label.entry(base.clone()).or_default();
+                *index += 1;
+                format!("{base}_{}", *index - 1)
+            })
+            .collect();
+        let policy_addresses: Vec<Expression> = labels
+            .iter()
+            .map(|label| expr::traversal(["aws_iam_policy", label]))
+            .collect();
+        let blocks = new_blocks
+            .entry(role_fragments[&group.role].clone())
+            .or_default();
         let mut attachments = Vec::new();
-        for statements in documents {
-            let index = policies_per_label.entry(base.clone()).or_default();
-            let label = format!("{base}_{index}");
-            let name = format!("{}-{index}", base.replace('_', "-"));
-            *index += 1;
+        for (label, statements) in labels.iter().zip(documents) {
+            let document = document(statements);
+            // A changed document is a new policy, created before the old one is destroyed, so
+            // statements that move between policies as grants are added or removed are always
+            // held by one of them. Two policies cannot share a name, so the name follows the
+            // content.
+            let name = format!("{}-{}", base.replace('_', "-"), content_hash(&document)?);
             let mut policy = vec![
                 attr("name", iam_managed_policy_name_template(&name)),
-                attr("policy", document(statements)),
+                attr("policy", document),
             ];
             let attachment_label = format!("{label}_attachment");
             let mut attachment = vec![
@@ -179,22 +207,23 @@ pub(crate) fn consolidate_role_policies(
                 ),
                 attr(
                     "policy_arn",
-                    expr::traversal(["aws_iam_policy", &label, "arn"]),
+                    expr::traversal(["aws_iam_policy", label, "arn"]),
                 ),
+                // Attach the new policies only once all of them exist.
+                attr("depends_on", Expression::Array(policy_addresses.clone())),
             ];
             if let Some(count) = &group.count {
                 policy.insert(0, attr("count", count.clone()));
                 attachment.insert(0, attr("count", count.clone()));
-                gated.insert("aws_iam_policy", &label);
+                gated.insert("aws_iam_policy", label);
                 gated.insert("aws_iam_role_policy_attachment", &attachment_label);
             }
             if !depends_on.is_empty() {
                 policy.push(attr("depends_on", Expression::Array(depends_on.clone())));
             }
-            let blocks = new_blocks
-                .entry(role_fragments[&group.role].clone())
-                .or_default();
-            blocks.push(resource_block("aws_iam_policy", &label, policy));
+            policy.push(create_before_destroy());
+            attachment.push(create_before_destroy());
+            blocks.push(resource_block("aws_iam_policy", label, policy));
             blocks.push(resource_block(
                 "aws_iam_role_policy_attachment",
                 &attachment_label,
@@ -208,10 +237,49 @@ pub(crate) fn consolidate_role_policies(
         for grant in &bin.grants {
             carriers.insert(grants[*grant].address.clone(), attachments.clone());
         }
+        group_attachments
+            .entry(bin.group)
+            .or_default()
+            .extend(attachments.iter().cloned());
         role_attachments
             .entry(group.role.clone())
             .or_default()
             .extend(attachments);
+    }
+
+    // Terraform destroys a replaced object only after everything depending on it is replaced.
+    // The barrier depends on every attachment of its role and is replaced whenever one is, so
+    // the replaced attachments, and then the replaced policies, go only after every new
+    // attachment is in place.
+    for (group_index, attachments) in &group_attachments {
+        let group = &groups[*group_index];
+        let label = format!("{}_policies_barrier", group_label(group));
+        let mut barrier = vec![
+            attr(
+                "triggers_replace",
+                Expression::Array(
+                    attachments
+                        .iter()
+                        .map(|attachment| {
+                            let address = traversal_address(attachment)
+                                .expect("attachments are whole-resource references");
+                            let (kind, label) =
+                                address.split_once('.').expect("addresses have a type");
+                            expr::traversal([kind, label, "id"])
+                        })
+                        .collect(),
+                ),
+            ),
+            create_before_destroy(),
+        ];
+        if let Some(count) = &group.count {
+            barrier.insert(0, attr("count", count.clone()));
+            gated.insert("terraform_data", &label);
+        }
+        new_blocks
+            .entry(role_fragments[&group.role].clone())
+            .or_default()
+            .push(resource_block("terraform_data", &label, barrier));
     }
 
     for (fragment_id, blocks) in new_blocks {
@@ -486,6 +554,28 @@ fn chunk(
         documents.push(current);
     }
     Ok(documents)
+}
+
+fn create_before_destroy() -> Structure {
+    nested(block(
+        "lifecycle",
+        [attr("create_before_destroy", Expression::Bool(true))],
+    ))
+}
+
+/// Eight hex characters of the SHA-256 of a policy document as rendered.
+fn content_hash(document: &Expression) -> Result<String> {
+    let rendered = hcl::format::to_string(document)
+        .into_alien_error()
+        .context(ErrorData::TemplateSerializationFailed {
+            format: "Terraform IAM policy".into(),
+            reason: "Failed to render a managed policy document".into(),
+        })?;
+    let digest = Sha256::digest(rendered.as_bytes());
+    Ok(digest[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn document(statements: Vec<Expression>) -> Expression {

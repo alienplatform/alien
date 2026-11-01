@@ -242,6 +242,7 @@ fn a_gated_grant_keeps_its_gate() {
     for address in [
         "aws_iam_policy.app_input_jobs_setup_0",
         "aws_iam_role_policy_attachment.app_input_jobs_setup_0_attachment",
+        "terraform_data.app_input_jobs_setup_policies_barrier",
         "aws_iam_role_policy.app_jobs",
     ] {
         assert_eq!(
@@ -265,7 +266,8 @@ fn a_gated_grant_keeps_its_gate() {
         rendered,
         [
             "aws_iam_policy.app_input_jobs_setup_0",
-            "aws_iam_role_policy_attachment.app_input_jobs_setup_0_attachment"
+            "aws_iam_role_policy_attachment.app_input_jobs_setup_0_attachment",
+            "terraform_data.app_input_jobs_setup_policies_barrier"
         ]
     );
 }

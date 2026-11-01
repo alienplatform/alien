@@ -411,6 +411,46 @@ fn attachments_count_distinct_policies_up_to_the_quota() {
         .contains("IAM role 'execution' requires 21 managed-policy attachments"));
 }
 
+/// An update attaches a create-before-destroy replacement before it detaches the attachment it
+/// replaces, so both count against the role's quota.
+#[test]
+fn replaced_attachments_count_twice() {
+    for (count, fits) in [(10, true), (11, false)] {
+        let mut resources = vec![role("execution")];
+        for index in 0..count {
+            resources.push(resource_block(
+                "aws_iam_role_policy_attachment",
+                &format!("grant_{index}"),
+                [
+                    attr(
+                        "role",
+                        expr::traversal(["aws_iam_role", "execution", "name"]),
+                    ),
+                    attr(
+                        "policy_arn",
+                        Expression::String(format!("arn:aws:iam::aws:policy/Managed{index}")),
+                    ),
+                    nested(block(
+                        "lifecycle",
+                        [attr("create_before_destroy", Expression::Bool(true))],
+                    )),
+                ],
+            ));
+        }
+        assert_eq!(
+            usage(resources.clone()).unwrap().roles["execution"].attachments,
+            2 * count
+        );
+        let result = check(resources);
+        if fits {
+            result.expect("twenty attachments at once fit");
+        } else {
+            let error = result.expect_err("twenty-two attachments at once exceed the quota");
+            assert!(error.to_string().contains("requires 22 managed-policy attachments, counting twice each one replaced create-before-destroy"), "{error}");
+        }
+    }
+}
+
 #[test]
 fn generated_managed_policy_chunks_obey_the_quotas() {
     for (count, fits) in [(20, true), (21, false)] {
@@ -562,10 +602,11 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
         let case = format!("{prefix}-character prefix, {region}-character region");
         assert_eq!(
             usage.roles["execution_sa"],
+            // Two managed policies, each attached once more while an update replaces it.
             RoleUsage {
                 inline_policies: 19,
                 inline_chars: 19 * stub,
-                attachments: 2,
+                attachments: 4,
             },
             "{case}"
         );

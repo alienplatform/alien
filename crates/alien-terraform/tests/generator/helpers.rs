@@ -104,7 +104,7 @@ pub fn render_with_registry(
     settings: StackSettings,
     registry: &TfRegistry,
 ) -> alien_core::Result<ModuleFiles> {
-    generate_terraform_module(
+    let module = generate_terraform_module(
         stack,
         target,
         TerraformOptions {
@@ -115,7 +115,50 @@ pub fn render_with_registry(
             helm_install: None,
             supported_aws_regions: Vec::new(),
         },
-    )
+    )?;
+    if target.cloud_platform() == alien_core::Platform::Aws {
+        assert_leaves_runtime_role_policies_alone(&module);
+    }
+    Ok(module)
+}
+
+/// The runtime writes its own inline policies on these roles, under names Terraform never
+/// declares. Terraform leaves them alone only while nothing in the module claims a role's whole
+/// set of inline or attached policies.
+pub fn assert_leaves_runtime_role_policies_alone(module: &ModuleFiles) {
+    for (path, contents) in module.iter().filter(|(path, _)| path.ends_with(".tf")) {
+        let body = hcl::parse(contents).unwrap_or_else(|error| panic!("{path} parses: {error}"));
+        for block in body
+            .blocks()
+            .filter(|block| block.identifier() == "resource")
+        {
+            let kind = block.labels()[0].as_str();
+            assert!(
+                !matches!(
+                    kind,
+                    "aws_iam_role_policies_exclusive" | "aws_iam_role_policy_attachments_exclusive"
+                ),
+                "{path}: {kind} would remove the runtime's policies"
+            );
+            if kind == "aws_iam_role" {
+                let label = block.labels()[1].as_str();
+                assert!(
+                    !block
+                        .body()
+                        .blocks()
+                        .any(|nested| nested.identifier() == "inline_policy"),
+                    "{path}: aws_iam_role.{label} declares its inline policies exclusively"
+                );
+                assert!(
+                    !block
+                        .body()
+                        .attributes()
+                        .any(|attribute| attribute.key() == "managed_policy_arns"),
+                    "{path}: aws_iam_role.{label} declares its attached policies exclusively"
+                );
+            }
+        }
+    }
 }
 
 /// Convert the rendered module into the `LinterFiles` shape consumed by
@@ -201,7 +244,7 @@ pub fn assert_terraform_variable_plan_invalid_contains(
 
 /// The document every former inline grant keeps once its permissions move to managed policies.
 pub const INERT_POLICY: &str =
-    r#"{"Statement":[{"Effect":"Deny","NotAction":"*","Resource":"*"}]}"#;
+    r#"{"Version":"2012-10-17","Statement":[{"Effect":"Deny","NotAction":"*","Resource":"*"}]}"#;
 
 /// The documents that give an AWS role its setup permissions, as `(address, argument of the
 /// jsonencode it is written as)`: its inline policies and the managed policies attached to it.

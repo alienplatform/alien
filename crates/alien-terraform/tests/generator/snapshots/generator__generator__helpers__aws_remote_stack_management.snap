@@ -486,20 +486,41 @@ resource "aws_iam_role_policy_attachment" "management_managed_policy_1_attachmen
 resource "aws_iam_role_policy" "management_self_read" {
   name   = "deployment-management-self-read"
   role   = aws_iam_role.management.id
-  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
     aws_iam_role_policy_attachment.management_setup_0_attachment
   ]
 }
 
 resource "aws_iam_policy" "management_setup_0" {
-  name   = length(format("%s-%s", local.resource_prefix, "management-setup-0")) <= 128 ? format("%s-%s", local.resource_prefix, "management-setup-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management-setup-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "management-setup-0")), 0, 8))
+  name   = length(format("%s-%s", local.resource_prefix, "management-setup-1049c8d7")) <= 128 ? format("%s-%s", local.resource_prefix, "management-setup-1049c8d7") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management-setup-1049c8d7"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "management-setup-1049c8d7")), 0, 8))
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = ["iam:GetRole"], Resource = [aws_iam_role.management.arn] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "management_setup_0_attachment" {
   role       = aws_iam_role.management.name
   policy_arn = aws_iam_policy.management_setup_0.arn
+  depends_on = [
+    aws_iam_policy.management_setup_0
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "management_setup_policies_barrier" {
+  triggers_replace = [
+    aws_iam_role_policy_attachment.management_setup_0_attachment.id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 === registration.tf ===
@@ -528,7 +549,8 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role_policy_attachment.management_managed_policy_1_attachment,
     aws_iam_role_policy.management_self_read,
     aws_iam_policy.management_setup_0,
-    aws_iam_role_policy_attachment.management_setup_0_attachment
+    aws_iam_role_policy_attachment.management_setup_0_attachment,
+    terraform_data.management_setup_policies_barrier
   ]
 
   lifecycle {

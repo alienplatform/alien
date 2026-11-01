@@ -6,7 +6,10 @@
 //! the inert stub, and wait for the role's attachments. `terraform plan` against a state holding
 //! the v3.3.47 grants shows what Terraform will actually do.
 
-use super::helpers::{linter_files, INERT_POLICY};
+use super::helpers::{
+    assert_leaves_runtime_role_policies_alone, assert_terraform_valid, linter_files,
+    role_policy_documents, INERT_POLICY,
+};
 use alien_core::{
     import::EmitContext, AwsManagementConfig, ComputeCluster, DeploymentConfig,
     EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, Platform, Stack,
@@ -14,7 +17,13 @@ use alien_core::{
 };
 use alien_preflights::runner::PreflightRunner;
 use alien_terraform::{
-    generate_terraform_module, TerraformOptions, TerraformTarget, TfEmitter, TfFragment, TfRegistry,
+    block::{attr, resource_block},
+    emitters::aws::helpers::{
+        aws_terraform_permission_context, emit_iam_role_policy, required_label,
+        resource_prefix_template, service_assume_role_policy,
+    },
+    generate_terraform_module, TerraformOptions, TerraformTarget, TfEmitter, TfFragment,
+    TfRegistry,
 };
 use serde_json::{json, Value};
 use std::{
@@ -47,7 +56,10 @@ impl TfEmitter for NoComputeCluster {
 
 /// The stack prepared as `alien render` prepares it.
 async fn prepared_stack() -> Stack {
-    let stack: Stack = serde_json::from_str(STACK).expect("the fixture is a stack");
+    prepare(serde_json::from_str(STACK).expect("the fixture is a stack")).await
+}
+
+async fn prepare(stack: Stack) -> Stack {
     let runner = PreflightRunner::new();
     runner
         .run_template_preflights(&stack, Platform::Aws)
@@ -235,25 +247,7 @@ async fn an_inline_install_upgrades_in_place_after_the_managed_policies_attach()
         return;
     }
     let stack = prepared_stack().await;
-    let mut registry = TfRegistry::built_in();
-    registry.register(
-        ComputeCluster::RESOURCE_TYPE,
-        Platform::Aws,
-        NoComputeCluster,
-    );
-    let module = generate_terraform_module(
-        &stack,
-        TerraformTarget::Aws,
-        TerraformOptions {
-            display_name: None,
-            registry: &registry,
-            stack_settings: StackSettings::default(),
-            registration: None,
-            helm_install: None,
-            supported_aws_regions: Vec::new(),
-        },
-    )
-    .expect("the module renders");
+    let module = render(&stack, &container_registry(NoComputeCluster));
     let former = former_grants();
     assert!(
         former
@@ -264,35 +258,7 @@ async fn an_inline_install_upgrades_in_place_after_the_managed_policies_attach()
         "v3.3.47 put 19 inline policies on the execution role"
     );
 
-    let dir = tempfile::tempdir().expect("temp dir");
-    for (path, contents) in linter_files(&module) {
-        std::fs::write(dir.path().join(path), contents).expect("writes the module");
-    }
-    std::fs::write(
-        dir.path().join("upgrade_test_override.tf"),
-        format!(
-            r#"provider "aws" {{
-  region                      = "us-east-2"
-  access_key                  = "upgrade-test"
-  secret_key                  = "upgrade-test"
-  skip_credentials_validation = true
-  skip_metadata_api_check     = true
-  skip_requesting_account_id  = true
-  endpoints {{
-    ec2 = "http://127.0.0.1:{port}"
-    sts = "http://127.0.0.1:{port}"
-  }}
-}}
-"#,
-            port = fake_aws()
-        ),
-    )
-    .expect("writes the provider override");
-    terraform(
-        dir.path(),
-        &["init", "-backend=false", "-input=false", "-no-color"],
-    );
-
+    let dir = module_dir(&module);
     // The v3.3.47 state: its roles, managed policies and attachments as a fresh install of this
     // module plans them (their addresses and names did not change), and its inline grants.
     let installed = v3_3_47_addresses();
@@ -536,6 +502,433 @@ async fn an_inline_install_upgrades_in_place_after_the_managed_policies_attach()
     }
 }
 
+/// The module written to a fresh directory, initialized, with its AWS provider pointed at the
+/// local fake.
+fn module_dir(module: &alien_terraform::ModuleFiles) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("temp dir");
+    write_module(dir.path(), module);
+    std::fs::write(
+        dir.path().join("upgrade_test_override.tf"),
+        format!(
+            r#"provider "aws" {{
+  region                      = "us-east-2"
+  access_key                  = "upgrade-test"
+  secret_key                  = "upgrade-test"
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+  endpoints {{
+    ec2 = "http://127.0.0.1:{port}"
+    sts = "http://127.0.0.1:{port}"
+  }}
+}}
+"#,
+            port = fake_aws()
+        ),
+    )
+    .expect("writes the provider override");
+    terraform(
+        dir.path(),
+        &["init", "-backend=false", "-input=false", "-no-color"],
+    );
+    dir
+}
+
+/// Replace the module's files in `dir`, keeping the provider override and the state.
+fn write_module(dir: &Path, module: &alien_terraform::ModuleFiles) {
+    for entry in std::fs::read_dir(dir).expect("lists the module") {
+        let path = entry.expect("an entry").path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if name.ends_with(".tf") && name != "upgrade_test_override.tf" {
+            std::fs::remove_file(&path).expect("removes a module file");
+        }
+    }
+    for (path, contents) in linter_files(module) {
+        std::fs::write(dir.join(path), contents).expect("writes the module");
+    }
+}
+
+fn container_registry(compute: impl TfEmitter + 'static) -> TfRegistry {
+    let mut registry = TfRegistry::built_in();
+    registry.register(ComputeCluster::RESOURCE_TYPE, Platform::Aws, compute);
+    registry
+}
+
+fn render(stack: &Stack, registry: &TfRegistry) -> alien_terraform::ModuleFiles {
+    let module = generate_terraform_module(
+        stack,
+        TerraformTarget::Aws,
+        TerraformOptions {
+            display_name: None,
+            registry,
+            stack_settings: StackSettings::default(),
+            registration: None,
+            helm_install: None,
+            supported_aws_regions: Vec::new(),
+        },
+    )
+    .expect("the module renders");
+    assert_leaves_runtime_role_policies_alone(&module);
+    module
+}
+
+/// The state an apply of the planned module would leave for its IAM roles, managed policies,
+/// attachments, role policies and policy barriers, with the attributes AWS computes filled in.
+fn applied_iam_state(fresh: &Value) -> Vec<Value> {
+    let config: BTreeMap<String, &Value> = fresh["configuration"]["root_module"]["resources"]
+        .as_array()
+        .expect("configured resources")
+        .iter()
+        .map(|resource| (resource["address"].as_str().unwrap().to_string(), resource))
+        .collect();
+    let planned: Vec<&Value> = fresh["planned_values"]["root_module"]["resources"]
+        .as_array()
+        .expect("planned resources")
+        .iter()
+        .filter(|resource| resource.get("index").is_none())
+        .collect();
+    let mut applied: BTreeMap<String, Value> = BTreeMap::new();
+    for kind in [
+        "aws_iam_role",
+        "aws_iam_policy",
+        "aws_iam_role_policy_attachment",
+        "aws_iam_role_policy",
+        "terraform_data",
+    ] {
+        for resource in planned.iter().filter(|resource| resource["type"] == kind) {
+            let address = resource["address"].as_str().unwrap().to_string();
+            let mut values = resource["values"].clone();
+            let name = values["name"].as_str().map(str::to_string);
+            match kind {
+                "aws_iam_role" => {
+                    let name = name.expect("a role name is known");
+                    values["id"] = json!(name);
+                    values["arn"] = json!(format!("arn:aws:iam::{ACCOUNT}:role/{name}"));
+                    values["unique_id"] = json!(format!("AROA{}", name.len()));
+                }
+                "aws_iam_policy" => {
+                    let name = name.expect("a policy name is known");
+                    let arn = format!("arn:aws:iam::{ACCOUNT}:policy/{name}");
+                    values["id"] = json!(arn);
+                    values["arn"] = json!(arn);
+                    values["policy_id"] = json!(format!("ANPA{}", name.len()));
+                    if values["policy"].is_null() {
+                        // Unknown until the resources it names exist.
+                        values["policy"] = json!(r#"{"Version":"2012-10-17","Statement":[]}"#);
+                    }
+                }
+                "aws_iam_role_policy_attachment" => {
+                    let policy = references(config[&address], "policy_arn")
+                        .into_iter()
+                        .find_map(|reference| reference.strip_suffix(".arn").map(str::to_string))
+                        .expect("an attachment references its policy");
+                    let arn = applied[&policy]["arn"].clone();
+                    values["policy_arn"] = arn.clone();
+                    values["id"] = json!(format!(
+                        "{}-{}",
+                        values["role"].as_str().unwrap(),
+                        arn.as_str().unwrap()
+                    ));
+                }
+                "aws_iam_role_policy" => {
+                    let role = references(config[&address], "role")
+                        .into_iter()
+                        .find(|reference| reference.matches('.').count() == 1)
+                        .expect("a policy names its role");
+                    let role = applied[&role]["name"].as_str().unwrap().to_string();
+                    values["role"] = json!(role);
+                    values["id"] = json!(format!("{role}:{}", name.expect("a policy name")));
+                    values["name_prefix"] = json!("");
+                }
+                _ => {
+                    if !address.ends_with("_policies_barrier") {
+                        continue;
+                    }
+                    let triggers: Vec<Value> = references(config[&address], "triggers_replace")
+                        .iter()
+                        .filter_map(|reference| reference.strip_suffix(".id"))
+                        .map(|attachment| applied[attachment]["id"].clone())
+                        .collect();
+                    values["id"] = json!(format!("barrier-{}", triggers.len()));
+                    values["triggers_replace"] = json!({
+                        "value": triggers,
+                        "type": ["tuple", vec!["string"; triggers.len()]],
+                    });
+                    values["input"] = Value::Null;
+                    values["output"] = Value::Null;
+                }
+            }
+            applied.insert(address, values);
+        }
+    }
+    let provider = |kind: &str| {
+        if kind == "terraform_data" {
+            r#"provider["terraform.io/builtin/terraform"]"#
+        } else {
+            r#"provider["registry.terraform.io/hashicorp/aws"]"#
+        }
+    };
+    applied
+        .into_iter()
+        .map(|(address, values)| {
+            let (kind, label) = address.split_once('.').unwrap();
+            // Terraform records what each object depended on, and orders destroying objects
+            // that left the configuration, or were replaced, by it.
+            let dependencies = recorded_dependencies(config[&address]);
+            json!({"mode": "managed", "type": kind, "name": label, "provider": provider(kind),
+                   "instances": [{"schema_version": 0, "attributes": values,
+                                  "dependencies": dependencies}]})
+        })
+        .collect()
+}
+
+/// The managed resources a configured resource refers to or depends on, as Terraform records
+/// them in state.
+fn recorded_dependencies(resource: &Value) -> Vec<String> {
+    fn collect(value: &Value, found: &mut BTreeSet<String>) {
+        match value {
+            Value::Object(fields) => {
+                for (key, value) in fields {
+                    if key == "references" {
+                        for reference in value.as_array().into_iter().flatten() {
+                            found.insert(reference.as_str().unwrap().to_string());
+                        }
+                    } else {
+                        collect(value, found);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| collect(item, found)),
+            _ => {}
+        }
+    }
+    let mut found = BTreeSet::new();
+    collect(&resource["expressions"], &mut found);
+    for dependency in resource["depends_on"].as_array().into_iter().flatten() {
+        found.insert(dependency.as_str().unwrap().to_string());
+    }
+    found
+        .into_iter()
+        .filter(|reference| {
+            ![
+                "data.",
+                "local.",
+                "var.",
+                "each.",
+                "count.",
+                "path.",
+                "terraform.",
+            ]
+            .iter()
+            .any(|scope| reference.starts_with(scope))
+        })
+        .map(|reference| {
+            let mut parts = reference.split('.');
+            let kind = parts.next().unwrap();
+            let label = parts.next().unwrap_or_default();
+            format!("{kind}.{}", label.split('[').next().unwrap())
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn write_state(dir: &Path, resources: Vec<Value>) {
+    let version: Value =
+        serde_json::from_str(&terraform(dir, &["version", "-json"])).expect("version");
+    std::fs::write(
+        dir.join("terraform.tfstate"),
+        json!({
+            "version": 4,
+            "terraform_version": version["terraform_version"],
+            "serial": 1,
+            "lineage": "00000000-0000-0000-0000-000000003347",
+            "outputs": {},
+            "resources": resources,
+        })
+        .to_string(),
+    )
+    .expect("writes the state");
+}
+
+fn resource_changes(plan: &Value) -> BTreeMap<String, Value> {
+    plan["resource_changes"]
+        .as_array()
+        .expect("resource changes")
+        .iter()
+        .map(|change| {
+            (
+                change["address"].as_str().unwrap().to_string(),
+                change["change"]["actions"].clone(),
+            )
+        })
+        .collect()
+}
+
+/// A later release whose new grant lands early moves statements between the execution role's
+/// managed policies. The changed policies are new policies under new names, created and
+/// attached before the old ones are detached and deleted, so a moved statement is never held
+/// by neither.
+#[tokio::test]
+async fn statements_moving_between_managed_policies_are_never_dropped() {
+    if std::env::var("SKIP_LINTERS").as_deref() == Ok("1") {
+        return;
+    }
+    let registry = container_registry(NoComputeCluster);
+    let before = prepared_stack().await;
+    let first = render(&before, &registry);
+
+    // The next release names one more bucket for the workload, before every other resource.
+    let mut source: Stack = serde_json::from_str(STACK).expect("the fixture is a stack");
+    let bucket = alien_core::ResourceEntry {
+        config: alien_core::Resource::new(alien_core::Storage::new("archive".to_string()).build()),
+        lifecycle: alien_core::ResourceLifecycle::Frozen,
+        dependencies: Vec::new(),
+        display_name: None,
+        description: None,
+        remote_access: false,
+        enabled_when: None,
+    };
+    source
+        .resources
+        .shift_insert(0, "archive".to_string(), bucket);
+    source
+        .permissions
+        .profiles
+        .get_mut("execution")
+        .expect("the execution profile")
+        .0
+        .insert(
+            "archive".to_string(),
+            vec![alien_core::PermissionSetReference::from_name(
+                "storage/data-write",
+            )],
+        );
+    let after = prepare(source).await;
+    let second = render(&after, &registry);
+
+    let dir = module_dir(&first);
+    let fresh = plan(dir.path(), "first.tfplan");
+    write_state(dir.path(), applied_iam_state(&fresh));
+    assert_eq!(
+        resource_changes(&plan(dir.path(), "settled.tfplan"))
+            .iter()
+            .filter(|(address, actions)| {
+                [
+                    "aws_iam_policy.",
+                    "aws_iam_role_policy_attachment.",
+                    "terraform_data.",
+                ]
+                .iter()
+                .any(|kind| address.starts_with(kind))
+                    && address.contains("_setup")
+                    && **actions != json!(["no-op"])
+                    && **actions != json!(["update"])
+            })
+            .collect::<Vec<_>>(),
+        Vec::<(&String, &Value)>::new(),
+        "the applied release plans no replacement"
+    );
+
+    write_module(dir.path(), &second);
+    let reflow = plan(dir.path(), "second.tfplan");
+    let changes = resource_changes(&reflow);
+    let names = |plan: &Value, label: &str| -> Option<String> {
+        plan["planned_values"]["root_module"]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|resource| resource["address"] == format!("aws_iam_policy.{label}"))
+            .map(|resource| resource["values"]["name"].as_str().unwrap().to_string())
+    };
+    // The statements moved: both of the execution role's policies changed.
+    for label in ["execution_sa_setup_0", "execution_sa_setup_1"] {
+        assert_ne!(
+            names(&fresh, label),
+            names(&reflow, label),
+            "{label} changed"
+        );
+        for address in [
+            format!("aws_iam_policy.{label}"),
+            format!("aws_iam_role_policy_attachment.{label}_attachment"),
+        ] {
+            assert_eq!(changes[&address], json!(["create", "delete"]), "{address}");
+        }
+    }
+    assert_eq!(
+        changes["terraform_data.execution_sa_setup_policies_barrier"],
+        json!(["create", "delete"])
+    );
+    // Nothing is destroyed before its replacement exists.
+    let destroyed_first: Vec<_> = changes
+        .iter()
+        .filter(|(_, actions)| actions.as_array().unwrap().first() == Some(&json!("delete")))
+        .collect();
+    assert!(destroyed_first.is_empty(), "{destroyed_first:?}");
+
+    // Terraform's apply graph: the replaced attachments are destroyed only after the barrier
+    // is replaced, and the replaced policies only after their attachments are destroyed.
+    let graph = terraform(dir.path(), &["graph", "-type=apply", "-plan=second.tfplan"]);
+    for (later, earlier) in [
+        (
+            "aws_iam_role_policy_attachment.execution_sa_setup_0_attachment (destroy deposed",
+            "terraform_data.execution_sa_setup_policies_barrier",
+        ),
+        (
+            "aws_iam_role_policy_attachment.execution_sa_setup_1_attachment (destroy deposed",
+            "terraform_data.execution_sa_setup_policies_barrier",
+        ),
+        (
+            "aws_iam_policy.execution_sa_setup_0 (destroy deposed",
+            "aws_iam_role_policy_attachment.execution_sa_setup_0_attachment (destroy deposed",
+        ),
+    ] {
+        assert!(
+            graph_orders(&graph, earlier, later),
+            "{later} must wait for {earlier}:\n{graph}"
+        );
+    }
+}
+
+/// Whether `later` runs after `earlier` in a `terraform graph` DOT, whose edges point from a
+/// node to what it waits for. `later` is a node prefix (deposed nodes end in an object id);
+/// `earlier` matches a whole node or, ending in an open parenthesis, a prefix.
+fn graph_orders(graph: &str, earlier: &str, later: &str) -> bool {
+    let node = |line: &str| -> Option<(String, String)> {
+        let (from, to) = line.trim().split_once(" -> ")?;
+        let clean = |side: &str| {
+            side.trim()
+                .trim_end_matches(';')
+                .trim_matches('"')
+                .trim_start_matches("[root] ")
+                .to_string()
+        };
+        Some((clean(from), clean(to)))
+    };
+    let edges: Vec<(String, String)> = graph.lines().filter_map(node).collect();
+    let mut pending = vec![later.to_string()];
+    let mut seen = BTreeSet::new();
+    while let Some(current) = pending.pop() {
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+        for (from, to) in &edges {
+            if from.starts_with(&current) {
+                let reached = if earlier.ends_with("deposed") {
+                    to.starts_with(earlier)
+                } else {
+                    to == earlier
+                };
+                if reached {
+                    return true;
+                }
+                pending.push(to.clone());
+            }
+        }
+    }
+    false
+}
+
 /// The addresses an attribute of a configured resource refers to, from `terraform show -json`.
 fn references(resource: &Value, attribute: &str) -> Vec<String> {
     resource["expressions"][attribute]["references"]
@@ -547,4 +940,102 @@ fn references(resource: &Value, attribute: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Stands in for an out-of-tree compute-cluster emitter: it grants its instances role a set
+/// with the public helper, as the one composed CLIs register does.
+struct ComputeInstances;
+
+impl TfEmitter for ComputeInstances {
+    fn emit(&self, ctx: &EmitContext<'_>) -> alien_core::Result<TfFragment> {
+        let role = format!("{}_instances", required_label(ctx)?);
+        let mut fragment = TfFragment::default();
+        fragment.resource_blocks.push(resource_block(
+            "aws_iam_role",
+            &role,
+            [
+                attr("name", resource_prefix_template("compute-instances")),
+                attr(
+                    "assume_role_policy",
+                    service_assume_role_policy(&["ec2.amazonaws.com"]),
+                ),
+            ],
+        ));
+        let set = alien_permissions::get_permission_set("kv/data-read").expect("registered");
+        emit_iam_role_policy(
+            &mut fragment,
+            &role,
+            set,
+            0,
+            &aws_terraform_permission_context(),
+        )?;
+        Ok(fragment)
+    }
+
+    fn emit_import_ref(&self, _ctx: &EmitContext<'_>) -> alien_core::Result<hcl::Expression> {
+        Ok(hcl::Expression::Object(hcl::Object::new()))
+    }
+}
+
+/// A grant a registered emitter writes inline moves to a managed policy like the built-in ones,
+/// and keeps its address as a stub.
+#[tokio::test]
+async fn a_registered_emitters_grant_moves_to_a_managed_policy() {
+    let stack = prepared_stack().await;
+    let module = render(&stack, &container_registry(ComputeInstances));
+    let (role, contents) = module
+        .iter()
+        .find_map(|(path, contents)| {
+            let role = contents
+                .split("resource \"aws_iam_role\" \"")
+                .nth(1)?
+                .split('"')
+                .next()?
+                .to_string();
+            (path.ends_with(".tf") && role.ends_with("_instances")).then_some((role, contents))
+        })
+        .expect("the instances role renders");
+
+    let stub: hcl::Body = hcl::parse(contents).expect("parses");
+    let stub = stub
+        .blocks()
+        .find(|block| {
+            block.labels().first().map(|label| label.as_str()) == Some("aws_iam_role_policy")
+        })
+        .expect("the grant keeps its address");
+    let attribute = |key: &str| {
+        stub.body()
+            .attributes()
+            .find(|attribute| attribute.key() == key)
+            .unwrap_or_else(|| panic!("the stub sets {key}"))
+            .expr()
+            .to_string()
+    };
+    assert_eq!(stub.labels()[1].as_str(), format!("{role}_set_0"));
+    assert_eq!(attribute("name"), "\"kv-data-read-0\"");
+    assert_eq!(attribute("role"), format!("aws_iam_role.{role}.id"));
+    assert_eq!(
+        attribute("policy"),
+        hcl::Expression::String(INERT_POLICY.into()).to_string()
+    );
+    assert_eq!(
+        attribute("depends_on")
+            .split_whitespace()
+            .collect::<String>(),
+        format!("[aws_iam_role_policy_attachment.{role}_setup_0_attachment]")
+    );
+
+    let documents = role_policy_documents(&module, &role);
+    assert_eq!(
+        documents
+            .iter()
+            .map(|(address, _)| address.as_str())
+            .collect::<Vec<_>>(),
+        [format!("aws_iam_policy.{role}_setup_0")]
+    );
+    let granted = documents[0].1.to_string();
+    for action in ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"] {
+        assert!(granted.contains(action), "{action}: {granted}");
+    }
+    assert_terraform_valid(&module, "registered emitter grant");
 }

@@ -62,7 +62,8 @@ pub(crate) struct RoleUsage {
     pub inline_policies: usize,
     /// Largest total non-whitespace characters of those inline policies.
     pub inline_chars: usize,
-    /// Distinct managed policies attached to the role.
+    /// Managed policies attached to the role at once, at most: distinct policies, and the
+    /// replacement of each one replaced create-before-destroy.
     pub attachments: usize,
 }
 
@@ -131,7 +132,7 @@ impl RenderedModule {
             }
             if role_usage.attachments > IAM_MANAGED_POLICIES_PER_ROLE {
                 shortfalls.push(format!(
-                    "IAM role '{role}' requires {} managed-policy attachments; generated setup supports the default quota of {IAM_MANAGED_POLICIES_PER_ROLE} per role. Reduce the number of attached policies.",
+                    "IAM role '{role}' requires {} managed-policy attachments, counting twice each one replaced create-before-destroy, since an update attaches its replacement before detaching it; generated setup supports the default quota of {IAM_MANAGED_POLICIES_PER_ROLE} per role. Reduce the number of attached policies.",
                     role_usage.attachments
                 ));
             }
@@ -224,10 +225,13 @@ impl RenderedModule {
                         return Err(unknown_role(kind, label, role));
                     }
                     let arn = required_attribute(block, "policy_arn", kind, label)?;
-                    attachments
-                        .entry(role.to_string())
-                        .or_default()
-                        .insert(policy_identity(arn));
+                    let identities = attachments.entry(role.to_string()).or_default();
+                    let identity = policy_identity(arn);
+                    // The attachment that replaces it is attached before it is detached.
+                    if creates_before_destroying(block) {
+                        identities.insert(format!("{identity} (replacement)"));
+                    }
+                    identities.insert(identity);
                 }
                 "aws_iam_policy" => {
                     let policy = required_attribute(block, "policy", kind, label)?;
@@ -808,6 +812,16 @@ fn policy_identity(expression: &Expression) -> String {
         }
         _ => expression.to_string(),
     }
+}
+
+fn creates_before_destroying(block: &Block) -> bool {
+    block
+        .body
+        .blocks()
+        .filter(|nested| nested.identifier.as_str() == "lifecycle")
+        .any(|lifecycle| {
+            attribute(lifecycle, "create_before_destroy") == Some(&Expression::Bool(true))
+        })
 }
 
 fn resource_type(block: &Block) -> Option<&str> {

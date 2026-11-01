@@ -434,7 +434,7 @@ resource "aws_s3_bucket_policy" "files" {
 resource "aws_iam_role_policy" "files_access_storage-remote-data-write_0" {
   name   = "files-storage-remote-data-write-0"
   role   = aws_iam_role.access.id
-  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
     aws_iam_role_policy_attachment.access_setup_0_attachment
   ]
@@ -453,13 +453,34 @@ resource "aws_iam_role" "access" {
 }
 
 resource "aws_iam_policy" "access_setup_0" {
-  name   = length(format("%s-%s", local.resource_prefix, "access-setup-0")) <= 128 ? format("%s-%s", local.resource_prefix, "access-setup-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "access-setup-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "access-setup-0")), 0, 8))
+  name   = length(format("%s-%s", local.resource_prefix, "access-setup-9e89337a")) <= 128 ? format("%s-%s", local.resource_prefix, "access-setup-9e89337a") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "access-setup-9e89337a"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "access-setup-9e89337a")), 0, 8))
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ListBucketAndUploads", Effect = "Allow", Action = ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"], Resource = ["arn:aws:s3:::${aws_s3_bucket.files.bucket}"] }, { Sid = "ReadWriteBucketObjects", Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"], Resource = ["arn:aws:s3:::${aws_s3_bucket.files.bucket}/*"] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "access_setup_0_attachment" {
   role       = aws_iam_role.access.name
   policy_arn = aws_iam_policy.access_setup_0.arn
+  depends_on = [
+    aws_iam_policy.access_setup_0
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "access_setup_policies_barrier" {
+  triggers_replace = [
+    aws_iam_role_policy_attachment.access_setup_0_attachment.id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 === registration.tf ===
@@ -488,7 +509,8 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role_policy.files_access_storage-remote-data-write_0,
     aws_iam_role.access,
     aws_iam_policy.access_setup_0,
-    aws_iam_role_policy_attachment.access_setup_0_attachment
+    aws_iam_role_policy_attachment.access_setup_0_attachment,
+    terraform_data.access_setup_policies_barrier
   ]
 
   lifecycle {

@@ -798,7 +798,7 @@ resource "aws_iam_role" "execution_sa" {
 resource "aws_iam_role_policy" "execution_sa_set_0" {
   name   = "storage-data-read-0"
   role   = aws_iam_role.execution_sa.id
-  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
     aws_iam_role_policy_attachment.execution_sa_setup_0_attachment
   ]
@@ -807,20 +807,41 @@ resource "aws_iam_role_policy" "execution_sa_set_0" {
 resource "aws_iam_role_policy" "execution_sa_set_1" {
   name   = "queue-data-write-1"
   role   = aws_iam_role.execution_sa.id
-  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
     aws_iam_role_policy_attachment.execution_sa_setup_0_attachment
   ]
 }
 
 resource "aws_iam_policy" "execution_sa_setup_0" {
-  name   = length(format("%s-%s", local.resource_prefix, "execution-sa-setup-0")) <= 128 ? format("%s-%s", local.resource_prefix, "execution-sa-setup-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa-setup-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa-setup-0")), 0, 8))
+  name   = length(format("%s-%s", local.resource_prefix, "execution-sa-setup-6ab386a6")) <= 128 ? format("%s-%s", local.resource_prefix, "execution-sa-setup-6ab386a6") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa-setup-6ab386a6"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa-setup-6ab386a6")), 0, 8))
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadS3Objects", Effect = "Allow", Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"] }, { Sid = "SendSqsMessages", Effect = "Allow", Action = ["sqs:SendMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"], Resource = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "execution_sa_setup_0_attachment" {
   role       = aws_iam_role.execution_sa.name
   policy_arn = aws_iam_policy.execution_sa_setup_0.arn
+  depends_on = [
+    aws_iam_policy.execution_sa_setup_0
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "execution_sa_setup_policies_barrier" {
+  triggers_replace = [
+    aws_iam_role_policy_attachment.execution_sa_setup_0_attachment.id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 === management.tf ===
@@ -863,20 +884,41 @@ resource "aws_iam_role_policy_attachment" "management_managed_policy_1_attachmen
 resource "aws_iam_role_policy" "management_self_read" {
   name   = "deployment-management-self-read"
   role   = aws_iam_role.management.id
-  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
     aws_iam_role_policy_attachment.management_setup_0_attachment
   ]
 }
 
 resource "aws_iam_policy" "management_setup_0" {
-  name   = length(format("%s-%s", local.resource_prefix, "management-setup-0")) <= 128 ? format("%s-%s", local.resource_prefix, "management-setup-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management-setup-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "management-setup-0")), 0, 8))
+  name   = length(format("%s-%s", local.resource_prefix, "management-setup-ef8239f2")) <= 128 ? format("%s-%s", local.resource_prefix, "management-setup-ef8239f2") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management-setup-ef8239f2"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "management-setup-ef8239f2")), 0, 8))
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = ["iam:GetRole"], Resource = [aws_iam_role.management.arn] }, { Sid = "CheckS3BucketHealth", Effect = "Allow", Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Resource = ["arn:aws:s3:::${aws_s3_bucket.assets.bucket}"] }, { Sid = "WriteSsmParameters", Effect = "Allow", Action = ["ssm:PutParameter", "ssm:DeleteParameter"], Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-secrets-*"] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "management_setup_0_attachment" {
   role       = aws_iam_role.management.name
   policy_arn = aws_iam_policy.management_setup_0.arn
+  depends_on = [
+    aws_iam_policy.management_setup_0
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "management_setup_policies_barrier" {
+  triggers_replace = [
+    aws_iam_role_policy_attachment.management_setup_0_attachment.id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 === assets.tf ===
@@ -937,7 +979,7 @@ resource "aws_s3_bucket_versioning" "assets" {
 resource "aws_iam_role_policy" "assets_management_storage-heartbeat_0" {
   name   = "assets-storage-heartbeat-0"
   role   = aws_iam_role.management.id
-  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
     aws_iam_role_policy_attachment.management_setup_0_attachment
   ]
@@ -1003,7 +1045,7 @@ resource "aws_dynamodb_table" "metadata" {
 resource "aws_iam_role_policy" "management_vault_secrets_set_0" {
   name   = "management-secrets-vault-data-write"
   role   = aws_iam_role.management.id
-  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
     aws_iam_role_policy_attachment.management_setup_0_attachment
   ]
@@ -1065,7 +1107,7 @@ resource "aws_iam_role" "registry_push" {
 resource "aws_iam_role_policy" "registry_pull_policy" {
   name   = "ecr-pull"
   role   = aws_iam_role.registry_pull.id
-  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
     aws_iam_role_policy_attachment.registry_pull_setup_0_attachment
   ]
@@ -1074,30 +1116,72 @@ resource "aws_iam_role_policy" "registry_pull_policy" {
 resource "aws_iam_role_policy" "registry_push_policy" {
   name   = "ecr-push-pull"
   role   = aws_iam_role.registry_push.id
-  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
     aws_iam_role_policy_attachment.registry_push_setup_0_attachment
   ]
 }
 
 resource "aws_iam_policy" "registry_pull_setup_0" {
-  name   = length(format("%s-%s", local.resource_prefix, "registry-pull-setup-0")) <= 128 ? format("%s-%s", local.resource_prefix, "registry-pull-setup-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-pull-setup-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "registry-pull-setup-0")), 0, 8))
+  name   = length(format("%s-%s", local.resource_prefix, "registry-pull-setup-4416b0d3")) <= 128 ? format("%s-%s", local.resource_prefix, "registry-pull-setup-4416b0d3") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-pull-setup-4416b0d3"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "registry-pull-setup-4416b0d3")), 0, 8))
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = ["*"] }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"], Resource = [aws_ecr_repository.registry.arn, format("%s-*", aws_ecr_repository.registry.arn)] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "registry_pull_setup_0_attachment" {
   role       = aws_iam_role.registry_pull.name
   policy_arn = aws_iam_policy.registry_pull_setup_0.arn
+  depends_on = [
+    aws_iam_policy.registry_pull_setup_0
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_iam_policy" "registry_push_setup_0" {
-  name   = length(format("%s-%s", local.resource_prefix, "registry-push-setup-0")) <= 128 ? format("%s-%s", local.resource_prefix, "registry-push-setup-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-push-setup-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "registry-push-setup-0")), 0, 8))
+  name   = length(format("%s-%s", local.resource_prefix, "registry-push-setup-2bb131f2")) <= 128 ? format("%s-%s", local.resource_prefix, "registry-push-setup-2bb131f2") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-push-setup-2bb131f2"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "registry-push-setup-2bb131f2")), 0, 8))
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = ["*"] }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages", "ecr:CompleteLayerUpload", "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"], Resource = [aws_ecr_repository.registry.arn, format("%s-*", aws_ecr_repository.registry.arn)] }, { Sid = "RegionalRepositoryPolicies", Effect = "Allow", Action = ["ecr:GetRepositoryPolicy", "ecr:DeleteRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories"], Resource = [replace(aws_ecr_repository.registry.arn, format(":%s:", data.aws_region.current.region), ":*:"), format("%s-*", replace(aws_ecr_repository.registry.arn, format(":%s:", data.aws_region.current.region), ":*:"))] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "registry_push_setup_0_attachment" {
   role       = aws_iam_role.registry_push.name
   policy_arn = aws_iam_policy.registry_push_setup_0.arn
+  depends_on = [
+    aws_iam_policy.registry_push_setup_0
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "registry_pull_setup_policies_barrier" {
+  triggers_replace = [
+    aws_iam_role_policy_attachment.registry_pull_setup_0_attachment.id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "registry_push_setup_policies_barrier" {
+  triggers_replace = [
+    aws_iam_role_policy_attachment.registry_push_setup_0_attachment.id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 === registration.tf ===
@@ -1134,6 +1218,7 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role_policy.execution_sa_set_1,
     aws_iam_policy.execution_sa_setup_0,
     aws_iam_role_policy_attachment.execution_sa_setup_0_attachment,
+    terraform_data.execution_sa_setup_policies_barrier,
     aws_iam_role.management,
     aws_iam_policy.management_permissions_boundary,
     aws_iam_policy.management_managed_policy_0,
@@ -1143,6 +1228,7 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role_policy.management_self_read,
     aws_iam_policy.management_setup_0,
     aws_iam_role_policy_attachment.management_setup_0_attachment,
+    terraform_data.management_setup_policies_barrier,
     aws_s3_bucket.assets,
     aws_s3_bucket_server_side_encryption_configuration.assets,
     aws_s3_bucket_ownership_controls.assets,
@@ -1162,7 +1248,9 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_policy.registry_pull_setup_0,
     aws_iam_role_policy_attachment.registry_pull_setup_0_attachment,
     aws_iam_policy.registry_push_setup_0,
-    aws_iam_role_policy_attachment.registry_push_setup_0_attachment
+    aws_iam_role_policy_attachment.registry_push_setup_0_attachment,
+    terraform_data.registry_pull_setup_policies_barrier,
+    terraform_data.registry_push_setup_policies_barrier
   ]
 
   lifecycle {
