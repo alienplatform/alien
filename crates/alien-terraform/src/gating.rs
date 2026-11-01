@@ -54,6 +54,12 @@ impl GatedAddresses {
             .contains(&(provider_type.to_string(), label.to_string()))
     }
 
+    /// Record a block a generator pass created with a gate's `count`.
+    pub(crate) fn insert(&mut self, provider_type: &str, label: &str) {
+        self.addresses
+            .insert((provider_type.to_string(), label.to_string()));
+    }
+
     /// The addresses as `type.label` strings, for the rendered-output scan.
     pub(crate) fn rendered_forms(&self) -> Vec<String> {
         self.addresses

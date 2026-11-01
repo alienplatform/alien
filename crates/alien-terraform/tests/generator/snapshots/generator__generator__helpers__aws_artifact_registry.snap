@@ -506,13 +506,81 @@ resource "aws_iam_role" "registry_push" {
 resource "aws_iam_role_policy" "registry_pull_policy" {
   name   = "ecr-pull"
   role   = aws_iam_role.registry_pull.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = "ecr:GetAuthorizationToken", Resource = "*" }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"], Resource = [aws_ecr_repository.registry.arn, format("%s-*", aws_ecr_repository.registry.arn)] }] })
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  depends_on = [
+    aws_iam_role_policy_attachment.registry_pull_setup_4416b0d3_attachment
+  ]
 }
 
 resource "aws_iam_role_policy" "registry_push_policy" {
   name   = "ecr-push-pull"
   role   = aws_iam_role.registry_push.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = "ecr:GetAuthorizationToken", Resource = "*" }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages", "ecr:CompleteLayerUpload", "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"], Resource = [aws_ecr_repository.registry.arn, format("%s-*", aws_ecr_repository.registry.arn)] }, { Sid = "RegionalRepositoryPolicies", Effect = "Allow", Action = ["ecr:GetRepositoryPolicy", "ecr:DeleteRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories"], Resource = [replace(aws_ecr_repository.registry.arn, format(":%s:", data.aws_region.current.region), ":*:"), format("%s-*", replace(aws_ecr_repository.registry.arn, format(":%s:", data.aws_region.current.region), ":*:"))] }] })
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  depends_on = [
+    aws_iam_role_policy_attachment.registry_push_setup_2bb131f2_attachment
+  ]
+}
+
+resource "aws_iam_policy" "registry_pull_setup_4416b0d3" {
+  name   = length(format("%s-%s", local.resource_prefix, "registry-pull-setup-4416b0d3")) <= 128 ? format("%s-%s", local.resource_prefix, "registry-pull-setup-4416b0d3") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-pull-setup-4416b0d3"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "registry-pull-setup-4416b0d3")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = ["*"] }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"], Resource = [aws_ecr_repository.registry.arn, format("%s-*", aws_ecr_repository.registry.arn)] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "registry_pull_setup_4416b0d3_attachment" {
+  role       = aws_iam_role.registry_pull.name
+  policy_arn = aws_iam_policy.registry_pull_setup_4416b0d3.arn
+  depends_on = [
+    aws_iam_policy.registry_pull_setup_4416b0d3
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_iam_policy" "registry_push_setup_2bb131f2" {
+  name   = length(format("%s-%s", local.resource_prefix, "registry-push-setup-2bb131f2")) <= 128 ? format("%s-%s", local.resource_prefix, "registry-push-setup-2bb131f2") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-push-setup-2bb131f2"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "registry-push-setup-2bb131f2")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = ["*"] }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages", "ecr:CompleteLayerUpload", "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"], Resource = [aws_ecr_repository.registry.arn, format("%s-*", aws_ecr_repository.registry.arn)] }, { Sid = "RegionalRepositoryPolicies", Effect = "Allow", Action = ["ecr:GetRepositoryPolicy", "ecr:DeleteRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories"], Resource = [replace(aws_ecr_repository.registry.arn, format(":%s:", data.aws_region.current.region), ":*:"), format("%s-*", replace(aws_ecr_repository.registry.arn, format(":%s:", data.aws_region.current.region), ":*:"))] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "registry_push_setup_2bb131f2_attachment" {
+  role       = aws_iam_role.registry_push.name
+  policy_arn = aws_iam_policy.registry_push_setup_2bb131f2.arn
+  depends_on = [
+    aws_iam_policy.registry_push_setup_2bb131f2
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "registry_pull_setup_policies_barrier" {
+  triggers_replace = [
+    aws_iam_role_policy_attachment.registry_pull_setup_4416b0d3_attachment.id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "registry_push_setup_policies_barrier" {
+  triggers_replace = [
+    aws_iam_role_policy_attachment.registry_push_setup_2bb131f2_attachment.id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 === registration.tf ===
@@ -538,7 +606,13 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role.registry_pull,
     aws_iam_role.registry_push,
     aws_iam_role_policy.registry_pull_policy,
-    aws_iam_role_policy.registry_push_policy
+    aws_iam_role_policy.registry_push_policy,
+    aws_iam_policy.registry_pull_setup_4416b0d3,
+    aws_iam_role_policy_attachment.registry_pull_setup_4416b0d3_attachment,
+    aws_iam_policy.registry_push_setup_2bb131f2,
+    aws_iam_role_policy_attachment.registry_push_setup_2bb131f2_attachment,
+    terraform_data.registry_pull_setup_policies_barrier,
+    terraform_data.registry_push_setup_policies_barrier
   ]
 
   lifecycle {

@@ -10,8 +10,9 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        downcast, emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize,
-        required_label, stack_permission_context,
+        downcast, emit_iam_role_policy_for_target_with_label, emit_iam_role_policy_stub,
+        iam_policy_name_sanitize, required_label, stack_permission_context,
+        without_stack_policy_copies,
     },
     expr,
 };
@@ -32,7 +33,19 @@ impl TfEmitter for AwsVaultEmitter {
         let context = stack_permission_context(ctx)
             .with_resource_name(format!("${{local.resource_prefix}}-{}", vault.id()));
 
-        for (owner_label, permission_set_refs) in vault_permission_owners(ctx) {
+        for (owner_label, (profile_name, profile), permission_set_refs) in
+            vault_permission_owners(ctx)
+        {
+            // The workload's stack-level policy already grants its `"*"` sets on this vault,
+            // which is named under the prefix. A set it holds keeps its address as a stub, and
+            // every set keeps its index, so no policy changes address.
+            let kept = without_stack_policy_copies(
+                ctx,
+                profile_name,
+                profile,
+                permission_set_refs.clone(),
+                &context,
+            )?;
             for (idx, permission_set_ref) in permission_set_refs.iter().enumerate() {
                 if let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
@@ -41,16 +54,30 @@ impl TfEmitter for AwsVaultEmitter {
                         continue;
                     }
                     let vault_label_segment = sanitize_label_segment(vault.id());
+                    let policy_label =
+                        format!("{owner_label}_vault_{vault_label_segment}_set_{idx}");
+                    let policy_name = format!(
+                        "access-{}-{}",
+                        vault.id(),
+                        iam_policy_name_sanitize(&permission_set.id)
+                    );
+                    if !kept.contains(permission_set_ref) {
+                        if permission_set.platforms.aws.is_some() {
+                            emit_iam_role_policy_stub(
+                                &mut fragment,
+                                &owner_label,
+                                &policy_label,
+                                &policy_name,
+                            );
+                        }
+                        continue;
+                    }
                     emit_iam_role_policy_for_target_with_label(
                         &mut fragment,
                         &owner_label,
                         &permission_set,
-                        &format!("{owner_label}_vault_{vault_label_segment}_set_{idx}"),
-                        &format!(
-                            "access-{}-{}",
-                            vault.id(),
-                            iam_policy_name_sanitize(&permission_set.id)
-                        ),
+                        &policy_label,
+                        &policy_name,
                         &context,
                         BindingTarget::Resource,
                     )?;
@@ -175,7 +202,14 @@ fn emit_sandbox_gateway_replica_secret(fragment: &mut TfFragment, label: &str) {
     ));
 }
 
-fn vault_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
+/// The workload roles granted sets on this vault, each with its profile and the sets.
+fn vault_permission_owners<'a>(
+    ctx: &'a EmitContext<'_>,
+) -> Vec<(
+    String,
+    (&'a str, &'a PermissionProfile),
+    Vec<PermissionSetReference>,
+)> {
     if ctx.stack_settings.setup_management == alien_core::SetupManagement::Automatic {
         return Vec::new();
     }
@@ -188,7 +222,7 @@ fn vault_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permission
 
         let service_account_id = format!("{profile_name}-sa");
         if let Some((label, _service_account)) = service_account_for_id(ctx, &service_account_id) {
-            owners.push((label.to_string(), refs));
+            owners.push((label.to_string(), (profile_name.as_str(), profile), refs));
         }
     }
 

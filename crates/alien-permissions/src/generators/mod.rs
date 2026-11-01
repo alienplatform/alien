@@ -10,7 +10,9 @@ mod labels;
 
 pub use aws_boundary::{aws_permissions_boundary, aws_stack_permissions_boundary};
 pub use aws_boundary_coverage::aws_permissions_boundary_covers;
-pub use aws_boundary_scope::{aws_boundary_scope_context, validate_aws_boundary_size};
+pub use aws_boundary_scope::{
+    aws_boundary_scope_context, aws_longest_permission_context, validate_aws_boundary_size,
+};
 pub use aws_cloudformation::{
     AwsCloudFormationIamPolicy, AwsCloudFormationIamStatement,
     AwsCloudFormationPermissionsGenerator,

@@ -3,7 +3,7 @@
 
 use super::helpers::{
     assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input, render,
-    snapshot_module, try_render,
+    role_policy_documents, snapshot_module, statement_grants, try_render,
 };
 use alien_core::{
     sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
@@ -133,24 +133,35 @@ fn aws_management_grants_for_a_gated_resource_carry_its_gate() {
         main.push('\n');
     }
 
-    // The grant exists, and it is behind the worker's gate.
-    let gated_policy = main
-        .split("resource \"")
-        .find(|block| block.starts_with("aws_iam_role_policy\" \"management_input_jobs_enabled\""))
-        .unwrap_or_else(|| panic!("the gated management policy should render:\n{main}"));
-    // HCL re-pads `=` to align with sibling attributes, so match the value.
-    assert!(
-        gated_policy.contains("var.input_jobs_enabled ? 1 : 0"),
-        "the gated management policy must carry the worker's gate:\n{gated_policy}"
-    );
+    // The grant exists, and it and its attachment are behind the worker's gate. HCL re-pads `=`
+    // to align with sibling attributes, so match the value.
+    let block = |prefix: &str| {
+        main.split("resource \"")
+            .find(|block| block.starts_with(prefix))
+            .unwrap_or_else(|| panic!("{prefix} should render:\n{main}"))
+    };
+    let gated_policy = block("aws_iam_policy\" \"management_input_jobs_enabled_");
+    for gated in [
+        gated_policy,
+        block("aws_iam_role_policy_attachment\" \"management_input_jobs_enabled_"),
+        // The address the grant was installed under stays, gated, as a stub.
+        block("aws_iam_role_policy\" \"management_input_jobs_enabled\""),
+    ] {
+        assert!(
+            gated.contains("var.input_jobs_enabled ? 1 : 0"),
+            "the gated management grant must carry the worker's gate:\n{gated}"
+        );
+    }
     assert!(
         gated_policy.contains("lambda:InvokeFunction"),
         "the dispatch grant belongs in the gated policy:\n{gated_policy}"
     );
 
-    // And it is not also sitting in the unconditional managed policy.
+    // And it is not also sitting in an unconditional managed policy.
     for block in main.split("resource \"") {
-        if block.starts_with("aws_iam_policy\" \"management_managed_policy") {
+        if block.starts_with("aws_iam_policy\" \"management_managed_policy")
+            || block.starts_with("aws_iam_policy\" \"management_setup")
+        {
             assert!(
                 !block.contains("lambda:InvokeFunction"),
                 "a declinable resource's grant must not ride the unconditional \
@@ -205,9 +216,17 @@ fn management_grants_sharing_a_gate_get_unique_statement_ids() {
 
     let gated_policy = rendered
         .split("resource \"")
-        .find(|block| block.starts_with("aws_iam_role_policy\" \"management_input_jobs_enabled\""))
+        .find(|block| block.starts_with("aws_iam_policy\" \"management_input_jobs_enabled_"))
         .unwrap_or_else(|| panic!("the gated management policy should render:\n{rendered}"));
 
+    // Both workers' functions are granted; the two statements, equal but for their resources,
+    // merge into one.
+    for worker in ["jobs-a", "jobs-b"] {
+        assert!(
+            gated_policy.contains(&format!("function:${{local.resource_prefix}}-{worker}")),
+            "{worker} is dispatchable:\n{gated_policy}"
+        );
+    }
     let sids: Vec<&str> = gated_policy
         .match_indices("Sid = \"")
         .map(|(i, _)| {
@@ -215,13 +234,10 @@ fn management_grants_sharing_a_gate_get_unique_statement_ids() {
             &rest[..rest.find('"').unwrap_or(0)]
         })
         .collect();
+    assert!(!sids.is_empty(), "{gated_policy}");
     assert_eq!(
+        sids.iter().collect::<std::collections::HashSet<_>>().len(),
         sids.len(),
-        2,
-        "both workers contribute a statement: {sids:?}"
-    );
-    assert_ne!(
-        sids[0], sids[1],
         "IAM rejects a policy document with duplicate statement ids: {sids:?}"
     );
 
@@ -695,17 +711,17 @@ fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
         !image.contains("awscc_lambda_network_connector.agents.arn"),
         "the deny connector belongs to the session, not the build:\n{image}"
     );
-    // The roles are referenced by ARN, which resolves before the inline policy is attached and
-    // before IAM has propagated it. Without a barrier the first apply fails and a retry works.
+    // The roles are referenced by ARN, which resolves before their policies are attached and
+    // before IAM has propagated them. Without a barrier the first apply fails and a retry works.
     let barrier = rendered
         .split("resource \"time_sleep\"")
         .nth(1)
         .expect("the sandbox must emit an IAM propagation barrier");
     let barrier = barrier.split("\nresource ").next().expect("block ends");
     assert!(
-        barrier.contains("aws_iam_role_policy.agents")
-            && barrier.contains("aws_iam_role_policy.agents_egress"),
-        "the barrier must wait for both inline policies:\n{barrier}"
+        barrier.contains("aws_iam_role_policy_attachment.agents_setup_")
+            && barrier.contains("aws_iam_role_policy_attachment.agents_egress_setup_"),
+        "the barrier must wait for both roles' policies:\n{barrier}"
     );
     assert!(
         barrier.contains("unique_id"),
@@ -918,7 +934,11 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
     );
     let module = render(&stack, TerraformTarget::Aws, settings);
 
+    // The boundary caps the roles management writes; it is not attached to management.
     let mut denies = Vec::new();
+    for (_, document) in role_policy_documents(&module, "management") {
+        collect_denies(&document, &mut denies);
+    }
     let mut sandbox_role_tags = Vec::new();
     for (file, contents) in module.iter() {
         if !file.ends_with(".tf") {
@@ -926,15 +946,6 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
         }
         let body: hcl::Body =
             hcl::parse(contents).unwrap_or_else(|error| panic!("{file} parses: {error}"));
-        for kind in ["aws_iam_policy", "aws_iam_role_policy"] {
-            for block in resource_blocks(&body, kind) {
-                // The boundary caps the roles management writes; it is not attached to management.
-                let label = block.labels()[1].as_str();
-                if label.starts_with("management") && label != "management_permissions_boundary" {
-                    collect_denies(jsonencoded(block_attribute(block, "policy")), &mut denies);
-                }
-            }
-        }
         if file == "agents.tf" {
             for role in resource_blocks(&body, "aws_iam_role") {
                 sandbox_role_tags.push((
@@ -1113,6 +1124,20 @@ fn evaluate_policy_expression(expression: &hcl::Expression) -> serde_json::Value
     }
 }
 
+/// What every policy of `role_label`, inline or attached, grants, evaluated with the parity
+/// values.
+fn role_grants(
+    module: &alien_terraform::ModuleFiles,
+    role_label: &str,
+) -> std::collections::BTreeSet<String> {
+    let documents: Vec<Value> = role_policy_documents(module, role_label)
+        .iter()
+        .map(|(_, document)| evaluate_policy_expression(document))
+        .collect();
+    assert!(!documents.is_empty(), "{role_label} holds a policy");
+    statement_grants(&documents)
+}
+
 /// The argument of the `jsonencode(...)` call an IAM document attribute holds.
 fn jsonencoded(attribute: &hcl::Attribute) -> &hcl::Expression {
     match attribute.expr() {
@@ -1187,9 +1212,11 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             .build();
 
         assert_eq!(
-            evaluate_policy_expression(jsonencoded(block_attribute(policies[0], "policy"))),
-            serde_json::to_value(expected.policy().expect("the builder accepts the fixture"))
-                .expect("serializes"),
+            role_grants(&module, role_label),
+            statement_grants(&[serde_json::to_value(
+                expected.policy().expect("the builder accepts the fixture")
+            )
+            .expect("serializes")]),
             "{case}: permission policy"
         );
         assert_eq!(
@@ -1222,8 +1249,12 @@ fn the_emitted_operator_role_matches_the_shared_builder() {
         .unwrap_or_else(|| panic!("the operator role {role_label} renders"));
 
     assert_eq!(
-        evaluate_policy_expression(jsonencoded(block_attribute(policies[0], "policy"))),
-        sandbox_egress_operator_policy(PARITY_PARTITION, PARITY_ACCOUNT, PARITY_REGION),
+        role_grants(&module, role_label),
+        statement_grants(&[sandbox_egress_operator_policy(
+            PARITY_PARTITION,
+            PARITY_ACCOUNT,
+            PARITY_REGION
+        )]),
         "permission policy"
     );
     assert_eq!(
@@ -1909,39 +1940,30 @@ fn sandbox_module_with_account(
     render(&stack, TerraformTarget::Aws, settings)
 }
 
-/// Every action the `aws_iam_role_policy` blocks attached to `role_label` grant, across the whole
-/// module, mapped to the resources it is granted on.
+/// Every action the policies of `role_label` grant, inline or attached, mapped to the resources
+/// it is granted on.
 fn granted_actions(
     module: &alien_terraform::ModuleFiles,
     role_label: &str,
 ) -> std::collections::BTreeMap<String, Vec<String>> {
-    let role_id = format!("aws_iam_role.{role_label}.id");
     let as_list = |value: &Value| match value {
         Value::Array(items) => items.clone(),
         other => vec![other.clone()],
     };
     let mut granted = std::collections::BTreeMap::<String, Vec<String>>::new();
-    for (file, contents) in module.iter().filter(|(file, _)| file.ends_with(".tf")) {
-        let body: hcl::Body =
-            hcl::parse(contents).unwrap_or_else(|error| panic!("{file} parses: {error}"));
-        for policy in resource_blocks(&body, "aws_iam_role_policy") {
-            if block_attribute(policy, "role").expr().to_string() != role_id {
-                continue;
-            }
-            let document =
-                evaluate_policy_expression(jsonencoded(block_attribute(policy, "policy")));
-            for statement in document["Statement"].as_array().expect("statements") {
-                assert_eq!(statement["Effect"], "Allow", "{statement:#}");
-                let resources: Vec<String> = as_list(&statement["Resource"])
-                    .iter()
-                    .map(|resource| resource.as_str().expect("string").to_string())
-                    .collect();
-                for action in as_list(&statement["Action"]) {
-                    granted
-                        .entry(action.as_str().expect("string").to_string())
-                        .or_default()
-                        .extend(resources.iter().cloned());
-                }
+    for (_, document) in role_policy_documents(module, role_label) {
+        let document = evaluate_policy_expression(&document);
+        for statement in document["Statement"].as_array().expect("statements") {
+            assert_eq!(statement["Effect"], "Allow", "{statement:#}");
+            let resources: Vec<String> = as_list(&statement["Resource"])
+                .iter()
+                .map(|resource| resource.as_str().expect("string").to_string())
+                .collect();
+            for action in as_list(&statement["Action"]) {
+                granted
+                    .entry(action.as_str().expect("string").to_string())
+                    .or_default()
+                    .extend(resources.iter().cloned());
             }
         }
     }

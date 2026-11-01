@@ -15,9 +15,9 @@
 use crate::{block::attr, expr};
 use alien_core::Result;
 use hcl::{
-    Identifier,
     expr::{Conditional, Expression, FuncCall},
     structure::{Block, Body, Structure},
+    Identifier,
 };
 
 /// Terraform variable carrying the gate's value.

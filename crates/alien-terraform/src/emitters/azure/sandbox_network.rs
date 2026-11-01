@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use alien_core::{Container, ErrorData, Result, Sandbox, SandboxEgress, import::EmitContext};
+use alien_core::{import::EmitContext, Container, ErrorData, Result, Sandbox, SandboxEgress};
 use alien_error::AlienError;
 use hcl::expr::Expression;
 use sha2::{Digest, Sha256};

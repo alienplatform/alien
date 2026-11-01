@@ -20,24 +20,24 @@ use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        ProfileGrants, downcast, emit_profile_grants, emit_remote_bindings_role_definitions,
-        permission_context, remote_bindings_role_label, remote_stack_management_label,
-        required_label, setup_management_role_label,
+        downcast, emit_profile_grants, emit_remote_bindings_role_definitions, permission_context,
+        remote_bindings_role_label, remote_stack_management_label, required_label,
+        setup_management_role_label, ProfileGrants,
     },
     expr,
 };
 use alien_core::{
-    AzureStorageAccount, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    Result, Storage, import::EmitContext, storage_notifications::notification_rule_key,
+    import::EmitContext, storage_notifications::notification_rule_key, AzureStorageAccount,
+    ErrorData, PermissionProfile, PermissionSet, PermissionSetReference, Result, Storage,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
-    BindingTarget,
     generators::{AzureCustomRole, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    BindingTarget,
 };
 use hcl::{
-    Identifier,
     expr::{Expression, FuncCall},
+    Identifier,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -513,7 +513,7 @@ fn sanitize_role_label(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{TerraformOptions, TerraformTarget, TfRegistry, generate_terraform_module};
+    use crate::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
     use alien_core::{
         AzureResourceGroup, ManagementPermissions, RemoteBindings, RemoteStackManagement,
         ResourceLifecycle, ServiceAccount, Stack, StackSettings,

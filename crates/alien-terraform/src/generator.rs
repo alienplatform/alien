@@ -253,6 +253,29 @@ pub fn generate_product_terraform_module_with_profile(
 fn generate_terraform_module_internal(
     stack: &Stack,
     target: TerraformTarget,
+    options: TerraformOptions<'_>,
+    product_remote_operator: bool,
+    requires_remote_operator_collector_token: bool,
+    profile: alien_core::SetupConfigurationProfile,
+) -> Result<ModuleFiles> {
+    let module = render_terraform_module(
+        stack,
+        target,
+        options,
+        product_remote_operator,
+        requires_remote_operator_collector_token,
+        profile,
+    )?;
+    if target.cloud_platform() == alien_core::Platform::Aws {
+        crate::iam_limits::validate_role_policy_limits(&module)?;
+    }
+    Ok(module)
+}
+
+/// Render the module without checking it against IAM quotas.
+pub(crate) fn render_terraform_module(
+    stack: &Stack,
+    target: TerraformTarget,
     mut options: TerraformOptions<'_>,
     product_remote_operator: bool,
     requires_remote_operator_collector_token: bool,
@@ -443,6 +466,13 @@ fn generate_terraform_module_internal(
         dedupe_azure_role_assignments(&mut per_resource)?;
     }
     apply_resource_dependencies(stack, &mut per_resource);
+    if platform == alien_core::Platform::Aws {
+        crate::aws_role_policies::consolidate_role_policies(
+            &mut per_resource,
+            &shared_locals,
+            &mut gated,
+        )?;
+    }
     // EKS uses IAM roles for the cluster and IRSA, not Lambda execution.
     // Making its subnets depend on those roles creates a Terraform cycle.
     if target == TerraformTarget::Aws {
@@ -467,10 +497,6 @@ fn generate_terraform_module_internal(
         for (_gate, expression) in registration_resources.iter_mut() {
             crate::gating::rewrite_expression(expression, &gated);
         }
-    }
-
-    if matches!(platform, alien_core::Platform::Aws) {
-        crate::iam_limits::validate_role_policy_limits(&per_resource)?;
     }
 
     let gcp_iam_propagation_dependencies = if matches!(platform, alien_core::Platform::Gcp) {

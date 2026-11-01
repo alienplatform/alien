@@ -13,7 +13,7 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, Network, NetworkSettings, PermissionSet,
+    import::EmitContext, ErrorData, Network, NetworkSettings, PermissionProfile, PermissionSet,
     PermissionSetReference, ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount,
     ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
@@ -424,7 +424,6 @@ pub fn emit_workload_resource_grants(
     let resource_label = required_label(ctx)?;
     let context = stack_permission_context(ctx)
         .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
-    let generator = AwsRuntimePermissionsGenerator::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let service_account_id = format!("{profile_name}-sa");
         let Some(role_label) = ctx.stack.resources().find_map(|(id, entry)| {
@@ -444,21 +443,7 @@ pub fn emit_workload_resource_grants(
             .filter(|reference| seen.insert(reference.id().to_string()))
             .cloned()
             .collect();
-        let granted = without_refs_the_stack_policy_grants(
-            ctx.stack,
-            profile_name,
-            profile,
-            ctx.resource_id,
-            granted,
-            &generator,
-            &context,
-        )
-        .context(ErrorData::GenericError {
-            message: format!(
-                "failed to select profile '{profile_name}' policies for '{}'",
-                ctx.resource_id
-            ),
-        })?;
+        let granted = without_stack_policy_grants(ctx, profile_name, profile, granted, &context)?;
         for reference in granted {
             let permission_set = reference
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
@@ -486,6 +471,85 @@ pub fn emit_workload_resource_grants(
         }
     }
     Ok(())
+}
+
+/// Drops the sets of `refs` that the stack-level policy of `profile_name`'s service account
+/// already grants on the resource being emitted, resolved with `context`. Sets the resource
+/// names itself stay. The runtime writer selects a resource's policies with the same rule.
+pub fn without_stack_policy_grants(
+    ctx: &EmitContext<'_>,
+    profile_name: &str,
+    profile: &PermissionProfile,
+    refs: Vec<PermissionSetReference>,
+    context: &PermissionContext,
+) -> Result<Vec<PermissionSetReference>> {
+    without_refs_the_stack_policy_grants(
+        ctx.stack,
+        profile_name,
+        profile,
+        ctx.resource_id,
+        refs,
+        &AwsRuntimePermissionsGenerator::new(),
+        context,
+    )
+    .context(ErrorData::GenericError {
+        message: format!(
+            "failed to select profile '{profile_name}' policies for '{}'",
+            ctx.resource_id
+        ),
+    })
+}
+
+/// [`without_stack_policy_grants`], also dropping the sets that render for this resource
+/// exactly as the stack-level policy holds them: a set bound to the same resources at both
+/// targets, such as the deployer-secrets protection Deny, written again changes nothing,
+/// whatever its effect. Sets the resource names itself stay.
+pub fn without_stack_policy_copies(
+    ctx: &EmitContext<'_>,
+    profile_name: &str,
+    profile: &PermissionProfile,
+    refs: Vec<PermissionSetReference>,
+    context: &PermissionContext,
+) -> Result<Vec<PermissionSetReference>> {
+    let stack_sets = ctx
+        .stack
+        .resources()
+        .find(|(id, _)| id.as_str() == format!("{profile_name}-sa"))
+        .and_then(|(_, entry)| entry.config.downcast_ref::<ServiceAccount>())
+        .map(|account| account.stack_permission_sets.as_slice())
+        .unwrap_or_default();
+    let named = profile
+        .0
+        .get(ctx.resource_id)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let mut kept = Vec::new();
+    for reference in without_stack_policy_grants(ctx, profile_name, profile, refs, context)? {
+        let held = reference
+            .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            .filter(|set| set.platforms.aws.is_some() && stack_sets.contains(set));
+        let copy = match held {
+            Some(set) if !named.contains(&reference) => {
+                let render = |target| {
+                    generator
+                        .generate_policy(&set, target, context)
+                        .context(ErrorData::GenericError {
+                            message: format!(
+                                "failed to compare permission set '{}' on '{}' with profile '{profile_name}'s stack-level policy",
+                                set.id, ctx.resource_id
+                            ),
+                        })
+                };
+                render(BindingTarget::Stack)? == render(BindingTarget::Resource)?
+            }
+            _ => false,
+        };
+        if !copy {
+            kept.push(reference);
+        }
+    }
+    Ok(kept)
 }
 
 pub fn emit_iam_role_policy_for_target_with_label(
@@ -527,6 +591,31 @@ pub fn emit_iam_role_policy_for_target_with_label(
         ],
     ));
     Ok(())
+}
+
+/// Keep the address of a grant that is no longer written, as an inert stub on `role_label`.
+///
+/// Installed deployments hold the grant inline under this address. Terraform cannot order
+/// deleting it after the grant that replaces it exists, but it orders an in-place update, so
+/// the address stays and the generator orders the stub after the role's managed policies.
+pub fn emit_iam_role_policy_stub(
+    fragment: &mut TfFragment,
+    role_label: &str,
+    policy_label: &str,
+    policy_name: &str,
+) {
+    fragment.resource_blocks.push(resource_block(
+        "aws_iam_role_policy",
+        policy_label,
+        [
+            attr("name", Expression::String(policy_name.to_string())),
+            attr("role", expr::traversal(["aws_iam_role", role_label, "id"])),
+            attr(
+                "policy",
+                Expression::String(crate::aws_role_policies::STUB_POLICY.to_string()),
+            ),
+        ],
+    ));
 }
 
 pub fn emit_iam_managed_policy_chunks(

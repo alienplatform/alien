@@ -28,7 +28,7 @@ use crate::{
     expr,
 };
 use alien_core::{
-    ErrorData, Network, NetworkSettings, Result, Sandbox, SandboxEgress, import::EmitContext,
+    import::EmitContext, ErrorData, Network, NetworkSettings, Result, Sandbox, SandboxEgress,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;

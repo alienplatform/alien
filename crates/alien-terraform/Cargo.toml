@@ -31,3 +31,4 @@ alien-preflights = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 indexmap = { workspace = true }
 insta = { workspace = true, features = ["json"] }
+regex = { workspace = true }

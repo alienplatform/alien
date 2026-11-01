@@ -8,13 +8,63 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, Key, PermissionSetReference, RemoteBindings, RemoteStackManagement, Result,
+    id_error_message, id_regex_pattern, import::EmitContext, IdType, Key, PermissionSetReference,
+    RemoteBindings, RemoteStackManagement, Result,
 };
 use alien_permissions::BindingTarget;
 use hcl::{
     expr::{Conditional, Expression},
     structure::Block,
 };
+
+/// The AWS partitions, as the AWS SDKs' `partitions.json` lists them.
+pub(crate) const AWS_PARTITIONS: [&str; 8] = [
+    "aws",
+    "aws-cn",
+    "aws-us-gov",
+    "aws-iso",
+    "aws-iso-b",
+    "aws-iso-e",
+    "aws-iso-f",
+    "aws-eusc",
+];
+
+/// A KMS key ARN in this deployment's account and region, in a known AWS partition, naming the
+/// key by its ID: a lowercase UUID, or `mrk-` and 32 hex digits for a multi-Region key. Aliases
+/// are not immutable, so they are refused. The IAM size check bounds a resource attribute that
+/// a `can(regex(KMS_KEY_ARN_PATTERN, self.<attribute>))` postcondition admits as a KMS key ARN,
+/// at the longest partition and key ID this admits.
+pub const KMS_KEY_ARN_PATTERN: &str = "^arn:(aws|aws-cn|aws-us-gov|aws-iso|aws-iso-b|aws-iso-e|aws-iso-f|aws-eusc):kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:key/(mrk-[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$";
+
+/// Suffix of a variable naming a customer key connection, an object whose `deployment_id` is
+/// the deployment holding the customer's key.
+pub const CUSTOMER_KEY_CONNECTION_SUFFIX: &str = "_customer_key_connection";
+
+/// The `validation` block a `<label>_customer_key_connection` variable needs before the IAM
+/// size check bounds its `deployment_id`: null, or an ID in alien's deployment ID format.
+pub fn customer_key_connection_validation(variable: &str) -> Result<Block> {
+    Ok(block(
+        "validation",
+        [
+            attr(
+                "condition",
+                expr::parse(&customer_key_connection_condition(variable))?,
+            ),
+            attr(
+                "error_message",
+                Expression::String(id_error_message(IdType::Deployment)),
+            ),
+        ],
+    ))
+}
+
+/// The condition of [`customer_key_connection_validation`].
+pub(crate) fn customer_key_connection_condition(variable: &str) -> String {
+    format!(
+        r#"var.{variable} == null || can(regex("{}", var.{variable}.deployment_id))"#,
+        id_regex_pattern(IdType::Deployment)
+    )
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsKeyEmitter;
@@ -78,7 +128,7 @@ impl TfEmitter for AwsKeyEmitter {
                     attr("error_message", Expression::String("The encryption key is immutable. Create a new deployment to use a different key.".to_string())),
                 ])),
                 nested(block("postcondition", [
-                    attr("condition", expr::parse(r#"can(regex("^arn:aws[a-z-]*:kms:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:key/[a-zA-Z0-9-]+$", self.output))"#)?),
+                    attr("condition", expr::parse(&format!(r#"can(regex("{KMS_KEY_ARN_PATTERN}", self.output))"#))?),
                     attr("error_message", Expression::String("The key must be an immutable KMS key ARN in this deployment's AWS account and region. Aliases are not supported.".to_string())),
                 ])),
             ])),

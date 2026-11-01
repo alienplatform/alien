@@ -14,9 +14,12 @@ pub fn validate_aws_boundary_size(stack: &Stack) -> Result<()> {
     Ok(())
 }
 
-/// Render the boundary with the longest deployment names setup allows.
-fn render_sized_boundary(stack: &Stack) -> Result<serde_json::Value> {
-    let base = PermissionContext::new()
+/// The longest value setup allows for each AWS deployment variable: a 40-character
+/// resource prefix, a 16-character region, 12-digit account IDs, a managing role ARN of
+/// IAM's maximum length and the boundary ARN of that prefix. Sizing a policy with it gives
+/// the largest document any deployment can receive.
+pub fn aws_longest_permission_context() -> PermissionContext {
+    PermissionContext::new()
         .with_stack_prefix("s".repeat(40))
         .with_aws_region("r".repeat(16))
         .with_aws_account_id("123456789012")
@@ -28,7 +31,12 @@ fn render_sized_boundary(stack: &Stack) -> Result<serde_json::Value> {
         .with_aws_permissions_boundary_arn(format!(
             "arn:aws:iam::123456789012:policy/{}-deployment-management-boundary",
             "s".repeat(40)
-        ));
+        ))
+}
+
+/// Render the boundary with the longest deployment names setup allows.
+fn render_sized_boundary(stack: &Stack) -> Result<serde_json::Value> {
+    let base = aws_longest_permission_context();
     super::aws_stack_permissions_boundary(stack, &base, |_, scope| {
         aws_boundary_scope_context(stack, &base, scope, |scope| {
             if stack.resources[scope].config.resource_type() != alien_core::Key::RESOURCE_TYPE {

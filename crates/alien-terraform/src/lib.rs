@@ -13,6 +13,7 @@
 //! constructing a `TfRegistry` and calling `register(resource_type, platform, emitter)`
 //! on top of `TfRegistry::built_in()`.
 
+mod aws_role_policies;
 pub mod block;
 mod built_ins;
 mod emitter;

@@ -5,7 +5,7 @@
 //! resource's grants itself. A grant one generator emits and the other omits is therefore a
 //! permission the application only has under one of them.
 
-use super::helpers::{assert_terraform_valid, render};
+use super::helpers::{assert_terraform_valid, render, role_policy_documents, INERT_POLICY};
 use alien_cloudformation::{
     generate_cloudformation_template, CfExpression, CfRegistry, CfTemplate, CloudFormationOptions,
     CloudFormationTarget, RegistrationMode,
@@ -121,27 +121,52 @@ fn a_frozen_queue_and_table_grant_the_workload_role_by_name() {
         StackSettings::default(),
     );
 
-    for (label, name, resource) in [
+    for (label, name) in [
         (
             "execution_sa_jobs_queue_data_write",
             "deployment-jobs-queue-data-write",
-            "arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-jobs",
         ),
         (
             "execution_sa_metadata_kv_data_write",
             "deployment-metadata-kv-data-write",
-            "arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${local.resource_prefix}-metadata",
         ),
     ] {
+        // The grant keeps its address, name and role, as the stub its permissions moved out of.
         let policy = terraform_role_policies(&module)
             .find(|policy| policy.label == label)
             .unwrap_or_else(|| panic!("aws_iam_role_policy.{label} must render"));
         assert_eq!(policy.role, "execution_sa");
         assert_eq!(policy.name, name);
         assert_eq!(
-            policy.resources,
-            [resource],
-            "{label} must be scoped to {resource} alone"
+            policy.policy,
+            hcl::Expression::String(INERT_POLICY.to_string())
+        );
+    }
+    // The write actions reach the queue and the table by name, and nothing else.
+    for (action, resource) in [
+        (
+            "sqs:SendMessage",
+            "arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-jobs",
+        ),
+        (
+            "dynamodb:PutItem",
+            "arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${local.resource_prefix}-metadata",
+        ),
+    ] {
+        let mut granted = Vec::new();
+        for (_, document) in role_policy_documents(&module, "execution_sa") {
+            let document = hcl_to_json(&document);
+            for statement in document["Statement"].as_array().expect("statements") {
+                let actions = serde_json::json!([statement["Action"]]);
+                if actions.to_string().contains(&format!("\"{action}\"")) {
+                    granted.push(statement["Resource"].clone());
+                }
+            }
+        }
+        assert_eq!(
+            granted,
+            [serde_json::json!([resource])],
+            "{action} must be granted on {resource} alone"
         );
     }
     // The stack-level policy already grants the "*" set on every prefixed queue.
@@ -206,38 +231,11 @@ fn cloudformation_role_actions(
     actions
 }
 
-/// Allowed actions of every `aws_iam_role_policy` on `aws_iam_role.<role_label>`.
+/// Allowed actions of every policy of `aws_iam_role.<role_label>`, inline or attached.
 fn terraform_role_actions(module: &ModuleFiles, role_label: &str) -> BTreeSet<String> {
-    let attached: Vec<_> = module
-        .iter()
-        .filter(|(path, _)| path.ends_with(".tf"))
-        .flat_map(|(_, contents)| {
-            let body: hcl::Body = hcl::from_str(contents).expect("rendered HCL parses");
-            body.blocks()
-                .filter(|block| {
-                    block.identifier() == "resource"
-                        && block.labels().first().map(|label| label.as_str())
-                            == Some("aws_iam_role_policy_attachment")
-                        && block.body().attributes().any(|attribute| {
-                            attribute.key() == "role"
-                                && attribute
-                                    .expr()
-                                    .to_string()
-                                    .contains(&format!("aws_iam_role.{role_label}."))
-                        })
-                })
-                .map(|block| block.labels()[1].as_str().to_string())
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    assert!(
-        attached.is_empty(),
-        "managed policy attachments are not compared yet: {attached:?}"
-    );
-
     let mut actions = BTreeSet::new();
-    for policy in terraform_role_policies(module).filter(|policy| policy.role == role_label) {
-        collect_allowed_actions(&policy.document, &mut actions);
+    for (_, document) in role_policy_documents(module, role_label) {
+        collect_allowed_actions(&hcl_to_json(&document), &mut actions);
     }
     actions
 }
@@ -246,8 +244,7 @@ struct TerraformRolePolicy {
     label: String,
     role: String,
     name: String,
-    document: serde_json::Value,
-    resources: Vec<String>,
+    policy: hcl::Expression,
 }
 
 fn terraform_role_policies(module: &ModuleFiles) -> impl Iterator<Item = TerraformRolePolicy> {
@@ -279,30 +276,11 @@ fn terraform_role_policies(module: &ModuleFiles) -> impl Iterator<Item = Terrafo
             let hcl::Expression::String(name) = attribute("name") else {
                 panic!("policy name must be a literal");
             };
-            let document = match attribute("policy") {
-                hcl::Expression::FuncCall(call) if call.name.name.as_str() == "jsonencode" => {
-                    hcl_to_json(&call.args[0])
-                }
-                other => panic!("policy must be a jsonencode call: {other}"),
-            };
-            let mut resources = Vec::new();
-            for statement in document["Statement"].as_array().expect("statements") {
-                match &statement["Resource"] {
-                    serde_json::Value::String(value) => resources.push(value.clone()),
-                    serde_json::Value::Array(values) => resources.extend(
-                        values
-                            .iter()
-                            .map(|value| value.as_str().expect("string").to_string()),
-                    ),
-                    _ => {}
-                }
-            }
             policies.push(TerraformRolePolicy {
                 label: block.labels()[1].as_str().to_string(),
                 role,
                 name,
-                document,
-                resources,
+                policy: attribute("policy"),
             });
         }
     }

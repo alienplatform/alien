@@ -1,4 +1,4 @@
-use super::helpers::{assert_terraform_valid, render};
+use super::helpers::{assert_terraform_valid, render, role_policy_documents, INERT_POLICY};
 use alien_core::{
     AzureServiceBusNamespace, ManagementPermissions, PermissionProfile, Queue, QueueBatchConfig,
     RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, Stack, StackSettings,
@@ -195,29 +195,40 @@ fn frozen_queue_metadata_policy_has_no_bootstrap_cycle() {
                     attribute("role").expr().to_string(),
                     "aws_iam_role.management.id"
                 );
-                let hcl::Expression::FuncCall(call) = attribute("policy").expr() else {
-                    panic!("policy must be jsonencode")
-                };
-                assert_eq!(call.name.name.as_str(), "jsonencode");
-                let hcl::Expression::Array(statements) = metadata_field(&call.args[0], "Statement")
-                else {
-                    panic!("statements")
-                };
-                assert_eq!(statements.len(), 1);
+                // The grant keeps its address as a stub; its permission moved to a managed
+                // policy of the management role.
                 assert_eq!(
-                    metadata_field(&statements[0], "Action"),
-                    &hcl::Expression::Array(vec![hcl::Expression::String(
-                        "sqs:GetQueueAttributes".into()
-                    )])
-                );
-                let expected: hcl::Body = hcl::parse(r#"resource = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${aws_sqs_queue.jobs.name}"]"#).unwrap();
-                assert_eq!(
-                    metadata_field(&statements[0], "Resource"),
-                    expected.attributes().next().unwrap().expr()
+                    attribute("policy").expr(),
+                    &hcl::Expression::String(INERT_POLICY.to_string())
                 );
             }
         }
         assert_eq!(metadata_policies, usize::from(enabled));
+        let expected: hcl::Body = hcl::parse(r#"resource = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${aws_sqs_queue.jobs.name}"]"#).unwrap();
+        let expected = expected.attributes().next().unwrap().expr().clone();
+        let mut on_queue = Vec::new();
+        for (_, document) in role_policy_documents(&module, "management") {
+            let hcl::Expression::Array(statements) = metadata_field(&document, "Statement") else {
+                panic!("statements")
+            };
+            on_queue.extend(
+                statements
+                    .iter()
+                    .filter(|statement| metadata_field(statement, "Resource") == &expected)
+                    .map(|statement| metadata_field(statement, "Action").clone()),
+            );
+        }
+        if enabled {
+            assert_eq!(
+                on_queue,
+                [hcl::Expression::Array(vec![hcl::Expression::String(
+                    "sqs:GetQueueAttributes".into()
+                )])],
+                "the metadata grant reaches the queue alone"
+            );
+        } else {
+            assert!(on_queue.is_empty(), "{on_queue:?}");
+        }
     }
 }
 

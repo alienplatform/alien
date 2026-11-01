@@ -1,145 +1,1010 @@
-//! Definite IAM role quota overflows in the final emitted module.
+//! IAM role quotas checked against the largest policies the emitted module can submit.
+//!
+//! AWS caps a role at 10,240 non-whitespace characters across all of its inline policies,
+//! a managed policy at 6,144, and a role at 20 managed-policy attachments by default. A module
+//! applies with deployment values chosen later (resource prefix, region, account), so every
+//! policy is sized here at the longest value each interpolation can resolve to. A module that
+//! passes therefore fits every deployment. An interpolation this check cannot bound fails the
+//! render instead of being guessed, and resources behind `count`/`for_each` count as present.
 
-use crate::emitter::TfFragment;
-use alien_core::{ErrorData, Result};
+use crate::{
+    emitters::aws::key::{
+        customer_key_connection_condition, AWS_PARTITIONS, CUSTOMER_KEY_CONNECTION_SUFFIX,
+        KMS_KEY_ARN_PATTERN,
+    },
+    expr, ModuleFiles,
+};
+use alien_core::{new_id, ErrorData, IdType, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_permissions::generators::aws_longest_permission_context;
 use hcl::{
-    expr::{Expression, ObjectKey, TraversalOperator},
+    expr::{
+        BinaryOperator, Conditional, Expression, FuncCall, ObjectKey, Operation, TemplateExpr,
+        Traversal, TraversalOperator,
+    },
     structure::{Block, Structure},
+    template::{Element, Template},
 };
 use indexmap::IndexMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-/// Conditional resources and unresolved expressions are excluded from the
-/// lower bound. Attachments count distinct literal ARNs and references to
-/// unconditional policies created here. Those two sets may alias, so their
-/// maximum is a conservative lower bound. Other dynamic identities are excluded.
-pub(crate) fn validate_role_policy_limits(fragments: &IndexMap<String, TfFragment>) -> Result<()> {
-    let blocks: Vec<_> = fragments
-        .values()
-        .flat_map(|f| &f.resource_blocks)
-        .collect();
-    let roles: HashSet<_> = blocks
-        .iter()
-        .filter(|b| resource_type(b) == Some("aws_iam_role") && !conditional(b))
-        .filter_map(|b| b.labels.get(1).map(|label| label.as_str()))
-        .collect();
-    let policies: HashSet<_> = blocks
-        .iter()
-        .filter(|b| resource_type(b) == Some("aws_iam_policy") && !conditional(b))
-        .filter_map(|b| b.labels.get(1).map(|label| label.as_str()))
-        .collect();
-    let mut sizes: IndexMap<String, usize> = IndexMap::new();
-    let mut attachments: IndexMap<String, HashSet<PolicyIdentity>> = IndexMap::new();
-    for block in blocks.iter().filter(|b| !conditional(b)) {
-        match resource_type(block) {
-            Some("aws_iam_role") => {
-                let Some(label) = block.labels.get(1).map(|label| label.as_str()) else {
-                    continue;
-                };
-                for nested in block
-                    .body
-                    .blocks()
-                    .filter(|b| b.identifier.as_str() == "inline_policy")
-                {
-                    if let Some(policy) = attribute(nested, "policy") {
-                        *sizes.entry(label.to_string()).or_default() += policy_size(policy)?;
-                    }
-                }
-                if let Some(Expression::Array(arns)) = attribute(block, "managed_policy_arns") {
-                    for arn in arns {
-                        if let Some(identity) = policy_identity(arn, &policies) {
-                            attachments
-                                .entry(label.to_string())
-                                .or_default()
-                                .insert(identity);
+/// AWS's limit on the non-whitespace characters of all inline policies on one role.
+pub(crate) const IAM_ROLE_INLINE_POLICY_CHARS: usize = 10_240;
+/// AWS's limit on the non-whitespace characters of one managed policy.
+pub(crate) const IAM_MANAGED_POLICY_CHARS: usize = 6_144;
+/// AWS's default "Managed policies per role" quota (L-0DA4ABF3). An account can raise it,
+/// but a generated module must fit an account that never asked.
+pub(crate) const IAM_MANAGED_POLICIES_PER_ROLE: usize = 20;
+
+/// Longest value of each deployment variable an IAM policy can interpolate.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DeploymentLengths {
+    pub prefix: usize,
+    pub region: usize,
+    pub account_id: usize,
+    pub managing_account_id: usize,
+    pub managing_role_arn: usize,
+}
+
+impl DeploymentLengths {
+    /// The longest values setup accepts, shared with the permissions-boundary size check.
+    pub fn longest() -> Self {
+        let context = aws_longest_permission_context();
+        let len = |value: Option<String>| value.map_or(0, |value| value.chars().count());
+        Self {
+            prefix: len(context.stack_prefix),
+            region: len(context.aws_region),
+            account_id: len(context.aws_account_id),
+            managing_account_id: len(context.managing_account_id),
+            managing_role_arn: len(context.managing_role_arn),
+        }
+    }
+}
+
+/// Worst-case IAM usage of one role.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct RoleUsage {
+    /// Inline policies on the role, embedded or as `aws_iam_role_policy`.
+    pub inline_policies: usize,
+    /// Largest total non-whitespace characters of those inline policies.
+    pub inline_chars: usize,
+    /// Managed policies attached to the role at once, at most: distinct policies, and the
+    /// replacement of each create-before-destroy one. If two releases each pass this bound,
+    /// an update between them, holding the old and the new policies at once, fits the quota.
+    pub attachments: usize,
+}
+
+/// Worst-case IAM usage of a module.
+#[derive(Debug, Default)]
+pub(crate) struct ModuleUsage {
+    /// Keyed by the `aws_iam_role` label.
+    pub roles: IndexMap<String, RoleUsage>,
+    /// Largest non-whitespace characters of each `aws_iam_policy`, keyed by label.
+    pub managed_policies: IndexMap<String, usize>,
+}
+
+/// Rejects a module whose IAM policies can exceed a role or managed-policy quota for some
+/// deployment it accepts.
+pub(crate) fn validate_role_policy_limits(module: &ModuleFiles) -> Result<()> {
+    RenderedModule::parse(module)?.check()
+}
+
+/// The resources and locals of a rendered module, as Terraform reads them.
+pub(crate) struct RenderedModule {
+    resources: Vec<Block>,
+    locals: IndexMap<String, Expression>,
+    variables: Vec<Block>,
+}
+
+impl RenderedModule {
+    pub fn new(resources: Vec<Block>, locals: IndexMap<String, Expression>) -> Self {
+        Self {
+            resources,
+            locals,
+            variables: Vec::new(),
+        }
+    }
+
+    /// The module's `variable` blocks, whose validations can bound a variable's value.
+    pub fn with_variables(mut self, variables: Vec<Block>) -> Self {
+        self.variables = variables;
+        self
+    }
+
+    pub fn parse(module: &ModuleFiles) -> Result<Self> {
+        let mut resources = Vec::new();
+        let mut locals = IndexMap::new();
+        let mut variables = Vec::new();
+        for (path, contents) in module.iter().filter(|(path, _)| path.ends_with(".tf")) {
+            let body = hcl::parse(contents).into_alien_error().context(
+                ErrorData::TemplateSerializationFailed {
+                    format: "Terraform IAM policy".into(),
+                    reason: format!("Failed to parse '{path}' to size its IAM policies"),
+                },
+            )?;
+            for block in body.into_blocks() {
+                match block.identifier.as_str() {
+                    "resource" => resources.push(block),
+                    "variable" => variables.push(block),
+                    "locals" => {
+                        for attribute in block.body.into_attributes() {
+                            locals.insert(attribute.key.to_string(), attribute.expr);
                         }
                     }
+                    _ => {}
                 }
             }
-            Some("aws_iam_role_policy" | "aws_iam_role_policy_attachment") => {
-                let Some(role) = attribute(block, "role").and_then(role_label) else {
-                    continue;
-                };
-                if !roles.contains(role) {
-                    continue;
-                }
-                if resource_type(block) == Some("aws_iam_role_policy") {
-                    if let Some(policy) = attribute(block, "policy") {
-                        *sizes.entry(role.to_string()).or_default() += policy_size(policy)?;
-                    }
-                } else {
-                    if let Some(identity) = attribute(block, "policy_arn")
-                        .and_then(|value| policy_identity(value, &policies))
+        }
+        Ok(Self::new(resources, locals).with_variables(variables))
+    }
+
+    /// Fails when a quota can be exceeded with the longest deployment values.
+    pub fn check(&self) -> Result<()> {
+        let lengths = DeploymentLengths::longest();
+        let usage = self.usage(lengths)?;
+        let mut shortfalls = Vec::new();
+        for (role, role_usage) in &usage.roles {
+            if role_usage.inline_chars > IAM_ROLE_INLINE_POLICY_CHARS {
+                shortfalls.push(format!(
+                    "IAM role '{role}' can need {} non-whitespace characters across its {} inline policies with a {}-character resource prefix and a {}-character region; AWS allows {IAM_ROLE_INLINE_POLICY_CHARS} across all inline policies on one role. Reduce permissions or move grants to managed policies.",
+                    role_usage.inline_chars, role_usage.inline_policies, lengths.prefix, lengths.region
+                ));
+            }
+            if role_usage.attachments > IAM_MANAGED_POLICIES_PER_ROLE {
+                shortfalls.push(format!(
+                    "IAM role '{role}' requires {} managed-policy attachments, counting each create-before-destroy attachment twice, since an update that changes a policy attaches its replacement before detaching it; generated setup supports the default quota of {IAM_MANAGED_POLICIES_PER_ROLE} per role. Reduce the number of attached policies.",
+                    role_usage.attachments
+                ));
+            }
+        }
+        for (policy, chars) in &usage.managed_policies {
+            if *chars > IAM_MANAGED_POLICY_CHARS {
+                shortfalls.push(format!(
+                    "IAM managed policy '{policy}' can need {chars} non-whitespace characters with a {}-character resource prefix and a {}-character region; AWS allows {IAM_MANAGED_POLICY_CHARS} per managed policy.",
+                    lengths.prefix, lengths.region
+                ));
+            }
+        }
+        if shortfalls.is_empty() {
+            Ok(())
+        } else {
+            Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_terraform_module".into(),
+                reason: shortfalls.join("\n"),
+            }))
+        }
+    }
+
+    /// Largest non-whitespace characters IAM counts for a `policy` attribute at `lengths`.
+    pub fn policy_chars(&self, policy: &Expression, lengths: DeploymentLengths) -> Result<usize> {
+        Module::new(&self.resources, &self.locals, &self.variables, lengths).policy_chars(policy)
+    }
+
+    /// Largest non-whitespace characters of a value inside a policy document at `lengths`.
+    pub fn json_chars(&self, value: &Expression, lengths: DeploymentLengths) -> Result<usize> {
+        Module::new(&self.resources, &self.locals, &self.variables, lengths).json_chars(value, 0)
+    }
+
+    /// Sizes every IAM role and managed policy of the module at `lengths`.
+    pub fn usage(&self, lengths: DeploymentLengths) -> Result<ModuleUsage> {
+        let module = Module::new(&self.resources, &self.locals, &self.variables, lengths);
+        let mut usage = ModuleUsage::default();
+        let mut attachments: IndexMap<String, HashSet<String>> = IndexMap::new();
+        for block in &self.resources {
+            if resource_type(block) == Some("aws_iam_role") {
+                usage
+                    .roles
+                    .entry(resource_label(block)?.to_string())
+                    .or_default();
+            }
+        }
+        for block in &self.resources {
+            let Some(kind) = resource_type(block) else {
+                continue;
+            };
+            let label = resource_label(block)?;
+            match kind {
+                "aws_iam_role" => {
+                    for nested in block
+                        .body
+                        .blocks()
+                        .filter(|nested| nested.identifier.as_str() == "inline_policy")
                     {
-                        attachments
-                            .entry(role.to_string())
-                            .or_default()
-                            .insert(identity);
+                        let policy = required_attribute(nested, "policy", kind, label)?;
+                        let chars = module
+                            .policy_chars(policy)
+                            .context(policy_context(kind, label))?;
+                        let role = &mut usage.roles[label];
+                        role.inline_policies += 1;
+                        role.inline_chars += chars;
+                    }
+                    if let Some(arns) = attribute(block, "managed_policy_arns") {
+                        let Expression::Array(arns) = arns else {
+                            return Err(unbounded(arns, "managed_policy_arns must be a list"));
+                        };
+                        let entry = attachments.entry(label.to_string()).or_default();
+                        entry.extend(arns.iter().map(policy_identity));
                     }
                 }
+                "aws_iam_role_policy" => {
+                    let role = module.role_of(block, kind, label)?;
+                    let policy = required_attribute(block, "policy", kind, label)?;
+                    let chars = module
+                        .policy_chars(policy)
+                        .context(policy_context(kind, label))?;
+                    let role = usage
+                        .roles
+                        .get_mut(role)
+                        .ok_or_else(|| unknown_role(kind, label, role))?;
+                    role.inline_policies += 1;
+                    role.inline_chars += chars;
+                }
+                "aws_iam_role_policy_attachment" => {
+                    let role = module.role_of(block, kind, label)?;
+                    if !usage.roles.contains_key(role) {
+                        return Err(unknown_role(kind, label, role));
+                    }
+                    let arn = required_attribute(block, "policy_arn", kind, label)?;
+                    let arns = match attribute(block, "for_each") {
+                        Some(for_each) => for_each_arns(for_each, arn).ok_or_else(|| {
+                            AlienError::new(ErrorData::TemplateSerializationFailed {
+                                format: "Terraform IAM policy".into(),
+                                reason: format!(
+                                    "Cannot count the policies {kind}.{label} attaches: its for_each must be literal lists of ARNs, and its policy_arn each.value"
+                                ),
+                            })
+                        })?,
+                        None => vec![arn.clone()],
+                    };
+                    let identities = attachments.entry(role.to_string()).or_default();
+                    for arn in &arns {
+                        let identity = policy_identity(arn);
+                        // The attachment that replaces it is attached before it is detached.
+                        if creates_before_destroying(block) {
+                            identities.insert(format!("{identity} (replacement)"));
+                        }
+                        identities.insert(identity);
+                    }
+                }
+                "aws_iam_policy" => {
+                    let policy = required_attribute(block, "policy", kind, label)?;
+                    let chars = module
+                        .policy_chars(policy)
+                        .context(policy_context(kind, label))?;
+                    usage.managed_policies.insert(label.to_string(), chars);
+                }
+                _ => {}
             }
-            _ => {}
         }
-    }
-    let mut shortfalls = Vec::new();
-    for (role, size) in sizes {
-        if size > 10_240 {
-            shortfalls.push(format!("IAM role '{role}' requires at least {size} non-whitespace inline-policy characters; AWS allows 10240 across all inline policies on one role. Reduce permissions or move grants to managed policies."));
+        for (role, identities) in attachments {
+            usage.roles.entry(role).or_default().attachments = identities.len();
         }
+        Ok(usage)
     }
-    for (role, arns) in attachments {
-        let literal_count = arns
+}
+
+/// The rendered module seen by the size check: its resources by address and its locals.
+struct Module<'a> {
+    resources: HashMap<(&'a str, &'a str), &'a Block>,
+    locals: &'a IndexMap<String, Expression>,
+    variables: HashMap<&'a str, &'a Block>,
+    lengths: DeploymentLengths,
+}
+
+/// Locals may reference locals; deeper chains than this are a cycle.
+const MAX_LOCAL_DEPTH: usize = 32;
+/// The longest AWS partition name.
+const LONGEST_PARTITION: &str = longest(&AWS_PARTITIONS);
+/// Characters of a UUID.
+const UUID: usize = 36;
+/// Characters of a KMS key ID, a UUID or a multi-Region `mrk-` ID of the same length.
+const KMS_KEY_ID: usize = UUID;
+/// Random characters Secrets Manager appends, after a `-`, to a secret's name in its ARN.
+const SECRET_ARN_SUFFIX: usize = 6;
+/// EKS's limit on cluster names.
+const EKS_CLUSTER_NAME: usize = 100;
+
+const fn longest(names: &[&'static str]) -> &'static str {
+    let mut longest = names[0];
+    let mut index = 1;
+    while index < names.len() {
+        if names[index].len() > longest.len() {
+            longest = names[index];
+        }
+        index += 1;
+    }
+    longest
+}
+
+impl<'a> Module<'a> {
+    fn new(
+        blocks: &'a [Block],
+        locals: &'a IndexMap<String, Expression>,
+        variables: &'a [Block],
+        lengths: DeploymentLengths,
+    ) -> Self {
+        let resources = blocks
             .iter()
-            .filter(|id| matches!(id, PolicyIdentity::Arn(_)))
-            .count();
-        let count = literal_count.max(arns.len() - literal_count);
-        if count > 20 {
-            shortfalls.push(format!("IAM role '{role}' requires at least {count} managed-policy attachments; generated setup supports the default quota of 20 per role. Reduce the number of attached policies."));
+            .filter_map(|block| {
+                let kind = resource_type(block)?;
+                let label = block.labels.get(1)?.as_str();
+                Some(((kind, label), block))
+            })
+            .collect();
+        let variables = variables
+            .iter()
+            .filter_map(|block| Some((block.labels.first()?.as_str(), block)))
+            .collect();
+        Self {
+            resources,
+            locals,
+            variables,
+            lengths,
         }
     }
-    if shortfalls.is_empty() {
-        Ok(())
-    } else {
-        Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: "generate_terraform_module".into(),
-            reason: shortfalls.join("\n"),
+
+    /// The `aws_iam_role` label a policy or attachment's `role` attribute names.
+    fn role_of(&self, block: &'a Block, kind: &str, label: &str) -> Result<&'a str> {
+        let role = required_attribute(block, "role", kind, label)?;
+        let reference = resource_reference(role).filter(|reference| {
+            reference.kind == "aws_iam_role" && matches!(reference.attribute, "id" | "name")
+        });
+        reference.map(|reference| reference.label).ok_or_else(|| {
+            unbounded(
+                role,
+                &format!("{kind}.{label} must name a role created by this module"),
+            )
+        })
+    }
+
+    /// Largest non-whitespace characters IAM counts for a `policy` attribute.
+    fn policy_chars(&self, policy: &Expression) -> Result<usize> {
+        match policy {
+            Expression::FuncCall(call)
+                if call.name.to_string() == "jsonencode"
+                    && call.args.len() == 1
+                    && !call.expand_final =>
+            {
+                self.json_chars(&call.args[0], 0)
+            }
+            Expression::String(document) => Ok(non_whitespace(document)),
+            other => Err(unbounded(
+                other,
+                "a policy must be jsonencode(...) or JSON text",
+            )),
+        }
+    }
+
+    /// Largest non-whitespace characters of `jsonencode(expression)`.
+    fn json_chars(&self, expression: &Expression, depth: usize) -> Result<usize> {
+        match expression {
+            Expression::Null => Ok(4),
+            Expression::Bool(value) => Ok(if *value { 4 } else { 5 }),
+            Expression::Number(number) => Ok(number.to_string().len()),
+            Expression::String(value) => json_string_chars(value),
+            Expression::Array(values) => {
+                let mut size = 2 + values.len().saturating_sub(1);
+                for value in values {
+                    size += self.json_chars(value, depth)?;
+                }
+                Ok(size)
+            }
+            Expression::Object(values) => {
+                let mut size = 2 + values.len().saturating_sub(1);
+                for (key, value) in values {
+                    let key = match key {
+                        ObjectKey::Identifier(key) => key.as_str(),
+                        ObjectKey::Expression(Expression::String(key)) => key.as_str(),
+                        _ => return Err(unbounded(expression, "object keys must be literal")),
+                    };
+                    size += json_string_chars(key)? + 1 + self.json_chars(value, depth)?;
+                }
+                Ok(size)
+            }
+            Expression::Parenthesis(inner) => self.json_chars(inner, depth),
+            Expression::Conditional(conditional) => Ok(self
+                .json_chars(&conditional.true_expr, depth)?
+                .max(self.json_chars(&conditional.false_expr, depth)?)),
+            // `compact` drops empty strings, so it is never longer than its argument.
+            Expression::FuncCall(call)
+                if call.name.to_string() == "compact"
+                    && call.args.len() == 1
+                    && !call.expand_final =>
+            {
+                self.json_chars(&call.args[0], depth)
+            }
+            Expression::FuncCall(call)
+                if call.name.to_string() == "concat" && !call.expand_final =>
+            {
+                let mut items = Vec::new();
+                for argument in &call.args {
+                    let Expression::Array(values) = argument else {
+                        return Err(unbounded(argument, "concat arguments must be lists"));
+                    };
+                    items.extend(values.iter().cloned());
+                }
+                self.json_chars(&Expression::Array(items), depth)
+            }
+            Expression::Traversal(traversal) => match local_path(traversal) {
+                Some((name, attributes)) if name != "resource_prefix" => {
+                    let local = self.local(expression, name, depth)?;
+                    projections(local, &attributes, expression)?
+                        .into_iter()
+                        .try_fold(0, |size, value| {
+                            Ok(size.max(self.json_chars(value, depth + 1)?))
+                        })
+                }
+                _ => Ok(2 + self.string_chars(expression, depth)?),
+            },
+            Expression::TemplateExpr(_) | Expression::FuncCall(_) => {
+                Ok(2 + self.string_chars(expression, depth)?)
+            }
+            other => Err(unbounded(other, "unsupported in a policy document")),
+        }
+    }
+
+    /// Largest number of characters a string-valued expression resolves to.
+    ///
+    /// Interpolated values are names, identifiers and ARNs, which JSON never escapes, so this
+    /// also bounds their JSON characters. Literal text around them is checked to be the same.
+    fn string_chars(&self, expression: &Expression, depth: usize) -> Result<usize> {
+        match expression {
+            Expression::String(value) => plain_literal_chars(value, expression),
+            Expression::Number(number) => Ok(number.to_string().len()),
+            Expression::Bool(value) => Ok(if *value { 4 } else { 5 }),
+            Expression::Parenthesis(inner) => self.string_chars(inner, depth),
+            Expression::TemplateExpr(template) => self.template_chars(template, expression, depth),
+            Expression::Traversal(traversal) => self.traversal_chars(traversal, expression, depth),
+            Expression::Conditional(conditional) => {
+                self.conditional_string_chars(conditional, depth)
+            }
+            Expression::FuncCall(call) => self.call_chars(call, expression, depth),
+            other => Err(unbounded(other, "not a string this check can bound")),
+        }
+    }
+
+    fn template_chars(
+        &self,
+        template: &TemplateExpr,
+        expression: &Expression,
+        depth: usize,
+    ) -> Result<usize> {
+        let parsed = Template::from_expr(template).into_alien_error().context(
+            ErrorData::TemplateSerializationFailed {
+                format: "Terraform IAM policy".into(),
+                reason: format!("Failed to parse template `{expression}`"),
+            },
+        )?;
+        let mut size = 0;
+        for element in parsed.elements() {
+            size += match element {
+                Element::Literal(literal) => plain_literal_chars(literal, expression)?,
+                Element::Interpolation(interpolation) => {
+                    self.string_chars(&interpolation.expr, depth)?
+                }
+                Element::Directive(_) => {
+                    return Err(unbounded(expression, "template directives are not bounded"))
+                }
+            };
+        }
+        Ok(size)
+    }
+
+    fn traversal_chars(
+        &self,
+        traversal: &Traversal,
+        expression: &Expression,
+        depth: usize,
+    ) -> Result<usize> {
+        let lengths = self.lengths;
+        let Expression::Variable(root) = &traversal.expr else {
+            return Err(unbounded(expression, "not a reference"));
+        };
+        let path = attribute_path(traversal)
+            .ok_or_else(|| unbounded(expression, "splats and computed indexes are not bounded"))?;
+        match (root.as_str(), path.as_slice()) {
+            ("local", ["resource_prefix"]) => Ok(lengths.prefix),
+            ("local", [name, attributes @ ..]) => {
+                let local = self.local(expression, name, depth)?;
+                projections(local, attributes, expression)?
+                    .into_iter()
+                    .try_fold(0, |size, value| {
+                        Ok(size.max(self.string_chars(value, depth + 1)?))
+                    })
+            }
+            ("data", ["aws_region", _, "region" | "name"]) => Ok(lengths.region),
+            ("data", ["aws_caller_identity", _, "account_id"]) => Ok(lengths.account_id),
+            ("data", ["aws_partition", _, "partition"]) => Ok(LONGEST_PARTITION.len()),
+            // An RDS-managed master user secret of a cluster:
+            // `arn:<partition>:secretsmanager:<region>:<account>:secret:rds!cluster-<UUID>-<6>`.
+            // RDS names the secret `rds!cluster-<UUID>`; Secrets Manager appends `-` and six
+            // random characters to every secret's ARN. The format is observed from the AWS
+            // docs and their examples, not a documented contract.
+            ("data", ["aws_rds_cluster", _, "master_user_secret", "secret_arn"]) => Ok("arn:"
+                .len()
+                + LONGEST_PARTITION.len()
+                + ":secretsmanager:".len()
+                + lengths.region
+                + 1
+                + lengths.account_id
+                + ":secret:rds!cluster-".len()
+                + UUID
+                + "-".len()
+                + SECRET_ARN_SUFFIX),
+            // A customer key connection's deployment ID, which its variable's validation admits
+            // only in alien's deployment ID format: `dep_` and 28 characters.
+            ("var", [name, "deployment_id"]) if name.ends_with(CUSTOMER_KEY_CONNECTION_SUFFIX) => {
+                if !self.validates(name, &customer_key_connection_condition(name))? {
+                    return Err(unbounded(
+                        expression,
+                        &format!(
+                            "var.{name} must be declared with the validation `{}` (see customer_key_connection_validation)",
+                            customer_key_connection_condition(name)
+                        ),
+                    ));
+                }
+                Ok(new_id(IdType::Deployment).len())
+            }
+            ("var", ["managing_account_id"]) => Ok(lengths.managing_account_id),
+            ("var", ["managing_role_arn"]) => Ok(lengths.managing_role_arn),
+            // An existing cluster's name, which EKS caps at 100 characters.
+            ("var", ["eks_cluster_name"]) => Ok(EKS_CLUSTER_NAME),
+            // The key's identity postcondition admits only a KMS key ARN in this deployment's
+            // account and region.
+            ("var", [name, "arn"]) if name.ends_with("_existing_key") => {
+                Ok(self.kms_key_arn_chars(LONGEST_PARTITION.len()))
+            }
+            (kind, [label, attribute]) => {
+                self.resource_attribute_chars(kind, label, attribute, expression, depth)
+            }
+            _ => Err(unbounded(expression, "no known longest value")),
+        }
+    }
+
+    /// Longest value of a resource attribute, derived from the name the module gives it.
+    fn resource_attribute_chars(
+        &self,
+        kind: &str,
+        label: &str,
+        attribute_name: &str,
+        expression: &Expression,
+        depth: usize,
+    ) -> Result<usize> {
+        let block = self
+            .resources
+            .get(&(kind, label))
+            .ok_or_else(|| unbounded(expression, "the resource is not in this module"))?;
+        let named = |key: &str| -> Result<usize> {
+            let name = attribute(block, key).ok_or_else(|| {
+                unbounded(
+                    expression,
+                    &format!("{kind}.{label} has no literal `{key}`"),
+                )
+            })?;
+            self.string_chars(name, depth)
+        };
+        // IAM paths default to `/`.
+        let iam_path = || -> Result<usize> {
+            attribute(block, "path").map_or(Ok(1), |path| self.string_chars(path, depth))
+        };
+        let region = self.lengths.region;
+        let account = self.lengths.account_id;
+        Ok(match (kind, attribute_name) {
+            ("aws_s3_bucket", "bucket" | "id") => named("bucket")?,
+            ("aws_s3_bucket", "arn") => "arn:aws:s3:::".len() + named("bucket")?,
+            ("aws_ecr_repository", "name" | "id") => named("name")?,
+            ("aws_ecr_repository", "arn") => {
+                "arn:aws:ecr:".len() + region + 1 + account + ":repository/".len() + named("name")?
+            }
+            ("aws_ecr_repository", "repository_url") => {
+                account + ".dkr.ecr.".len() + region + ".amazonaws.com/".len() + named("name")?
+            }
+            ("aws_dynamodb_table", "name" | "id") => named("name")?,
+            ("aws_dynamodb_table", "arn") => {
+                "arn:aws:dynamodb:".len() + region + 1 + account + ":table/".len() + named("name")?
+            }
+            ("aws_sqs_queue", "name") => named("name")?,
+            ("aws_sqs_queue", "arn") => {
+                "arn:aws:sqs:".len() + region + 1 + account + 1 + named("name")?
+            }
+            ("aws_sqs_queue", "id" | "url") => {
+                "https://sqs.".len()
+                    + region
+                    + ".amazonaws.com/".len()
+                    + account
+                    + 1
+                    + named("name")?
+            }
+            ("aws_iam_role", "name" | "id") => named("name")?,
+            ("aws_iam_role", "arn") => {
+                "arn:aws:iam::".len() + account + ":role".len() + iam_path()? + named("name")?
+            }
+            ("aws_iam_policy", "name") => named("name")?,
+            ("aws_iam_policy", "arn") => {
+                "arn:aws:iam::".len() + account + ":policy".len() + iam_path()? + named("name")?
+            }
+            ("aws_kms_key", "key_id" | "id") => KMS_KEY_ID,
+            ("aws_kms_key", "arn") => self.kms_key_arn_chars("aws".len()),
+            ("aws_eks_cluster", "name" | "id") => named("name")?,
+            ("aws_eks_cluster", "arn") => {
+                "arn:aws:eks:".len() + region + 1 + account + ":cluster/".len() + named("name")?
+            }
+            // A setup-recorded value is the first `input` it was given.
+            ("terraform_data", "output") => named("input")?,
+            ("random_uuid", "result" | "id") => UUID,
+            // KMS issues only UUID or `mrk-` key IDs of the same length.
+            (_, attribute) if admits_only_kms_key_arns(block, attribute)? => {
+                self.kms_key_arn_chars(LONGEST_PARTITION.len())
+            }
+            _ => {
+                return Err(unbounded(
+                    expression,
+                    "no known longest value for this attribute",
+                ))
+            }
+        })
+    }
+
+    /// A KMS key ARN, whose key ID is a UUID or a multi-Region `mrk-` ID of the same length.
+    /// Whether the module declares `variable` with a validation whose condition is `condition`.
+    fn validates(&self, variable: &str, condition: &str) -> Result<bool> {
+        let required = expr::parse(condition)?;
+        Ok(self.variables.get(variable).is_some_and(|block| {
+            block
+                .body
+                .blocks()
+                .filter(|nested| nested.identifier.as_str() == "validation")
+                .any(|validation| {
+                    validation.body.attributes().any(|attribute| {
+                        attribute.key.as_str() == "condition" && attribute.expr == required
+                    })
+                })
         }))
     }
-}
 
-#[derive(PartialEq, Eq, Hash)]
-enum PolicyIdentity {
-    Arn(String),
-    Resource(String),
-}
-
-fn policy_identity(expression: &Expression, policies: &HashSet<&str>) -> Option<PolicyIdentity> {
-    if let Expression::String(arn) = expression {
-        return Some(PolicyIdentity::Arn(arn.clone()));
+    fn kms_key_arn_chars(&self, partition: usize) -> usize {
+        "arn:".len()
+            + partition
+            + ":kms:".len()
+            + self.lengths.region
+            + 1
+            + self.lengths.account_id
+            + ":key/".len()
+            + KMS_KEY_ID
     }
+
+    fn call_chars(&self, call: &FuncCall, expression: &Expression, depth: usize) -> Result<usize> {
+        let name = call.name.to_string();
+        let arguments = call.args.as_slice();
+        if call.expand_final {
+            return Err(unbounded(expression, "expanded arguments are not bounded"));
+        }
+        match (name.as_str(), arguments) {
+            ("format", [Expression::String(format), values @ ..]) => {
+                let mut values = values.iter();
+                let mut size = 0;
+                let mut characters = format.chars();
+                while let Some(character) = characters.next() {
+                    if character != '%' {
+                        size += plain_literal_chars(&character.to_string(), expression)?;
+                        continue;
+                    }
+                    match characters.next() {
+                        Some('%') => size += 1,
+                        Some('s') => {
+                            let value = values.next().ok_or_else(|| {
+                                unbounded(expression, "format has fewer values than verbs")
+                            })?;
+                            size += self.string_chars(value, depth)?;
+                        }
+                        _ => return Err(unbounded(expression, "only %s and %% are bounded")),
+                    }
+                }
+                if values.next().is_some() {
+                    return Err(unbounded(expression, "format has more values than verbs"));
+                }
+                Ok(size)
+            }
+            ("replace", [value, search, replacement]) => {
+                if matches!(search, Expression::String(search) if search.starts_with('/')) {
+                    return Err(unbounded(expression, "regular expressions are not bounded"));
+                }
+                // Replacing never lengthens the string when every match is at least as long
+                // as the replacement.
+                if self.string_chars(replacement, depth)? <= self.min_chars(search) {
+                    self.string_chars(value, depth)
+                } else {
+                    Err(unbounded(
+                        expression,
+                        "the replacement can be longer than the match",
+                    ))
+                }
+            }
+            ("substr", [value, _offset, Expression::Number(length)]) => {
+                let value = self.string_chars(value, depth)?;
+                match length.as_i64() {
+                    Some(-1) => Ok(value),
+                    Some(length) if length >= 0 => Ok(value.min(length as usize)),
+                    _ => Err(unbounded(expression, "invalid substring length")),
+                }
+            }
+            ("sha1", [_]) => Ok(40),
+            ("sha256", [_]) => Ok(64),
+            ("md5", [_]) => Ok(32),
+            ("lower" | "upper" | "trimspace" | "tostring", [value]) => {
+                self.string_chars(value, depth)
+            }
+            _ => Err(unbounded(expression, "function not bounded")),
+        }
+    }
+
+    /// Fewest characters a string-valued expression resolves to. Every deployment variable
+    /// resolves to at least one character.
+    fn min_chars(&self, expression: &Expression) -> usize {
+        match expression {
+            Expression::String(value) => value.chars().count(),
+            Expression::FuncCall(call) if call.name.to_string() == "format" => {
+                match call.args.split_first() {
+                    Some((Expression::String(format), values)) => {
+                        let verbs = format.matches("%s").count();
+                        format.chars().count() - 2 * verbs
+                            + values
+                                .iter()
+                                .map(|value| self.min_chars(value))
+                                .sum::<usize>()
+                    }
+                    _ => 0,
+                }
+            }
+            Expression::Traversal(traversal) => match traversal.expr {
+                Expression::Variable(ref root)
+                    if matches!(root.as_str(), "local" | "data" | "var") =>
+                {
+                    1
+                }
+                _ => 0,
+            },
+            _ => 0,
+        }
+    }
+
+    /// Longest value of a conditional: the longer branch. Name templates are written
+    /// `length(x) <= n ? x : shortened`: that yields `x` only while it is at most `n` characters
+    /// long, and never the shortened name when `x` cannot exceed `n`.
+    fn conditional_string_chars(&self, conditional: &Conditional, depth: usize) -> Result<usize> {
+        let mut first = self.string_chars(&conditional.true_expr, depth)?;
+        if let Some((value, limit)) = length_at_most(&conditional.cond_expr) {
+            if self.string_chars(value, depth)? <= limit {
+                return Ok(first);
+            }
+            if *value == conditional.true_expr {
+                first = first.min(limit);
+            }
+        }
+        Ok(first.max(self.string_chars(&conditional.false_expr, depth)?))
+    }
+
+    fn local(&self, expression: &Expression, name: &str, depth: usize) -> Result<&'a Expression> {
+        if depth >= MAX_LOCAL_DEPTH {
+            return Err(unbounded(
+                expression,
+                "locals reference each other in a cycle",
+            ));
+        }
+        self.locals
+            .get(name)
+            .ok_or_else(|| unbounded(expression, "the local is not defined by this module"))
+    }
+}
+
+/// `(x, n)` for a `length(x) <= n` condition.
+fn length_at_most(condition: &Expression) -> Option<(&Expression, usize)> {
+    let Expression::Operation(operation) = condition else {
+        return None;
+    };
+    let Operation::Binary(binary) = operation.as_ref() else {
+        return None;
+    };
+    let (Expression::FuncCall(call), BinaryOperator::LessEq, Expression::Number(limit)) =
+        (&binary.lhs_expr, binary.operator, &binary.rhs_expr)
+    else {
+        return None;
+    };
+    match call.args.as_slice() {
+        [value] if call.name.to_string() == "length" && !call.expand_final => {
+            Some((value, usize::try_from(limit.as_u64()?).ok()?))
+        }
+        _ => None,
+    }
+}
+
+/// A reference to an attribute of a managed resource, `kind.label[index].attribute`.
+struct ResourceReference<'a> {
+    kind: &'a str,
+    label: &'a str,
+    attribute: &'a str,
+}
+
+fn resource_reference(expression: &Expression) -> Option<ResourceReference<'_>> {
     let Expression::Traversal(traversal) = expression else {
         return None;
     };
     let Expression::Variable(root) = &traversal.expr else {
         return None;
     };
-    match traversal.operators.as_slice() {
-        [TraversalOperator::GetAttr(label), TraversalOperator::GetAttr(attr)]
-            if root.as_str() == "aws_iam_policy"
-                && attr.as_str() == "arn"
-                && policies.contains(label.as_str()) =>
-        {
-            Some(PolicyIdentity::Resource(label.to_string()))
-        }
+    match attribute_path(traversal)?.as_slice() {
+        [label, attribute] => Some(ResourceReference {
+            kind: root.as_str(),
+            label,
+            attribute,
+        }),
         _ => None,
     }
+}
+
+/// Whether a postcondition of the resource requires `attribute` to be a KMS key ARN of this
+/// deployment's account and region.
+fn admits_only_kms_key_arns(block: &Block, attribute: &str) -> Result<bool> {
+    let required = expr::parse(&format!(
+        r#"can(regex("{KMS_KEY_ARN_PATTERN}", self.{attribute}))"#
+    ))?;
+    Ok(block
+        .body
+        .blocks()
+        .filter(|nested| nested.identifier.as_str() == "lifecycle")
+        .flat_map(|lifecycle| lifecycle.body.blocks())
+        .filter(|nested| nested.identifier.as_str() == "postcondition")
+        .any(|postcondition| {
+            postcondition.body.attributes().any(|condition| {
+                condition.key.as_str() == "condition" && condition.expr == required
+            })
+        }))
+}
+
+/// Attribute names of a traversal, skipping literal instance indexes (`[0]` that gating adds,
+/// or the same index written `.0`).
+fn attribute_path(traversal: &Traversal) -> Option<Vec<&str>> {
+    traversal
+        .operators
+        .iter()
+        .filter_map(|operator| match operator {
+            TraversalOperator::GetAttr(name) => Some(Some(name.as_str())),
+            TraversalOperator::Index(Expression::Number(_)) | TraversalOperator::LegacyIndex(_) => {
+                None
+            }
+            _ => Some(None),
+        })
+        .collect()
+}
+
+/// The local a traversal reads and the attributes it then selects.
+fn local_path(traversal: &Traversal) -> Option<(&str, Vec<&str>)> {
+    let Expression::Variable(root) = &traversal.expr else {
+        return None;
+    };
+    if root.as_str() != "local" {
+        return None;
+    }
+    let path = attribute_path(traversal)?;
+    let (name, attributes) = path.split_first()?;
+    Some((name, attributes.to_vec()))
+}
+
+/// The values `attributes` select from `value`. Either branch of a conditional can be taken,
+/// except a null one: reading an attribute of null fails the apply.
+fn projections<'e>(
+    value: &'e Expression,
+    attributes: &[&str],
+    expression: &Expression,
+) -> Result<Vec<&'e Expression>> {
+    let Some((attribute, rest)) = attributes.split_first() else {
+        return Ok(vec![value]);
+    };
+    match value {
+        Expression::Object(values) => {
+            let selected = values
+                .iter()
+                .find_map(|(key, value)| {
+                    let key = match key {
+                        ObjectKey::Identifier(key) => key.as_str(),
+                        ObjectKey::Expression(Expression::String(key)) => key.as_str(),
+                        _ => return None,
+                    };
+                    (key == *attribute).then_some(value)
+                })
+                .ok_or_else(|| unbounded(expression, "the local has no such attribute"))?;
+            projections(selected, rest, expression)
+        }
+        Expression::Conditional(conditional) => {
+            let mut values = Vec::new();
+            for branch in [&conditional.true_expr, &conditional.false_expr] {
+                if *branch != Expression::Null {
+                    values.extend(projections(branch, attributes, expression)?);
+                }
+            }
+            Ok(values)
+        }
+        Expression::Parenthesis(inner) => projections(inner, attributes, expression),
+        _ => Err(unbounded(
+            expression,
+            "the local is not an object this check can read",
+        )),
+    }
+}
+
+/// Every ARN a `for_each` attachment can attach: the elements of each literal list its
+/// `for_each` can take, when `policy_arn` is `each.value`.
+fn for_each_arns(for_each: &Expression, policy_arn: &Expression) -> Option<Vec<Expression>> {
+    if policy_arn.to_string() != "each.value" {
+        return None;
+    }
+    fn elements(expression: &Expression) -> Option<Vec<Expression>> {
+        match expression {
+            Expression::Array(values) => values
+                .iter()
+                .map(|value| matches!(value, Expression::String(_)).then(|| value.clone()))
+                .collect(),
+            Expression::FuncCall(call)
+                if matches!(call.name.to_string().as_str(), "toset" | "tolist")
+                    && call.args.len() == 1
+                    && !call.expand_final =>
+            {
+                elements(&call.args[0])
+            }
+            Expression::Conditional(conditional) => {
+                let mut values = elements(&conditional.true_expr)?;
+                for value in elements(&conditional.false_expr)? {
+                    if !values.contains(&value) {
+                        values.push(value);
+                    }
+                }
+                Some(values)
+            }
+            Expression::Parenthesis(inner) => elements(inner),
+            _ => None,
+        }
+    }
+    elements(for_each)
+}
+
+/// Identity of an attached managed policy. References to the same resource or the same literal
+/// ARN attach one policy; anything else counts as its own.
+fn policy_identity(expression: &Expression) -> String {
+    match resource_reference(expression) {
+        Some(reference) if reference.kind == "aws_iam_policy" && reference.attribute == "arn" => {
+            format!("aws_iam_policy.{}", reference.label)
+        }
+        _ => expression.to_string(),
+    }
+}
+
+fn creates_before_destroying(block: &Block) -> bool {
+    block
+        .body
+        .blocks()
+        .filter(|nested| nested.identifier.as_str() == "lifecycle")
+        .any(|lifecycle| {
+            attribute(lifecycle, "create_before_destroy") == Some(&Expression::Bool(true))
+        })
 }
 
 fn resource_type(block: &Block) -> Option<&str> {
     (block.identifier.as_str() == "resource")
         .then(|| block.labels.first().map(|label| label.as_str()))
         .flatten()
+}
+
+fn resource_label(block: &Block) -> Result<&str> {
+    block
+        .labels
+        .get(1)
+        .map(|label| label.as_str())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::TemplateSerializationFailed {
+                format: "Terraform IAM policy".into(),
+                reason: "an IAM resource block has no label".into(),
+            })
+        })
 }
 
 fn attribute<'a>(block: &'a Block, name: &str) -> Option<&'a Expression> {
@@ -149,318 +1014,73 @@ fn attribute<'a>(block: &'a Block, name: &str) -> Option<&'a Expression> {
     })
 }
 
-fn conditional(block: &Block) -> bool {
-    attribute(block, "count").is_some() || attribute(block, "for_each").is_some()
+fn required_attribute<'a>(
+    block: &'a Block,
+    name: &str,
+    kind: &str,
+    label: &str,
+) -> Result<&'a Expression> {
+    attribute(block, name).ok_or_else(|| {
+        AlienError::new(ErrorData::TemplateSerializationFailed {
+            format: "Terraform IAM policy".into(),
+            reason: format!("{kind}.{label} has no `{name}` attribute"),
+        })
+    })
 }
 
-fn role_label(expression: &Expression) -> Option<&str> {
-    let Expression::Traversal(traversal) = expression else {
-        return None;
-    };
-    let Expression::Variable(root) = &traversal.expr else {
-        return None;
-    };
-    if root.as_str() != "aws_iam_role" {
-        return None;
-    }
-    match traversal.operators.as_slice() {
-        [TraversalOperator::GetAttr(label), TraversalOperator::GetAttr(attr)]
-            if matches!(attr.as_str(), "name" | "id") =>
-        {
-            Some(label.as_str())
-        }
-        _ => None,
-    }
+fn non_whitespace(text: &str) -> usize {
+    text.chars().filter(|c| !c.is_whitespace()).count()
 }
 
-fn policy_size(expression: &Expression) -> Result<usize> {
-    match expression {
-        Expression::String(document) => Ok(document.chars().filter(|c| !c.is_whitespace()).count()),
-        Expression::FuncCall(call)
-            if call.name.to_string() == "jsonencode"
-                && call.args.len() == 1
-                && !call.expand_final =>
-        {
-            json_size_lower_bound(&call.args[0])
-        }
-        _ => Ok(0),
-    }
-}
-
-fn string_size(value: &str) -> Result<usize> {
+/// Non-whitespace characters of a JSON string literal, quotes and escapes included.
+fn json_string_chars(value: &str) -> Result<usize> {
     serde_json::to_string(value)
         .into_alien_error()
         .context(ErrorData::TemplateSerializationFailed {
             format: "Terraform IAM policy".into(),
             reason: "Failed to measure IAM policy string".into(),
         })
-        .map(|json| json.chars().filter(|c| !c.is_whitespace()).count())
+        .map(|json| non_whitespace(&json))
 }
 
-/// Count JSON structure and literals, never serialized HCL syntax. Dynamic
-/// strings, functions and comprehensions contribute zero rather than guessing
-/// their resolved size. Static object keys cannot disappear during jsonencode.
-fn json_size_lower_bound(expression: &Expression) -> Result<usize> {
-    match expression {
-        Expression::String(value) => string_size(value),
-        Expression::Null => Ok(4),
-        Expression::Bool(value) => Ok(if *value { 4 } else { 5 }),
-        Expression::Number(_) => Ok(1),
-        Expression::Array(values) => {
-            let mut size = 2 + values.len().saturating_sub(1);
-            for value in values {
-                size += json_size_lower_bound(value)?;
-            }
-            Ok(size)
-        }
-        Expression::Object(values) => {
-            let mut size = 2 + values.len().saturating_sub(1);
-            let mut keys = HashSet::new();
-            for (key, value) in values {
-                let key = match key {
-                    ObjectKey::Identifier(key) => key.as_str(),
-                    ObjectKey::Expression(Expression::String(key)) => key.as_str(),
-                    _ => return Ok(0),
-                };
-                if !keys.insert(key) {
-                    return Ok(0);
-                }
-                size += string_size(key)? + 1 + json_size_lower_bound(value)?;
-            }
-            Ok(size)
-        }
-        _ => Ok(0),
+/// Characters of literal text inside an interpolated string. Such text must need no JSON
+/// escape and hold no whitespace, so its length is also what IAM counts.
+fn plain_literal_chars(literal: &str, expression: &Expression) -> Result<usize> {
+    if literal
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || c == '"' || c == '\\')
+    {
+        return Err(unbounded(
+            expression,
+            "literal text with whitespace or JSON escapes",
+        ));
     }
+    Ok(literal.chars().count())
+}
+
+fn unbounded(expression: &Expression, reason: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::TemplateSerializationFailed {
+        format: "Terraform IAM policy".into(),
+        reason: format!("Cannot bound the size of `{expression}` in an IAM policy: {reason}"),
+    })
+}
+
+fn policy_context(kind: &str, label: &str) -> ErrorData {
+    ErrorData::TemplateSerializationFailed {
+        format: "Terraform IAM policy".into(),
+        reason: format!("Failed to size the policy of {kind}.{label}"),
+    }
+}
+
+fn unknown_role(kind: &str, label: &str, role: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::TemplateSerializationFailed {
+        format: "Terraform IAM policy".into(),
+        reason: format!(
+            "{kind}.{label} targets aws_iam_role.{role}, which this module does not create"
+        ),
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{json_size_lower_bound, validate_role_policy_limits};
-    use crate::{
-        block::{attr, block, nested, resource_block},
-        expr, generate_terraform_module, TerraformOptions, TerraformTarget, TfFragment, TfRegistry,
-    };
-    use alien_core::{PermissionSet, ResourceLifecycle, ServiceAccount, Stack, StackSettings};
-    use alien_permissions::generators::AwsIamStatement;
-    use hcl::expr::Expression;
-    use indexmap::IndexMap;
-
-    fn role() -> hcl::Block {
-        resource_block("aws_iam_role", "execution", [])
-    }
-
-    fn policy(label: &str, size: usize) -> hcl::Block {
-        resource_block(
-            "aws_iam_role_policy",
-            label,
-            [
-                attr(
-                    "role",
-                    expr::traversal(["aws_iam_role", "execution", "name"]),
-                ),
-                attr("policy", Expression::String("x".repeat(size))),
-            ],
-        )
-    }
-
-    fn fragments(blocks: Vec<hcl::Block>) -> IndexMap<String, TfFragment> {
-        let mut fragment = TfFragment::default();
-        fragment.resource_blocks = blocks;
-        IndexMap::from([("test".into(), fragment)])
-    }
-
-    #[test]
-    fn aggregates_embedded_and_external_policies_and_accepts_exact_boundary() {
-        let mut role = role();
-        role.body.0.push(nested(block(
-            "inline_policy",
-            [attr("policy", Expression::String("x".repeat(5000)))],
-        )));
-        let good = fragments(vec![role.clone(), policy("external", 5240)]);
-        validate_role_policy_limits(&good).unwrap();
-        let error = validate_role_policy_limits(&fragments(vec![role, policy("external", 5241)]))
-            .expect_err("aggregate exceeds quota although neither document does");
-        assert!(error.to_string().contains("execution"));
-        assert!(error.to_string().contains("10241"));
-    }
-
-    #[test]
-    fn excludes_conditional_policies_and_roles() {
-        let mut conditional_policy = policy("optional", 20000);
-        conditional_policy
-            .body
-            .0
-            .push(attr("count", expr::raw("var.enabled ? 1 : 0")));
-        validate_role_policy_limits(&fragments(vec![role(), conditional_policy])).unwrap();
-        let mut conditional_role = role();
-        conditional_role
-            .body
-            .0
-            .push(attr("for_each", expr::raw("var.roles")));
-        validate_role_policy_limits(&fragments(vec![
-            conditional_role,
-            policy("external", 20000),
-        ]))
-        .unwrap();
-    }
-
-    #[test]
-    fn attachment_default_quota_and_multiple_shortfalls() {
-        let mut blocks = vec![role(), policy("external", 10241)];
-        for index in 0..20 {
-            blocks.push(resource_block(
-                "aws_iam_role_policy_attachment",
-                &format!("grant{index}"),
-                [
-                    attr("role", expr::traversal(["aws_iam_role", "execution", "id"])),
-                    attr(
-                        "policy_arn",
-                        Expression::String(format!("arn:aws:iam::aws:policy/grant{index}")),
-                    ),
-                ],
-            ));
-        }
-        let error = validate_role_policy_limits(&fragments(blocks.clone())).unwrap_err();
-        assert!(!error.to_string().contains("managed-policy attachments"));
-        blocks.push(resource_block(
-            "aws_iam_role_policy_attachment",
-            "grant20",
-            [
-                attr("role", expr::traversal(["aws_iam_role", "execution", "id"])),
-                attr(
-                    "policy_arn",
-                    Expression::String("arn:aws:iam::aws:policy/grant20".into()),
-                ),
-            ],
-        ));
-        let error = validate_role_policy_limits(&fragments(blocks)).unwrap_err();
-        assert!(error.to_string().contains("10241"));
-        assert!(error.to_string().contains("21 managed-policy attachments"));
-    }
-
-    #[test]
-    fn generated_managed_policy_chunks_obey_attachment_limit() {
-        for count in [20, 21] {
-            let mut fragment = TfFragment::default();
-            fragment.resource_blocks.push(role());
-            crate::emitters::aws::helpers::emit_iam_managed_policy_chunks(
-                &mut fragment,
-                "execution",
-                "management",
-                "q5-management",
-                (0..count)
-                    .map(|index| AwsIamStatement {
-                        sid: format!("Grant{index}"),
-                        effect: "Allow".into(),
-                        action: vec!["s3:GetObject".into()],
-                        resource: vec![format!("arn:aws:s3:::q5-managed/{}", "x".repeat(4500))],
-                        not_resource: Vec::new(),
-                        condition: None,
-                    })
-                    .collect(),
-            )
-            .unwrap();
-            assert_eq!(fragment.resource_blocks.len(), 1 + count * 2);
-            // A duplicate reference and an unresolved external expression must
-            // not inflate the number of known distinct attachments.
-            for (label, arn) in [
-                (
-                    "duplicate",
-                    expr::traversal(["aws_iam_policy", "management_0", "arn"]),
-                ),
-                ("unknown", expr::raw("var.policy_arn")),
-                (
-                    "missing",
-                    expr::traversal(["aws_iam_policy", "absent", "arn"]),
-                ),
-            ] {
-                fragment.resource_blocks.push(resource_block(
-                    "aws_iam_role_policy_attachment",
-                    label,
-                    [
-                        attr(
-                            "role",
-                            expr::traversal(["aws_iam_role", "execution", "name"]),
-                        ),
-                        attr("policy_arn", arn),
-                    ],
-                ));
-            }
-            let result =
-                validate_role_policy_limits(&IndexMap::from([("generated".into(), fragment)]));
-            if count == 20 {
-                result.expect("twenty generated policies fit");
-            } else {
-                let error = result.expect_err("twenty-one chunks must fail before rendering");
-                assert!(error.to_string().contains("21 managed-policy attachments"));
-            }
-        }
-    }
-
-    #[test]
-    fn measures_json_literals_and_never_counts_expression_syntax() {
-        let document = expr::object([
-            ("Version", Expression::String("2012-10-17".into())),
-            (
-                "Statement",
-                Expression::Array(vec![expr::object([
-                    ("Effect", Expression::String("Allow".into())),
-                    (
-                        "Resource",
-                        Expression::String("arn:aws:s3:::q5-quote/\"key\"".into()),
-                    ),
-                ])]),
-            ),
-        ]);
-        let resolved = serde_json::json!({"Version":"2012-10-17", "Statement":[{"Effect":"Allow", "Resource":"arn:aws:s3:::q5-quote/\"key\""}]});
-        assert_eq!(
-            json_size_lower_bound(&document).unwrap(),
-            resolved.to_string().chars().count()
-        );
-        let dynamic = expr::object([("Resource", expr::template("${var.long_expression_name}"))]);
-        assert!(json_size_lower_bound(&dynamic).unwrap() <= "{\"Resource\":\"\"}".len());
-        assert_eq!(
-            json_size_lower_bound(&expr::raw("[for grant in var.grants : grant]")).unwrap(),
-            0
-        );
-    }
-
-    #[test]
-    fn built_in_generation_rejects_oversized_service_account_and_renders_control() {
-        for (count, should_pass) in [(10, true), (400, false)] {
-            let resources: Vec<_> = (0..count)
-                .map(|index| format!("arn:aws:s3:::q5-policy-control/objects/object-{index:04}"))
-                .collect();
-            let set: PermissionSet = serde_json::from_value(serde_json::json!({
-                "id": "q5-policy-read", "description": "Read explicit test objects",
-                "platforms": {"aws": [{"grant": {"actions": ["s3:GetObject"]}, "binding": {"stack": {"resources": resources}}}]}
-            })).unwrap();
-            let mut account = ServiceAccount::new("execution-sa".into()).build();
-            account.stack_permission_sets.push(set);
-            let stack = Stack::new("q5-policy-control".into())
-                .add(account, ResourceLifecycle::Frozen)
-                .build();
-            let registry = TfRegistry::built_in();
-            let result = generate_terraform_module(
-                &stack,
-                TerraformTarget::Aws,
-                TerraformOptions {
-                    registry: &registry,
-                    display_name: None,
-                    stack_settings: StackSettings::default(),
-                    registration: None,
-                    helm_install: None,
-                    supported_aws_regions: Vec::new(),
-                },
-            );
-            if should_pass {
-                result.expect("small policy must render");
-            } else {
-                let error =
-                    result.expect_err("oversized policy must fail before files are returned");
-                assert!(error.to_string().contains("execution_sa"));
-                assert!(error.to_string().contains("10240"));
-            }
-        }
-    }
-}
+#[path = "iam_limits_tests.rs"]
+mod tests;

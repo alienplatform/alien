@@ -461,7 +461,10 @@ resource "aws_iam_role" "builder_role" {
 resource "aws_iam_role_policy" "builder_role_logs" {
   name   = "deployment-permissions"
   role   = aws_iam_role.builder_role.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "WriteLogs", Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "*" }] })
+  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  depends_on = [
+    aws_iam_role_policy_attachment.builder_role_setup_a2827b0c_attachment
+  ]
 }
 
 resource "aws_cloudwatch_log_group" "builder_logs" {
@@ -516,6 +519,37 @@ resource "aws_codebuild_project" "builder" {
   }
 }
 
+resource "aws_iam_policy" "builder_role_setup_a2827b0c" {
+  name   = length(format("%s-%s", local.resource_prefix, "builder-role-setup-a2827b0c")) <= 128 ? format("%s-%s", local.resource_prefix, "builder-role-setup-a2827b0c") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "builder-role-setup-a2827b0c"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "builder-role-setup-a2827b0c")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "WriteLogs", Effect = "Allow", Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = ["*"] }] })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "builder_role_setup_a2827b0c_attachment" {
+  role       = aws_iam_role.builder_role.name
+  policy_arn = aws_iam_policy.builder_role_setup_a2827b0c.arn
+  depends_on = [
+    aws_iam_policy.builder_role_setup_a2827b0c
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "terraform_data" "builder_role_setup_policies_barrier" {
+  triggers_replace = [
+    aws_iam_role_policy_attachment.builder_role_setup_a2827b0c_attachment.id
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 === registration.tf ===
 resource "terraform_data" "deployment_registration" {
   input = {
@@ -537,7 +571,10 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role.builder_role,
     aws_iam_role_policy.builder_role_logs,
     aws_cloudwatch_log_group.builder_logs,
-    aws_codebuild_project.builder
+    aws_codebuild_project.builder,
+    aws_iam_policy.builder_role_setup_a2827b0c,
+    aws_iam_role_policy_attachment.builder_role_setup_a2827b0c_attachment,
+    terraform_data.builder_role_setup_policies_barrier
   ]
 
   lifecycle {

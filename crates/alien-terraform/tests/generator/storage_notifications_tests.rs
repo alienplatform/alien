@@ -122,15 +122,28 @@ fn aws_storage_notifications_with_shared_queue_are_provider_valid() {
 
 #[test]
 fn aws_storage_notifications_follow_deployer_enablement() {
-    let storage = Storage::new("files".into()).notifications(vec![
-        StorageNotification::builder().queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs")).build(),
-    ]).build();
+    let storage = Storage::new("files".into())
+        .notifications(vec![StorageNotification::builder()
+            .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "jobs"))
+            .build()])
+        .build();
     let stack = Stack::new("gated-notifications".into())
-        .inputs(vec![super::helpers::gate_input("deliveryEnabled", "Enable delivery", "Create the bucket and queue")])
-        .add_enabled_when(Queue::new("jobs".into()).build(), ResourceLifecycle::Frozen, "deliveryEnabled")
+        .inputs(vec![super::helpers::gate_input(
+            "deliveryEnabled",
+            "Enable delivery",
+            "Create the bucket and queue",
+        )])
+        .add_enabled_when(
+            Queue::new("jobs".into()).build(),
+            ResourceLifecycle::Frozen,
+            "deliveryEnabled",
+        )
         .add_enabled_when(storage, ResourceLifecycle::Frozen, "deliveryEnabled")
         .build();
-    assert_terraform_valid(&render(&stack, TerraformTarget::Aws, StackSettings::default()), "Gated storage notifications");
+    assert_terraform_valid(
+        &render(&stack, TerraformTarget::Aws, StackSettings::default()),
+        "Gated storage notifications",
+    );
 }
 
 /// A gated Storage notifying an always-on queue: the queue's ingress policy exists only
@@ -157,7 +170,11 @@ fn aws_queue_ingress_follows_the_only_notifying_storage_gate() {
         .blocks()
         .find(|block| {
             block.identifier() == "resource"
-                && block.labels().iter().map(|label| label.as_str()).collect::<Vec<_>>()
+                && block
+                    .labels()
+                    .iter()
+                    .map(|label| label.as_str())
+                    .collect::<Vec<_>>()
                     == ["aws_sqs_queue_policy", "jobs_storage_ingress"]
         })
         .expect("queue ingress policy");
