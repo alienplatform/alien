@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/bindings-darwin-x64",
-  "version": "3.3.48",
+  "version": "3.3.49",
   "cpu": [
     "x64"
   ],
