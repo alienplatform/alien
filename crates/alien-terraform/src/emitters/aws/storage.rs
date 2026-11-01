@@ -8,9 +8,9 @@ use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        downcast, emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize,
-        required_label, resource_prefix_template, stack_permission_context, tags,
-        without_stack_policy_copies,
+        downcast, emit_iam_role_policy_for_target_with_label, emit_iam_role_policy_stub,
+        iam_policy_name_sanitize, required_label, resource_prefix_template,
+        stack_permission_context, tags, without_stack_policy_copies,
     },
     expr,
 };
@@ -396,8 +396,8 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
         let context = stack_permission_context(ctx)
             .with_resource_name(format!("${{{}}}", bucket_path(label, "bucket")));
         // A workload's stack-level policy already grants its `"*"` sets on every bucket named
-        // under the prefix, as this one is. Skipped sets keep their index, so the policies
-        // that remain keep their addresses.
+        // under the prefix, as this one is. A set it holds keeps its address as a stub, and
+        // every set keeps its index, so no policy changes address.
         let kept = match profile {
             Some((profile_name, profile)) => without_stack_policy_copies(
                 ctx,
@@ -411,9 +411,6 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
         };
 
         for (idx, permission_ref) in permission_refs.iter().enumerate() {
-            if !kept.contains(permission_ref) {
-                continue;
-            }
             let Some(permission_set) =
                 permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
             else {
@@ -431,6 +428,12 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
                 "{}-{}-{idx}",
                 ctx.resource_id, permission_set.id
             ));
+            if !kept.contains(permission_ref) {
+                if permission_set.platforms.aws.is_some() {
+                    emit_iam_role_policy_stub(fragment, &owner_label, &policy_label, &policy_name);
+                }
+                continue;
+            }
 
             emit_iam_role_policy_for_target_with_label(
                 fragment,
@@ -479,15 +482,15 @@ pub(crate) fn emit_sandbox_bundle_read(
     )
 }
 
-/// The roles granted sets on this storage: each with the workload profile it serves, if any,
-/// and the sets.
-fn storage_permission_owners<'a>(
-    ctx: &'a EmitContext<'_>,
-) -> Vec<(
+/// A role granted sets on this storage: its label, the workload profile it serves, if any, and
+/// the sets.
+type StorageGrantOwner<'a> = (
     String,
     Option<(&'a str, &'a PermissionProfile)>,
     Vec<PermissionSetReference>,
-)> {
+);
+
+fn storage_permission_owners<'a>(ctx: &'a EmitContext<'_>) -> Vec<StorageGrantOwner<'a>> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         // A workload's stack-wide sets do not reach the sandbox bundle Storage: its bundles decide

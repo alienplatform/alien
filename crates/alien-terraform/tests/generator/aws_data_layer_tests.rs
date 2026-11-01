@@ -5,7 +5,9 @@
 //! goes through `terraform fmt -check` + `terraform validate` against
 //! the real AWS provider.
 
-use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
+use super::helpers::{
+    assert_terraform_valid, gate_input, render, role_policy_documents, snapshot_module,
+};
 use alien_core::{
     Ai, ArtifactRegistry, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile,
     Queue, RemoteBindings, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress,
@@ -97,9 +99,9 @@ fn aws_storage_uses_customer_managed_key() {
                         && block
                             .labels
                             .first()
-                            .is_some_and(|label| label.as_str() == "aws_iam_role_policy")
+                            .is_some_and(|label| label.as_str() == "aws_iam_policy")
                 })
-                .map(|block| format!("aws_iam_role_policy.{}[*].policy", block.labels[1].as_str()))
+                .map(|block| format!("aws_iam_policy.{}[*].policy", block.labels[1].as_str()))
                 .collect::<Vec<_>>()
         })
         .collect();
@@ -116,6 +118,9 @@ mock_provider "aws" {
   mock_data "aws_region" { defaults = { region = "us-east-1" } }
   mock_resource "aws_kms_key" {
     defaults = { arn = "arn:aws:kms:us-east-1:123456789012:key/selected", id = "selected" }
+  }
+  mock_resource "aws_iam_policy" {
+    defaults = { arn = "arn:aws:iam::123456789012:policy/mock" }
   }
 }
 mock_provider "random" {}
@@ -404,13 +409,16 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
         .collect::<Vec<_>>()
         .join("\n");
 
-    let policy = rendered
-        .split("resource \"aws_iam_role_policy\" \"access_agents_remote_execute\"")
-        .nth(1)
-        .expect("the remote grant attaches to the Remote Bindings role")
-        .split("\nresource ")
-        .next()
-        .expect("block ends");
+    assert!(
+        rendered.contains("resource \"aws_iam_role_policy\" \"access_agents_remote_execute\""),
+        "the remote grant keeps its address on the Remote Bindings role"
+    );
+    let policy = role_policy_documents(&module, "access")
+        .iter()
+        .map(|(_, document)| document.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let policy = policy.as_str();
 
     for action in [
         "lambda:RunMicrovm",

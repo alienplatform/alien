@@ -198,3 +198,146 @@ pub fn assert_terraform_variable_plan_invalid_contains(
         }
     }
 }
+
+/// The document every former inline grant keeps once its permissions move to managed policies.
+pub const INERT_POLICY: &str =
+    r#"{"Statement":[{"Effect":"Deny","NotAction":"*","Resource":"*"}]}"#;
+
+/// The documents that give an AWS role its setup permissions, as `(address, argument of the
+/// jsonencode it is written as)`: its inline policies and the managed policies attached to it.
+/// Inert stubs grant nothing, so they are left out.
+pub fn role_policy_documents(
+    module: &ModuleFiles,
+    role_label: &str,
+) -> Vec<(String, hcl::Expression)> {
+    let blocks: Vec<hcl::Block> = module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .flat_map(|(path, contents)| {
+            hcl::parse(contents)
+                .unwrap_or_else(|error| panic!("{path} parses: {error}"))
+                .into_blocks()
+                .filter(|block| block.identifier() == "resource")
+        })
+        .collect();
+    let attribute = |block: &hcl::Block, key: &str| {
+        block
+            .body()
+            .attributes()
+            .find(|attribute| attribute.key() == key)
+            .map(|attribute| attribute.expr().to_string())
+    };
+    let names_role = |expression: Option<String>, attribute_name: &str| {
+        expression.is_some_and(|expression| {
+            expression == format!("aws_iam_role.{role_label}.{attribute_name}")
+                || expression == format!("aws_iam_role.{role_label}[0].{attribute_name}")
+        })
+    };
+    let jsonencoded = |block: &hcl::Block, address: &str| {
+        let policy = block
+            .body()
+            .attributes()
+            .find(|attribute| attribute.key() == "policy")
+            .unwrap_or_else(|| panic!("{address} has a policy"))
+            .expr()
+            .clone();
+        match policy {
+            hcl::Expression::FuncCall(call) if call.name.name.as_str() == "jsonencode" => {
+                Some(call.args[0].clone())
+            }
+            hcl::Expression::String(text) => {
+                assert_eq!(
+                    text, INERT_POLICY,
+                    "{address}: a literal policy is the inert stub"
+                );
+                None
+            }
+            other => panic!("{address}: unexpected policy {other}"),
+        }
+    };
+    let address = |block: &hcl::Block| {
+        format!(
+            "{}.{}",
+            block.labels()[0].as_str(),
+            block.labels()[1].as_str()
+        )
+    };
+    let mut documents = Vec::new();
+    for block in &blocks {
+        let kind = block.labels()[0].as_str();
+        if kind == "aws_iam_role_policy" && names_role(attribute(block, "role"), "id") {
+            let address = address(block);
+            if let Some(document) = jsonencoded(block, &address) {
+                documents.push((address, document));
+            }
+        }
+        if kind == "aws_iam_role_policy_attachment" && names_role(attribute(block, "role"), "name")
+        {
+            let arn = attribute(block, "policy_arn").expect("an attachment names its policy");
+            let Some(label) = arn
+                .strip_prefix("aws_iam_policy.")
+                .and_then(|rest| rest.strip_suffix(".arn"))
+                .map(|label| label.trim_end_matches("[0]"))
+            else {
+                // AWS-managed policies are attached by literal ARN.
+                continue;
+            };
+            let policy = blocks
+                .iter()
+                .find(|candidate| {
+                    candidate.labels()[0].as_str() == "aws_iam_policy"
+                        && candidate.labels()[1].as_str() == label
+                })
+                .unwrap_or_else(|| panic!("aws_iam_policy.{label} is in the module"));
+            let address = address(policy);
+            let document = jsonencoded(policy, &address)
+                .unwrap_or_else(|| panic!("{address}: a managed policy is never a stub"));
+            documents.push((address, document));
+        }
+    }
+    documents
+}
+
+/// Each (effect, action, resource, condition) the evaluated documents allow or deny, one entry
+/// per action and resource, so documents that merge or split statements differently compare
+/// equal exactly when they grant and deny the same.
+pub fn statement_grants(documents: &[serde_json::Value]) -> std::collections::BTreeSet<String> {
+    let as_list = |value: &serde_json::Value| match value {
+        serde_json::Value::Null => Vec::new(),
+        serde_json::Value::Array(items) => items.clone(),
+        other => vec![other.clone()],
+    };
+    let mut grants = std::collections::BTreeSet::new();
+    for document in documents {
+        for statement in as_list(&document["Statement"]) {
+            // An exclusion list means one thing as a whole, so it stays one entry.
+            let whole = |values: &serde_json::Value| {
+                let mut values = as_list(values);
+                values.sort_by_key(|value| value.to_string());
+                vec![serde_json::Value::Array(values)]
+            };
+            let (action_key, actions) = match statement.get("NotAction") {
+                Some(actions) => ("NotAction", whole(actions)),
+                None => ("Action", as_list(&statement["Action"])),
+            };
+            let (resource_key, resources) = match statement.get("NotResource") {
+                Some(resources) => ("NotResource", whole(resources)),
+                None => ("Resource", as_list(&statement["Resource"])),
+            };
+            for action in &actions {
+                for resource in &resources {
+                    grants.insert(
+                        serde_json::json!({
+                            "Effect": statement["Effect"],
+                            action_key: action,
+                            resource_key: resource,
+                            "Condition": statement.get("Condition"),
+                        })
+                        .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    grants
+}

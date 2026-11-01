@@ -10,8 +10,9 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        downcast, emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize,
-        required_label, stack_permission_context, without_stack_policy_copies,
+        downcast, emit_iam_role_policy_for_target_with_label, emit_iam_role_policy_stub,
+        iam_policy_name_sanitize, required_label, stack_permission_context,
+        without_stack_policy_copies,
     },
     expr,
 };
@@ -36,8 +37,8 @@ impl TfEmitter for AwsVaultEmitter {
             vault_permission_owners(ctx)
         {
             // The workload's stack-level policy already grants its `"*"` sets on this vault,
-            // which is named under the prefix. Skipped sets keep their index, so the policies
-            // that remain keep their addresses.
+            // which is named under the prefix. A set it holds keeps its address as a stub, and
+            // every set keeps its index, so no policy changes address.
             let kept = without_stack_policy_copies(
                 ctx,
                 profile_name,
@@ -46,9 +47,6 @@ impl TfEmitter for AwsVaultEmitter {
                 &context,
             )?;
             for (idx, permission_set_ref) in permission_set_refs.iter().enumerate() {
-                if !kept.contains(permission_set_ref) {
-                    continue;
-                }
                 if let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 {
@@ -56,16 +54,30 @@ impl TfEmitter for AwsVaultEmitter {
                         continue;
                     }
                     let vault_label_segment = sanitize_label_segment(vault.id());
+                    let policy_label =
+                        format!("{owner_label}_vault_{vault_label_segment}_set_{idx}");
+                    let policy_name = format!(
+                        "access-{}-{}",
+                        vault.id(),
+                        iam_policy_name_sanitize(&permission_set.id)
+                    );
+                    if !kept.contains(permission_set_ref) {
+                        if permission_set.platforms.aws.is_some() {
+                            emit_iam_role_policy_stub(
+                                &mut fragment,
+                                &owner_label,
+                                &policy_label,
+                                &policy_name,
+                            );
+                        }
+                        continue;
+                    }
                     emit_iam_role_policy_for_target_with_label(
                         &mut fragment,
                         &owner_label,
                         &permission_set,
-                        &format!("{owner_label}_vault_{vault_label_segment}_set_{idx}"),
-                        &format!(
-                            "access-{}-{}",
-                            vault.id(),
-                            iam_policy_name_sanitize(&permission_set.id)
-                        ),
+                        &policy_label,
+                        &policy_name,
                         &context,
                         BindingTarget::Resource,
                     )?;

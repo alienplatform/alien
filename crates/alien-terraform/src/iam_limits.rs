@@ -154,6 +154,16 @@ impl RenderedModule {
         }
     }
 
+    /// Largest non-whitespace characters IAM counts for a `policy` attribute at `lengths`.
+    pub fn policy_chars(&self, policy: &Expression, lengths: DeploymentLengths) -> Result<usize> {
+        Module::new(&self.resources, &self.locals, lengths).policy_chars(policy)
+    }
+
+    /// Largest non-whitespace characters of a value inside a policy document at `lengths`.
+    pub fn json_chars(&self, value: &Expression, lengths: DeploymentLengths) -> Result<usize> {
+        Module::new(&self.resources, &self.locals, lengths).json_chars(value, 0)
+    }
+
     /// Sizes every IAM role and managed policy of the module at `lengths`.
     pub fn usage(&self, lengths: DeploymentLengths) -> Result<ModuleUsage> {
         let module = Module::new(&self.resources, &self.locals, lengths);

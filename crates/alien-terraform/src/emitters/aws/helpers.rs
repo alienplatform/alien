@@ -593,6 +593,31 @@ pub fn emit_iam_role_policy_for_target_with_label(
     Ok(())
 }
 
+/// Keep the address of a grant that is no longer written, as an inert stub on `role_label`.
+///
+/// Installed deployments hold the grant inline under this address. Terraform cannot order
+/// deleting it after the grant that replaces it exists, but it orders an in-place update, so
+/// the address stays and the generator orders the stub after the role's managed policies.
+pub fn emit_iam_role_policy_stub(
+    fragment: &mut TfFragment,
+    role_label: &str,
+    policy_label: &str,
+    policy_name: &str,
+) {
+    fragment.resource_blocks.push(resource_block(
+        "aws_iam_role_policy",
+        policy_label,
+        [
+            attr("name", Expression::String(policy_name.to_string())),
+            attr("role", expr::traversal(["aws_iam_role", role_label, "id"])),
+            attr(
+                "policy",
+                Expression::String(crate::aws_role_policies::STUB_POLICY.to_string()),
+            ),
+        ],
+    ));
+}
+
 pub fn emit_iam_managed_policy_chunks(
     fragment: &mut TfFragment,
     role_label: &str,

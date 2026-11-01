@@ -87,11 +87,19 @@ fn attribute<'a>(block: &'a hcl::Block, key: &str) -> &'a Expression {
 }
 
 fn document(expression: &Expression, context: &Context) -> Value {
+    granting_document(expression, context).expect("expected jsonencode")
+}
+
+/// The document a policy grants, or `None` for the inert stub a former inline grant keeps.
+fn granting_document(expression: &Expression, context: &Context) -> Option<Value> {
+    if *expression == Expression::String(super::helpers::INERT_POLICY.to_string()) {
+        return None;
+    }
     let Expression::FuncCall(call) = expression else {
         panic!("expected jsonencode")
     };
     assert_eq!(call.name.name.as_str(), "jsonencode");
-    serde_json::to_value(call.args[0].evaluate(context).unwrap()).unwrap()
+    Some(serde_json::to_value(call.args[0].evaluate(context).unwrap()).unwrap())
 }
 
 fn find_import(expression: &Expression) -> Option<&Expression> {
@@ -293,7 +301,9 @@ fn check_boundary(enabled: Option<bool>) {
             {
                 continue;
             }
-            let policy = document(attribute(block, "policy"), &context);
+            let Some(policy) = granting_document(attribute(block, "policy"), &context) else {
+                continue;
+            };
             assert!(policy.to_string().len() <= 6144);
             for statement in policy["Statement"].as_array().unwrap() {
                 if statement["Effect"] != "Allow" {
@@ -382,7 +392,7 @@ fn gated_ai_registration_and_role_writes_preserve_the_boundary() {
         for block in body.blocks().filter(|b| {
             b.labels()
                 .first()
-                .is_some_and(|l| l.as_str() == "aws_iam_role_policy")
+                .is_some_and(|l| ["aws_iam_policy", "aws_iam_role_policy"].contains(&l.as_str()))
                 && b.body.attributes().any(|a| a.key() == "count")
         }) {
             let mut context = Context::new();
@@ -396,7 +406,9 @@ fn gated_ai_registration_and_role_writes_preserve_the_boundary() {
                 hcl::to_value(json!({"management_permissions_boundary": {"arn": "boundary-arn"}}))
                     .unwrap(),
             );
-            let policy = document(attribute(block, "policy"), &context);
+            let Some(policy) = granting_document(attribute(block, "policy"), &context) else {
+                continue;
+            };
             for statement in policy["Statement"].as_array().unwrap() {
                 if statement["Action"]
                     .as_array()
@@ -653,10 +665,14 @@ async fn rendered_management_statements(automatic: bool, grants: &[&str]) -> Vec
             }
             let kind = labels[0].as_str();
             let name = labels[1].as_str();
-            if (kind == "aws_iam_policy" && name.starts_with("management_managed_policy"))
-                || (kind == "aws_iam_role_policy" && name.starts_with("management_"))
+            if ["aws_iam_policy", "aws_iam_role_policy"].contains(&kind)
+                && name.starts_with("management_")
+                && name != "management_permissions_boundary"
             {
-                let mut policy = document(attribute(block, "policy"), &context);
+                let Some(mut policy) = granting_document(attribute(block, "policy"), &context)
+                else {
+                    continue;
+                };
                 // IAM accepts a scalar for a single action or resource;
                 // the evaluator's statement type stores both as lists.
                 for statement in policy["Statement"].as_array_mut().unwrap() {

@@ -466,6 +466,13 @@ pub(crate) fn render_terraform_module(
         dedupe_azure_role_assignments(&mut per_resource)?;
     }
     apply_resource_dependencies(stack, &mut per_resource);
+    if platform == alien_core::Platform::Aws {
+        crate::aws_role_policies::consolidate_role_policies(
+            &mut per_resource,
+            &shared_locals,
+            &mut gated,
+        )?;
+    }
     // EKS uses IAM roles for the cluster and IRSA, not Lambda execution.
     // Making its subnets depend on those roles creates a Terraform cycle.
     if target == TerraformTarget::Aws {

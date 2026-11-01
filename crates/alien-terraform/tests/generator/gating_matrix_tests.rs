@@ -384,7 +384,8 @@ fn a_gated_ai_renders_conditionally_with_its_scoped_grants() {
         // declined deploy — and at least one must exist, or the assertion
         // proves nothing.
         let (grant_type, grant_marker) = match platform {
-            Platform::Aws => ("aws_iam_role_policy", "bedrock:InvokeModel"),
+            // AWS grants live in managed policies; the former inline address is a stub.
+            Platform::Aws => ("aws_iam_policy\"", "bedrock:InvokeModel"),
             Platform::Gcp => ("google_project_iam_member", "ai_invoke"),
             Platform::Azure => ("azurerm_role_assignment", "cognitive"),
             _ => unreachable!("matrix platforms"),

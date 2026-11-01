@@ -596,7 +596,11 @@ resource "aws_subnet" "default_network_private" {
     aws_iam_role.agents,
     aws_iam_role_policy.agents,
     aws_iam_role.agents_egress,
-    aws_iam_role_policy.agents_egress
+    aws_iam_role_policy.agents_egress,
+    aws_iam_policy.agents_setup_0,
+    aws_iam_role_policy_attachment.agents_setup_0_attachment,
+    aws_iam_policy.agents_egress_setup_0,
+    aws_iam_role_policy_attachment.agents_egress_setup_0_attachment
   ]
 }
 
@@ -695,7 +699,11 @@ resource "aws_security_group" "default_network_workload" {
     aws_iam_role.agents,
     aws_iam_role_policy.agents,
     aws_iam_role.agents_egress,
-    aws_iam_role_policy.agents_egress
+    aws_iam_role_policy.agents_egress,
+    aws_iam_policy.agents_setup_0,
+    aws_iam_role_policy_attachment.agents_setup_0_attachment,
+    aws_iam_policy.agents_egress_setup_0,
+    aws_iam_role_policy_attachment.agents_egress_setup_0_attachment
   ]
 }
 
@@ -714,7 +722,10 @@ resource "aws_iam_role" "agents" {
 resource "aws_iam_role_policy" "agents" {
   name   = "sandbox-image-build"
   role   = aws_iam_role.agents.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "ReadSandboxBundle", "Effect" = "Allow", "Action" = ["s3:GetObject"], "Resource" = "arn:${data.aws_partition.current.partition}:s3:::acme-artifacts/agents/bundle.zip" }] })
+  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  depends_on = [
+    aws_iam_role_policy_attachment.agents_setup_0_attachment
+  ]
 }
 
 resource "time_sleep" "agents_iam_propagation" {
@@ -724,8 +735,8 @@ resource "time_sleep" "agents_iam_propagation" {
     "operator_role" = aws_iam_role.agents_egress.unique_id
   }
   depends_on = [
-    aws_iam_role_policy.agents,
-    aws_iam_role_policy.agents_egress
+    aws_iam_role_policy_attachment.agents_setup_0_attachment,
+    aws_iam_role_policy_attachment.agents_egress_setup_0_attachment
   ]
 }
 
@@ -751,7 +762,10 @@ resource "aws_iam_role" "agents_egress" {
 resource "aws_iam_role_policy" "agents_egress" {
   name   = "sandbox-egress-connector"
   role   = aws_iam_role.agents_egress.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "CreateENI", "Effect" = "Allow", "Action" = "ec2:CreateNetworkInterface", "Resource" = ["arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"] }, { "Sid" = "TagENI", "Effect" = "Allow", "Action" = "ec2:CreateTags", "Resource" = "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "Condition" = { "StringEquals" = { "ec2:CreateAction" = "CreateNetworkInterface", "ec2:ManagedResourceOperator" = "network-connectors.lambda.amazonaws.com" } } }] })
+  policy = "{\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
+  depends_on = [
+    aws_iam_role_policy_attachment.agents_egress_setup_0_attachment
+  ]
 }
 
 resource "aws_security_group" "agents_egress" {
@@ -814,6 +828,26 @@ resource "awscc_lambda_network_connector" "agents" {
   ]
 }
 
+resource "aws_iam_policy" "agents_setup_0" {
+  name   = length(format("%s-%s", local.resource_prefix, "agents-setup-0")) <= 128 ? format("%s-%s", local.resource_prefix, "agents-setup-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "agents-setup-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "agents-setup-0")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "ReadSandboxBundle", "Effect" = "Allow", "Action" = ["s3:GetObject"], "Resource" = "arn:${data.aws_partition.current.partition}:s3:::acme-artifacts/agents/bundle.zip" }] })
+}
+
+resource "aws_iam_role_policy_attachment" "agents_setup_0_attachment" {
+  role       = aws_iam_role.agents.name
+  policy_arn = aws_iam_policy.agents_setup_0.arn
+}
+
+resource "aws_iam_policy" "agents_egress_setup_0" {
+  name   = length(format("%s-%s", local.resource_prefix, "agents-egress-setup-0")) <= 128 ? format("%s-%s", local.resource_prefix, "agents-egress-setup-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "agents-egress-setup-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "agents-egress-setup-0")), 0, 8))
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "CreateENI", "Effect" = "Allow", "Action" = "ec2:CreateNetworkInterface", "Resource" = ["arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"] }, { "Sid" = "TagENI", "Effect" = "Allow", "Action" = "ec2:CreateTags", "Resource" = "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "Condition" = { "StringEquals" = { "ec2:CreateAction" = "CreateNetworkInterface", "ec2:ManagedResourceOperator" = "network-connectors.lambda.amazonaws.com" } } }] })
+}
+
+resource "aws_iam_role_policy_attachment" "agents_egress_setup_0_attachment" {
+  role       = aws_iam_role.agents_egress.name
+  policy_arn = aws_iam_policy.agents_egress_setup_0.arn
+}
+
 === registration.tf ===
 resource "terraform_data" "deployment_registration" {
   input = {
@@ -850,7 +884,11 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role.agents_egress,
     aws_iam_role_policy.agents_egress,
     aws_security_group.agents_egress,
-    awscc_lambda_network_connector.agents
+    awscc_lambda_network_connector.agents,
+    aws_iam_policy.agents_setup_0,
+    aws_iam_role_policy_attachment.agents_setup_0_attachment,
+    aws_iam_policy.agents_egress_setup_0,
+    aws_iam_role_policy_attachment.agents_egress_setup_0_attachment
   ]
 
   lifecycle {

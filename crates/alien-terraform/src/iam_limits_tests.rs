@@ -523,12 +523,13 @@ fn options(registry: &TfRegistry) -> TerraformOptions<'_> {
     }
 }
 
-/// The execution role's inline policies, sized at real deployment values, equal what IAM
-/// counts for the same module (evaluated by Terraform with that prefix and region).
+/// The execution role's policies, sized at real deployment values, equal what IAM counts for
+/// the same module (evaluated by Terraform with that prefix and region).
 ///
-/// Before ALIEN-2147 the role held 19 policies: 10,804 characters at a 39-character prefix in
-/// us-east-2, which IAM rejects, and the render was refused. The storage and vault grants the
-/// stack-level policy already holds are no longer repeated per resource, which leaves 14.
+/// Before ALIEN-2147 the role held 19 inline policies: 9,634, 10,804 and 10,843 characters at 9,
+/// 39 and 40-character prefixes in us-east-2, which IAM rejects. Its grants now live in two
+/// managed policies, each within 5,500 characters at the longest prefix and region, and the 19
+/// former addresses are stubs.
 #[tokio::test]
 async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
     let stack = prepare_for_render(e2e_container_stack()).await;
@@ -544,11 +545,12 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
     .expect("module renders");
     let rendered = RenderedModule::parse(&module).unwrap();
     let us_east_2 = "us-east-2".len();
-    for (prefix, region, chars) in [
-        (9, us_east_2, 7_937),
-        (39, us_east_2, 8_897),
-        (40, us_east_2, 8_929),
-        (PREFIX, REGION, 9_034),
+    let stub = crate::aws_role_policies::STUB_POLICY.len();
+    for (prefix, region, chunks) in [
+        (9, us_east_2, [4_722, 954]),
+        (39, us_east_2, [5_412, 1_014]),
+        (40, us_east_2, [5_435, 1_016]),
+        (PREFIX, REGION, [5_484, 1_037]),
     ] {
         let usage = rendered
             .usage(DeploymentLengths {
@@ -557,14 +559,23 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
                 ..DeploymentLengths::longest()
             })
             .unwrap();
+        let case = format!("{prefix}-character prefix, {region}-character region");
         assert_eq!(
             usage.roles["execution_sa"],
             RoleUsage {
-                inline_policies: 14,
-                inline_chars: chars,
-                attachments: 0,
+                inline_policies: 19,
+                inline_chars: 19 * stub,
+                attachments: 2,
             },
-            "{prefix}-character prefix, {region}-character region"
+            "{case}"
+        );
+        assert_eq!(
+            [
+                usage.managed_policies["execution_sa_setup_0"],
+                usage.managed_policies["execution_sa_setup_1"],
+            ],
+            chunks,
+            "{case}"
         );
     }
     crate::generate_terraform_module(&stack, TerraformTarget::Aws, options(&registry))
