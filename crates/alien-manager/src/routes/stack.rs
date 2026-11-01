@@ -1602,6 +1602,7 @@ async fn prepare_import_stack(
         deployment_token: None,
         native_image_host: None,
         volume_restores: Vec::new(),
+        deletion_policy: Default::default(),
     };
 
     let quota_activation_declared = source_stack.resources.contains_key("enable-cloud-quotas");

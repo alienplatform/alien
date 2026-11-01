@@ -1,6 +1,6 @@
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, Storage, StorageOutputs};
+use alien_core::{DeletionPolicy, ResourceOutputs, ResourceStatus, Storage, StorageOutputs};
 use alien_error::AlienError;
 use alien_macros::controller;
 use std::sync::Mutex;
@@ -11,9 +11,10 @@ use tracing::info;
 /// free-form settings, so the trigger rides on a config field.
 pub const SIMULATE_STORAGE_CREATE_FAILURE_ORIGIN: &str = "https://simulate-create-failure.test";
 
-/// Every bucket delete the test controller issued: the storage id and the config the delete
-/// handler saw.
-static ISSUED_STORAGE_DELETES: Mutex<Vec<(String, Storage)>> = Mutex::new(Vec::new());
+/// Every bucket delete the test controller issued: the storage id, and the config and
+/// deletion policy the delete handler saw.
+static ISSUED_STORAGE_DELETES: Mutex<Vec<(String, Storage, DeletionPolicy)>> =
+    Mutex::new(Vec::new());
 
 /// The configs seen by each bucket delete issued for the storage with this id, in order.
 ///
@@ -23,8 +24,19 @@ pub fn test_storage_deletes_issued(storage_id: &str) -> Vec<Storage> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .iter()
-        .filter(|(issued_for, _)| issued_for == storage_id)
-        .map(|(_, config)| config.clone())
+        .filter(|(issued_for, _, _)| issued_for == storage_id)
+        .map(|(_, config, _)| config.clone())
+        .collect()
+}
+
+/// The deletion policy each bucket delete issued for the storage with this id ran under.
+pub fn test_storage_delete_policies(storage_id: &str) -> Vec<DeletionPolicy> {
+    ISSUED_STORAGE_DELETES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .filter(|(issued_for, _, _)| issued_for == storage_id)
+        .map(|(_, _, policy)| *policy)
         .collect()
 }
 
@@ -204,7 +216,11 @@ impl TestStorageController {
             ISSUED_STORAGE_DELETES
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push((storage_config.id.clone(), storage_config.clone()));
+                .push((
+                    storage_config.id.clone(),
+                    storage_config.clone(),
+                    ctx.deployment_config.deletion_policy,
+                ));
             info!(
                 "✓ [test-storage-delete] Storage bucket `{}` deleted",
                 bucket_name

@@ -350,6 +350,7 @@ pub struct SingleControllerExecutor {
     domain_metadata: Option<DomainMetadata>,
     // Volume restore requests carried in the deployment config
     volume_restores: Vec<alien_core::VolumeRestoreRequest>,
+    deletion_policy: alien_core::DeletionPolicy,
     // Public endpoint URL overrides for testing.
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     // Stack and state
@@ -421,6 +422,7 @@ impl SingleControllerExecutor {
                 .maybe_domain_metadata(self.domain_metadata.clone())
                 .maybe_public_endpoints(self.public_endpoints.clone())
                 .volume_restores(self.volume_restores.clone())
+                .deletion_policy(self.deletion_policy)
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
@@ -683,6 +685,7 @@ impl SingleControllerExecutor {
             .maybe_domain_metadata(self.domain_metadata.clone())
             .maybe_public_endpoints(self.public_endpoints.clone())
             .volume_restores(self.volume_restores.clone())
+            .deletion_policy(self.deletion_policy)
             .manager_url("https://test-manager.alien.dev".to_string())
             .deployment_token("test-deployment-token".to_string())
             .build();
@@ -705,6 +708,11 @@ impl SingleControllerExecutor {
     /// Whether the controller asks for an update with an unchanged config.
     pub fn needs_update(&self) -> Result<bool> {
         self.with_context(|ctx| self.controller.needs_update(ctx))
+    }
+
+    /// The deletion policy the next steps run under, as deletion sets it from runtime metadata.
+    pub fn set_deletion_policy(&mut self, policy: alien_core::DeletionPolicy) {
+        self.deletion_policy = policy;
     }
 
     /// Replaces the volume restore requests the next steps see in the deployment config.
@@ -778,6 +786,7 @@ pub struct SingleControllerExecutorBuilder {
     domain_metadata: Option<DomainMetadata>,
     // Volume restore requests carried in the deployment config
     volume_restores: Vec<alien_core::VolumeRestoreRequest>,
+    deletion_policy: alien_core::DeletionPolicy,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     dependency_lifecycles: HashMap<String, ResourceLifecycle>,
@@ -815,6 +824,7 @@ impl SingleControllerExecutorBuilder {
             monitoring: None,
             domain_metadata: None,
             volume_restores: Vec::new(),
+            deletion_policy: alien_core::DeletionPolicy::Retain,
             public_endpoints: None,
             dependencies: Vec::new(),
             dependency_lifecycles: HashMap::new(),
@@ -1520,6 +1530,7 @@ impl SingleControllerExecutorBuilder {
             monitoring: self.monitoring,
             domain_metadata: self.domain_metadata,
             volume_restores: self.volume_restores,
+            deletion_policy: self.deletion_policy,
             public_endpoints: self.public_endpoints,
             desired_stack: stack,
             stack_state,
