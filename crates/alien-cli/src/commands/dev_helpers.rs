@@ -704,6 +704,7 @@ pub async fn build_and_post_release_simple(
             // sentinel and is required by the wire schema.
             project_id: "default".to_string(),
             channel: None,
+            signed_stacks: Default::default(),
         })
         .send()
         .await

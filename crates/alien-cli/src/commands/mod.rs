@@ -26,6 +26,7 @@ pub mod onboard;
 pub mod packages;
 pub mod release;
 pub mod release_channels_manager;
+pub mod release_key;
 pub mod releases;
 pub mod render;
 pub mod status;
@@ -85,6 +86,7 @@ pub use operations::{local_operations_task, operations_task, OperationsArgs};
 #[cfg(feature = "platform")]
 pub use packages::{packages_task, PackagesArgs};
 pub use release::{release_command, ReleaseArgs};
+pub use release_key::{release_key_task, ReleaseKeyArgs};
 pub use releases::{releases_task, ReleasesArgs};
 pub use render::{render_task, RenderArgs};
 pub use status::{status_task, StatusArgs};

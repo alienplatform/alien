@@ -1,3 +1,4 @@
+use crate::commands::release_key::load_signing_key;
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use crate::get_current_dir;
 use crate::git_utils::collect_git_metadata;
@@ -5,6 +6,9 @@ use crate::output::print_json;
 use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::{settings::PushSettings, ImageDestinations};
+use alien_core::release_signature::{
+    image_digest, ReleaseSigningKey, ReleaseStatement, TrustedKeys, STATEMENT_TYPE,
+};
 use alien_core::{
     alien_event, is_deployer_secret_input, AlienEvent, Container, ContainerCode, Daemon,
     DaemonCode, Platform, Sandbox, SandboxCode, Stack, StackInputDefinition, StackInputKind,
@@ -61,7 +65,11 @@ use tracing::{info, warn};
     alien release --image-repo my-registry.com/my-app --registry-auth basic --registry-username user --registry-password pass
 
     # Skip git metadata collection
-    alien release --no-git"
+    alien release --no-git
+
+    # Sign the release so deployments that pin your public key accept it
+    alien release-key generate --out release-key.pem
+    alien release --signing-key-file release-key.pem"
 )]
 pub struct ReleaseArgs {
     /// Target platforms to release (comma-separated). If not specified, auto-discovers
@@ -150,6 +158,17 @@ pub struct ReleaseArgs {
     /// Registry password (required for basic auth)
     #[arg(long)]
     pub registry_password: Option<String>,
+
+    /// Sign the release with this key (from `alien release-key generate`). Every
+    /// image is pinned to its digest, and each platform's stack is signed, so
+    /// deployments that pin your public key run only what you released.
+    #[arg(long, env = "ALIEN_RELEASE_SIGNING_KEY_FILE")]
+    pub signing_key_file: Option<PathBuf>,
+
+    /// Operator image, as `repository@sha256:<digest>`, that deployments pinning
+    /// your key may update themselves to. Requires --signing-key-file.
+    #[arg(long, requires = "signing_key_file")]
+    pub operator_image: Option<String>,
 }
 
 /// JSON output for release command
@@ -184,6 +203,10 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
         }
         #[cfg(feature = "platform")]
         parse_release_title(Some(title))?;
+    }
+    if let Some(path) = &args.signing_key_file {
+        validate_signing(&args, &ctx)?;
+        load_signing_key(path)?;
     }
 
     if args.no_stack {
@@ -610,6 +633,17 @@ async fn release_task_core(
         local: None,
         test: None,
     };
+    let signing_key = args
+        .signing_key_file
+        .as_deref()
+        .map(load_signing_key)
+        .transpose()?;
+    // One sequence for the whole release: the signing time, which only grows.
+    let sequence = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or_default();
+    let mut signed_stacks = HashMap::new();
 
     for platform_str in &platforms_to_release {
         let platform_started = Instant::now();
@@ -644,11 +678,23 @@ async fn release_task_core(
                 platform,
                 built_stack,
                 &output_dir,
+                signing_key.is_some(),
             )
             .await?
         } else {
             built_stack
         };
+        if let Some(key) = &signing_key {
+            let signed = sign_platform_stack(
+                key,
+                &project_link.project_id,
+                platform,
+                sequence,
+                &pushed_stack,
+                args.operator_image.as_deref(),
+            )?;
+            signed_stacks.insert(platform.as_str().to_string(), signed);
+        }
 
         // Convert to JSON for the API
         let stack_json = serde_json::to_value(&pushed_stack)
@@ -691,6 +737,7 @@ async fn release_task_core(
             manager,
             &project_link.project_id,
             stack_by_platform,
+            signed_stacks,
             sdk_git_metadata,
             &args.channel,
         )
@@ -730,6 +777,63 @@ async fn release_task_core(
     Ok(release_id)
 }
 
+/// Refuse signing options this release can't honor, before building anything.
+fn validate_signing(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<()> {
+    if args.no_stack {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "A stackless release has nothing to sign; omit --signing-key-file".to_string(),
+        }));
+    }
+    if ctx.is_platform() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Signed releases are stored by a manager; release to a manager, or omit --signing-key-file"
+                .to_string(),
+        }));
+    }
+    if let Some(image) = &args.operator_image {
+        if image_digest(image).is_none() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "operator-image".to_string(),
+                message: format!("'{image}' must be pinned as repository@sha256:<digest>"),
+            }));
+        }
+    }
+    Ok(())
+}
+
+/// Sign `stack` for `platform`, then check the result with the same rules a
+/// protected deployment applies, so a release it would refuse fails here.
+fn sign_platform_stack(
+    key: &ReleaseSigningKey,
+    project_id: &str,
+    platform: Platform,
+    sequence: u64,
+    stack: &Stack,
+    operator_image: Option<&str>,
+) -> Result<alien_manager_api::types::SignedRelease> {
+    let refused = |reason: String| ErrorData::ReleaseFailed {
+        message: format!("Can't sign the {} stack: {reason}", platform.as_str()),
+    };
+    let signed = key
+        .sign(&ReleaseStatement {
+            statement_type: STATEMENT_TYPE.to_string(),
+            project: project_id.to_string(),
+            platform,
+            sequence,
+            stack: stack.clone(),
+            operator_image: operator_image.map(str::to_string),
+        })
+        .context(refused("the statement could not be built".to_string()))?;
+    TrustedKeys::parse(&[key.public_key()])
+        .context(refused("the key is invalid".to_string()))?
+        .verify(project_id, platform, &signed)
+        .map_err(|rejection| AlienError::new(refused(rejection.to_string())))?;
+    Ok(alien_manager_api::types::SignedRelease {
+        payload: signed.payload,
+        signature: signed.signature,
+    })
+}
+
 /// Fail before building when a manager you run has no such channel.
 /// `production` always exists: the first release creates it.
 async fn ensure_manager_channel(manager: &ManagerContext, channel: &str) -> Result<()> {
@@ -767,6 +871,7 @@ async fn create_manager_release(
     manager: &ManagerContext,
     project_id: &str,
     stack: ManagerStackByPlatform,
+    signed_stacks: HashMap<String, alien_manager_api::types::SignedRelease>,
     git_metadata: Option<alien_manager_api::types::GitMetadata>,
     channel: &str,
 ) -> Result<String> {
@@ -780,6 +885,7 @@ async fn create_manager_release(
             git_metadata,
             project_id: project_id.to_string(),
             channel: Some(channel.to_string()),
+            signed_stacks,
         })
         .send()
         .await
@@ -1394,6 +1500,7 @@ async fn push_platform_stack(
     platform: Platform,
     built_stack: Stack,
     output_dir: &PathBuf,
+    pin_digests: bool,
 ) -> Result<Stack> {
     let push_failed = || ErrorData::ReleaseFailed {
         message: format!("Failed to push images for {} platform", platform.as_str()),
@@ -1439,6 +1546,11 @@ async fn push_platform_stack(
         }
         result => result.context(push_failed())?,
     };
+    // Look digests up where the images were pushed, before any rewrite to the
+    // host deployments pull from: the digest is the same on both.
+    if pin_digests {
+        pin_stack_images(&mut pushed, &destinations.settings.options).await?;
+    }
     if let Some(public_host) = destinations.public_registry_host {
         let push_host = destinations
             .settings
@@ -2279,6 +2391,62 @@ async fn push_stack_with_cache(
         ImageDestinations::default(),
     )
     .await
+}
+
+/// Pin every image in `stack` to the digest the registry holds for it, as
+/// `repository@sha256:<digest>`. Images already pinned are kept as they are.
+async fn pin_stack_images(stack: &mut Stack, options: &dockdash::PushOptions) -> Result<()> {
+    for (resource_id, entry) in stack.resources_mut() {
+        let image = if let Some(container) = entry.config.downcast_mut::<Container>() {
+            match &mut container.code {
+                ContainerCode::Image { image } => image,
+                ContainerCode::Source { .. } => continue,
+            }
+        } else if let Some(worker) = entry.config.downcast_mut::<Worker>() {
+            match &mut worker.code {
+                WorkerCode::Image { image } => image,
+                WorkerCode::Source { .. } => continue,
+            }
+        } else if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
+            match &mut daemon.code {
+                DaemonCode::Image { image } => image,
+                DaemonCode::Source { .. } => continue,
+            }
+        } else if let Some(sandbox) = entry.config.downcast_mut::<Sandbox>() {
+            match &mut sandbox.code {
+                SandboxCode::Image { image, .. } => image,
+                SandboxCode::Source { .. } => continue,
+            }
+        } else {
+            continue;
+        };
+        if image_digest(image).is_some() {
+            continue;
+        }
+        let failed = |reason: &str| ErrorData::ReleaseFailed {
+            message: format!(
+                "Can't pin the image of '{resource_id}' ({image}) to a digest: {reason}"
+            ),
+        };
+        let digest = alien_build::registry::manifest_digest(image, options)
+            .await
+            .context(failed("the registry lookup failed"))?
+            .ok_or_else(|| AlienError::new(failed("the registry doesn't have it")))?;
+        *image = format!("{}@{digest}", image_repository(image));
+    }
+    Ok(())
+}
+
+/// `image` without its tag or digest. A `:` before the last `/` is a registry
+/// port, not a tag.
+fn image_repository(image: &str) -> &str {
+    let without_digest = image
+        .split_once('@')
+        .map_or(image, |(repository, _)| repository);
+    match without_digest.rsplit_once(':') {
+        Some((repository, tag)) if !tag.contains('/') => repository,
+        _ => without_digest,
+    }
 }
 
 async fn push_stack_with_cache_to_destinations(
@@ -3649,6 +3817,7 @@ mod tests {
                 Platform::Kubernetes,
                 stack,
                 &output_dir,
+                false,
             )
             .await
             .unwrap_or_else(|e| panic!("{targets:?}: the push is retried: {e:?}"));
@@ -3675,6 +3844,272 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("{targets:?}: the released image is missing: {e}"));
         }
+    }
+
+    /// A manager that records each release request body and answers it.
+    async fn start_recording_manager() -> (String, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let app = axum::Router::new().route(
+            "/v1/releases",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let recorded = recorded.clone();
+                async move {
+                    recorded.lock().unwrap().push(body.clone());
+                    (
+                        http::StatusCode::CREATED,
+                        axum::Json(serde_json::json!({
+                            "id": "rel_signed", "workspaceId": "default", "projectId": "default",
+                            "stack": body["stack"], "createdAt": "2026-01-01T00:00:00Z",
+                            "setupFingerprints": {},
+                        })),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, requests)
+    }
+
+    async fn release_to_manager(
+        manager_url: &str,
+        stack: &Stack,
+        extra_args: &[&str],
+    ) -> Result<String> {
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().join(".alien");
+        let build_dir = output_dir.join("build/test");
+        fs::create_dir_all(&build_dir).unwrap();
+        fs::write(
+            build_dir.join("stack.json"),
+            serde_json::to_vec(stack).unwrap(),
+        )
+        .unwrap();
+        let http_client = reqwest::Client::new();
+        let manager = ManagerContext {
+            manager_url: manager_url.to_string(),
+            manager_name: None,
+            manager_is_system: None,
+            manager_cloud: None,
+            client: alien_manager_api::Client::new_with_client(manager_url, http_client.clone()),
+            http_client,
+            auth_token: None,
+            repository_name: None,
+            repository_uri: None,
+            workspace: None,
+        };
+        let config = ReleaseConfig {
+            output_dir,
+            manager: Some(manager),
+            workspace_name: "default".to_string(),
+            project_link: crate::project_link::ProjectLink::new(
+                "default".to_string(),
+                "default".to_string(),
+                "default".to_string(),
+            ),
+            git_metadata: None,
+            platforms: vec!["test".to_string()],
+            onboarding_inputs: vec![],
+        };
+        let ctx = ExecutionMode::Standalone {
+            server_url: manager_url.to_string(),
+            api_key: "test-token".to_string(),
+        };
+        let args =
+            ReleaseArgs::try_parse_from([&["release", "--prebuilt"], extra_args].concat()).unwrap();
+        release_task_core(args, config, &ctx).await
+    }
+
+    /// With a key, the release carries a statement that verifies against the
+    /// key's public half and holds exactly the stack sent beside it. Without
+    /// one, the request is what it has always been.
+    #[tokio::test]
+    async fn a_signed_release_carries_a_verifiable_statement_of_its_stack() {
+        let (manager_url, requests) = start_recording_manager().await;
+        let keys = tempfile::tempdir().unwrap();
+        let key_file = keys.path().join("release.pem");
+        let key = ReleaseSigningKey::from_secret_bytes(&[11; 32]).unwrap();
+        fs::write(&key_file, key.to_pkcs8_pem().unwrap()).unwrap();
+        let operator = format!("registry.example.com/operator@sha256:{}", "b".repeat(64));
+        let stack = Stack::new("app".to_string())
+            .add(
+                test_container(
+                    "web",
+                    format!("registry.example.com/app/web@sha256:{}", "a".repeat(64)),
+                ),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        release_to_manager(&manager_url, &stack, &[]).await.unwrap();
+        release_to_manager(
+            &manager_url,
+            &stack,
+            &[
+                "--signing-key-file",
+                key_file.to_str().unwrap(),
+                "--operator-image",
+                &operator,
+            ],
+        )
+        .await
+        .unwrap();
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[0].get("signedStacks").is_none(),
+            "an unsigned release sends no statements: {}",
+            requests[0]
+        );
+        assert_eq!(requests[0]["stack"], requests[1]["stack"]);
+        let signed: alien_core::SignedRelease =
+            serde_json::from_value(requests[1]["signedStacks"]["test"].clone()).unwrap();
+        let verified = TrustedKeys::parse(&[key.public_key()])
+            .unwrap()
+            .verify("default", Platform::Test, &signed)
+            .expect("the statement verifies against the developer's key");
+        assert_eq!(verified.stack, stack);
+        assert_eq!(verified.operator_image.as_deref(), Some(operator.as_str()));
+    }
+
+    /// The CLI refuses a stack a protected deployment would refuse, before
+    /// anything is created.
+    #[tokio::test]
+    async fn a_release_that_cannot_be_signed_is_not_created() {
+        let (manager_url, requests) = start_recording_manager().await;
+        let keys = tempfile::tempdir().unwrap();
+        let key_file = keys.path().join("release.pem");
+        let key = ReleaseSigningKey::from_secret_bytes(&[11; 32]).unwrap();
+        fs::write(&key_file, key.to_pkcs8_pem().unwrap()).unwrap();
+        // The test platform pushes nothing, so nothing pins this tag.
+        let stack = Stack::new("app".to_string())
+            .add(
+                test_container("web", "registry.example.com/app/web:v1".to_string()),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        let error = release_to_manager(
+            &manager_url,
+            &stack,
+            &["--signing-key-file", key_file.to_str().unwrap()],
+        )
+        .await
+        .expect_err("an unpinned image can't be signed");
+        assert!(
+            error.to_string().contains("not pinned by sha256 digest"),
+            "{error}"
+        );
+        assert!(requests.lock().unwrap().is_empty());
+    }
+
+    /// Signing pins each pushed image to the digest the registry holds; an
+    /// unsigned release keeps the tag reference it has always had.
+    #[tokio::test]
+    async fn only_a_signed_release_pins_images_to_their_digest() {
+        let (manager_url, _) = start_renaming_manager(|_| false).await;
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().to_path_buf();
+        let artifact = output_dir.join("build/kubernetes/web-hash");
+        std::fs::create_dir_all(&artifact).unwrap();
+        let layer = dockdash::Layer::builder()
+            .unwrap()
+            .data("/app/web", b"web", Some(0o755))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        dockdash::Image::builder()
+            .platform("linux", &dockdash::Arch::Amd64)
+            .layer(layer)
+            .output_to(artifact.join("linux-x64.oci.tar"))
+            .build()
+            .await
+            .unwrap();
+        let stack = Stack::new("pinned".to_string())
+            .add(
+                test_container("web", artifact.display().to_string()),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let ctx = ExecutionMode::Standalone {
+            server_url: manager_url.clone(),
+            api_key: "test-token".to_string(),
+        };
+        let args = ReleaseArgs::try_parse_from(["release"]).unwrap();
+        let image = |stack: &Stack| {
+            let (_, entry) = stack.resources().next().unwrap();
+            container_image(entry.config.downcast_ref::<Container>().unwrap()).to_string()
+        };
+
+        let unsigned = push_platform_stack(
+            &args,
+            &ctx,
+            "prj_a",
+            Platform::Kubernetes,
+            stack.clone(),
+            &output_dir,
+            false,
+        )
+        .await
+        .unwrap();
+        let host = manager_url.trim_start_matches("http://");
+        let tagged = image(&unsigned);
+        assert!(
+            tagged.starts_with(&format!("{host}/acme-artifacts/prj_a:")) && !tagged.contains('@'),
+            "an unsigned release keeps its tag reference: {tagged}"
+        );
+
+        let signed = push_platform_stack(
+            &args,
+            &ctx,
+            "prj_a",
+            Platform::Kubernetes,
+            stack,
+            &output_dir,
+            true,
+        )
+        .await
+        .unwrap();
+        let pinned = image(&signed);
+        let client = oci_client::Client::new(oci_client::client::ClientConfig {
+            protocol: oci_client::client::ClientProtocol::Http,
+            ..Default::default()
+        });
+        let digest = client
+            .fetch_manifest_digest(
+                &oci_client::Reference::try_from(tagged.as_str()).unwrap(),
+                &oci_client::secrets::RegistryAuth::Anonymous,
+            )
+            .await
+            .unwrap();
+        // This manager names another repository on the second resolve; the
+        // content, and so the digest, is the same.
+        assert_eq!(pinned, format!("{host}/artifacts/prj_a@{digest}"));
+        let served = client
+            .fetch_manifest_digest(
+                &oci_client::Reference::try_from(pinned.as_str()).unwrap(),
+                &oci_client::secrets::RegistryAuth::Anonymous,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            served, digest,
+            "the pinned reference resolves to the pushed image"
+        );
+    }
+
+    #[test]
+    fn image_repository_strips_only_the_tag() {
+        assert_eq!(
+            image_repository("host:5000/team/app:v1"),
+            "host:5000/team/app"
+        );
+        assert_eq!(image_repository("host:5000/team/app"), "host:5000/team/app");
+        assert_eq!(image_repository("host/app:v1@sha256:abc"), "host/app");
     }
 
     /// A hosted manager in front of a real registry. It names the project's repository
@@ -3831,10 +4266,17 @@ mod tests {
             };
             let args = ReleaseArgs::try_parse_from(["release"]).unwrap();
 
-            let pushed =
-                push_platform_stack(&args, &ctx, "prj_a", Platform::Aws, stack, &output_dir)
-                    .await
-                    .unwrap_or_else(|e| panic!("splits={splits}: push failed: {e:?}"));
+            let pushed = push_platform_stack(
+                &args,
+                &ctx,
+                "prj_a",
+                Platform::Aws,
+                stack,
+                &output_dir,
+                false,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("splits={splits}: push failed: {e:?}"));
 
             let host = url.trim_start_matches("http://");
             let proxy_only = if splits {
