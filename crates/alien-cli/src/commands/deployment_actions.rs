@@ -1,16 +1,19 @@
 //! Platform actions on an existing deployment: compute, environment variables,
 //! stack inputs, health checks, machines, and machine join tokens.
 
+use std::str::FromStr;
 use std::time::Duration;
 
-use alien_core::{ComputePoolSelection, ComputeSettings};
+use alien_core::{ComputePoolSelection, ComputeSettings, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
-    DeploymentDetailResponse, DrainMachinesMachineRequest, EnvironmentVariableConfig,
+    ApiError, DeploymentDetailResponse, DrainMachinesMachineRequest, EnvironmentVariableConfig,
     UpdateDeploymentComputeRequest, UpdateDeploymentEnvironmentVariablesRequest,
     UpdateDeploymentInputsRequest,
 };
-use alien_platform_api::SdkResultExt as _;
+use alien_platform_api::{
+    convert_sdk_error, ClientInfo as _, Error as SdkError, ResponseValue, SdkResultExt as _,
+};
 use serde_json::{Map, Value};
 
 use crate::error::{ErrorData, Result};
@@ -18,20 +21,22 @@ use crate::interaction::{ConfirmationMode, InteractionMode};
 use crate::output::{print_json, prompt_confirm};
 use crate::ui::{command, dim_label, make_table, print_table, success_line};
 
-/// A requested change to one machine pool's size. Unset fields keep the pool's
-/// current value. Machine type and placement are chosen during setup and can't
-/// be changed here.
+/// A requested change to one machine pool. Unset fields keep the pool's current value.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PoolChange {
     pub pool: Option<String>,
     pub machines: Option<u32>,
     pub min: Option<u32>,
     pub max: Option<u32>,
+    pub machine: Option<String>,
 }
 
 impl PoolChange {
     fn is_empty(&self) -> bool {
-        self.machines.is_none() && self.min.is_none() && self.max.is_none()
+        self.machines.is_none()
+            && self.min.is_none()
+            && self.max.is_none()
+            && self.machine.is_none()
     }
 }
 
@@ -115,8 +120,8 @@ fn select_pool(compute: &ComputeSettings, requested: Option<&str>) -> Result<Str
 /// the full compute settings to send.
 ///
 /// A compute update replaces the whole pool map, so every other pool is sent
-/// back unchanged. The pool's machine type and failure-domain placement are
-/// kept: the API accepts only count and mode changes here.
+/// back unchanged. The pool's failure-domain placement is kept: it is fixed
+/// once machines exist.
 pub(crate) fn apply_pool_change(
     current: Option<&ComputeSettings>,
     change: &PoolChange,
@@ -124,7 +129,7 @@ pub(crate) fn apply_pool_change(
     let mut compute = current.cloned().unwrap_or_default();
     let pool_id = select_pool(&compute, change.pool.as_deref())?;
     let selection = compute.pools[&pool_id].clone();
-    let (machine, failure_domains) = match &selection {
+    let (current_machine, failure_domains) = match &selection {
         ComputePoolSelection::Fixed {
             machine,
             failure_domains,
@@ -136,6 +141,7 @@ pub(crate) fn apply_pool_change(
             ..
         } => (machine.clone(), failure_domains.clone()),
     };
+    let machine = change.machine.clone().or(current_machine);
     let invalid = |field: &str, message: String| {
         AlienError::new(ErrorData::ValidationError {
             field: field.to_string(),
@@ -235,6 +241,82 @@ fn describe_pool(selection: &ComputePoolSelection) -> String {
     }
 }
 
+/// Rejects quota identities the deployment's platform doesn't know, as
+/// `alien deploy` does, so a typo fails here instead of in the update.
+fn validate_quota_warning_overrides(detail: &Value, overrides: &[String]) -> Result<()> {
+    let platform = detail
+        .get("platform")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let platform = Platform::from_str(platform).map_err(|message| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message,
+        })
+    })?;
+    alien_preflights::quotas::validate_warning_overrides(platform, overrides).context(
+        ErrorData::ValidationError {
+            field: "quota-warning-override".to_string(),
+            message: "Invalid quota warning override".to_string(),
+        },
+    )
+}
+
+/// Sends `PATCH /v1/deployments/{id}/compute` and returns the response JSON.
+///
+/// The generated request type leaves out an empty `quotaWarningOverrides`
+/// list, and an empty list is how the API clears the overrides. So the body
+/// goes out as JSON through the generated client's HTTP client, and API errors
+/// are converted the same way the SDK converts them.
+async fn send_compute_update(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    body: &Value,
+) -> Result<Value> {
+    let failed = || ErrorData::ApiRequestFailed {
+        message: format!("updating compute for deployment '{deployment_id}'"),
+        url: None,
+    };
+    let url = format!(
+        "{}/v1/deployments/{}/compute",
+        client.baseurl(),
+        urlencoding::encode(deployment_id)
+    );
+    let response = client
+        .client()
+        .patch(&url)
+        .query(&[("workspace", workspace)])
+        .json(body)
+        .send()
+        .await
+        .into_alien_error()
+        .context(failed())?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let text = response.text().await.into_alien_error().context(failed())?;
+    if status.is_success() {
+        return serde_json::from_str(&text)
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "parse".to_string(),
+                reason: "the compute update response".to_string(),
+            });
+    }
+    match serde_json::from_str::<ApiError>(&text) {
+        Ok(api_error) => Err(convert_sdk_error(SdkError::ErrorResponse(
+            ResponseValue::new(api_error, status, headers),
+        )))
+        .context(failed()),
+        Err(_) => Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "updating compute for deployment '{deployment_id}' failed ({status}): {text}"
+            ),
+            url: None,
+        })),
+    }
+}
+
 pub(crate) async fn set_compute_task(
     client: &alien_platform_api::Client,
     workspace: &str,
@@ -246,7 +328,7 @@ pub(crate) async fn set_compute_task(
     if change.pool.is_empty() && change.quota_warning_overrides.is_none() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "compute".to_string(),
-            message: "Nothing to change. Pass --machines, --min/--max, \
+            message: "Nothing to change. Pass --machines, --min/--max, --machine, \
                       --quota-warning-override, or --clear-quota-warning-overrides."
                 .to_string(),
         }));
@@ -254,14 +336,15 @@ pub(crate) async fn set_compute_task(
     if change.pool.is_empty() && change.pool.pool.is_some() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "pool".to_string(),
-            message: "--pool needs --machines or --min/--max.".to_string(),
+            message: "--pool needs --machines, --min/--max, or --machine.".to_string(),
         }));
     }
 
+    let detail = detail_json(deployment)?;
     let mut body = Map::new();
     let mut changed_pool = None;
     if !change.pool.is_empty() {
-        let current = saved_compute(&detail_json(deployment)?)?;
+        let current = saved_compute(&detail)?;
         let (pool_id, compute) = apply_pool_change(current.as_ref(), &change.pool)?;
         changed_pool = Some((pool_id.clone(), describe_pool(&compute.pools[&pool_id])));
         body.insert(
@@ -275,31 +358,21 @@ pub(crate) async fn set_compute_task(
         );
     }
     if let Some(overrides) = &change.quota_warning_overrides {
+        validate_quota_warning_overrides(&detail, overrides)?;
         body.insert(
             "quotaWarningOverrides".to_string(),
             serde_json::json!(overrides),
         );
     }
-    let body: UpdateDeploymentComputeRequest = request_body(Value::Object(body), "compute")?;
+    let body = Value::Object(body);
+    // Checks the body against the API schema before sending it.
+    request_body::<UpdateDeploymentComputeRequest>(body.clone(), "compute")?;
 
-    let response = client
-        .update_deployment_compute()
-        .id(deployment_id)
-        .workspace(workspace)
-        .body(body)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("updating compute for deployment '{deployment_id}'"),
-            url: None,
-        })?
-        .into_inner();
-
+    let response = send_compute_update(client, workspace, deployment_id, &body).await?;
     if json {
         return print_json(&response);
     }
-    if response.outcome.to_string() == "unchanged" {
+    if response.get("outcome").and_then(Value::as_str) == Some("unchanged") {
         println!("Compute is already set to these values. Nothing to update.");
         return Ok(());
     }
@@ -315,8 +388,8 @@ pub(crate) async fn set_compute_task(
         };
         println!("{} {value}", dim_label("Quota warning overrides"));
     }
-    if let Some(operation) = response.operation.as_ref() {
-        println!("{} {}", dim_label("Operation"), operation.id.as_str());
+    if let Some(operation_id) = response.pointer("/operation/id").and_then(Value::as_str) {
+        println!("{} {operation_id}", dim_label("Operation"));
     }
     println!(
         "{} {}",
@@ -1150,6 +1223,7 @@ mod tests {
             Some(&autoscale),
             &PoolChange {
                 max: Some(10),
+                machine: Some("m6i.large".into()),
                 ..PoolChange::default()
             },
         )
@@ -1159,7 +1233,7 @@ mod tests {
             ComputePoolSelection::Autoscale {
                 min: 1,
                 max: 10,
-                machine: Some("t3.medium".into()),
+                machine: Some("m6i.large".into()),
                 failure_domains,
             }
         );
