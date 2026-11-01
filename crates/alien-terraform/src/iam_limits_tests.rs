@@ -566,7 +566,7 @@ fn options(registry: &TfRegistry) -> TerraformOptions<'_> {
 /// The execution role's policies, sized at real deployment values, equal what IAM counts for
 /// the same module (evaluated by Terraform with that prefix and region).
 ///
-/// Before ALIEN-2147 the role held 19 inline policies: 9,634, 10,804 and 10,843 characters at 9,
+/// Granted inline, the role held 19 policies: 9,634, 10,804 and 10,843 characters at 9,
 /// 39 and 40-character prefixes in us-east-2, which IAM rejects. Its grants now live in two
 /// managed policies, each within 5,500 characters at the longest prefix and region, and the 19
 /// former addresses are stubs.
