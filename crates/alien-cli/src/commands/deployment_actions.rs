@@ -106,7 +106,9 @@ fn select_pool(compute: &ComputeSettings, requested: Option<&str>) -> Result<Str
     }
     match compute.pools.len() {
         0 => Err(invalid(
-            "This deployment has no machine pools to change.".to_string(),
+            "This deployment has no saved compute pool choices, so there is nothing to \
+             resize here. Pools are chosen during setup; run setup again to save them."
+                .to_string(),
         )),
         1 => Ok(compute.pools.keys().next().expect("one pool").clone()),
         _ => Err(invalid(format!(
@@ -1039,10 +1041,15 @@ pub(crate) async fn create_join_token_task(
         "{}",
         success_line("Join token created. Existing tokens keep working.")
     );
+    let join_token = crate::commands::deploy::host_join_token(
+        &response.join_token,
+        &response.control_plane_url,
+        &response.cluster_id,
+    )?;
     print_new_join_token(
         deployment_id,
         &response.token.id,
-        &response.join_token,
+        &join_token,
         response.cli_command_name.as_deref(),
         response.cli_install_script_url.as_deref(),
     );
@@ -1091,10 +1098,15 @@ pub(crate) async fn rotate_join_token_task(
         "{}",
         success_line("Join tokens rotated. Earlier tokens no longer work.")
     );
+    let join_token = crate::commands::deploy::host_join_token(
+        &response.join_token,
+        &response.control_plane_url,
+        &response.cluster_id,
+    )?;
     print_new_join_token(
         deployment_id,
         &response.token.id,
-        &response.join_token,
+        &join_token,
         response.cli_command_name.as_deref(),
         response.cli_install_script_url.as_deref(),
     );

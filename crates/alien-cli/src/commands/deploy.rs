@@ -1241,6 +1241,22 @@ async fn create_machines_join_token(
     normalize_machines_join_token_response(response)
 }
 
+/// Returns the token a host passes to `join`. The API returns an `aj1_` token
+/// that already carries the control plane URL and cluster ID; a raw token is
+/// wrapped with them the same way `alien deploy --machines` does.
+pub(crate) fn host_join_token(
+    join_token: &str,
+    control_plane_url: &str,
+    cluster_id: &str,
+) -> Result<String> {
+    normalize_machines_join_token_response(MachinesJoinTokenResponse {
+        join_token: join_token.to_string(),
+        control_plane_url: Some(control_plane_url.to_string()),
+        cluster_id: Some(cluster_id.to_string()),
+        capacity_groups: None,
+    })
+}
+
 fn normalize_machines_join_token_response(response: MachinesJoinTokenResponse) -> Result<String> {
     let join_token = response.join_token.trim();
     if join_token.is_empty() {
