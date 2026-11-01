@@ -9,6 +9,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::interaction::{ConfirmationMode, InteractionMode};
+use crate::output::prompt_confirm;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -58,11 +60,18 @@ pub enum PackagesAction {
     ///
     /// Pending and building packages are cancelled and replaced by new
     /// versions. Use it when a build failed for a reason that is now fixed.
-    Rebuild,
+    Rebuild {
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Cancel a pending or building package.
     Cancel {
         /// Package ID.
         id: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
     },
     /// Download an artifact from a ready package.
     Download {
@@ -182,7 +191,20 @@ pub async fn packages_task(args: PackagesArgs, ctx: ExecutionMode) -> Result<()>
                 }
             }
         }
-        PackagesAction::Rebuild => {
+        PackagesAction::Rebuild { yes } => {
+            let confirmation = InteractionMode::current(args.json).confirmation_mode(
+                yes,
+                "Rebuilding cancels the project's pending and building packages and needs confirmation. Re-run with `--yes`.",
+            )?;
+            if matches!(confirmation, ConfirmationMode::Prompt)
+                && !prompt_confirm(
+                    "Rebuild every package? Pending and building packages are cancelled.",
+                    false,
+                )?
+            {
+                println!("Nothing changed.");
+                return Ok(());
+            }
             let url = package_api_url(&auth.base_url, "/v1/packages/rebuild", &workspace)?;
             let response = send_json(
                 &auth,
@@ -198,7 +220,13 @@ pub async fn packages_task(args: PackagesArgs, ctx: ExecutionMode) -> Result<()>
                 let created = response
                     .get("packagesCreated")
                     .and_then(Value::as_u64)
-                    .unwrap_or(0);
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::ApiRequestFailed {
+                            message: "The rebuild response has no packagesCreated count"
+                                .to_string(),
+                            url: None,
+                        })
+                    })?;
                 if created == 0 {
                     println!("This project has no package settings, so nothing was built.");
                 } else {
@@ -207,7 +235,17 @@ pub async fn packages_task(args: PackagesArgs, ctx: ExecutionMode) -> Result<()>
                 }
             }
         }
-        PackagesAction::Cancel { id } => {
+        PackagesAction::Cancel { id, yes } => {
+            let confirmation = InteractionMode::current(args.json).confirmation_mode(
+                yes,
+                "Cancelling a package build needs confirmation. Re-run with `--yes`.",
+            )?;
+            if matches!(confirmation, ConfirmationMode::Prompt)
+                && !prompt_confirm(&format!("Cancel package {id}?"), false)?
+            {
+                println!("Nothing changed.");
+                return Ok(());
+            }
             let url = package_api_url(
                 &auth.base_url,
                 &format!("/v1/packages/{}/cancel", urlencoding::encode(&id)),

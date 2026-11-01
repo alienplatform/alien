@@ -322,6 +322,10 @@ pub enum DeploymentsCmd {
         #[arg(long)]
         force: bool,
 
+        /// Skip the confirmation prompt for --force
+        #[arg(long)]
+        yes: bool,
+
         /// Print the result as machine-readable JSON
         #[arg(long)]
         json: bool,
@@ -496,9 +500,11 @@ pub enum DeploymentsCmd {
     /// Change machine counts, machine type, or quota warning overrides of a deployment
     ///
     /// Pass --machines for a fixed pool, or --min and --max for an autoscaling
-    /// pool; switching between them changes the pool's mode. Other pools and
-    /// settings stay as they are. Adding or removing pools, or changing their
-    /// placement, needs a new setup.
+    /// pool; switching between them changes the pool's mode. The update
+    /// replaces the deployment's whole pool map with the saved pools plus this
+    /// change, so other pools are sent back as they were read. Container CPU
+    /// and memory settings are not sent and stay as they are. Adding or
+    /// removing pools, or changing their placement, needs a new setup.
     SetCompute {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
@@ -534,6 +540,10 @@ pub enum DeploymentsCmd {
         /// Remove all saved quota warning overrides
         #[arg(long)]
         clear_quota_warning_overrides: bool,
+
+        /// Skip the confirmation prompt when scaling a pool to 0 machines
+        #[arg(long)]
+        yes: bool,
 
         /// Print the update result as machine-readable JSON
         #[arg(long)]
@@ -587,8 +597,10 @@ pub enum DeploymentsCmd {
     },
     /// Change stack inputs of a deployment
     ///
-    /// Values are converted to the type each input declares: numbers, true or
-    /// false, or a comma-separated list (or JSON array) for list inputs.
+    /// Values are read as in `alien deploy`: a JSON array of strings is a
+    /// list, and anything else is text that Alien converts to the type the
+    /// input declares (a number, true or false, or a comma-separated list).
+    /// Inputs you don't pass keep their saved values.
     SetInputs {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
@@ -596,6 +608,10 @@ pub enum DeploymentsCmd {
         /// Input value in ID=VALUE format (can be used multiple times)
         #[arg(long = "input")]
         inputs: Vec<String>,
+
+        /// Secret input value in ID=VALUE format, sent as text (can be used multiple times)
+        #[arg(long = "secret-input")]
+        secret_inputs: Vec<String>,
 
         /// Input to reset to its default (can be used multiple times)
         #[arg(long)]
@@ -1279,8 +1295,17 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             machine,
             quota_warning_overrides,
             clear_quota_warning_overrides,
+            yes,
             json,
         } => {
+            let confirmation = if machines == Some(0) {
+                InteractionMode::current(json).confirmation_mode(
+                    yes,
+                    "Scaling a pool to 0 machines stops its workloads and needs confirmation. Re-run with `--yes`.",
+                )?
+            } else {
+                ConfirmationMode::Skip
+            };
             let target = resolve_platform_target(&ctx, &id, json, "Compute changes").await?;
             let quota_warning_overrides = (clear_quota_warning_overrides
                 || !quota_warning_overrides.is_empty())
@@ -1299,6 +1324,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                     },
                     quota_warning_overrides,
                 },
+                confirmation,
                 json,
             )
             .await
@@ -1321,9 +1347,8 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                     message: "Pass the full set of variables with --env/--secret, or --clear to remove them all.".to_string(),
                 }));
             }
-            let confirmation = deployment_actions::confirmation_mode(
+            let confirmation = InteractionMode::current(json).confirmation_mode(
                 yes,
-                json,
                 "Replacing environment variables removes any variable not listed and needs confirmation. Re-run with `--yes`.",
             )?;
             let target =
@@ -1351,6 +1376,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
         DeploymentsCmd::SetInputs {
             id,
             inputs,
+            secret_inputs,
             clear,
             json,
         } => {
@@ -1359,8 +1385,11 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 &target.client,
                 &target.workspace,
                 target.deployment.id.as_str(),
-                inputs,
-                clear,
+                deployment_actions::InputChanges {
+                    inputs,
+                    secret_inputs,
+                    clear,
+                },
                 json,
             )
             .await
@@ -1380,8 +1409,17 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             machine_id,
             deadline,
             force,
+            yes,
             json,
         } => {
+            let confirmation = if force {
+                InteractionMode::current(json).confirmation_mode(
+                    yes,
+                    "A forced drain stops the machine's replicas without waiting for replacements and needs confirmation. Re-run with `--yes`.",
+                )?
+            } else {
+                ConfirmationMode::Skip
+            };
             let target = resolve_platform_target(&ctx, &id, json, "Machine drains").await?;
             deployment_actions::drain_machine_task(
                 &target.client,
@@ -1390,6 +1428,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 &machine_id,
                 deadline,
                 force,
+                confirmation,
                 json,
             )
             .await
@@ -1415,9 +1454,8 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             yes,
             json,
         } => {
-            let confirmation = deployment_actions::confirmation_mode(
+            let confirmation = InteractionMode::current(json).confirmation_mode(
                 yes,
-                json,
                 "Removing a machine needs confirmation. Re-run with `--yes`.",
             )?;
             let target = resolve_platform_target(&ctx, &id, json, "Machine removal").await?;
@@ -1492,9 +1530,8 @@ async fn join_tokens_task(ctx: &ExecutionMode, cmd: JoinTokensCmd) -> Result<()>
             .await
         }
         JoinTokensCmd::Rotate { id, yes, json } => {
-            let confirmation = deployment_actions::confirmation_mode(
+            let confirmation = InteractionMode::current(json).confirmation_mode(
                 yes,
-                json,
                 "Rotating join tokens revokes every existing token and needs confirmation. Re-run with `--yes`.",
             )?;
             let target = resolve_platform_target(ctx, &id, json, ACTION).await?;
@@ -1513,9 +1550,8 @@ async fn join_tokens_task(ctx: &ExecutionMode, cmd: JoinTokensCmd) -> Result<()>
             yes,
             json,
         } => {
-            let confirmation = deployment_actions::confirmation_mode(
+            let confirmation = InteractionMode::current(json).confirmation_mode(
                 yes,
-                json,
                 "Revoking a join token needs confirmation. Re-run with `--yes`.",
             )?;
             let target = resolve_platform_target(ctx, &id, json, ACTION).await?;

@@ -21,7 +21,8 @@ use serde_json::Value;
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
-use crate::output::print_json;
+use crate::interaction::{ConfirmationMode, InteractionMode};
+use crate::output::{print_json, prompt_confirm};
 use crate::ui::dim_label;
 
 #[derive(Parser, Debug, Clone)]
@@ -159,7 +160,12 @@ pub enum AccessRequestsAction {
         duration: Option<String>,
     },
     /// Deny someone else's queued access request.
-    Deny { id: String },
+    Deny {
+        id: String,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
     /// Revoke an access request: pending operations fail and open debug sessions stop.
     Revoke {
         id: String,
@@ -219,7 +225,20 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
         AccessRequestsAction::Approve { id, duration } => {
             approve_task(&sdk_client, &workspace, &id, duration.as_deref(), args.json).await
         }
-        AccessRequestsAction::Deny { id } => {
+        AccessRequestsAction::Deny { id, yes } => {
+            let confirmation = InteractionMode::current(args.json).confirmation_mode(
+                yes,
+                "Denying an access request can't be undone and needs confirmation. Re-run with `--yes`.",
+            )?;
+            if matches!(confirmation, ConfirmationMode::Prompt)
+                && !prompt_confirm(
+                    &format!("Deny access request {id}? It can't be approved afterwards."),
+                    false,
+                )?
+            {
+                println!("{}", dim_label("Nothing changed."));
+                return Ok(());
+            }
             deny_task(&sdk_client, &workspace, &id, args.json).await
         }
         AccessRequestsAction::Revoke { id, reason } => {

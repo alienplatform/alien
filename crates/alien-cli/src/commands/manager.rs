@@ -118,6 +118,10 @@ pub enum ManagersCmd {
         /// Manager release ID (rel_...). Omit to use the latest release.
         #[arg(long)]
         release: Option<String>,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
     },
     /// Run a private manager's provisioning again, for example after it failed
     Provision {
@@ -403,6 +407,9 @@ pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()>
         ManagersCmd::Delete { yes, .. } => {
             confirmation_mode(*yes, args.json, "delete")?;
         }
+        ManagersCmd::Update { yes, .. } => {
+            confirmation_mode(*yes, args.json, "update")?;
+        }
         _ => {}
     }
 
@@ -473,7 +480,24 @@ pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()>
             )
             .await?;
         }
-        ManagersCmd::Update { id, release } => {
+        ManagersCmd::Update { id, release, yes } => {
+            let mode = confirmation_mode(yes, args.json, "update")?;
+            if matches!(mode, ConfirmationMode::Prompt)
+                && !prompt_confirm(
+                    &format!(
+                        "Update manager {id} to {}?",
+                        release
+                            .as_deref()
+                            .map_or("the latest manager release".to_string(), |release| format!(
+                                "release {release}"
+                            ))
+                    ),
+                    false,
+                )?
+            {
+                println!("Nothing changed.");
+                return Ok(());
+            }
             update_manager_task(&auth, &workspace, &id, release.as_deref(), args.json).await?;
         }
         ManagersCmd::Provision { id } => {

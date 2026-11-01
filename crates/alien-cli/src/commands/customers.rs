@@ -77,7 +77,7 @@ pub enum CustomersCommand {
         #[arg(long)]
         clear: bool,
     },
-    /// Delete an empty deployment group
+    /// Delete an empty deployment group and its API keys
     #[command(visible_alias = "rm")]
     Delete {
         /// Deployment-group ID, name, or external ID
@@ -297,7 +297,10 @@ pub async fn customers_task(args: CustomersArgs, ctx: ExecutionMode) -> Result<(
             let customer = resolve_customer(&client, &workspace, &project_id, &customer).await?;
             if confirmation == ConfirmationMode::Prompt
                 && !prompt_confirm(
-                    &format!("Delete deployment group {}?", customer.name.as_str()),
+                    &format!(
+                        "Delete deployment group {}? Its API keys are deleted too, so anything using them stops working.",
+                        customer.name.as_str()
+                    ),
                     false,
                 )?
             {

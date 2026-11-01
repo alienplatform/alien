@@ -511,7 +511,7 @@ fn collect_raw_input_values(
     Ok(values)
 }
 
-fn parse_raw_stack_input_value(value: &str) -> serde_json::Value {
+pub(crate) fn parse_raw_stack_input_value(value: &str) -> serde_json::Value {
     match serde_json::from_str::<Vec<String>>(value) {
         Ok(values) => {
             serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect())
@@ -565,7 +565,7 @@ fn to_sdk_stack_input_values(
         .collect()
 }
 
-fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
+pub(crate) fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
     let Some((id, value)) = input.split_once('=') else {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: flag.trim_start_matches("--").to_string(),

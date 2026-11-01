@@ -10,7 +10,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
-use crate::output::print_json;
+use crate::interaction::{ConfirmationMode, InteractionMode};
+use crate::output::{print_json, prompt_confirm};
 use crate::ui::{dim_label, make_table, print_table, success_line};
 
 #[derive(Parser, Debug, Clone)]
@@ -60,7 +61,12 @@ pub enum ApiKeysCommand {
     #[command(visible_aliases = ["describe", "show"])]
     Get { id: String },
     /// Stop accepting an API key until it is enabled again
-    Disable { id: String },
+    Disable {
+        id: String,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
     /// Accept a disabled API key again
     Enable { id: String },
     /// Revoke an API key
@@ -212,7 +218,20 @@ pub async fn api_keys_task(args: ApiKeysArgs, ctx: ExecutionMode) -> Result<()> 
                 );
             }
         }
-        ApiKeysCommand::Disable { id } => {
+        ApiKeysCommand::Disable { id, yes } => {
+            let confirmation = InteractionMode::current(args.json).confirmation_mode(
+                yes,
+                "Disabling an API key makes every request that uses it fail and needs confirmation. Re-run with `--yes`.",
+            )?;
+            if matches!(confirmation, ConfirmationMode::Prompt)
+                && !prompt_confirm(
+                    &format!("Disable API key {id}? Requests that use it fail until it is enabled again."),
+                    false,
+                )?
+            {
+                println!("{}", dim_label("Nothing changed."));
+                return Ok(());
+            }
             set_api_key_enabled(&client, &workspace, &id, false, args.json).await?;
         }
         ApiKeysCommand::Enable { id } => {

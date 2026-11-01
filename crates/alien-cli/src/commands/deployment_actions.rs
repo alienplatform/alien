@@ -1,23 +1,22 @@
 //! Platform actions on an existing deployment: compute, environment variables,
 //! stack inputs, health checks, machines, and machine join tokens.
 
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
 
 use alien_core::{ComputePoolSelection, ComputeSettings, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
-    ApiError, DeploymentDetailResponse, DrainMachinesMachineRequest, EnvironmentVariableConfig,
+    DeploymentDetailResponse, DrainMachinesMachineRequest, EnvironmentVariableConfig,
     UpdateDeploymentComputeRequest, UpdateDeploymentEnvironmentVariablesRequest,
     UpdateDeploymentInputsRequest,
 };
-use alien_platform_api::{
-    convert_sdk_error, ClientInfo as _, Error as SdkError, ResponseValue, SdkResultExt as _,
-};
+use alien_platform_api::SdkResultExt as _;
 use serde_json::{Map, Value};
 
 use crate::error::{ErrorData, Result};
-use crate::interaction::{ConfirmationMode, InteractionMode};
+use crate::interaction::ConfirmationMode;
 use crate::output::{print_json, prompt_confirm};
 use crate::ui::{command, dim_label, make_table, print_table, success_line};
 
@@ -46,18 +45,6 @@ pub(crate) struct ComputeChange {
     pub pool: PoolChange,
     /// `None` keeps the saved overrides; `Some` replaces them (empty clears them).
     pub quota_warning_overrides: Option<Vec<String>>,
-}
-
-pub(crate) fn confirmation_mode(yes: bool, json: bool, message: &str) -> Result<ConfirmationMode> {
-    InteractionMode::current(json).confirmation_mode(yes, message)
-}
-
-/// Returns false when the user declined the prompt.
-fn confirmed(mode: ConfirmationMode, question: &str) -> Result<bool> {
-    match mode {
-        ConfirmationMode::Skip => Ok(true),
-        ConfirmationMode::Prompt => prompt_confirm(question, false),
-    }
 }
 
 fn detail_json(deployment: &DeploymentDetailResponse) -> Result<Value> {
@@ -106,8 +93,8 @@ fn select_pool(compute: &ComputeSettings, requested: Option<&str>) -> Result<Str
     }
     match compute.pools.len() {
         0 => Err(invalid(
-            "This deployment has no saved compute pool choices, so there is nothing to \
-             resize here. Pools are chosen during setup; run setup again to save them."
+            "This deployment has no stored compute pool choices. Choose compute pools \
+             during deployment setup; rerunning `alien deploy` alone doesn't save them."
                 .to_string(),
         )),
         1 => Ok(compute.pools.keys().next().expect("one pool").clone()),
@@ -272,59 +259,26 @@ fn validate_quota_warning_overrides(detail: &Value, overrides: &[String]) -> Res
     )
 }
 
-/// Sends `PATCH /v1/deployments/{id}/compute` and returns the response JSON.
+/// Builds the compute update body.
 ///
-/// The generated request type leaves out an empty `quotaWarningOverrides`
-/// list, and an empty list is how the API clears the overrides. So the body
-/// goes out as JSON through the generated client's HTTP client, and API errors
-/// are converted the same way the SDK converts them.
-async fn send_compute_update(
-    client: &alien_platform_api::Client,
-    workspace: &str,
-    deployment_id: &str,
-    body: &Value,
-) -> Result<Value> {
-    let failed = || ErrorData::ApiRequestFailed {
-        message: format!("updating compute for deployment '{deployment_id}'"),
-        url: None,
-    };
-    let url = format!(
-        "{}/v1/deployments/{}/compute",
-        client.baseurl(),
-        urlencoding::encode(deployment_id)
-    );
-    let response = client
-        .client()
-        .patch(&url)
-        .query(&[("workspace", workspace)])
-        .json(body)
-        .send()
-        .await
-        .into_alien_error()
-        .context(failed())?;
-    let status = response.status();
-    let headers = response.headers().clone();
-    let text = response.text().await.into_alien_error().context(failed())?;
-    if status.is_success() {
-        return serde_json::from_str(&text)
-            .into_alien_error()
-            .context(ErrorData::JsonError {
-                operation: "parse".to_string(),
-                reason: "the compute update response".to_string(),
-            });
+/// Only the pool map is sent. The API keeps the saved container settings when
+/// `containers` is absent, so a concurrent container change isn't reverted.
+/// `Some(vec![])` for the overrides clears them.
+fn compute_request(
+    pools: Option<&HashMap<String, ComputePoolSelection>>,
+    quota_warning_overrides: Option<Vec<String>>,
+) -> Result<UpdateDeploymentComputeRequest> {
+    let mut body = Map::new();
+    if let Some(pools) = pools {
+        body.insert("compute".to_string(), serde_json::json!({ "pools": pools }));
     }
-    match serde_json::from_str::<ApiError>(&text) {
-        Ok(api_error) => Err(convert_sdk_error(SdkError::ErrorResponse(
-            ResponseValue::new(api_error, status, headers),
-        )))
-        .context(failed()),
-        Err(_) => Err(AlienError::new(ErrorData::ApiRequestFailed {
-            message: format!(
-                "updating compute for deployment '{deployment_id}' failed ({status}): {text}"
-            ),
-            url: None,
-        })),
+    if let Some(overrides) = quota_warning_overrides {
+        body.insert(
+            "quotaWarningOverrides".to_string(),
+            serde_json::json!(overrides),
+        );
     }
+    request_body(Value::Object(body), "compute")
 }
 
 pub(crate) async fn set_compute_task(
@@ -332,6 +286,7 @@ pub(crate) async fn set_compute_task(
     workspace: &str,
     deployment: &DeploymentDetailResponse,
     change: ComputeChange,
+    confirmation: ConfirmationMode,
     json: bool,
 ) -> Result<()> {
     let deployment_id = deployment.id.as_str();
@@ -351,37 +306,54 @@ pub(crate) async fn set_compute_task(
     }
 
     let detail = detail_json(deployment)?;
-    let mut body = Map::new();
     let mut changed_pool = None;
+    let mut pools_to_send = None;
     if !change.pool.is_empty() {
         let current = saved_compute(&detail)?;
         let (pool_id, compute) = apply_pool_change(current.as_ref(), &change.pool)?;
+        if matches!(confirmation, ConfirmationMode::Prompt)
+            && !prompt_confirm(
+                &format!("Scale pool '{pool_id}' to 0 machines? Its workloads stop running."),
+                false,
+            )?
+        {
+            println!("{}", dim_label("Nothing changed."));
+            return Ok(());
+        }
         changed_pool = Some((pool_id.clone(), describe_pool(&compute.pools[&pool_id])));
-        body.insert(
-            "compute".to_string(),
-            serde_json::to_value(&compute)
-                .into_alien_error()
-                .context(ErrorData::JsonError {
-                    operation: "serialize".to_string(),
-                    reason: "compute settings".to_string(),
-                })?,
-        );
+        pools_to_send = Some(compute.pools);
     }
     if let Some(overrides) = &change.quota_warning_overrides {
         validate_quota_warning_overrides(&detail, overrides)?;
-        body.insert(
-            "quotaWarningOverrides".to_string(),
-            serde_json::json!(overrides),
-        );
     }
-    let body = Value::Object(body);
-    // Checks the body against the API schema before sending it.
-    request_body::<UpdateDeploymentComputeRequest>(body.clone(), "compute")?;
+    let body = compute_request(
+        pools_to_send.as_ref(),
+        change.quota_warning_overrides.clone(),
+    )?;
 
-    let response = send_compute_update(client, workspace, deployment_id, &body).await?;
+    let response = client
+        .update_deployment_compute()
+        .id(deployment_id)
+        .workspace(workspace)
+        .body(body)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("updating compute for deployment '{deployment_id}'"),
+            url: None,
+        })?
+        .into_inner();
     if json {
         return print_json(&response);
     }
+    let response =
+        serde_json::to_value(&response)
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "serialize".to_string(),
+                reason: "the compute update response".to_string(),
+            })?;
     if response.get("outcome").and_then(Value::as_str) == Some("unchanged") {
         println!("Compute is already set to these values. Nothing to update.");
         return Ok(());
@@ -440,7 +412,9 @@ pub(crate) async fn set_environment_variables_task(
             )
         );
     }
-    if !confirmed(confirmation, "Replace the environment variables?")? {
+    if matches!(confirmation, ConfirmationMode::Prompt)
+        && !prompt_confirm("Replace the environment variables?", false)?
+    {
         println!("{}", dim_label("Nothing changed."));
         return Ok(());
     }
@@ -488,44 +462,83 @@ pub(crate) async fn set_environment_variables_task(
 // Stack inputs
 // ---------------------------------------------------------------------------
 
-/// Converts a command-line value to the JSON type the input declares.
-pub(crate) fn input_value(input_id: &str, kind: &str, raw: &str) -> Result<Value> {
-    let invalid = |expected: &str| {
+/// Stack input changes for `alien deployments set-inputs`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct InputChanges {
+    /// `ID=VALUE`, read as `alien deploy --input` reads it.
+    pub inputs: Vec<String>,
+    /// `ID=VALUE`, sent as text, as `alien deploy --secret-input` sends it.
+    pub secret_inputs: Vec<String>,
+    /// Input IDs to reset.
+    pub clear: Vec<String>,
+}
+
+/// Parses `changes` against the inputs the release declares and returns the
+/// values to save. Rejects undeclared inputs, an input given twice, and an
+/// input that is both set and cleared.
+pub(crate) fn input_values_to_save(
+    declared: &[&str],
+    changes: &InputChanges,
+) -> Result<Map<String, Value>> {
+    let invalid = |field: &str, message: String| {
         AlienError::new(ErrorData::ValidationError {
-            field: "input".to_string(),
-            message: format!("Input '{input_id}' takes {expected}, got '{raw}'."),
+            field: field.to_string(),
+            message,
         })
     };
-    match kind {
-        "number" => raw
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .and_then(serde_json::Number::from_f64)
-            .map(Value::Number)
-            .ok_or_else(|| invalid("a number")),
-        "integer" => raw
-            .trim()
-            .parse::<i64>()
-            .map(Value::from)
-            .map_err(|_| invalid("a whole number")),
-        "boolean" => match raw.trim() {
-            "true" => Ok(Value::Bool(true)),
-            "false" => Ok(Value::Bool(false)),
-            _ => Err(invalid("true or false")),
-        },
-        "stringList" if raw.trim_start().starts_with('[') => {
-            serde_json::from_str::<Vec<String>>(raw)
-                .map(|items| serde_json::json!(items))
-                .map_err(|_| invalid("a JSON array of strings or a comma-separated list"))
-        }
-        "stringList" => Ok(serde_json::json!(raw
-            .split(',')
-            .map(str::trim)
-            .filter(|item| !item.is_empty())
-            .collect::<Vec<_>>())),
-        _ => Ok(Value::String(raw.to_string())),
+    if changes.inputs.is_empty() && changes.secret_inputs.is_empty() && changes.clear.is_empty() {
+        return Err(invalid(
+            "input",
+            "Pass at least one --input ID=VALUE, --secret-input ID=VALUE, or --clear ID."
+                .to_string(),
+        ));
     }
+    let check_declared = |id: &str| {
+        if declared.contains(&id) {
+            return Ok(());
+        }
+        Err(invalid(
+            "input",
+            if declared.is_empty() {
+                format!("Input '{id}' is not declared: this deployment's release has no stack inputs you can change.")
+            } else {
+                format!(
+                    "Input '{id}' is not declared by this deployment's release. Inputs: {}",
+                    declared.join(", ")
+                )
+            },
+        ))
+    };
+
+    let mut values = Map::new();
+    let parsed = changes.inputs.iter().map(|arg| (arg, "--input")).chain(
+        changes
+            .secret_inputs
+            .iter()
+            .map(|arg| (arg, "--secret-input")),
+    );
+    for (arg, flag) in parsed {
+        let (id, raw) = crate::commands::deploy::parse_stack_input_arg(arg, flag)?;
+        check_declared(&id)?;
+        let value = if flag == "--secret-input" {
+            Value::String(raw)
+        } else {
+            crate::commands::deploy::parse_raw_stack_input_value(&raw)
+        };
+        if values.insert(id.clone(), value).is_some() {
+            return Err(invalid("input", format!("Input '{id}' was given twice.")));
+        }
+    }
+    for id in &changes.clear {
+        check_declared(id)?;
+        if values.contains_key(id) {
+            return Err(invalid(
+                "clear",
+                format!("Input '{id}' can't be both set and cleared."),
+            ));
+        }
+    }
+    Ok(values)
 }
 
 async fn fetch_inputs(
@@ -619,81 +632,22 @@ pub(crate) async fn set_inputs_task(
     client: &alien_platform_api::Client,
     workspace: &str,
     deployment_id: &str,
-    assignments: Vec<String>,
-    clear: Vec<String>,
+    changes: InputChanges,
     json: bool,
 ) -> Result<()> {
-    if assignments.is_empty() && clear.is_empty() {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "input".to_string(),
-            message: "Pass at least one --input ID=VALUE or --clear ID.".to_string(),
-        }));
-    }
     let current = fetch_inputs(client, workspace, deployment_id).await?;
-    let definitions: Vec<(String, String)> = current
+    let declared: Vec<&str> = current
         .get("inputs")
         .and_then(Value::as_array)
         .map(|inputs| {
             inputs
                 .iter()
-                .filter_map(|input| {
-                    Some((
-                        input.get("id")?.as_str()?.to_string(),
-                        input.get("kind")?.as_str()?.to_string(),
-                    ))
-                })
+                .filter_map(|input| input.get("id")?.as_str())
                 .collect()
         })
         .unwrap_or_default();
-    let unknown = |id: &str| {
-        let known: Vec<&str> = definitions.iter().map(|(id, _)| id.as_str()).collect();
-        AlienError::new(ErrorData::ValidationError {
-            field: "input".to_string(),
-            message: if known.is_empty() {
-                format!("Input '{id}' is not declared: this deployment's release has no stack inputs you can change.")
-            } else {
-                format!(
-                    "Input '{id}' is not declared by this deployment's release. Inputs: {}",
-                    known.join(", ")
-                )
-            },
-        })
-    };
-
-    let mut values = Map::new();
-    for assignment in &assignments {
-        let (id, raw) = assignment.split_once('=').ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "input".to_string(),
-                message: format!("Invalid --input '{assignment}'. Use ID=VALUE."),
-            })
-        })?;
-        let kind = definitions
-            .iter()
-            .find(|(known, _)| known == id)
-            .map(|(_, kind)| kind.as_str())
-            .ok_or_else(|| unknown(id))?;
-        if values
-            .insert(id.to_string(), input_value(id, kind, raw)?)
-            .is_some()
-        {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "input".to_string(),
-                message: format!("Input '{id}' was given twice."),
-            }));
-        }
-    }
-    for id in &clear {
-        if !definitions.iter().any(|(known, _)| known == id) {
-            return Err(unknown(id));
-        }
-        if values.contains_key(id) {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "clear".to_string(),
-                message: format!("Input '{id}' can't be both set and cleared."),
-            }));
-        }
-    }
+    let values = input_values_to_save(&declared, &changes)?;
+    let clear = changes.clear;
 
     let body: UpdateDeploymentInputsRequest = request_body(
         serde_json::json!({ "inputValues": values, "clearInputIds": clear }),
@@ -800,8 +754,19 @@ pub(crate) async fn drain_machine_task(
     machine_id: &str,
     deadline: Option<Duration>,
     force: bool,
+    confirmation: ConfirmationMode,
     json: bool,
 ) -> Result<()> {
+    if matches!(confirmation, ConfirmationMode::Prompt) {
+        println!(
+            "{}",
+            dim_label("A forced drain stops the machine's replicas without waiting for healthy replacements.")
+        );
+        if !prompt_confirm(&format!("Force-drain machine {machine_id}?"), false)? {
+            println!("{}", dim_label("Nothing changed."));
+            return Ok(());
+        }
+    }
     let body: DrainMachinesMachineRequest = request_body(
         serde_json::json!({
             "deadlineSeconds": deadline.map(|deadline| deadline.as_secs()),
@@ -897,7 +862,9 @@ pub(crate) async fn remove_machine_task(
             dim_label("The machine is forgotten and can't rejoin with its old identity. Drain it first so its workloads move.")
         );
     }
-    if !confirmed(confirmation, "Remove this machine?")? {
+    if matches!(confirmation, ConfirmationMode::Prompt)
+        && !prompt_confirm("Remove this machine?", false)?
+    {
         println!("{}", dim_label("Nothing changed."));
         return Ok(());
     }
@@ -932,6 +899,29 @@ pub(crate) async fn remove_machine_task(
 // Machine join tokens
 // ---------------------------------------------------------------------------
 
+/// Whether a join token still lets a host join. A token stops working once it
+/// is revoked, past its expiry, or out of joins.
+fn join_token_status(
+    revoked: bool,
+    expires_at: Option<&str>,
+    join_count: i64,
+    max_joins: Option<i64>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> &'static str {
+    let expired = expires_at
+        .and_then(|expires_at| chrono::DateTime::parse_from_rfc3339(expires_at).ok())
+        .is_some_and(|expires_at| expires_at <= now);
+    if revoked {
+        "revoked"
+    } else if expired {
+        "expired"
+    } else if max_joins.is_some_and(|max| join_count >= max) {
+        "exhausted"
+    } else {
+        "active"
+    }
+}
+
 pub(crate) async fn list_join_tokens_task(
     client: &alien_platform_api::Client,
     workspace: &str,
@@ -964,13 +954,23 @@ pub(crate) async fn list_join_tokens_task(
         );
         return Ok(());
     }
-    let mut table = make_table(&["Token", "Status", "Joins", "Created", "Last used"]);
+    let now = chrono::Utc::now();
+    let mut table = make_table(&[
+        "Token",
+        "Status",
+        "Joins",
+        "Expires",
+        "Created",
+        "Last used",
+    ]);
     for token in response.tokens {
-        let status = if token.revoked_at.is_some() {
-            "revoked"
-        } else {
-            "active"
-        };
+        let status = join_token_status(
+            token.revoked_at.is_some(),
+            token.expires_at.as_deref(),
+            token.join_count,
+            token.max_joins,
+            now,
+        );
         let joins = match token.max_joins {
             Some(max) => format!("{}/{max}", token.join_count),
             None => token.join_count.to_string(),
@@ -979,6 +979,7 @@ pub(crate) async fn list_join_tokens_task(
             token.id,
             status.to_string(),
             joins,
+            token.expires_at.unwrap_or_else(|| "never".to_string()),
             token.created_at,
             token.last_used_at.unwrap_or_else(|| "-".to_string()),
         ]);
@@ -1072,10 +1073,9 @@ pub(crate) async fn rotate_join_token_task(
             )
         );
     }
-    if !confirmed(
-        confirmation,
-        "Revoke every join token and create a new one?",
-    )? {
+    if matches!(confirmation, ConfirmationMode::Prompt)
+        && !prompt_confirm("Revoke every join token and create a new one?", false)?
+    {
         println!("{}", dim_label("Nothing changed."));
         return Ok(());
     }
@@ -1121,7 +1121,9 @@ pub(crate) async fn revoke_join_token_task(
     confirmation: ConfirmationMode,
     json: bool,
 ) -> Result<()> {
-    if !confirmed(confirmation, &format!("Revoke join token {token_id}?"))? {
+    if matches!(confirmation, ConfirmationMode::Prompt)
+        && !prompt_confirm(&format!("Revoke join token {token_id}?"), false)?
+    {
         println!("{}", dim_label("Nothing changed."));
         return Ok(());
     }
@@ -1312,8 +1314,13 @@ mod tests {
     }
 
     #[test]
-    fn merged_compute_is_accepted_by_the_platform_request_type() {
-        let current = compute(vec![("general", fixed(2, Some("t3.medium")))]);
+    fn compute_body_sends_pools_without_containers() {
+        let mut current = compute(vec![("general", fixed(2, Some("t3.medium")))]);
+        current.containers.insert(
+            "api".to_string(),
+            serde_json::from_value(serde_json::json!({"cpu": 1.0, "memory": "1Gi"}))
+                .expect("container settings"),
+        );
         let (_, next) = apply_pool_change(
             Some(&current),
             &PoolChange {
@@ -1322,46 +1329,107 @@ mod tests {
             },
         )
         .expect("count change applies");
-        let body: UpdateDeploymentComputeRequest =
-            request_body(serde_json::json!({ "compute": next }), "compute")
-                .expect("request type accepts merged compute");
+        let body = compute_request(Some(&next.pools), None).expect("request type accepts pools");
         let sent = serde_json::to_value(&body).expect("serialize request");
-        assert_eq!(sent["compute"]["pools"]["general"]["machines"], 3);
-        assert_eq!(sent["compute"]["pools"]["general"]["mode"], "fixed");
-        assert_eq!(sent["compute"]["pools"]["general"]["machine"], "t3.medium");
+        // The saved container settings are not sent back: the API keeps them.
         assert_eq!(
-            sent["compute"]["pools"]["general"]["failure_domains"]["spread"],
-            2
+            sent,
+            serde_json::json!({"compute": {"pools": serde_json::to_value(&next.pools).unwrap()}})
         );
+        assert_eq!(sent["compute"]["pools"]["general"]["machines"], 3);
+        assert_eq!(sent["compute"]["pools"]["general"]["machine"], "t3.medium");
+    }
+
+    #[tokio::test]
+    async fn clearing_quota_warning_overrides_sends_an_empty_list() {
+        let server = httpmock::MockServer::start_async().await;
+        let clear = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH)
+                    .path("/v1/deployments/dep_0c29fq4a2yjb7kx3smwdgxlcxd7f/compute")
+                    .query_param("workspace", "my-workspace")
+                    .json_body(serde_json::json!({"quotaWarningOverrides": []}));
+                then.status(200)
+                    .json_body(serde_json::json!({"outcome": "accepted", "operation": null}));
+            })
+            .await;
+        let client = alien_platform_api::Client::new(&server.base_url());
+        client
+            .update_deployment_compute()
+            .id("dep_0c29fq4a2yjb7kx3smwdgxlcxd7f")
+            .workspace("my-workspace")
+            .body(compute_request(None, Some(Vec::new())).expect("clear body"))
+            .send()
+            .await
+            .expect("clear request matches");
+        clear.assert_async().await;
+
+        let unchanged = serde_json::to_value(compute_request(None, None).expect("empty body"))
+            .expect("serialize request");
+        assert_eq!(unchanged, serde_json::json!({}));
     }
 
     #[test]
-    fn input_values_follow_the_declared_kind() {
+    fn join_token_status_shows_tokens_that_no_longer_work() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let past = Some("2026-06-01T11:59:59Z");
+        let future = Some("2026-06-02T00:00:00Z");
+        assert_eq!(join_token_status(false, None, 3, None, now), "active");
+        assert_eq!(join_token_status(false, future, 1, Some(2), now), "active");
+        assert_eq!(join_token_status(false, past, 0, None, now), "expired");
         assert_eq!(
-            input_value("n", "number", "1.5").unwrap(),
-            serde_json::json!(1.5)
+            join_token_status(false, future, 2, Some(2), now),
+            "exhausted"
         );
+        assert_eq!(join_token_status(true, past, 2, Some(2), now), "revoked");
+    }
+
+    #[test]
+    fn input_changes_parse_like_deploy_and_reject_conflicts() {
+        let declared = ["region", "domains", "token"];
+        let changes = |inputs: &[&str], secret_inputs: &[&str], clear: &[&str]| InputChanges {
+            inputs: inputs.iter().map(|value| value.to_string()).collect(),
+            secret_inputs: secret_inputs
+                .iter()
+                .map(|value| value.to_string())
+                .collect(),
+            clear: clear.iter().map(|value| value.to_string()).collect(),
+        };
+
+        let values = input_values_to_save(
+            &declared,
+            &changes(
+                &["region=us-east-2", r#"domains=["a.example","b.example"]"#],
+                &[r#"token=["not","a","list"]"#],
+                &[],
+            ),
+        )
+        .expect("declared inputs parse");
+        assert_eq!(values["region"], serde_json::json!("us-east-2"));
         assert_eq!(
-            input_value("i", "integer", "42").unwrap(),
-            serde_json::json!(42)
+            values["domains"],
+            serde_json::json!(["a.example", "b.example"])
         );
-        assert!(input_value("i", "integer", "4.2").is_err());
-        assert_eq!(
-            input_value("b", "boolean", "true").unwrap(),
-            serde_json::json!(true)
-        );
-        assert!(input_value("b", "boolean", "yes").is_err());
-        assert_eq!(
-            input_value("l", "stringList", "a, b,,c").unwrap(),
-            serde_json::json!(["a", "b", "c"])
-        );
-        assert_eq!(
-            input_value("l", "stringList", r#"["a,b","c"]"#).unwrap(),
-            serde_json::json!(["a,b", "c"])
-        );
-        assert_eq!(
-            input_value("s", "secret", "p=ss:word").unwrap(),
-            serde_json::json!("p=ss:word")
+        // A secret is sent as typed, even when it looks like JSON.
+        assert_eq!(values["token"], serde_json::json!(r#"["not","a","list"]"#));
+
+        let error = |changes: InputChanges| {
+            input_values_to_save(&declared, &changes)
+                .expect_err("rejected")
+                .to_string()
+        };
+        assert!(error(changes(&["zone=a"], &[], &[])).contains("'zone'"));
+        assert!(error(changes(&[], &[], &["zone"])).contains("'zone'"));
+        assert!(error(changes(&["region=a"], &["region=b"], &[])).contains("twice"));
+        assert!(error(changes(&["region=a"], &[], &["region"])).contains("set and cleared"));
+        assert!(error(changes(&["region"], &[], &[])).contains("id=value"));
+        assert!(error(changes(&[], &[], &[])).contains("at least one"));
+        assert!(
+            input_values_to_save(&declared, &changes(&[], &[], &["region"]))
+                .expect("clear only")
+                .is_empty()
         );
     }
 }
