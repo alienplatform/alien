@@ -5,10 +5,10 @@
     "aws": [
       {
         // The sandbox bundle bucket's policy is what keeps every principal but management from
-        // writing the bundles sandbox images are built from. Preflights add this to a workload
-        // profile that can manage the stack's bucket policies, so that grant cannot lift it, nor
-        // delete the bucket and create one of the same name without the policy. Setup and
-        // management never hold it: they set that policy and own the bucket.
+        // writing the bundles sandbox images are built from. Preflights add this to every
+        // workload profile of a stack that holds the bucket, so no grant, built-in or inline,
+        // can lift it or delete the bucket and create one of the same name without the policy.
+        // Setup and management never hold it: they set that policy and own the bucket.
         "label": "deny-sandbox-bundle-bucket-policy-changes",
         "effect": "Deny",
         "grant": {
