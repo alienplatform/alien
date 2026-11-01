@@ -8120,6 +8120,26 @@
             "type": "string",
             "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`.\n\nThe OSS CLI sends this field as `project` on `alien release`\n(see `alien-cli` release flow); the underlying alien-managerx\nrelease endpoint accepts both forms. Accept both here too so\n`alien release` against an OSS standalone manager doesn't fail\nat the schema layer with a confusing\n`unknown field \"project\", expected \"projectId\"`."
           },
+          "signedStacks": {
+            "type": "object",
+            "description": "Signed statements keyed by platform, from `alien release` with a\nsigning key. Stored and returned exactly as received; deployments in\nprotected mode verify them and deploy only the stack they contain.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SignedRelease"
+            },
+            "propertyNames": {
+              "type": "string",
+              "description": "Represents the target cloud platform.",
+              "enum": [
+                "aws",
+                "gcp",
+                "azure",
+                "kubernetes",
+                "machines",
+                "local",
+                "test"
+              ]
+            }
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
           }
@@ -16803,6 +16823,26 @@
               "type": "string"
             }
           },
+          "signedStacks": {
+            "type": "object",
+            "description": "Signed statements keyed by platform, exactly as they were created.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SignedRelease"
+            },
+            "propertyNames": {
+              "type": "string",
+              "description": "Represents the target cloud platform.",
+              "enum": [
+                "aws",
+                "gcp",
+                "azure",
+                "kubernetes",
+                "machines",
+                "local",
+                "test"
+              ]
+            }
+          },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
           },
@@ -19238,6 +19278,25 @@
           "manual",
           "automatic"
         ]
+      },
+      "SignedRelease": {
+        "type": "object",
+        "description": "A signed release statement as it is stored and forwarded: the exact bytes\nthat were signed and the signature over them. Carriers pass both through\nunchanged; only a verifier reads them (see `release_signature`).",
+        "required": [
+          "payload",
+          "signature"
+        ],
+        "properties": {
+          "payload": {
+            "type": "string",
+            "description": "Base64 of the statement's JSON bytes."
+          },
+          "signature": {
+            "type": "string",
+            "description": "Base64 DER ECDSA P-256 signature over SHA-256 of the payload bytes."
+          }
+        },
+        "additionalProperties": false
       },
       "SourceCredentials": {
         "type": "string",
