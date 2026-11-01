@@ -5,9 +5,9 @@
 //! the resource declarations they produce instead of like AST builders.
 
 use hcl::{
-    Identifier,
     expr::Expression,
     structure::{Attribute, Block, BlockLabel, Body, Structure},
+    Identifier,
 };
 
 /// Build a `resource "type" "label" { ... }` block from an iterator of

@@ -197,20 +197,27 @@ fn terraform(dir: &Path, args: &[&str]) -> String {
 }
 
 fn plan(dir: &Path, name: &str) -> Value {
-    terraform(
-        dir,
-        &[
-            "plan",
-            "-refresh=false",
-            "-input=false",
-            "-no-color",
-            "-lock=false",
-            &format!("-out={name}"),
-            "-var=name=e2e-upgrade",
-            "-var=token=synthetic-setup-token",
-            &format!("-var=resource_prefix={PREFIX}"),
-        ],
-    );
+    plan_with(dir, name, &[])
+}
+
+/// A plan with extra `-var` assignments, such as `x=false`.
+fn plan_with(dir: &Path, name: &str, vars: &[&str]) -> Value {
+    let out = format!("-out={name}");
+    let prefix = format!("-var=resource_prefix={PREFIX}");
+    let vars: Vec<String> = vars.iter().map(|var| format!("-var={var}")).collect();
+    let mut args = vec![
+        "plan",
+        "-refresh=false",
+        "-input=false",
+        "-no-color",
+        "-lock=false",
+        &out,
+        "-var=name=e2e-upgrade",
+        "-var=token=synthetic-setup-token",
+        &prefix,
+    ];
+    args.extend(vars.iter().map(String::as_str));
+    terraform(dir, &args);
     serde_json::from_str(&terraform(dir, &["show", "-json", name])).expect("plan JSON")
 }
 
@@ -1800,4 +1807,363 @@ async fn a_grant_on_a_counted_role_instance_moves_to_a_managed_policy() {
         document["Statement"][0]["Resource"],
         json!([format!("arn:aws:s3:::{PREFIX}-gated/*")])
     );
+}
+
+/// How a stand-in emitter's grants share one role, in ways whose generated labels used to
+/// collide.
+#[derive(Clone, Copy)]
+enum SharedRole {
+    /// Two grants on one role behind opposite gates on the same input.
+    OppositeGates,
+    /// A role with `count = 2`, granted on each instance.
+    TwoInstances,
+    /// One instance of a counted role, named `role[0]` by one grant and `role.0` by another.
+    OneInstanceTwoWays,
+}
+
+struct SharedRoleGrants(SharedRole);
+
+/// `s3:<action>` on the stand-in's bucket.
+fn shared_role_statement(action: &str) -> hcl::Expression {
+    expr::object([
+        ("Effect", hcl::Expression::String("Allow".into())),
+        ("Action", hcl::Expression::String(format!("s3:{action}"))),
+        (
+            "Resource",
+            expr::template("arn:aws:s3:::${local.resource_prefix}-shared/*"),
+        ),
+    ])
+}
+
+impl TfEmitter for SharedRoleGrants {
+    fn emit(&self, ctx: &EmitContext<'_>) -> alien_core::Result<TfFragment> {
+        let label = required_label(ctx)?;
+        let role = format!("{label}_shared");
+        let mut fragment = TfFragment::default();
+        let counted = !matches!(self.0, SharedRole::OppositeGates);
+        let mut role_body = vec![
+            attr(
+                "name",
+                if counted {
+                    expr::template("${local.resource_prefix}-shared-${count.index}")
+                } else {
+                    resource_prefix_template("shared")
+                },
+            ),
+            attr(
+                "assume_role_policy",
+                service_assume_role_policy(&["ec2.amazonaws.com"]),
+            ),
+        ];
+        if counted {
+            role_body.insert(0, attr("count", hcl::Expression::Number(2.into())));
+        }
+        fragment
+            .resource_blocks
+            .push(resource_block("aws_iam_role", &role, role_body));
+        let grants: Vec<(&str, &str, String, Option<String>)> = match self.0 {
+            SharedRole::OppositeGates => {
+                fragment.variable_blocks.push(
+                    hcl::Block::builder("variable")
+                        .add_label(format!("{label}_shared_on"))
+                        .add_attribute(("type", expr::parse("bool")?))
+                        .add_attribute(("default", hcl::Expression::Bool(true)))
+                        .build(),
+                );
+                vec![
+                    (
+                        "on",
+                        "GetObject",
+                        format!("aws_iam_role.{role}.id"),
+                        Some(format!("var.{label}_shared_on ? 1 : 0")),
+                    ),
+                    (
+                        "off",
+                        "PutObject",
+                        format!("aws_iam_role.{role}.id"),
+                        Some(format!("var.{label}_shared_on ? 0 : 1")),
+                    ),
+                ]
+            }
+            SharedRole::TwoInstances => vec![
+                (
+                    "first",
+                    "GetObject",
+                    format!("aws_iam_role.{role}[0].id"),
+                    None,
+                ),
+                (
+                    "second",
+                    "PutObject",
+                    format!("aws_iam_role.{role}[1].id"),
+                    None,
+                ),
+            ],
+            SharedRole::OneInstanceTwoWays => vec![
+                (
+                    "index",
+                    "GetObject",
+                    format!("aws_iam_role.{role}[0].id"),
+                    None,
+                ),
+                (
+                    "legacy",
+                    "PutObject",
+                    format!("aws_iam_role.{role}.0.id"),
+                    None,
+                ),
+            ],
+        };
+        for (suffix, action, role_reference, count) in grants {
+            let mut body = vec![
+                attr("name", hcl::Expression::String(format!("shared-{suffix}"))),
+                attr("role", expr::parse(&role_reference)?),
+                attr(
+                    "policy",
+                    expr::jsonencode(expr::object([
+                        ("Version", hcl::Expression::String("2012-10-17".into())),
+                        (
+                            "Statement",
+                            hcl::Expression::Array(vec![shared_role_statement(action)]),
+                        ),
+                    ])),
+                ),
+            ];
+            if let Some(count) = count {
+                body.insert(0, attr("count", expr::parse(&count)?));
+            }
+            fragment.resource_blocks.push(resource_block(
+                "aws_iam_role_policy",
+                &format!("{role}_{suffix}"),
+                body,
+            ));
+        }
+        Ok(fragment)
+    }
+
+    fn emit_import_ref(&self, _ctx: &EmitContext<'_>) -> alien_core::Result<hcl::Expression> {
+        Ok(hcl::Expression::Object(hcl::Object::new()))
+    }
+}
+
+/// The stand-in's planned IAM changes: address -> change.
+fn shared_role_changes(plan: &Value) -> BTreeMap<String, Value> {
+    plan["resource_changes"]
+        .as_array()
+        .expect("resource changes")
+        .iter()
+        .filter(|change| change["name"].as_str().unwrap().contains("_shared"))
+        .map(|change| {
+            (
+                change["address"].as_str().unwrap().to_string(),
+                change.clone(),
+            )
+        })
+        .collect()
+}
+
+/// The planned document of a managed policy, as JSON.
+fn planned_document(change: &Value) -> Value {
+    serde_json::from_str(
+        change["change"]["after"]["policy"]
+            .as_str()
+            .expect("the document is known"),
+    )
+    .expect("the document is JSON")
+}
+
+/// The actions of the stand-in's statements in a planned document.
+fn planned_actions(change: &Value) -> Vec<String> {
+    planned_document(change)["Statement"]
+        .as_array()
+        .expect("statements")
+        .iter()
+        .flat_map(|statement| match &statement["Action"] {
+            Value::Array(actions) => actions
+                .iter()
+                .map(|action| action.as_str().unwrap().to_string())
+                .collect(),
+            action => vec![action.as_str().unwrap().to_string()],
+        })
+        .collect()
+}
+
+/// Renders the stand-in into the container stack, validates the whole module, and plans it.
+async fn shared_role_module(case: SharedRole) -> (alien_terraform::ModuleFiles, tempfile::TempDir) {
+    let stack = prepared_stack().await;
+    let module = render(&stack, &container_registry(SharedRoleGrants(case)));
+    assert_terraform_valid(&module, "grants sharing a role");
+    let dir = module_dir(&module);
+    (module, dir)
+}
+
+fn of_kind<'a>(changes: &'a BTreeMap<String, Value>, kind: &str) -> Vec<&'a String> {
+    changes
+        .keys()
+        .filter(|address| address.starts_with(&format!("{kind}.")))
+        .collect()
+}
+
+/// Two grants on one role behind opposite gates on one input get managed policies,
+/// attachments and barriers of their own, each behind its grant's gate, and either value of
+/// the input plans exactly one set.
+#[tokio::test]
+async fn grants_behind_opposite_gates_on_one_role_get_their_own_addresses() {
+    if std::env::var("SKIP_LINTERS").as_deref() == Ok("1") {
+        return;
+    }
+    let (module, dir) = shared_role_module(SharedRole::OppositeGates).await;
+    let gated_blocks: Vec<(String, String)> = module
+        .iter()
+        .filter(|(name, _)| name.ends_with(".tf"))
+        .flat_map(|(_, contents)| {
+            hcl::from_str::<hcl::Body>(contents)
+                .unwrap()
+                .into_blocks()
+                .collect::<Vec<_>>()
+        })
+        .filter(|block| {
+            block.identifier() == "resource"
+                && block.labels()[1].as_str().contains("_shared")
+                && matches!(
+                    block.labels()[0].as_str(),
+                    "aws_iam_policy" | "aws_iam_role_policy_attachment" | "terraform_data"
+                )
+        })
+        .map(|block| {
+            let count = block
+                .body()
+                .attributes()
+                .find(|attribute| attribute.key() == "count")
+                .map(|attribute| attribute.expr().to_string())
+                .unwrap_or_default();
+            (
+                format!(
+                    "{}.{}",
+                    block.labels()[0].as_str(),
+                    block.labels()[1].as_str()
+                ),
+                count,
+            )
+        })
+        .collect();
+    // One policy, attachment and barrier per gate, each behind its gate.
+    assert_eq!(gated_blocks.len(), 6, "{gated_blocks:?}");
+    for gate in ["? 1 : 0", "? 0 : 1"] {
+        let behind: Vec<&String> = gated_blocks
+            .iter()
+            .filter(|(_, count)| count.ends_with(gate))
+            .map(|(address, _)| address)
+            .collect();
+        assert_eq!(behind.len(), 3, "{gate}: {gated_blocks:?}");
+    }
+
+    let variable = module
+        .iter()
+        .flat_map(|(_, contents)| contents.lines())
+        .find_map(|line| {
+            line.strip_prefix("variable \"")?
+                .strip_suffix("\" {")
+                .filter(|name| name.ends_with("_shared_on"))
+        })
+        .expect("the stand-in declares its input")
+        .to_string();
+    let role = variable.strip_suffix("_on").unwrap();
+    for (on, granted, stub) in [
+        ("true", "s3:GetObject", "on"),
+        ("false", "s3:PutObject", "off"),
+    ] {
+        let changes = shared_role_changes(&plan_with(
+            dir.path(),
+            &format!("{on}.tfplan"),
+            &[&format!("{variable}={on}")],
+        ));
+        let [policy] = of_kind(&changes, "aws_iam_policy")[..] else {
+            panic!("one managed policy when on={on}: {:?}", changes.keys());
+        };
+        assert_eq!(planned_actions(&changes[policy]), [granted]);
+        let label = policy
+            .strip_prefix("aws_iam_policy.")
+            .and_then(|label| label.strip_suffix("[0]"))
+            .expect("the policy keeps its gate");
+        assert!(changes.contains_key(&format!(
+            "aws_iam_role_policy_attachment.{label}_attachment[0]"
+        )));
+        assert_eq!(of_kind(&changes, "terraform_data").len(), 1, "{on}");
+        let [planned_stub] = of_kind(&changes, "aws_iam_role_policy")[..] else {
+            panic!("one stub when on={on}: {:?}", changes.keys());
+        };
+        assert_eq!(
+            planned_stub,
+            &format!("aws_iam_role_policy.{role}_{stub}[0]")
+        );
+        assert_eq!(
+            changes[planned_stub]["change"]["after"]["policy"],
+            json!(INERT_POLICY)
+        );
+    }
+}
+
+/// Grants on two instances of a counted role get managed policies and barriers of their own,
+/// each attached to its instance.
+#[tokio::test]
+async fn grants_on_two_instances_of_a_role_get_their_own_addresses() {
+    if std::env::var("SKIP_LINTERS").as_deref() == Ok("1") {
+        return;
+    }
+    let (_module, dir) = shared_role_module(SharedRole::TwoInstances).await;
+    let changes = shared_role_changes(&plan(dir.path(), "fresh.tfplan"));
+    let policies = of_kind(&changes, "aws_iam_policy");
+    assert_eq!(policies.len(), 2, "{:?}", changes.keys());
+    let mut attached = BTreeMap::new();
+    for policy in policies {
+        let label = policy.strip_prefix("aws_iam_policy.").unwrap();
+        let attachment = &changes[&format!("aws_iam_role_policy_attachment.{label}_attachment")];
+        attached.insert(
+            attachment["change"]["after"]["role"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            planned_actions(&changes[policy]),
+        );
+    }
+    assert_eq!(
+        attached,
+        BTreeMap::from([
+            (
+                format!("{PREFIX}-shared-0"),
+                vec!["s3:GetObject".to_string()]
+            ),
+            (
+                format!("{PREFIX}-shared-1"),
+                vec!["s3:PutObject".to_string()]
+            ),
+        ])
+    );
+    assert_eq!(of_kind(&changes, "terraform_data").len(), 2);
+}
+
+/// `role[0]` and `role.0` name one instance, so their grants share its managed policy and
+/// barrier.
+#[tokio::test]
+async fn one_role_instance_written_two_ways_is_one_group() {
+    if std::env::var("SKIP_LINTERS").as_deref() == Ok("1") {
+        return;
+    }
+    let (_module, dir) = shared_role_module(SharedRole::OneInstanceTwoWays).await;
+    let changes = shared_role_changes(&plan(dir.path(), "fresh.tfplan"));
+    let [policy] = of_kind(&changes, "aws_iam_policy")[..] else {
+        panic!("one managed policy: {:?}", changes.keys());
+    };
+    let mut actions = planned_actions(&changes[policy]);
+    actions.sort();
+    assert_eq!(actions, ["s3:GetObject", "s3:PutObject"]);
+    let label = policy.strip_prefix("aws_iam_policy.").unwrap();
+    assert_eq!(
+        changes[&format!("aws_iam_role_policy_attachment.{label}_attachment")]["change"]["after"]
+            ["role"],
+        json!(format!("{PREFIX}-shared-0"))
+    );
+    assert_eq!(of_kind(&changes, "terraform_data").len(), 1);
+    assert_eq!(of_kind(&changes, "aws_iam_role_policy").len(), 2);
 }

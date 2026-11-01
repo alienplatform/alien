@@ -6,9 +6,9 @@ use crate::{
     expr,
 };
 use alien_core::{
-    ErrorData, Result, Storage,
     import::EmitContext,
-    storage_notifications::{AWS_QUEUE_INGRESS_SID, aws_notification_id, storages_notifying_queue},
+    storage_notifications::{aws_notification_id, storages_notifying_queue, AWS_QUEUE_INGRESS_SID},
+    ErrorData, Result, Storage,
 };
 use alien_error::AlienError;
 use hcl::{expr::Expression, structure::Block};

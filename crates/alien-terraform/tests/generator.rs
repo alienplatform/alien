@@ -12,7 +12,6 @@ mod generator {
     pub mod remote_kv_tests;
     pub mod remote_queue_tests;
 
-    pub mod boundary_tests;
     pub mod aws_boundary_size_tests;
     pub mod aws_compute_tests;
     pub mod aws_data_layer_tests;
@@ -24,12 +23,13 @@ mod generator {
     pub mod azure_compute_tests;
     pub mod azure_data_layer_tests;
     pub mod azure_full_stack_tests;
-    pub mod azure_kv_upgrade_tests;
     pub mod azure_identity_tests;
+    pub mod azure_kv_upgrade_tests;
     pub mod azure_profile_grant_tests;
     pub mod azure_queue_grant_tests;
     pub mod azure_shared_grant_tests;
     pub mod azure_storage_settings_tests;
+    pub mod boundary_tests;
     pub mod deployment_name_tests;
     pub mod enabled_queue_tests;
     pub mod enabled_storage_tests;

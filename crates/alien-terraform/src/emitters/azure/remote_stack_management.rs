@@ -308,7 +308,13 @@ fn emit_management_roles(
     }
     for role in &roles.role_assignment_roles {
         for shard in 0..role_assignment_shards.max(1) {
-            emit_management_role(fragment, label, role, ManagementRoleKind::RoleAssignments, shard);
+            emit_management_role(
+                fragment,
+                label,
+                role,
+                ManagementRoleKind::RoleAssignments,
+                shard,
+            );
         }
     }
 }
@@ -326,8 +332,7 @@ fn runtime_role_conditions(
     runtime_roles: &AzureRuntimeRoles,
 ) -> Result<Vec<String>> {
     let local_name = format!("{label}_runtime_role_ids");
-    let placeholder =
-        |seed: &str| Uuid::new_v5(&Uuid::NAMESPACE_URL, seed.as_bytes()).to_string();
+    let placeholder = |seed: &str| Uuid::new_v5(&Uuid::NAMESPACE_URL, seed.as_bytes()).to_string();
     let mut references: Vec<(String, String)> = Vec::new();
     let mut ids = Vec::new();
     let mut management_ids = BTreeSet::new();
@@ -381,12 +386,14 @@ fn runtime_role_conditions(
             ctx.stack_settings.setup_management,
             ctx.platform,
         ) {
-            return Err(alien_error::AlienError::new(ErrorData::OperationNotSupported {
-                operation: format!("Azure setup without identity '{resource_id}'"),
-                reason: "management's role-assignment condition names every application \
+            return Err(alien_error::AlienError::new(
+                ErrorData::OperationNotSupported {
+                    operation: format!("Azure setup without identity '{resource_id}'"),
+                    reason: "management's role-assignment condition names every application \
                          identity, so setup must create it"
-                    .to_string(),
-            }));
+                        .to_string(),
+                },
+            ));
         }
         let Some(identity_label) = ctx.name_for(resource_id) else {
             continue;
@@ -404,15 +411,15 @@ fn runtime_role_conditions(
         &management_ids,
         &workload_ids,
     )
-        .into_iter()
-        .map(|condition| {
-            references
-                .iter()
-                .fold(condition, |condition, (stand_in, reference)| {
-                    condition.replace(stand_in.as_str(), reference)
-                })
-        })
-        .collect())
+    .into_iter()
+    .map(|condition| {
+        references
+            .iter()
+            .fold(condition, |condition, (stand_in, reference)| {
+                condition.replace(stand_in.as_str(), reference)
+            })
+    })
+    .collect())
 }
 
 /// One conditioned assignment per role-assignment role and shard. Not gated: the conditions
@@ -472,7 +479,10 @@ fn emit_role_assignment_role_assignments(
 
 /// The remote-bindings identity's roles the runtime assigns, under the runtime's ids. The
 /// profiles' and management's are emitted with the resources that use them.
-fn emit_remote_bindings_runtime_roles(fragment: &mut TfFragment, runtime_roles: &AzureRuntimeRoles) {
+fn emit_remote_bindings_runtime_roles(
+    fragment: &mut TfFragment,
+    runtime_roles: &AzureRuntimeRoles,
+) {
     let holder = AzureRuntimeRoleHolder::Profile(AZURE_REMOTE_BINDINGS_PROFILE.to_string());
     for (index, role) in runtime_roles
         .custom_roles
@@ -480,14 +490,19 @@ fn emit_remote_bindings_runtime_roles(fragment: &mut TfFragment, runtime_roles: 
         .filter(|role| role.holder == holder)
         .enumerate()
     {
-        let seed =
-            holder.role_definition_seed("${local.resource_prefix}", &role.permission_set_id, &role.key);
+        let seed = holder.role_definition_seed(
+            "${local.resource_prefix}",
+            &role.permission_set_id,
+            &role.key,
+        );
         let definition = &role.role_definition;
-        let assignable_scopes =
-            protected_management_assignable_scopes(OWN_RESOURCE_GROUP_SCOPE, OWN_SUBSCRIPTION_SCOPE)
-                .into_iter()
-                .map(expr::template)
-                .collect();
+        let assignable_scopes = protected_management_assignable_scopes(
+            OWN_RESOURCE_GROUP_SCOPE,
+            OWN_SUBSCRIPTION_SCOPE,
+        )
+        .into_iter()
+        .map(expr::template)
+        .collect();
         fragment.push_shared_resource(resource_block(
             "azurerm_role_definition",
             &format!("runtime_remote_bindings_{index}"),
@@ -499,16 +514,31 @@ fn emit_remote_bindings_runtime_roles(fragment: &mut TfFragment, runtime_roles: 
                         definition.name
                     )),
                 ),
-                attr("role_definition_id", expr::raw(format!("uuidv5(\"oid\", \"{seed}\")"))),
-                attr("scope", expr::template(OWN_RESOURCE_GROUP_SCOPE.to_string())),
-                attr("description", expr::template(definition.description.clone())),
+                attr(
+                    "role_definition_id",
+                    expr::raw(format!("uuidv5(\"oid\", \"{seed}\")")),
+                ),
+                attr(
+                    "scope",
+                    expr::template(OWN_RESOURCE_GROUP_SCOPE.to_string()),
+                ),
+                attr(
+                    "description",
+                    expr::template(definition.description.clone()),
+                ),
                 nested(block(
                     "permissions",
                     [
                         attr("actions", string_array(definition.actions.clone())),
-                        attr("data_actions", string_array(definition.data_actions.clone())),
+                        attr(
+                            "data_actions",
+                            string_array(definition.data_actions.clone()),
+                        ),
                         attr("not_actions", string_array(definition.not_actions.clone())),
-                        attr("not_data_actions", string_array(definition.not_data_actions.clone())),
+                        attr(
+                            "not_data_actions",
+                            string_array(definition.not_data_actions.clone()),
+                        ),
                     ],
                 )),
                 attr("assignable_scopes", Expression::Array(assignable_scopes)),

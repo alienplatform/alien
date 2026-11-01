@@ -61,12 +61,16 @@ struct Grant {
     depends_on: Vec<Expression>,
 }
 
-/// Grants of one role under one gate, which may fold into the same managed policies.
+/// Grants of one role instance under one gate, which may fold into the same managed policies.
 struct Group {
     role: String,
-    /// The role's `name`, at the instance the grants name when the role has a `count`.
+    /// The instance the grants name when the role has a `count`, however it is written.
+    instance: Option<u64>,
+    /// The role's `name`, at that instance.
     role_name: Expression,
     count: Option<Expression>,
+    /// The `count` as Terraform formats it, which tells gates apart.
+    gate: Option<String>,
     grants: Vec<usize>,
 }
 
@@ -100,12 +104,13 @@ pub(crate) fn consolidate_role_policies(
             if attribute(block, "for_each").is_some() {
                 return Err(invalid(&address, "uses for_each"));
             }
-            let (role, role_name) = role_reference(block)
+            let (role, instance, role_name) = role_reference(block)
                 .ok_or_else(|| invalid(&address, "names no role of this module"))?;
             if !role_fragments.contains_key(role) {
                 return Err(invalid(&address, "names no role of this module"));
             }
             let count = attribute(block, "count").cloned();
+            let gate = count.as_ref().map(format_expression).transpose()?;
             let statements = statements(block, &address)?;
             let depends_on = match attribute(block, "depends_on") {
                 Some(Expression::Array(dependencies)) => dependencies.clone(),
@@ -121,13 +126,15 @@ pub(crate) fn consolidate_role_policies(
                 depends_on,
             });
             match groups.iter_mut().find(|group| {
-                group.role == role && group.role_name == role_name && group.count == count
+                group.role == role && group.instance == instance && group.gate == gate
             }) {
                 Some(group) => group.grants.push(grant),
                 None => groups.push(Group {
                     role: role.to_string(),
+                    instance,
                     role_name,
                     count,
+                    gate,
                     grants: vec![grant],
                 }),
             }
@@ -189,7 +196,8 @@ pub(crate) fn consolidate_role_policies(
                 if labels_in_use.contains(&label) {
                     // One document in two bins of a role: grants on resources that share it,
                     // kept apart by dependency order. The bin's first former grant, an address
-                    // that never changes, tells them apart.
+                    // that never changes, tells them apart. Which of the two keeps the plain
+                    // content address follows bin order, which is fixed for a given module.
                     hash = content_hash(&document, Some(&grants[bin.grants[0]].address))?;
                     label = format!("{base}_{hash}");
                 }
@@ -305,6 +313,23 @@ pub(crate) fn consolidate_role_policies(
             .push(resource_block("terraform_data", &label, barrier));
     }
 
+    // Every generated address must be new: a stem shared by two groups, or one an emitter
+    // already uses, would declare a resource twice.
+    let mut addresses: HashSet<String> = per_resource
+        .values()
+        .flat_map(|fragment| &fragment.resource_blocks)
+        .filter_map(block_address_text)
+        .collect();
+    for block in new_blocks.values().flatten() {
+        let address = block_address_text(block).expect("generated blocks have a type and label");
+        if !addresses.insert(address.clone()) {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "Consolidating role grants would declare {address} twice: two roles, role instances or gates map to the same label"
+                ),
+            }));
+        }
+    }
     for (fragment_id, blocks) in new_blocks {
         per_resource[&fragment_id].resource_blocks.extend(blocks);
     }
@@ -695,11 +720,24 @@ fn content_hash(document: &Expression, distinguished_by: Option<&str>) -> Result
         rendered.push('\n');
         rendered.push_str(grant);
     }
-    let digest = Sha256::digest(rendered.as_bytes());
-    Ok(digest[..4]
+    Ok(short_hash(&rendered))
+}
+
+/// The first 8 hex digits of the text's SHA-256.
+fn short_hash(text: &str) -> String {
+    Sha256::digest(text.as_bytes())[..4]
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect())
+        .collect()
+}
+
+fn format_expression(expression: &Expression) -> Result<String> {
+    hcl::format::to_string(expression)
+        .into_alien_error()
+        .context(ErrorData::TemplateSerializationFailed {
+            format: "Terraform IAM policy".into(),
+            reason: "Failed to render a role grant's count".into(),
+        })
 }
 
 fn document(statements: Vec<Expression>) -> Expression {
@@ -709,12 +747,18 @@ fn document(statements: Vec<Expression>) -> Expression {
     ]))
 }
 
-/// The label stem of a group's managed policies: the role's, and the gate's inputs.
+/// The label stem of a group's managed policies and barrier: the role's, the role instance's,
+/// and for a gated group the gate's inputs, to read, plus a hash of the gate, so that two gates
+/// on the same inputs (`var.a ? 1 : 0` and `var.a ? 0 : 1`) get stems of their own. Each part
+/// follows from the group alone, so a stem stays the same across renders, and an ungated grant
+/// on an uncounted role keeps the plain `<role>_setup`.
 fn group_label(group: &Group) -> String {
     let mut label = group.role.clone();
-    if let Some(count) = &group.count {
-        let inputs = count
-            .to_string()
+    if let Some(instance) = group.instance {
+        label.push_str(&format!("_{instance}"));
+    }
+    if let Some(gate) = &group.gate {
+        let inputs = gate
             .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
             .filter_map(|token| token.strip_prefix("var."))
             .map(str::to_string)
@@ -723,6 +767,8 @@ fn group_label(group: &Group) -> String {
             label.push('_');
             label.push_str(&input);
         }
+        label.push('_');
+        label.push_str(&short_hash(gate));
     }
     label.push_str("_setup");
     label
@@ -837,7 +883,7 @@ fn object_key(key: &ObjectKey) -> Option<&str> {
 
 /// The role label a grant's `role` names, `aws_iam_role.<label>[<n>].id` or `.name` with an
 /// optional literal index, and that role instance's `name`.
-fn role_reference(block: &Block) -> Option<(&str, Expression)> {
+fn role_reference(block: &Block) -> Option<(&str, Option<u64>, Expression)> {
     let Expression::Traversal(traversal) = attribute(block, "role")? else {
         return None;
     };
@@ -851,22 +897,26 @@ fn role_reference(block: &Block) -> Option<(&str, Expression)> {
         [TraversalOperator::GetAttr(label), TraversalOperator::GetAttr(attribute)] => {
             (label, None, attribute)
         }
-        [TraversalOperator::GetAttr(label), index @ (TraversalOperator::LegacyIndex(_)
-        | TraversalOperator::Index(Expression::Number(_))), TraversalOperator::GetAttr(attribute)] => {
-            (label, Some(index), attribute)
+        [TraversalOperator::GetAttr(label), TraversalOperator::LegacyIndex(index), TraversalOperator::GetAttr(attribute)] => {
+            (label, Some(*index), attribute)
+        }
+        [TraversalOperator::GetAttr(label), TraversalOperator::Index(Expression::Number(index)), TraversalOperator::GetAttr(attribute)] => {
+            (label, Some(index.as_u64()?), attribute)
         }
         _ => return None,
     };
     if !matches!(attribute.as_str(), "id" | "name") {
         return None;
     }
+    // `role[0]` and `role.0` are one instance; the attachment names it one way.
     let operators = [TraversalOperator::GetAttr(label.clone())]
         .into_iter()
-        .chain(instance.cloned())
+        .chain(instance.map(|index| TraversalOperator::Index(Expression::Number(index.into()))))
         .chain([TraversalOperator::GetAttr("name".into())])
         .collect::<Vec<_>>();
     Some((
         label.as_str(),
+        instance,
         Expression::Traversal(Box::new(hcl::expr::Traversal::new(
             traversal.expr.clone(),
             operators,

@@ -25,11 +25,11 @@ use crate::{
     expr,
 };
 use alien_core::{
-    AzureStorageAccount, ErrorData, ResourceLifecycle, Result, Storage, import::EmitContext,
+    import::EmitContext, AzureStorageAccount, ErrorData, ResourceLifecycle, Result, Storage,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;
-use hcl::{Identifier, expr::FuncCall, structure::BlockLabel};
+use hcl::{expr::FuncCall, structure::BlockLabel, Identifier};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureStorageAccountEmitter;

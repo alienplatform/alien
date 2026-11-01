@@ -775,7 +775,6 @@ fn resource_reference(expression: &Expression) -> Option<ResourceReference<'_>> 
     }
 }
 
-/// Attribute names of a traversal, skipping literal instance indexes (`[0]`) that gating adds.
 /// Whether a postcondition of the resource requires `attribute` to be a KMS key ARN of this
 /// deployment's account and region.
 fn admits_only_kms_key_arns(block: &Block, attribute: &str) -> Result<bool> {
@@ -795,13 +794,17 @@ fn admits_only_kms_key_arns(block: &Block, attribute: &str) -> Result<bool> {
         }))
 }
 
+/// Attribute names of a traversal, skipping literal instance indexes (`[0]` that gating adds,
+/// or the same index written `.0`).
 fn attribute_path(traversal: &Traversal) -> Option<Vec<&str>> {
     traversal
         .operators
         .iter()
         .filter_map(|operator| match operator {
             TraversalOperator::GetAttr(name) => Some(Some(name.as_str())),
-            TraversalOperator::Index(Expression::Number(_)) => None,
+            TraversalOperator::Index(Expression::Number(_)) | TraversalOperator::LegacyIndex(_) => {
+                None
+            }
             _ => Some(None),
         })
         .collect()

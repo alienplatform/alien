@@ -262,14 +262,17 @@ fn a_gated_grant_keeps_its_gate() {
     )]);
     let gated = consolidate(&mut per_resource);
 
+    // The gate's inputs, to read, and a hash of the gate as Terraform formats it.
+    let stem = format!(
+        "app_input_jobs_{}_setup",
+        short_hash("var.input_jobs ? 1 : 0")
+    );
     let [always] = policies(&per_resource, "app_setup").try_into().unwrap();
-    let [jobs] = policies(&per_resource, "app_input_jobs_setup")
-        .try_into()
-        .unwrap();
+    let [jobs] = policies(&per_resource, &stem).try_into().unwrap();
     for address in [
         format!("aws_iam_policy.{jobs}"),
         format!("aws_iam_role_policy_attachment.{jobs}_attachment"),
-        "terraform_data.app_input_jobs_setup_policies_barrier".to_string(),
+        format!("terraform_data.{stem}_policies_barrier"),
         "aws_iam_role_policy.app_jobs".to_string(),
     ] {
         assert_eq!(
@@ -290,7 +293,7 @@ fn a_gated_grant_keeps_its_gate() {
         [
             format!("aws_iam_policy.{jobs}"),
             format!("aws_iam_role_policy_attachment.{jobs}_attachment"),
-            "terraform_data.app_input_jobs_setup_policies_barrier".to_string()
+            format!("terraform_data.{stem}_policies_barrier")
         ]
     );
 }
@@ -425,39 +428,82 @@ fn an_unchanged_policy_keeps_its_address_wherever_it_lands() {
     assert!(both_names[0].contains(&both[0]["app_setup_".len()..]));
 }
 
-/// Two managed policies of one role at one address cannot both exist, so the render fails.
-/// Two grants of one role with the same document, kept apart (here by their gates), become two
-/// managed policies. The first keeps the address its document gives it; the second's address
-/// also follows its first former grant, so each stays put while its own grants do.
+/// Two grants of one role with the same document, kept apart by dependency order (the second
+/// waits for a bucket that waits for the first), become two managed policies. The first keeps
+/// the address its document gives it; the second's address also follows its first former
+/// grant, so each stays put while its own grants do.
 #[test]
 fn identical_managed_policies_on_one_role_get_their_own_addresses() {
     let same = vec![statement("A", "Allow", &["s3:GetObject"], &["*"])];
-    let on = grant(
-        "app_on",
-        "app",
-        same.clone(),
-        vec![attr("count", expr::raw("var.jobs ? 1 : 0"))],
+    let first = grant("app_first", "app", same.clone(), vec![]);
+    let bucket = resource_block(
+        "aws_s3_bucket",
+        "data",
+        [attr(
+            "depends_on",
+            Expression::Array(vec![expr::traversal(["aws_iam_role_policy", "app_first"])]),
+        )],
     );
-    let off = grant(
-        "app_off",
+    let second = grant(
+        "app_second",
         "app",
         same,
-        vec![attr("count", expr::raw("var.jobs ? 0 : 1"))],
+        vec![attr(
+            "depends_on",
+            Expression::Array(vec![expr::traversal(["aws_s3_bucket", "data"])]),
+        )],
     );
-    let mut alone = fragments(vec![("identity", vec![role("app"), on.clone()])]);
+    let mut alone = fragments(vec![("identity", vec![role("app"), first.clone()])]);
     consolidate(&mut alone);
-    let [first] = policies(&alone, "app_jobs_setup").try_into().unwrap();
+    let [alone] = policies(&alone, "app_setup").try_into().unwrap();
 
-    let mut both = fragments(vec![("identity", vec![role("app"), on, off])]);
+    let mut both = fragments(vec![("identity", vec![role("app"), first, bucket, second])]);
     consolidate(&mut both);
-    let labels = policies(&both, "app_jobs_setup");
+    let labels = policies(&both, "app_setup");
     assert_eq!(labels.len(), 2, "{labels:?}");
-    assert_eq!(labels[0], first);
-    assert_ne!(labels[1], first);
-    for (label, count) in labels.iter().zip(["var.jobs ? 1 : 0", "var.jobs ? 0 : 1"]) {
-        let policy = block(&both, &format!("aws_iam_policy.{label}"));
-        assert_eq!(attribute(policy, "count").unwrap().to_string(), count);
-    }
+    assert_eq!(labels[0], alone);
+    assert_ne!(labels[1], alone);
+    assert_eq!(
+        attribute_text(
+            block(&both, &format!("aws_iam_policy.{}", labels[0])),
+            "policy"
+        ),
+        attribute_text(
+            block(&both, &format!("aws_iam_policy.{}", labels[1])),
+            "policy"
+        ),
+    );
+    assert!(!DependencyGraph::new(&both, &IndexMap::new()).has_cycle());
+}
+
+/// A generated address an emitter already declares would be declared twice, so the render fails.
+#[test]
+fn a_generated_address_already_in_the_module_fails() {
+    let mut per_resource = fragments(vec![(
+        "identity",
+        vec![
+            role("app"),
+            grant(
+                "app_read",
+                "app",
+                vec![statement("A", "Allow", &["s3:GetObject"], &["*"])],
+                vec![],
+            ),
+            resource_block("terraform_data", "app_setup_policies_barrier", []),
+        ],
+    )]);
+    let error = consolidate_role_policies(
+        &mut per_resource,
+        &IndexMap::new(),
+        &mut GatedAddresses::default(),
+    )
+    .expect_err("the barrier address is taken");
+    assert!(
+        error
+            .to_string()
+            .contains("would declare terraform_data.app_setup_policies_barrier twice"),
+        "{error}"
+    );
 }
 
 /// A reference through a local reaches what the local names: a grant whose document names a
