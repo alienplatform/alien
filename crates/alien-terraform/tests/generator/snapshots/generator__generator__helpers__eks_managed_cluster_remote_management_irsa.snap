@@ -854,7 +854,7 @@ resource "aws_iam_role_policy" "management_kubernetes_kubernetes-cluster-heartbe
   role   = aws_iam_role.management.id
   policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
-    aws_iam_role_policy_attachment.management_setup_0_attachment
+    aws_iam_role_policy_attachment.management_setup_49a15168_attachment
   ]
 }
 
@@ -912,11 +912,11 @@ resource "aws_iam_role_policy" "management_self_read" {
   role   = aws_iam_role.management.id
   policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
-    aws_iam_role_policy_attachment.management_setup_0_attachment
+    aws_iam_role_policy_attachment.management_setup_49a15168_attachment
   ]
 }
 
-resource "aws_iam_policy" "management_setup_0" {
+resource "aws_iam_policy" "management_setup_49a15168" {
   name   = length(format("%s-%s", local.resource_prefix, "management-setup-49a15168")) <= 128 ? format("%s-%s", local.resource_prefix, "management-setup-49a15168") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management-setup-49a15168"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "management-setup-49a15168")), 0, 8))
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "KubernetesClusterHeartbeat", Effect = "Allow", Action = ["eks:DescribeCluster"], Resource = ["arn:aws:eks:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster/${local.kubernetes_cluster_name}"] }, { Sid = "ReadOwnManagementRole", Effect = "Allow", Action = ["iam:GetRole"], Resource = [aws_iam_role.management.arn] }] })
 
@@ -925,11 +925,11 @@ resource "aws_iam_policy" "management_setup_0" {
   }
 }
 
-resource "aws_iam_role_policy_attachment" "management_setup_0_attachment" {
+resource "aws_iam_role_policy_attachment" "management_setup_49a15168_attachment" {
   role       = aws_iam_role.management.name
-  policy_arn = aws_iam_policy.management_setup_0.arn
+  policy_arn = aws_iam_policy.management_setup_49a15168.arn
   depends_on = [
-    aws_iam_policy.management_setup_0
+    aws_iam_policy.management_setup_49a15168
   ]
 
   lifecycle {
@@ -939,7 +939,7 @@ resource "aws_iam_role_policy_attachment" "management_setup_0_attachment" {
 
 resource "terraform_data" "management_setup_policies_barrier" {
   triggers_replace = [
-    aws_iam_role_policy_attachment.management_setup_0_attachment.id
+    aws_iam_role_policy_attachment.management_setup_49a15168_attachment.id
   ]
 
   lifecycle {
@@ -989,8 +989,8 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role.management,
     aws_iam_policy.management_permissions_boundary,
     aws_iam_role_policy.management_self_read,
-    aws_iam_policy.management_setup_0,
-    aws_iam_role_policy_attachment.management_setup_0_attachment,
+    aws_iam_policy.management_setup_49a15168,
+    aws_iam_role_policy_attachment.management_setup_49a15168_attachment,
     terraform_data.management_setup_policies_barrier
   ]
 

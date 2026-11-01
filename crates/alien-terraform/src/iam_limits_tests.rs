@@ -12,6 +12,7 @@ use alien_core::{
     ManagementConfig, Platform, SetupConfigurationProfile, Stack, StackSettings, StackState,
 };
 use alien_preflights::runner::PreflightRunner;
+use std::collections::BTreeSet;
 
 const PREFIX: usize = 40;
 const REGION: usize = 16;
@@ -446,7 +447,7 @@ fn replaced_attachments_count_twice() {
             result.expect("twenty attachments at once fit");
         } else {
             let error = result.expect_err("twenty-two attachments at once exceed the quota");
-            assert!(error.to_string().contains("requires 22 managed-policy attachments, counting twice each one replaced create-before-destroy"), "{error}");
+            assert!(error.to_string().contains("requires 22 managed-policy attachments, counting each create-before-destroy attachment twice"), "{error}");
         }
     }
 }
@@ -611,10 +612,12 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
             "{case}"
         );
         assert_eq!(
-            [
-                usage.managed_policies["execution_sa_setup_0"],
-                usage.managed_policies["execution_sa_setup_1"],
-            ],
+            usage
+                .managed_policies
+                .iter()
+                .filter(|(label, _)| label.starts_with("execution_sa_setup_"))
+                .map(|(_, chars)| *chars)
+                .collect::<Vec<_>>(),
             chunks,
             "{case}"
         );
@@ -706,4 +709,134 @@ async fn a_vault_writes_no_copy_of_the_stack_level_policy() {
         vec!["vault/data-read".to_string()],
         "a set the vault names itself is still written"
     );
+}
+
+/// The e2e container stack with storage written through explicit grants instead: the
+/// execution profile's `"*"` no longer holds `storage/data-write`, and it names each of
+/// `buckets` added buckets for it.
+fn explicitly_granted_buckets(buckets: usize) -> Stack {
+    let mut stack = e2e_container_stack();
+    let profile = &mut stack
+        .permissions
+        .profiles
+        .get_mut("execution")
+        .expect("the execution profile")
+        .0;
+    profile
+        .get_mut("*")
+        .expect("the stack-wide grants")
+        .retain(|set| set.id() != "storage/data-write");
+    for bucket in 0..buckets {
+        let id = format!("bulk-{bucket}");
+        stack.resources.insert(
+            id.clone(),
+            alien_core::ResourceEntry {
+                config: alien_core::Resource::new(alien_core::Storage::new(id.clone()).build()),
+                lifecycle: alien_core::ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        profile.insert(
+            id,
+            vec![alien_core::PermissionSetReference::from_name(
+                "storage/data-write",
+            )],
+        );
+    }
+    stack
+}
+
+/// Each (effect, action, resource, condition) the execution role's managed policies grant or
+/// deny, as rendered, and the size of each policy with the longest deployment values.
+fn execution_role_grants(module: &ModuleFiles) -> (BTreeSet<String>, Vec<usize>) {
+    let rendered = RenderedModule::parse(module).unwrap();
+    let usage = rendered.usage(DeploymentLengths::longest()).unwrap();
+    let mut grants = BTreeSet::new();
+    let mut sizes = Vec::new();
+    let key = |name: &str| ObjectKey::Identifier(hcl::Identifier::sanitized(name));
+    let values = |value: Option<&Expression>| match value {
+        Some(Expression::Array(values)) => values.iter().map(ToString::to_string).collect(),
+        Some(value) => vec![value.to_string()],
+        None => Vec::new(),
+    };
+    for block in &rendered.resources {
+        let label = block.labels[1].as_str();
+        if resource_type(block) != Some("aws_iam_policy")
+            || !label.starts_with("execution_sa_setup_")
+        {
+            continue;
+        }
+        sizes.push(usage.managed_policies[label]);
+        let Some(Expression::FuncCall(call)) = attribute(block, "policy") else {
+            panic!("{label} is jsonencode(...)");
+        };
+        let Some(Expression::Object(document)) = call.args.first() else {
+            panic!("{label} encodes an object");
+        };
+        let Some(Expression::Array(statements)) = document.get(&key("Statement")) else {
+            panic!("{label} lists statements");
+        };
+        for statement in statements {
+            let Expression::Object(statement) = statement else {
+                panic!("{label}: a statement is an object");
+            };
+            let condition = statement
+                .get(&key("Condition"))
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            for action in values(statement.get(&key("Action"))) {
+                for resource in values(statement.get(&key("Resource"))) {
+                    grants.insert(format!(
+                        "{} {action} {resource} {condition}",
+                        statement[&key("Effect")]
+                    ));
+                }
+            }
+        }
+    }
+    (grants, sizes)
+}
+
+/// Forty-five explicit bucket grants of the same set merge into one statement listing every bucket,
+/// more than a managed policy holds. The module still renders: the statement is split by
+/// resource, every managed policy fits 5,500 characters at the longest values, and the role is
+/// granted exactly what one such grant gives on one bucket, on each of them.
+#[tokio::test]
+async fn many_explicit_bucket_grants_split_across_managed_policies() {
+    let registry = container_registry();
+    let render = |stack: Stack| async {
+        let stack = prepare_for_render(stack).await;
+        crate::generate_terraform_module(&stack, TerraformTarget::Aws, options(&registry))
+            .expect("the module renders")
+    };
+    let (without, _) = execution_role_grants(&render(explicitly_granted_buckets(0)).await);
+    let (one, _) = execution_role_grants(&render(explicitly_granted_buckets(1)).await);
+    let (many, sizes) = execution_role_grants(&render(explicitly_granted_buckets(45)).await);
+
+    let per_bucket: Vec<&String> = one.difference(&without).collect();
+    assert!(!per_bucket.is_empty());
+    let mut expected = without.clone();
+    for bucket in 0..45 {
+        for grant in &per_bucket {
+            // The bucket by name or by its Terraform label.
+            assert!(
+                grant.contains("bulk-0") || grant.contains("bulk_0."),
+                "{grant}"
+            );
+            expected.insert(
+                grant
+                    .replace("bulk-0", &format!("bulk-{bucket}"))
+                    .replace("bulk_0.", &format!("bulk_{bucket}.")),
+            );
+        }
+    }
+    assert_eq!(many, expected);
+    assert!(sizes.len() >= 3, "{sizes:?}");
+    for size in &sizes {
+        assert!(*size <= 5_500, "{sizes:?}");
+    }
 }

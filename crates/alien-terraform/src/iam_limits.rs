@@ -63,7 +63,8 @@ pub(crate) struct RoleUsage {
     /// Largest total non-whitespace characters of those inline policies.
     pub inline_chars: usize,
     /// Managed policies attached to the role at once, at most: distinct policies, and the
-    /// replacement of each one replaced create-before-destroy.
+    /// replacement of each create-before-destroy one. If two releases each pass this bound,
+    /// an update between them, holding the old and the new policies at once, fits the quota.
     pub attachments: usize,
 }
 
@@ -132,7 +133,7 @@ impl RenderedModule {
             }
             if role_usage.attachments > IAM_MANAGED_POLICIES_PER_ROLE {
                 shortfalls.push(format!(
-                    "IAM role '{role}' requires {} managed-policy attachments, counting twice each one replaced create-before-destroy, since an update attaches its replacement before detaching it; generated setup supports the default quota of {IAM_MANAGED_POLICIES_PER_ROLE} per role. Reduce the number of attached policies.",
+                    "IAM role '{role}' requires {} managed-policy attachments, counting each create-before-destroy attachment twice, since an update that changes a policy attaches its replacement before detaching it; generated setup supports the default quota of {IAM_MANAGED_POLICIES_PER_ROLE} per role. Reduce the number of attached policies.",
                     role_usage.attachments
                 ));
             }

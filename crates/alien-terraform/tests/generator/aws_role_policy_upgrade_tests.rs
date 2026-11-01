@@ -22,7 +22,7 @@ use alien_terraform::{
         aws_terraform_permission_context, emit_iam_role_policy, required_label,
         resource_prefix_template, service_assume_role_policy,
     },
-    generate_terraform_module, TerraformOptions, TerraformTarget, TfEmitter, TfFragment,
+    expr, generate_terraform_module, TerraformOptions, TerraformTarget, TfEmitter, TfFragment,
     TfRegistry,
 };
 use serde_json::{json, Value};
@@ -296,6 +296,12 @@ async fn an_inline_install_upgrades_in_place_after_the_managed_policies_attach()
                     values["id"] = json!(name);
                     values["arn"] = json!(format!("arn:aws:iam::{ACCOUNT}:role/{name}"));
                     values["unique_id"] = json!(format!("AROA{}", name.len()));
+                    // Read back after the role is created, before anything is attached.
+                    for computed in ["managed_policy_arns", "inline_policy"] {
+                        if values[computed].is_null() {
+                            values[computed] = json!([]);
+                        }
+                    }
                 }
                 "aws_iam_policy" => {
                     let name = values["name"]
@@ -435,12 +441,18 @@ async fn an_inline_install_upgrades_in_place_after_the_managed_policies_attach()
     };
     let policies = created("aws_iam_policy");
     let attachments = created("aws_iam_role_policy_attachment");
-    assert!(
-        policies.contains("aws_iam_policy.execution_sa_setup_0")
-            && attachments
-                .contains("aws_iam_role_policy_attachment.execution_sa_setup_0_attachment"),
-        "{policies:?} {attachments:?}"
-    );
+    let execution_policies = setup_policies(&upgrade, "execution_sa");
+    assert_eq!(execution_policies.len(), 2, "{execution_policies:?}");
+    for address in execution_policies.keys() {
+        let attachment = format!(
+            "aws_iam_role_policy_attachment.{}_attachment",
+            address.strip_prefix("aws_iam_policy.").unwrap()
+        );
+        assert!(
+            policies.contains(address) && attachments.contains(&attachment),
+            "{policies:?} {attachments:?}"
+        );
+    }
 
     // Each former grant waits for every attachment of its role, so its update to the stub runs
     // only after the role holds the managed policies.
@@ -599,12 +611,25 @@ fn applied_iam_state(fresh: &Value, module: &alien_terraform::ModuleFiles) -> Ve
             let address = resource["address"].as_str().unwrap().to_string();
             let mut values = resource["values"].clone();
             let name = values["name"].as_str().map(str::to_string);
+            if matches!(kind, "aws_iam_role" | "aws_iam_policy") && values["tags_all"].is_null() {
+                // The provider merges its default tags, of which the module sets none.
+                values["tags_all"] = match &values["tags"] {
+                    Value::Null => json!({}),
+                    tags => tags.clone(),
+                };
+            }
             match kind {
                 "aws_iam_role" => {
                     let name = name.expect("a role name is known");
                     values["id"] = json!(name);
                     values["arn"] = json!(format!("arn:aws:iam::{ACCOUNT}:role/{name}"));
                     values["unique_id"] = json!(format!("AROA{}", name.len()));
+                    // Read back after the role is created, before anything is attached.
+                    for computed in ["managed_policy_arns", "inline_policy"] {
+                        if values[computed].is_null() {
+                            values[computed] = json!([]);
+                        }
+                    }
                 }
                 "aws_iam_policy" => {
                     let name = name.expect("a policy name is known");
@@ -814,12 +839,13 @@ fn resource_changes(plan: &Value) -> BTreeMap<String, Value> {
         .collect()
 }
 
-/// A later release whose new grant lands early moves statements between the execution role's
-/// managed policies. The changed policies are new policies under new names, created and
-/// attached before the old ones are detached and deleted, so a moved statement is never held
-/// by neither.
+/// A later release grants the workload one more bucket, declared before every other resource.
+/// The execution role's installed policies keep their addresses and names, since their
+/// documents are unchanged; the new grant comes as a new policy, and nothing is destroyed.
+/// Statements that do move between policies are covered by
+/// `an_unchanged_managed_policy_keeps_its_address`.
 #[tokio::test]
-async fn statements_moving_between_managed_policies_are_never_dropped() {
+async fn a_grant_added_early_leaves_the_installed_policies_alone() {
     if std::env::var("SKIP_LINTERS").as_deref() == Ok("1") {
         return;
     }
@@ -857,61 +883,67 @@ async fn statements_moving_between_managed_policies_are_never_dropped() {
     write_module(dir.path(), &second);
     let reflow = plan(dir.path(), "second.tfplan");
     let changes = resource_changes(&reflow);
-    let names = |plan: &Value, label: &str| -> Option<String> {
-        plan["planned_values"]["root_module"]["resources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|resource| resource["address"] == format!("aws_iam_policy.{label}"))
-            .map(|resource| resource["values"]["name"].as_str().unwrap().to_string())
-    };
-    // The statements moved: both of the execution role's policies changed.
-    for label in ["execution_sa_setup_0", "execution_sa_setup_1"] {
-        assert_ne!(
-            names(&fresh, label),
-            names(&reflow, label),
-            "{label} changed"
+    let before = setup_policies(&fresh, "execution_sa");
+    let after = setup_policies(&reflow, "execution_sa");
+    assert_eq!(before.len(), 2, "{before:?}");
+    assert_eq!(after.len(), 3, "{after:?}");
+    assert!(
+        before.keys().all(|address| after.contains_key(address)),
+        "{after:?}"
+    );
+    assert_no_existing_name_is_created(&before, &after, &changes);
+    for (address, _) in after
+        .iter()
+        .filter(|(address, _)| !before.contains_key(*address))
+    {
+        assert_eq!(changes[address], json!(["create"]), "{address}");
+        assert_eq!(
+            changes[&attachment_of(address)],
+            json!(["create"]),
+            "{address}"
         );
-        for address in [
-            format!("aws_iam_policy.{label}"),
-            format!("aws_iam_role_policy_attachment.{label}_attachment"),
-        ] {
-            assert_eq!(changes[&address], json!(["create", "delete"]), "{address}");
-        }
     }
     assert_eq!(
         changes["terraform_data.execution_sa_setup_policies_barrier"],
         json!(["create", "delete"])
     );
-    // Nothing is destroyed before its replacement exists.
+    let deleted: Vec<_> = changes
+        .iter()
+        .filter(|(address, actions)| {
+            address.contains("execution_sa")
+                && actions.as_array().unwrap().contains(&json!("delete"))
+                && *address != "terraform_data.execution_sa_setup_policies_barrier"
+        })
+        .collect();
+    assert!(deleted.is_empty(), "{deleted:?}");
+    // The management role is granted the new bucket too, so its policy is a new one; the old
+    // goes after the management barrier. Nothing anywhere is destroyed before it is replaced.
+    let graph = terraform(dir.path(), &["graph", "-type=apply", "-plan=second.tfplan"]);
+    let replaced: Vec<&String> = changes
+        .iter()
+        .filter(|(address, actions)| {
+            address.starts_with("aws_iam_policy.") && **actions == json!(["delete"])
+        })
+        .map(|(address, _)| address)
+        .collect();
+    assert!(!replaced.is_empty());
+    for policy in replaced {
+        let base = policy
+            .strip_prefix("aws_iam_policy.")
+            .and_then(|label| label.rsplit_once("_setup_"))
+            .map(|(base, _)| base)
+            .unwrap_or_else(|| panic!("{policy} is a setup policy"));
+        assert_removed_after_the_barrier(&graph, base, [policy].into_iter());
+    }
     let destroyed_first: Vec<_> = changes
         .iter()
-        .filter(|(_, actions)| actions.as_array().unwrap().first() == Some(&json!("delete")))
+        .filter(|(_, actions)| {
+            let actions = actions.as_array().unwrap();
+            actions.len() > 1 && actions[0] == json!("delete")
+        })
         .collect();
     assert!(destroyed_first.is_empty(), "{destroyed_first:?}");
-
-    // Terraform's apply graph: the replaced attachments are destroyed only after the barrier
-    // is replaced, and the replaced policies only after their attachments are destroyed.
-    let graph = terraform(dir.path(), &["graph", "-type=apply", "-plan=second.tfplan"]);
-    for (later, earlier) in [
-        (
-            "aws_iam_role_policy_attachment.execution_sa_setup_0_attachment (destroy deposed",
-            "terraform_data.execution_sa_setup_policies_barrier",
-        ),
-        (
-            "aws_iam_role_policy_attachment.execution_sa_setup_1_attachment (destroy deposed",
-            "terraform_data.execution_sa_setup_policies_barrier",
-        ),
-        (
-            "aws_iam_policy.execution_sa_setup_0 (destroy deposed",
-            "aws_iam_role_policy_attachment.execution_sa_setup_0_attachment (destroy deposed",
-        ),
-    ] {
-        assert!(
-            graph_orders(&graph, earlier, later),
-            "{later} must wait for {earlier}:\n{graph}"
-        );
-    }
+    let first_policy = before.keys().next().unwrap().clone();
 
     // Teardown of the installed release: the barrier goes first, then the attachments, then
     // the policies and the role they attach.
@@ -935,14 +967,15 @@ async fn statements_moving_between_managed_policies_are_never_dropped() {
         dir.path(),
         &["graph", "-type=apply", "-plan=destroy.tfplan"],
     );
-    let attachment = "aws_iam_role_policy_attachment.execution_sa_setup_0_attachment (destroy)";
+    let attachment = format!("{} (destroy)", attachment_of(&first_policy));
+    let policy = format!("{first_policy} (destroy)");
     for (later, earlier) in [
         (
-            attachment,
+            attachment.as_str(),
             "terraform_data.execution_sa_setup_policies_barrier (destroy)",
         ),
-        ("aws_iam_policy.execution_sa_setup_0 (destroy)", attachment),
-        ("aws_iam_role.execution_sa (destroy)", attachment),
+        (policy.as_str(), attachment.as_str()),
+        ("aws_iam_role.execution_sa (destroy)", attachment.as_str()),
         (
             "aws_iam_role.execution_sa (destroy)",
             "aws_iam_role_policy.execution_sa_set_0 (destroy)",
@@ -973,37 +1006,113 @@ async fn a_managed_policy_no_longer_needed_goes_after_its_replacements() {
     write_module(dir.path(), &without);
     let shrink = plan(dir.path(), "without.tfplan");
     let changes = resource_changes(&shrink);
-    for address in [
-        "aws_iam_policy.execution_sa_setup_2",
-        "aws_iam_role_policy_attachment.execution_sa_setup_2_attachment",
-    ] {
+    let before = setup_policies(&fresh, "execution_sa");
+    let after = setup_policies(&shrink, "execution_sa");
+    assert_eq!((before.len(), after.len()), (3, 2));
+    assert_no_existing_name_is_created(&before, &after, &changes);
+    for address in before
+        .keys()
+        .filter(|address| !after.contains_key(*address))
+    {
         assert_eq!(changes[address], json!(["delete"]), "{address}");
+        assert_eq!(
+            changes[&attachment_of(address)],
+            json!(["delete"]),
+            "{address}"
+        );
     }
-    for address in [
-        "aws_iam_policy.execution_sa_setup_0",
-        "aws_iam_role_policy_attachment.execution_sa_setup_0_attachment",
-        "terraform_data.execution_sa_setup_policies_barrier",
-    ] {
-        assert_eq!(changes[address], json!(["create", "delete"]), "{address}");
-    }
+    assert_eq!(
+        changes["terraform_data.execution_sa_setup_policies_barrier"],
+        json!(["create", "delete"])
+    );
     let graph = terraform(
         dir.path(),
         &["graph", "-type=apply", "-plan=without.tfplan"],
     );
-    for (later, earlier) in [
-        (
-            "aws_iam_role_policy_attachment.execution_sa_setup_2_attachment (destroy)",
-            "terraform_data.execution_sa_setup_policies_barrier",
-        ),
-        (
-            "aws_iam_policy.execution_sa_setup_2 (destroy)",
-            "aws_iam_role_policy_attachment.execution_sa_setup_2_attachment (destroy)",
-        ),
-    ] {
-        assert!(
-            graph_orders(&graph, earlier, later),
-            "{later} must wait for {earlier}:\n{graph}"
-        );
+    assert_removed_after_the_barrier(
+        &graph,
+        "execution_sa",
+        before
+            .keys()
+            .filter(|address| !after.contains_key(*address)),
+    );
+}
+
+/// The `aws_iam_policy` addresses of a role's managed policies in a plan, with their names.
+fn setup_policies(plan: &Value, role: &str) -> BTreeMap<String, String> {
+    plan["planned_values"]["root_module"]["resources"]
+        .as_array()
+        .expect("planned resources")
+        .iter()
+        .filter(|resource| {
+            resource["type"] == "aws_iam_policy"
+                && resource["address"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix(&format!("aws_iam_policy.{role}_setup_"))
+                    .is_some_and(|hash| hash.len() == 8)
+        })
+        .map(|resource| {
+            (
+                resource["address"].as_str().unwrap().to_string(),
+                resource["values"]["name"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn attachment_of(policy: &str) -> String {
+    format!(
+        "aws_iam_role_policy_attachment.{}_attachment",
+        policy.strip_prefix("aws_iam_policy.").unwrap()
+    )
+}
+
+/// IAM refuses a policy whose name another policy still holds, and old policies go only after
+/// the new ones exist: a created policy never takes the name of one the account holds.
+fn assert_no_existing_name_is_created(
+    before: &BTreeMap<String, String>,
+    after: &BTreeMap<String, String>,
+    changes: &BTreeMap<String, Value>,
+) {
+    let held: BTreeSet<&String> = before.values().collect();
+    for (address, name) in after {
+        if changes[address] == json!(["create"]) {
+            assert!(
+                !held.contains(name),
+                "{address} creates {name}, which exists"
+            );
+        } else {
+            // An update in place, where the document was unknown when the state was seeded.
+            assert!(
+                [json!(["no-op"]), json!(["update"])].contains(&changes[address]),
+                "{address}: {}",
+                changes[address]
+            );
+            assert_eq!(before.get(address), Some(name), "{address} keeps its name");
+        }
+    }
+}
+
+/// Each removed policy's attachment is destroyed after the role's barrier is replaced, and the
+/// policy after its attachment.
+fn assert_removed_after_the_barrier<'a>(
+    graph: &str,
+    role: &str,
+    removed: impl Iterator<Item = &'a String>,
+) {
+    let barrier = format!("terraform_data.{role}_setup_policies_barrier");
+    for policy in removed {
+        let attachment = format!("{} (destroy)", attachment_of(policy));
+        for (later, earlier) in [
+            (attachment.clone(), barrier.clone()),
+            (format!("{policy} (destroy)"), attachment.clone()),
+        ] {
+            assert!(
+                graph_orders(graph, &earlier, &later),
+                "{later} must wait for {earlier}:\n{graph}"
+            );
+        }
     }
 }
 
@@ -1166,24 +1275,297 @@ async fn a_registered_emitters_grant_moves_to_a_managed_policy() {
         attribute("policy"),
         hcl::Expression::String(INERT_POLICY.into()).to_string()
     );
+    let documents = role_policy_documents(&module, &role);
+    let [(policy, _)] = documents.as_slice() else {
+        panic!("one managed policy: {documents:?}");
+    };
+    assert!(
+        policy
+            .strip_prefix(&format!("aws_iam_policy.{role}_setup_"))
+            .is_some_and(|hash| hash.len() == 8),
+        "{policy}"
+    );
     assert_eq!(
         attribute("depends_on")
             .split_whitespace()
             .collect::<String>(),
-        format!("[aws_iam_role_policy_attachment.{role}_setup_0_attachment]")
-    );
-
-    let documents = role_policy_documents(&module, &role);
-    assert_eq!(
-        documents
-            .iter()
-            .map(|(address, _)| address.as_str())
-            .collect::<Vec<_>>(),
-        [format!("aws_iam_policy.{role}_setup_0")]
+        format!("[{}]", attachment_of(policy))
     );
     let granted = documents[0].1.to_string();
     for action in ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"] {
         assert!(granted.contains(action), "{action}: {granted}");
     }
     assert_terraform_valid(&module, "registered emitter grant");
+}
+
+/// Stands in for a registered emitter whose role holds one grant per letter, on as many
+/// buckets as given. A grant on 32 buckets takes a little over a third of a managed policy at
+/// the longest prefix, so two share one; a grant on 80 fills one alone.
+struct LargeGrants(&'static [(char, usize)]);
+
+impl TfEmitter for LargeGrants {
+    fn emit(&self, ctx: &EmitContext<'_>) -> alien_core::Result<TfFragment> {
+        let role = format!("{}_instances", required_label(ctx)?);
+        let mut fragment = TfFragment::default();
+        fragment.resource_blocks.push(resource_block(
+            "aws_iam_role",
+            &role,
+            [
+                attr("name", resource_prefix_template("compute-instances")),
+                attr(
+                    "assume_role_policy",
+                    service_assume_role_policy(&["ec2.amazonaws.com"]),
+                ),
+            ],
+        ));
+        for (letter, buckets) in self.0 {
+            let resources = (0..*buckets)
+                .map(|n| {
+                    expr::template(format!(
+                        "arn:aws:s3:::${{local.resource_prefix}}-{letter}-{n}/*"
+                    ))
+                })
+                .collect();
+            let statement = expr::object([
+                (
+                    "Sid",
+                    hcl::Expression::String(letter.to_uppercase().to_string()),
+                ),
+                ("Effect", hcl::Expression::String("Allow".into())),
+                (
+                    "Action",
+                    hcl::Expression::String(format!("s3:GetObject{}", letter.to_uppercase())),
+                ),
+                ("Resource", hcl::Expression::Array(resources)),
+            ]);
+            fragment.resource_blocks.push(resource_block(
+                "aws_iam_role_policy",
+                &format!("{role}_{letter}"),
+                [
+                    attr("name", hcl::Expression::String(format!("grant-{letter}"))),
+                    attr("role", expr::traversal(["aws_iam_role", &role, "id"])),
+                    attr(
+                        "policy",
+                        expr::jsonencode(expr::object([
+                            ("Version", hcl::Expression::String("2012-10-17".into())),
+                            ("Statement", hcl::Expression::Array(vec![statement])),
+                        ])),
+                    ),
+                ],
+            ));
+        }
+        Ok(fragment)
+    }
+
+    fn emit_import_ref(&self, _ctx: &EmitContext<'_>) -> alien_core::Result<hcl::Expression> {
+        Ok(hcl::Expression::Object(hcl::Object::new()))
+    }
+}
+
+const INSTALLED: &[(char, usize)] = &[('a', 32), ('b', 32), ('c', 32), ('d', 32)];
+
+/// A managed policy's address follows its document, so a policy whose document is unchanged is
+/// left alone however the role's other policies change, and a changed one is a new policy. The
+/// installed role holds [a, b] and [c, d]. Each later release is planned against it, and none
+/// creates a policy under a name the account still holds:
+/// - dropping a and b leaves [c, d] untouched and deletes [a, b] after the barrier;
+/// - inserting a grant that fills a policy alone, before all, leaves both untouched although
+///   their positions move;
+/// - reordering the grants by policy changes nothing, the barrier included;
+/// - inserting a small grant before all moves b and d to other policies: every policy is new,
+///   and the old ones are detached and deleted only after the barrier, that is after every new
+///   one is attached.
+#[tokio::test]
+async fn an_unchanged_managed_policy_keeps_its_address() {
+    if std::env::var("SKIP_LINTERS").as_deref() == Ok("1") {
+        return;
+    }
+    let stack = prepared_stack().await;
+    let installed = render(&stack, &container_registry(LargeGrants(INSTALLED)));
+    let dir = module_dir(&installed);
+    let fresh = plan(dir.path(), "installed.tfplan");
+    write_state(dir.path(), applied_iam_state(&fresh, &installed));
+    let role = fresh["planned_values"]["root_module"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|resource| resource["type"] == "aws_iam_role")
+        .find_map(|resource| {
+            let label = resource["name"].as_str().unwrap();
+            label.ends_with("_instances").then(|| label.to_string())
+        })
+        .expect("the instances role is planned");
+    let barrier = format!("terraform_data.{role}_setup_policies_barrier");
+    let configured = |plan: &Value, address: &str| -> Value {
+        plan["configuration"]["root_module"]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|resource| resource["address"] == address)
+            .unwrap_or_else(|| panic!("{address} is configured"))
+            .clone()
+    };
+    // The policy holding a letter's grant, by the letter's action in its document.
+    let holding = |plan: &Value, letter: char| -> String {
+        let action = format!("s3:GetObject{}", letter.to_uppercase());
+        let policies: Vec<String> = setup_policies(plan, &role)
+            .into_keys()
+            .filter(|address| {
+                plan["planned_values"]["root_module"]["resources"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|resource| resource["address"] == *address)
+                    .and_then(|resource| resource["values"]["policy"].as_str())
+                    .unwrap_or_else(|| panic!("{address}'s document is known"))
+                    .contains(&action)
+            })
+            .collect();
+        let [policy] = policies.try_into().expect("one policy holds each grant");
+        policy
+    };
+    let installed_policies = setup_policies(&fresh, &role);
+    let ab = holding(&fresh, 'a');
+    let cd = holding(&fresh, 'c');
+    assert_eq!(
+        (
+            holding(&fresh, 'b'),
+            holding(&fresh, 'd'),
+            installed_policies.len()
+        ),
+        (ab.clone(), cd.clone(), 2)
+    );
+    for letter in ['a', 'b', 'c', 'd'] {
+        let address = format!("aws_iam_role_policy.{role}_{letter}");
+        assert_eq!(
+            configured(&fresh, &address)["depends_on"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{address} sets depends_on"))
+                .iter()
+                .map(|dependency| dependency.as_str().unwrap().to_string())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([attachment_of(&ab), attachment_of(&cd)]),
+            "{address} waits for every attachment of its role"
+        );
+    }
+
+    let plan_release = |grants: &'static [(char, usize)], name: &str| {
+        write_module(
+            dir.path(),
+            &render(&stack, &container_registry(LargeGrants(grants))),
+        );
+        let planned = plan(dir.path(), name);
+        let changes = resource_changes(&planned);
+        assert_no_existing_name_is_created(
+            &installed_policies,
+            &setup_policies(&planned, &role),
+            &changes,
+        );
+        (planned, changes)
+    };
+    let untouched = |changes: &BTreeMap<String, Value>, policy: &String| {
+        // Every document of this role is known at plan time, so unchanged is a no-op.
+        assert_eq!(changes[policy], json!(["no-op"]), "{policy}");
+        assert_eq!(
+            changes[&attachment_of(policy)],
+            json!(["no-op"]),
+            "{policy}"
+        );
+    };
+
+    // Dropping the grants of the first policy.
+    let (planned, changes) = plan_release(&[('c', 32), ('d', 32)], "drop.tfplan");
+    assert_eq!(
+        setup_policies(&planned, &role)
+            .into_keys()
+            .collect::<Vec<_>>(),
+        std::slice::from_ref(&cd)
+    );
+    untouched(&changes, &cd);
+    assert_eq!(changes[&ab], json!(["delete"]));
+    assert_eq!(changes[&attachment_of(&ab)], json!(["delete"]));
+    assert_eq!(changes[&barrier], json!(["create", "delete"]));
+    for (letter, action) in [
+        ('a', "delete"),
+        ('b', "delete"),
+        ('c', "no-op"),
+        ('d', "no-op"),
+    ] {
+        // A dropped grant's stub grants nothing; it goes with its grant.
+        assert_eq!(
+            changes[&format!("aws_iam_role_policy.{role}_{letter}")],
+            json!([action]),
+            "{letter}"
+        );
+    }
+    let graph = terraform(dir.path(), &["graph", "-type=apply", "-plan=drop.tfplan"]);
+    assert_removed_after_the_barrier(&graph, &role, [&ab].into_iter());
+
+    // Inserting a grant that fills a policy alone, before all others.
+    let (planned, changes) = plan_release(
+        &[('z', 80), ('a', 32), ('b', 32), ('c', 32), ('d', 32)],
+        "insert.tfplan",
+    );
+    untouched(&changes, &ab);
+    untouched(&changes, &cd);
+    let added = holding(&planned, 'z');
+    assert_eq!(changes[&added], json!(["create"]));
+    assert_eq!(changes[&attachment_of(&added)], json!(["create"]));
+    assert_eq!(changes[&barrier], json!(["create", "delete"]));
+    let deleted: Vec<_> = changes
+        .iter()
+        .filter(|(address, actions)| {
+            actions.as_array().unwrap().contains(&json!("delete")) && **address != barrier
+        })
+        .collect();
+    assert!(deleted.is_empty(), "{deleted:?}");
+
+    // Reordering the grants by policy.
+    let (planned, changes) = plan_release(
+        &[('c', 32), ('d', 32), ('a', 32), ('b', 32)],
+        "reorder.tfplan",
+    );
+    assert_eq!(setup_policies(&planned, &role), installed_policies);
+    let changed: Vec<_> = changes
+        .iter()
+        .filter(|(address, actions)| address.contains(&role) && **actions != json!(["no-op"]))
+        .collect();
+    assert!(changed.is_empty(), "{changed:?}");
+
+    // Inserting a small grant before all others: b and d move to other policies.
+    let (planned, changes) = plan_release(
+        &[('y', 32), ('a', 32), ('b', 32), ('c', 32), ('d', 32)],
+        "reflow.tfplan",
+    );
+    let reflowed = setup_policies(&planned, &role);
+    assert_eq!(reflowed.len(), 3, "{reflowed:?}");
+    assert_eq!(holding(&planned, 'y'), holding(&planned, 'a'));
+    assert_eq!(holding(&planned, 'b'), holding(&planned, 'c'));
+    for policy in reflowed.keys() {
+        assert_eq!(changes[policy], json!(["create"]), "{policy}");
+        assert_eq!(
+            changes[&attachment_of(policy)],
+            json!(["create"]),
+            "{policy}"
+        );
+    }
+    for policy in [&ab, &cd] {
+        assert_eq!(changes[policy], json!(["delete"]), "{policy}");
+        assert_eq!(
+            changes[&attachment_of(policy)],
+            json!(["delete"]),
+            "{policy}"
+        );
+    }
+    assert_eq!(changes[&barrier], json!(["create", "delete"]));
+    let graph = terraform(dir.path(), &["graph", "-type=apply", "-plan=reflow.tfplan"]);
+    assert_removed_after_the_barrier(&graph, &role, [&ab, &cd].into_iter());
+    // The barrier is replaced only after every new attachment exists.
+    for policy in reflowed.keys() {
+        assert!(
+            graph_orders(&graph, &attachment_of(policy), &barrier),
+            "{barrier} must wait for {}:\n{graph}",
+            attachment_of(policy)
+        );
+    }
 }

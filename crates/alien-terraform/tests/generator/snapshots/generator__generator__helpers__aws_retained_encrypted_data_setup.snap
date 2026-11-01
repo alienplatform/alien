@@ -640,7 +640,7 @@ resource "aws_iam_role_policy" "images_pull_policy" {
   role   = aws_iam_role.images_pull.id
   policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
-    aws_iam_role_policy_attachment.images_pull_setup_0_attachment
+    aws_iam_role_policy_attachment.images_pull_setup_9ddf7c77_attachment
   ]
 }
 
@@ -649,11 +649,11 @@ resource "aws_iam_role_policy" "images_push_policy" {
   role   = aws_iam_role.images_push.id
   policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"NotAction\":\"*\",\"Resource\":\"*\"}]}"
   depends_on = [
-    aws_iam_role_policy_attachment.images_push_setup_0_attachment
+    aws_iam_role_policy_attachment.images_push_setup_6d668f05_attachment
   ]
 }
 
-resource "aws_iam_policy" "images_pull_setup_0" {
+resource "aws_iam_policy" "images_pull_setup_9ddf7c77" {
   name   = length(format("%s-%s", local.resource_prefix, "images-pull-setup-9ddf7c77")) <= 128 ? format("%s-%s", local.resource_prefix, "images-pull-setup-9ddf7c77") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "images-pull-setup-9ddf7c77"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "images-pull-setup-9ddf7c77")), 0, 8))
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = ["*"] }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"], Resource = [aws_ecr_repository.images.arn, format("%s-*", aws_ecr_repository.images.arn)] }] })
 
@@ -662,11 +662,11 @@ resource "aws_iam_policy" "images_pull_setup_0" {
   }
 }
 
-resource "aws_iam_role_policy_attachment" "images_pull_setup_0_attachment" {
+resource "aws_iam_role_policy_attachment" "images_pull_setup_9ddf7c77_attachment" {
   role       = aws_iam_role.images_pull.name
-  policy_arn = aws_iam_policy.images_pull_setup_0.arn
+  policy_arn = aws_iam_policy.images_pull_setup_9ddf7c77.arn
   depends_on = [
-    aws_iam_policy.images_pull_setup_0
+    aws_iam_policy.images_pull_setup_9ddf7c77
   ]
 
   lifecycle {
@@ -674,7 +674,7 @@ resource "aws_iam_role_policy_attachment" "images_pull_setup_0_attachment" {
   }
 }
 
-resource "aws_iam_policy" "images_push_setup_0" {
+resource "aws_iam_policy" "images_push_setup_6d668f05" {
   name   = length(format("%s-%s", local.resource_prefix, "images-push-setup-6d668f05")) <= 128 ? format("%s-%s", local.resource_prefix, "images-push-setup-6d668f05") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "images-push-setup-6d668f05"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "images-push-setup-6d668f05")), 0, 8))
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "GetAuthorizationToken", Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = ["*"] }, { Sid = "RepositoryAccess", Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:DescribeImages", "ecr:DescribeRepositories", "ecr:GetDownloadUrlForLayer", "ecr:ListImages", "ecr:CompleteLayerUpload", "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"], Resource = [aws_ecr_repository.images.arn, format("%s-*", aws_ecr_repository.images.arn)] }, { Sid = "RegionalRepositoryPolicies", Effect = "Allow", Action = ["ecr:GetRepositoryPolicy", "ecr:DeleteRepositoryPolicy", "ecr:SetRepositoryPolicy", "ecr:DescribeRepositories"], Resource = [replace(aws_ecr_repository.images.arn, format(":%s:", data.aws_region.current.region), ":*:"), format("%s-*", replace(aws_ecr_repository.images.arn, format(":%s:", data.aws_region.current.region), ":*:"))] }] })
 
@@ -683,11 +683,11 @@ resource "aws_iam_policy" "images_push_setup_0" {
   }
 }
 
-resource "aws_iam_role_policy_attachment" "images_push_setup_0_attachment" {
+resource "aws_iam_role_policy_attachment" "images_push_setup_6d668f05_attachment" {
   role       = aws_iam_role.images_push.name
-  policy_arn = aws_iam_policy.images_push_setup_0.arn
+  policy_arn = aws_iam_policy.images_push_setup_6d668f05.arn
   depends_on = [
-    aws_iam_policy.images_push_setup_0
+    aws_iam_policy.images_push_setup_6d668f05
   ]
 
   lifecycle {
@@ -697,7 +697,7 @@ resource "aws_iam_role_policy_attachment" "images_push_setup_0_attachment" {
 
 resource "terraform_data" "images_pull_setup_policies_barrier" {
   triggers_replace = [
-    aws_iam_role_policy_attachment.images_pull_setup_0_attachment.id
+    aws_iam_role_policy_attachment.images_pull_setup_9ddf7c77_attachment.id
   ]
 
   lifecycle {
@@ -707,7 +707,7 @@ resource "terraform_data" "images_pull_setup_policies_barrier" {
 
 resource "terraform_data" "images_push_setup_policies_barrier" {
   triggers_replace = [
-    aws_iam_role_policy_attachment.images_push_setup_0_attachment.id
+    aws_iam_role_policy_attachment.images_push_setup_6d668f05_attachment.id
   ]
 
   lifecycle {
@@ -795,10 +795,10 @@ resource "terraform_data" "deployment_registration" {
     aws_iam_role.images_push,
     aws_iam_role_policy.images_pull_policy,
     aws_iam_role_policy.images_push_policy,
-    aws_iam_policy.images_pull_setup_0,
-    aws_iam_role_policy_attachment.images_pull_setup_0_attachment,
-    aws_iam_policy.images_push_setup_0,
-    aws_iam_role_policy_attachment.images_push_setup_0_attachment,
+    aws_iam_policy.images_pull_setup_9ddf7c77,
+    aws_iam_role_policy_attachment.images_pull_setup_9ddf7c77_attachment,
+    aws_iam_policy.images_push_setup_6d668f05,
+    aws_iam_role_policy_attachment.images_push_setup_6d668f05_attachment,
     terraform_data.images_pull_setup_policies_barrier,
     terraform_data.images_push_setup_policies_barrier,
     aws_kms_key.key,

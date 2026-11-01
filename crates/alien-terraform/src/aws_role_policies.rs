@@ -15,12 +15,14 @@
 //! Anything that depended on a grant now depends on the attachments that carry it.
 //!
 //! A later release that adds or removes a grant can move statements between a role's managed
-//! policies. A policy whose document changes is a new policy under a name derived from its
-//! content, created and attached before the old one goes: policies and attachments are
-//! create-before-destroy, each attachment waits for all of its bin's policies, and a per-role
-//! barrier replaced with every attachment change makes Terraform detach and delete the old ones
-//! only after every new attachment exists. During such an update a role holds both, so each
-//! attachment counts twice against its quota.
+//! policies. A policy's address and name derive from its document, so an unchanged document
+//! keeps its address wherever it lands, and a changed one is a new policy, created and attached
+//! before the old one goes: each attachment waits for all of its bin's policies, and a per-role
+//! barrier replaced whenever the role's set of attachments changes makes Terraform detach and
+//! delete the old ones only after every new attachment exists. During such an update a role
+//! holds both, so each attachment counts twice against its quota.
+//!
+//! A merged statement too large for one policy is split by its `Resource` list.
 
 use crate::{
     block::{attr, block, nested, resource_block},
@@ -148,7 +150,7 @@ pub(crate) fn consolidate_role_policies(
     let mut carriers: IndexMap<String, Vec<Expression>> = IndexMap::new();
     let mut role_attachments: IndexMap<String, Vec<Expression>> = IndexMap::new();
     let mut new_blocks: IndexMap<String, Vec<Block>> = IndexMap::new();
-    let mut policies_per_label: IndexMap<String, usize> = IndexMap::new();
+    let mut labels_in_use: HashSet<String> = HashSet::new();
     let mut group_attachments: IndexMap<usize, Vec<Expression>> = IndexMap::new();
     for bin in &bins {
         let group = &groups[bin.group];
@@ -170,31 +172,40 @@ pub(crate) fn consolidate_role_policies(
                 }
             }
         }
-        let documents = chunk(compact(statements), &module, lengths)?;
+        let statements = split_oversized(compact(statements), &module, lengths)?;
         let base = group_label(group);
-        let labels: Vec<String> = documents
-            .iter()
-            .map(|_| {
-                let index = policies_per_label.entry(base.clone()).or_default();
-                *index += 1;
-                format!("{base}_{}", *index - 1)
+        // A policy's address and name both follow its content, so a document that is unchanged
+        // keeps its address wherever it lands among the role's policies, and a changed one is a
+        // new policy, created before the old one is destroyed. Statements that move between
+        // policies as grants are added or removed are therefore always held by one of them.
+        let documents = chunk(statements, &module, lengths)?
+            .into_iter()
+            .map(|statements| {
+                let document = document(statements);
+                let hash = content_hash(&document)?;
+                let label = format!("{base}_{hash}");
+                if !labels_in_use.insert(label.clone()) {
+                    return Err(AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "Two managed policies of role '{}' would both be aws_iam_policy.{label}: their documents are identical or their content hashes collide",
+                            group.role
+                        ),
+                    }));
+                }
+                Ok((label, hash, document))
             })
-            .collect();
-        let policy_addresses: Vec<Expression> = labels
+            .collect::<Result<Vec<_>>>()?;
+        let policy_addresses: Vec<Expression> = documents
             .iter()
-            .map(|label| expr::traversal(["aws_iam_policy", label]))
+            .map(|(label, _, _)| expr::traversal(["aws_iam_policy", label]))
             .collect();
         let blocks = new_blocks
             .entry(role_fragments[&group.role].clone())
             .or_default();
         let mut attachments = Vec::new();
-        for (label, statements) in labels.iter().zip(documents) {
-            let document = document(statements);
-            // A changed document is a new policy, created before the old one is destroyed, so
-            // statements that move between policies as grants are added or removed are always
-            // held by one of them. Two policies cannot share a name, so the name follows the
-            // content.
-            let name = format!("{}-{}", base.replace('_', "-"), content_hash(&document)?);
+        for (label, hash, document) in documents {
+            let label = label.as_str();
+            let name = format!("{}-{hash}", base.replace('_', "-"));
             let mut policy = vec![
                 attr("name", iam_managed_policy_name_template(&name)),
                 attr("policy", document),
@@ -254,15 +265,21 @@ pub(crate) fn consolidate_role_policies(
     for (group_index, attachments) in &group_attachments {
         let group = &groups[*group_index];
         let label = format!("{}_policies_barrier", group_label(group));
+        // In address order, so the barrier changes only when the set of attachments does.
+        let mut addresses: Vec<String> = attachments
+            .iter()
+            .map(|attachment| {
+                traversal_address(attachment).expect("attachments are whole-resource references")
+            })
+            .collect();
+        addresses.sort();
         let mut barrier = vec![
             attr(
                 "triggers_replace",
                 Expression::Array(
-                    attachments
+                    addresses
                         .iter()
-                        .map(|attachment| {
-                            let address = traversal_address(attachment)
-                                .expect("attachments are whole-resource references");
+                        .map(|address| {
                             let (kind, label) =
                                 address.split_once('.').expect("addresses have a type");
                             expr::traversal([kind, label, "id"])
@@ -521,6 +538,90 @@ fn merge_values(statements: Vec<Expression>, property: &str) -> Vec<Expression> 
     unchanged
 }
 
+/// Splits each statement too large for a managed policy of its own into statements over
+/// consecutive parts of its `Resource` list, each fitting one. A statement allows or denies its
+/// actions on each resource it lists independently, conditions included, so the parts together
+/// mean exactly what it meant. Statements naming `NotResource` or `NotAction` stay whole, and
+/// one that still does not fit fails in [`chunk`]. Each part gets a Sid of its own.
+fn split_oversized(
+    statements: Vec<Expression>,
+    module: &RenderedModule,
+    lengths: DeploymentLengths,
+) -> Result<Vec<Expression>> {
+    let budget = MAX_MANAGED_POLICY_CHARS - module.policy_chars(&document(Vec::new()), lengths)?;
+    let resource_key = ObjectKey::Identifier(hcl::Identifier::sanitized("Resource"));
+    let sid_key = ObjectKey::Identifier(hcl::Identifier::sanitized("Sid"));
+    let mut sids: HashSet<String> = statements
+        .iter()
+        .filter_map(|statement| match statement {
+            Expression::Object(object) => match object.get(&sid_key) {
+                Some(Expression::String(sid)) => Some(sid.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let mut split = Vec::new();
+    for statement in statements {
+        let Expression::Object(object) = &statement else {
+            split.push(statement);
+            continue;
+        };
+        let negated = object
+            .keys()
+            .any(|key| matches!(object_key(key), Some("NotResource" | "NotAction")));
+        let resources = match object.get(&resource_key) {
+            Some(Expression::Array(resources)) if resources.len() > 1 && !negated => {
+                resources.clone()
+            }
+            _ => {
+                split.push(statement);
+                continue;
+            }
+        };
+        if module.json_chars(&statement, lengths)? <= budget {
+            split.push(statement);
+            continue;
+        }
+        let object = object.clone();
+        let sid = match object.get(&sid_key) {
+            Some(Expression::String(sid)) => Some(sid.clone()),
+            _ => None,
+        };
+        let part = |resources: Vec<Expression>, sid: Option<&String>| {
+            let mut part = object.clone();
+            part.insert(resource_key.clone(), Expression::Array(resources));
+            if let Some(sid) = sid {
+                part.insert(sid_key.clone(), Expression::String(sid.clone()));
+            }
+            Expression::Object(part)
+        };
+        // The first part keeps the statement's Sid; later ones take the next unused number.
+        let mut part_sid = sid.clone();
+        let mut current: Vec<Expression> = Vec::new();
+        for resource in resources {
+            current.push(resource);
+            if current.len() > 1
+                && module.json_chars(&part(current.clone(), part_sid.as_ref()), lengths)? > budget
+            {
+                let resource = current.pop().expect("just pushed");
+                split.push(part(std::mem::take(&mut current), part_sid.as_ref()));
+                part_sid = sid.as_ref().map(|sid| {
+                    let unused = (2..)
+                        .map(|n| format!("{sid}{n}"))
+                        .find(|candidate| !sids.contains(candidate))
+                        .expect("an unused Sid exists");
+                    sids.insert(unused.clone());
+                    unused
+                });
+                current.push(resource);
+            }
+        }
+        split.push(part(current, part_sid.as_ref()));
+    }
+    Ok(split)
+}
+
 /// Splits statements, in order, into documents of at most [`MAX_MANAGED_POLICY_CHARS`] at the
 /// longest deployment values.
 fn chunk(
@@ -538,7 +639,7 @@ fn chunk(
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: "generate_terraform_module".into(),
                 reason: format!(
-                    "An IAM statement can need {statement_size} characters, more than a managed policy of {MAX_MANAGED_POLICY_CHARS} holds: {statement}"
+                    "An IAM statement can need {statement_size} characters, more than a managed policy of {MAX_MANAGED_POLICY_CHARS} holds, and it cannot be split into smaller ones (a single resource, or NotResource/NotAction): {statement}"
                 ),
             }));
         }
