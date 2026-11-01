@@ -574,7 +574,7 @@ fn render(stack: &Stack, registry: &TfRegistry) -> alien_terraform::ModuleFiles 
 
 /// The state an apply of the planned module would leave for its IAM roles, managed policies,
 /// attachments, role policies and policy barriers, with the attributes AWS computes filled in.
-fn applied_iam_state(fresh: &Value) -> Vec<Value> {
+fn applied_iam_state(fresh: &Value, module: &alien_terraform::ModuleFiles) -> Vec<Value> {
     let config: BTreeMap<String, &Value> = fresh["configuration"]["root_module"]["resources"]
         .as_array()
         .expect("configured resources")
@@ -668,6 +668,20 @@ fn applied_iam_state(fresh: &Value) -> Vec<Value> {
             r#"provider["registry.terraform.io/hashicorp/aws"]"#
         }
     };
+    // Terraform applies create_before_destroy to everything a resource that sets it depends on,
+    // and records it in state.
+    let mut before_destroy = creates_before_destroying(module);
+    let mut pending: Vec<String> = before_destroy.iter().cloned().collect();
+    while let Some(address) = pending.pop() {
+        let Some(resource) = config.get(&address) else {
+            continue;
+        };
+        for dependency in recorded_dependencies(resource) {
+            if before_destroy.insert(dependency.clone()) {
+                pending.push(dependency);
+            }
+        }
+    }
     applied
         .into_iter()
         .map(|(address, values)| {
@@ -675,9 +689,13 @@ fn applied_iam_state(fresh: &Value) -> Vec<Value> {
             // Terraform records what each object depended on, and orders destroying objects
             // that left the configuration, or were replaced, by it.
             let dependencies = recorded_dependencies(config[&address]);
+            let mut instance = json!({"schema_version": 0, "attributes": values,
+                                      "dependencies": dependencies});
+            if before_destroy.contains(&address) {
+                instance["create_before_destroy"] = json!(true);
+            }
             json!({"mode": "managed", "type": kind, "name": label, "provider": provider(kind),
-                   "instances": [{"schema_version": 0, "attributes": values,
-                                  "dependencies": dependencies}]})
+                   "instances": [instance]})
         })
         .collect()
 }
@@ -733,6 +751,37 @@ fn recorded_dependencies(resource: &Value) -> Vec<String> {
         .collect()
 }
 
+/// Addresses of the module's resources that set `create_before_destroy`.
+fn creates_before_destroying(module: &alien_terraform::ModuleFiles) -> BTreeSet<String> {
+    let mut addresses = BTreeSet::new();
+    for (path, contents) in module.iter().filter(|(path, _)| path.ends_with(".tf")) {
+        let body = hcl::parse(contents).unwrap_or_else(|error| panic!("{path} parses: {error}"));
+        for block in body
+            .blocks()
+            .filter(|block| block.identifier() == "resource")
+        {
+            let sets = block
+                .body()
+                .blocks()
+                .filter(|nested| nested.identifier() == "lifecycle")
+                .any(|lifecycle| {
+                    lifecycle.body().attributes().any(|attribute| {
+                        attribute.key() == "create_before_destroy"
+                            && *attribute.expr() == hcl::Expression::Bool(true)
+                    })
+                });
+            if sets {
+                addresses.insert(format!(
+                    "{}.{}",
+                    block.labels()[0].as_str(),
+                    block.labels()[1].as_str()
+                ));
+            }
+        }
+    }
+    addresses
+}
+
 fn write_state(dir: &Path, resources: Vec<Value>) {
     let version: Value =
         serde_json::from_str(&terraform(dir, &["version", "-json"])).expect("version");
@@ -779,37 +828,12 @@ async fn statements_moving_between_managed_policies_are_never_dropped() {
     let first = render(&before, &registry);
 
     // The next release names one more bucket for the workload, before every other resource.
-    let mut source: Stack = serde_json::from_str(STACK).expect("the fixture is a stack");
-    let bucket = alien_core::ResourceEntry {
-        config: alien_core::Resource::new(alien_core::Storage::new("archive".to_string()).build()),
-        lifecycle: alien_core::ResourceLifecycle::Frozen,
-        dependencies: Vec::new(),
-        display_name: None,
-        description: None,
-        remote_access: false,
-        enabled_when: None,
-    };
-    source
-        .resources
-        .shift_insert(0, "archive".to_string(), bucket);
-    source
-        .permissions
-        .profiles
-        .get_mut("execution")
-        .expect("the execution profile")
-        .0
-        .insert(
-            "archive".to_string(),
-            vec![alien_core::PermissionSetReference::from_name(
-                "storage/data-write",
-            )],
-        );
-    let after = prepare(source).await;
+    let after = prepare(stack_with_archive()).await;
     let second = render(&after, &registry);
 
     let dir = module_dir(&first);
     let fresh = plan(dir.path(), "first.tfplan");
-    write_state(dir.path(), applied_iam_state(&fresh));
+    write_state(dir.path(), applied_iam_state(&fresh, &first));
     assert_eq!(
         resource_changes(&plan(dir.path(), "settled.tfplan"))
             .iter()
@@ -929,6 +953,89 @@ async fn statements_moving_between_managed_policies_are_never_dropped() {
             "{later} must wait for {earlier}:\n{graph}"
         );
     }
+}
+
+/// Removing that grant again moves the statements back, and the role's last managed policy is
+/// no longer needed. It is detached and deleted only after the barrier is replaced, that is
+/// after every replacement policy is attached.
+#[tokio::test]
+async fn a_managed_policy_no_longer_needed_goes_after_its_replacements() {
+    if std::env::var("SKIP_LINTERS").as_deref() == Ok("1") {
+        return;
+    }
+    let registry = container_registry(NoComputeCluster);
+    let without = render(&prepared_stack().await, &registry);
+    let with = render(&prepare(stack_with_archive()).await, &registry);
+
+    let dir = module_dir(&with);
+    let fresh = plan(dir.path(), "with.tfplan");
+    write_state(dir.path(), applied_iam_state(&fresh, &with));
+    write_module(dir.path(), &without);
+    let shrink = plan(dir.path(), "without.tfplan");
+    let changes = resource_changes(&shrink);
+    for address in [
+        "aws_iam_policy.execution_sa_setup_2",
+        "aws_iam_role_policy_attachment.execution_sa_setup_2_attachment",
+    ] {
+        assert_eq!(changes[address], json!(["delete"]), "{address}");
+    }
+    for address in [
+        "aws_iam_policy.execution_sa_setup_0",
+        "aws_iam_role_policy_attachment.execution_sa_setup_0_attachment",
+        "terraform_data.execution_sa_setup_policies_barrier",
+    ] {
+        assert_eq!(changes[address], json!(["create", "delete"]), "{address}");
+    }
+    let graph = terraform(
+        dir.path(),
+        &["graph", "-type=apply", "-plan=without.tfplan"],
+    );
+    for (later, earlier) in [
+        (
+            "aws_iam_role_policy_attachment.execution_sa_setup_2_attachment (destroy)",
+            "terraform_data.execution_sa_setup_policies_barrier",
+        ),
+        (
+            "aws_iam_policy.execution_sa_setup_2 (destroy)",
+            "aws_iam_role_policy_attachment.execution_sa_setup_2_attachment (destroy)",
+        ),
+    ] {
+        assert!(
+            graph_orders(&graph, earlier, later),
+            "{later} must wait for {earlier}:\n{graph}"
+        );
+    }
+}
+
+/// The container stack, one release later: the workload is granted one more bucket, declared
+/// before every other resource.
+fn stack_with_archive() -> Stack {
+    let mut source: Stack = serde_json::from_str(STACK).expect("the fixture is a stack");
+    let bucket = alien_core::ResourceEntry {
+        config: alien_core::Resource::new(alien_core::Storage::new("archive".to_string()).build()),
+        lifecycle: alien_core::ResourceLifecycle::Frozen,
+        dependencies: Vec::new(),
+        display_name: None,
+        description: None,
+        remote_access: false,
+        enabled_when: None,
+    };
+    source
+        .resources
+        .shift_insert(0, "archive".to_string(), bucket);
+    source
+        .permissions
+        .profiles
+        .get_mut("execution")
+        .expect("the execution profile")
+        .0
+        .insert(
+            "archive".to_string(),
+            vec![alien_core::PermissionSetReference::from_name(
+                "storage/data-write",
+            )],
+        );
+    source
 }
 
 /// Whether `later` runs after `earlier` in a `terraform graph` DOT, whose edges point from a
